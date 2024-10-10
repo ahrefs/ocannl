@@ -4,9 +4,6 @@ type ctx_array = Ndarray.t [@@deriving sexp_of]
 type ctx_arrays = ctx_array Base.Map.M(Tnode).t [@@deriving sexp_of]
 type buffer_ptr = ctx_array [@@deriving sexp_of]
 
-type config = [ `Physical_devices_only | `For_parallel_copying | `Most_parallel_devices ]
-[@@deriving equal, sexp, variants]
-
 let ctx_arrays Unimplemented_ctx = Base.Map.empty (module Tnode)
 let buffer_ptr ctx_array = ctx_array
 

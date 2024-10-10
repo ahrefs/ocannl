@@ -1,18 +1,18 @@
 (** In the current design of the CUDA backend, unlike in the CPU backends, context arrays for
-    incomparable contexts do not need be disjoint, as long as they share a physical device. If a
-    tensor node is read-only for all contexts, its array will be shared even by incomparable
-    contexts. The particular design is as follows, within a single physical device:
+    incomparable contexts do not need be disjoint, as long as they share a device. If a tensor node
+    is read-only for all contexts, its array will be shared even by incomparable contexts. The
+    particular design is as follows, within a single device:
     - If a tensor node is read-only for a context, and not otherwise recorded, it is stored as a
-      cross-device sharing candidate.
-    - If a cross-device sharing candidate is read-only for another context, whose parent does not
-      have the corresponding array (i.e. it is a different virtual device), it is recorded as
-      cross-device shared, and the same array is reused.
-    - If a tensor node is writable by a context, and it is not cross-device shared, it is marked as
-      non-cross-device, the array is removed from cross-device sharing candidates if present. If it
-      is cross-device shared, it is recorded as owned by the corresponding virtual device. It is an
-      error if the node was already owned by a different device.
+      cross-stream sharing candidate.
+    - If a cross-stream sharing candidate is read-only for another context, whose parent does not
+      have the corresponding array (i.e. it is a different stream), it is recorded as cross-stream
+      shared, and the same array is reused.
+    - If a tensor node is writable by a context, and it is not cross-stream shared, it is marked as
+      non-cross-stream, the array is removed from cross-stream sharing candidates if present. If it
+      is cross-stream shared, it is recorded as owned by the corresponding stream. It is an error if
+      the node was already owned by a different stream.
 
-    If a tensor node is cross-device shared, within-physical-device copying is a NOOP as source and
+    If a tensor node is cross-stream shared, within-device copying is a NOOP as source and
     destination pointers are in that case identical.
 
     FIXME(#286): this should be controllable via {!Tnode.memory_mode}. *)
@@ -38,7 +38,7 @@ type event = Cu.Delimited_event.t
 type ctx_array = { ptr : buffer_ptr; mutable tracking : (event[@sexp.opaque]) option }
 [@@deriving sexp_of]
 
-type physical_device = {
+type device = {
   dev : (Cu.Device.t[@sexp.opaque]);
   ordinal : int;
   primary_context : (Cu.Context.t[@sexp.opaque]);
@@ -46,21 +46,21 @@ type physical_device = {
   mutable copy_merge_buffer_capacity : int;
   mutable latest_subordinal : int;
   released : Utils.atomic_bool;
-  cross_device_candidates : ctx_array Hashtbl.M(Tn).t;
-      (** Freshly created arrays that might be shared across virtual devices. The map can both grow
-          and shrink. See the explanation on top of this file. *)
-  cross_device_shared : Hash_set.M(Tn).t;
-      (** Tensor nodes known to be cross-device shared. This set can only grow. *)
-  non_cross_device : Hash_set.M(Tn).t;
-      (** Tensor nodes known to not be cross-device shared. This set can only grow. *)
-  owner_device_subordinal : int Hashtbl.M(Tn).t;
-      (** The virtual devices owning the given nodes. This map can only grow. *)
+  cross_stream_candidates : ctx_array Hashtbl.M(Tn).t;
+      (** Freshly created arrays that might be shared across streams. The map can both grow and
+          shrink. See the explanation on top of this file. *)
+  cross_stream_shared : Hash_set.M(Tn).t;
+      (** Tensor nodes known to be cross-stream shared. This set can only grow. *)
+  non_cross_stream : Hash_set.M(Tn).t;
+      (** Tensor nodes known to not be cross-stream shared. This set can only grow. *)
+  owner_stream_subordinal : int Hashtbl.M(Tn).t;
+      (** The streams owning the given nodes. This map can only grow. *)
 }
 [@@deriving sexp_of]
 
-and device = {
-  physical : physical_device;
-  stream : (Cu.Stream.t[@sexp.opaque]);
+and stream = {
+  device : device;
+  cu_stream : (Cu.Stream.t[@sexp.opaque]);
   subordinal : int;
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
@@ -68,15 +68,15 @@ and device = {
 and context = {
   label : string;
   ctx : (Cu.Context.t[@sexp.opaque]);
-      (** Currently, this is always the same as [device.physical.primary_context]. *)
-  device : device;
+      (** Currently, this is always the same as [stream.device.primary_context]. *)
+  stream : stream;
   parent : context option;
   run_module : (Cu.Module.t[@sexp.opaque]) option;
       (** Code jitted for this context, typically independent of the parent and child contexts, but
           shared by batch linked contexts. *)
   ctx_arrays : ctx_array Map.M(Tn).t;
       (** This map contains arrays used in this context or an ancestor context (they might be unique
-          but might also be cross-device shared. *)
+          but might also be cross-stream shared. *)
   finalized : Utils.atomic_bool;
 }
 [@@deriving sexp_of]
@@ -89,13 +89,13 @@ let work_for ctx tn =
   | None -> None
   | Some { tracking = Some event; _ } -> Some event
   | Some ctx_array ->
-      ctx_array.tracking <- Some (Cu.Delimited_event.record ctx.device.stream);
+      ctx_array.tracking <- Some (Cu.Delimited_event.record ctx.stream.cu_stream);
       ctx_array.tracking
 
 let is_done event = Cu.Delimited_event.query event
-let will_wait_for context event = Cu.Delimited_event.wait context.device.stream event
+let will_wait_for context event = Cu.Delimited_event.wait context.stream.cu_stream event
 let sync event = Cu.Delimited_event.synchronize event
-let all_work device = Cu.Delimited_event.record device.stream
+let all_work stream = Cu.Delimited_event.record stream.cu_stream
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -106,7 +106,7 @@ let is_initialized, initialize =
   in
   ((fun () -> !initialized), init)
 
-let num_physical_devices = Cu.Device.get_count
+let num_devices = Cu.Device.get_count
 let devices = ref @@ Core.Weak.create 0
 
 (* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
@@ -114,15 +114,15 @@ let initialized_devices = Hash_set.create (module Int)
 let set_ctx ctx = Cu.Context.set_current ctx
 
 (* It's not actually used, but it's required by the [Backend] interface. *)
-let alloc_buffer ?old_buffer ~size_in_bytes device =
+let alloc_buffer ?old_buffer ~size_in_bytes stream =
   match old_buffer with
   | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
   | Some (old_ptr, _old_size) ->
-      set_ctx device.physical.primary_context;
+      set_ctx stream.device.primary_context;
       Cu.Deviceptr.mem_free old_ptr;
       Cu.Deviceptr.mem_alloc ~size_in_bytes
   | None ->
-      set_ctx device.physical.primary_context;
+      set_ctx stream.device.primary_context;
       Cu.Deviceptr.mem_alloc ~size_in_bytes
 
 let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
@@ -132,19 +132,19 @@ let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
     phys_dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
     phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
 
-let cleanup_physical device =
+let cleanup_device device =
   Cu.Context.set_current device.primary_context;
   Cu.Context.synchronize ();
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
   Cu.Deviceptr.mem_free device.copy_merge_buffer;
-  Hashtbl.iter device.cross_device_candidates ~f:(fun ctx_array ->
+  Hashtbl.iter device.cross_stream_candidates ~f:(fun ctx_array ->
       Cu.Deviceptr.mem_free ctx_array.ptr)
 
-let finalize_physical device =
-  if Atomic.compare_and_set device.released false true then cleanup_physical device
+let finalize_device device =
+  if Atomic.compare_and_set device.released false true then cleanup_device device
 
-let get_device ~(ordinal : int) : physical_device =
-  if num_physical_devices () <= ordinal then
+let get_device ~(ordinal : int) : device =
+  if num_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   if Core.Weak.length !devices <= ordinal then (
     let old = !devices in
@@ -168,78 +168,77 @@ let get_device ~(ordinal : int) : physical_device =
           copy_merge_buffer;
           copy_merge_buffer_capacity;
           released = Atomic.make false;
-          cross_device_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
-          cross_device_shared = Hash_set.create (module Tn);
-          non_cross_device = Hash_set.create (module Tn);
-          owner_device_subordinal = Hashtbl.create (module Tn);
+          cross_stream_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
+          cross_stream_shared = Hash_set.create (module Tn);
+          non_cross_stream = Hash_set.create (module Tn);
+          owner_stream_subordinal = Hashtbl.create (module Tn);
         }
       in
-      Stdlib.Gc.finalise finalize_physical result;
+      Stdlib.Gc.finalise finalize_device result;
       Core.Weak.set !devices ordinal (Some result);
       result)
 
-let new_virtual_device physical =
-  let subordinal = physical.latest_subordinal in
-  physical.latest_subordinal <- physical.latest_subordinal + 1;
+let new_stream device =
+  let subordinal = device.latest_subordinal in
+  device.latest_subordinal <- device.latest_subordinal + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
-  set_ctx physical.primary_context;
-  let stream = Cu.Stream.create ~non_blocking:true () in
-  { physical; stream; subordinal; merge_buffer = None }
+  set_ctx device.primary_context;
+  let cu_stream = Cu.Stream.create ~non_blocking:true () in
+  { device; cu_stream; subordinal; merge_buffer = None }
 
 let cuda_properties =
   let cache =
     lazy
-      (Array.init (num_physical_devices ()) ~f:(fun ordinal ->
+      (Array.init (num_devices ()) ~f:(fun ordinal ->
            let dev = get_device ~ordinal in
            lazy (Cu.Device.get_attributes dev.dev)))
   in
-  fun physical ->
+  fun device ->
     if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
     let cache = Lazy.force cache in
-    Lazy.force cache.(physical.ordinal)
+    Lazy.force cache.(device.ordinal)
 
-let suggested_num_virtual_devices device =
+let suggested_num_streams device =
   match !global_config with
-  | Physical_devices_only -> 1
+  | Only_devices_parallel -> 1
   | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
-  | Most_parallel_devices -> (cuda_properties device).multiprocessor_count
+  | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
 
-let get_ctx_device { device; _ } = device
-let get_physical_device { physical; _ } = physical
+let get_ctx_stream { stream; _ } = stream
+let get_stream_device { device; _ } = device
 let to_ordinal { ordinal; _ } = ordinal
 let to_subordinal { subordinal; _ } = subordinal
 
-let get_name device =
-  Int.to_string (to_ordinal device.physical) ^ "_" ^ Int.to_string (to_subordinal device)
+let get_name stream =
+  Int.to_string (to_ordinal stream.device) ^ "_" ^ Int.to_string (to_subordinal stream)
 
-let await device : unit =
-  set_ctx device.physical.primary_context;
-  Cu.Stream.synchronize device.stream;
+let await stream : unit =
+  set_ctx stream.device.primary_context;
+  Cu.Stream.synchronize stream.cu_stream;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
-let is_idle device = Cu.Stream.is_ready device.stream
+let is_idle stream = Cu.Stream.is_ready stream.cu_stream
 
 let finalize ctx =
   if
-    Atomic.compare_and_set ctx.finalized false true
-    && (not @@ Atomic.get ctx.device.physical.released)
+    Atomic.compare_and_set ctx.finalized false true && (not @@ Atomic.get ctx.stream.device.released)
   then (
-    (* await does this: set_ctx ctx.device.physical.primary_context; *)
-    await ctx.device;
+    (* await does this: set_ctx ctx.stream.device.primary_context; *)
+    await ctx.stream;
     (* Cudajit's contexts, streams and events are destroyed by their respective finalizers. *)
     Option.iter ctx.run_module ~f:Cu.Module.unload;
     Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
         if
           (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
-          && not (Hashtbl.mem ctx.device.physical.cross_device_candidates key)
+          && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
         then Cu.Deviceptr.mem_free data.ptr))
 
-let init device =
+let init stream =
   let ctx =
     {
-      label = "on dev " ^ get_name device;
-      ctx = device.physical.primary_context;
-      device;
+      label = "on dev " ^ get_name stream;
+      ctx = stream.device.primary_context;
+      stream;
       parent = None;
       ctx_arrays = Map.empty (module Tn);
       run_module = None;
@@ -252,11 +251,11 @@ let init device =
 let unsafe_cleanup () =
   let len = Core.Weak.length !devices in
   (* NOTE: releasing the context should free its resources, there's no need to finalize the
-     remaining contexts, and [finalize], [finalize_physical] will not do anything for a [released]
-     physical device. *)
+     remaining contexts, and [finalize], [finalize_device] will not do anything for a [released]
+     device. *)
   for i = 0 to len - 1 do
     Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
-        if Atomic.compare_and_set device.released false true then cleanup_physical device)
+        if Atomic.compare_and_set device.released false true then cleanup_device device)
   done;
   Core.Weak.fill !devices 0 len None;
   Stdlib.Gc.compact ()
@@ -266,7 +265,7 @@ let%diagn2_l_sexp from_host (ctx : context) tn =
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
-      let f src = Cu.Stream.memcpy_H_to_D ~dst:dst.ptr ~src ctx.device.stream in
+      let f src = Cu.Stream.memcpy_H_to_D ~dst:dst.ptr ~src ctx.stream.cu_stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
@@ -276,26 +275,26 @@ let%diagn2_l_sexp to_host (ctx : context) (tn : Tn.t) =
   | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
       set_ctx ctx.ctx;
       [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
-      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src.ptr ctx.device.stream in
+      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src.ptr ctx.stream.cu_stream in
       Ndarray.map { f } hosted;
       true
   | _ -> false
 
 let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
     ~(src : context) =
-  let same_physical = phys_equal dst.device.physical src.device.physical in
+  let same_device = phys_equal dst.stream.device src.stream.device in
   let memcpy ~d_arr ~s_arr =
-    if same_physical then
+    if same_device then
       Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~src:s_arr.ptr
-        dst.device.stream
+        dst.stream.cu_stream
     else
       Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~dst_ctx:dst.ctx
-        ~src:s_arr.ptr ~src_ctx:src.ctx dst.device.stream
+        ~src:s_arr.ptr ~src_ctx:src.ctx dst.stream.cu_stream
   in
   if
-    same_physical
-    && (src.device.subordinal = dst.device.subordinal
-       || Hash_set.mem dst.device.physical.cross_device_shared tn)
+    same_device
+    && (src.stream.subordinal = dst.stream.subordinal
+       || Hash_set.mem dst.stream.device.cross_stream_shared tn)
   then false
   else
     match Map.find src.ctx_arrays tn with
@@ -319,8 +318,8 @@ let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : co
                     (d_arr : ctx_array)];
                 true)
         | Streaming ->
-            if phys_equal dst.device.physical src.device.physical then (
-              dst.device.merge_buffer <- Some (s_arr.ptr, tn);
+            if phys_equal dst.stream.device src.stream.device then (
+              dst.stream.merge_buffer <- Some (s_arr.ptr, tn);
               [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
               true)
             else
@@ -329,9 +328,9 @@ let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : co
         | Copy ->
             set_ctx dst.ctx;
             let size_in_bytes = Tn.size_in_bytes tn in
-            opt_alloc_merge_buffer ~size_in_bytes dst.device.physical;
-            memcpy ~d_arr:{ ptr = dst.device.physical.copy_merge_buffer; tracking = None } ~s_arr;
-            dst.device.merge_buffer <- Some (dst.device.physical.copy_merge_buffer, tn);
+            opt_alloc_merge_buffer ~size_in_bytes dst.stream.device;
+            memcpy ~d_arr:{ ptr = dst.stream.device.copy_merge_buffer; tracking = None } ~s_arr;
+            dst.stream.merge_buffer <- Some (dst.stream.device.copy_merge_buffer, tn);
             [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
             true)
 
@@ -530,7 +529,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
             S.Tensor arr.ptr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
-            let ptr = fst @@ Option.value_exn ~here:[%here] context.device.merge_buffer in
+            let ptr = fst @@ Option.value_exn ~here:[%here] context.stream.merge_buffer in
             S.Tensor ptr
         | _name, Static_idx s ->
             let i = Indexing.find_exn lowered_bindings s in
@@ -559,13 +558,14 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.device.stream args;
+    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.cu_stream
+      args;
     Map.iteri ctx_arrays ~f:(fun ~key ~data ->
         (* Note: a tensor node can only be a context array if it is materialized. *)
         if Option.is_some data.tracking then
           let traced = Low_level.get_node traced_store key in
           if not traced.read_only then
-            data.tracking <- Some (Cu.Delimited_event.record context.device.stream));
+            data.tracking <- Some (Cu.Delimited_event.record context.stream.cu_stream));
     [%log "kernel launched"]
   in
   ( context,
@@ -576,7 +576,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
         work;
       } )
 
-let%diagn2_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
+let%diagn2_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
   if is_in_context node && not (Map.mem ctx_arrays key) then (
     [%log Tn.debug_name key, "read_only", (node.read_only : bool)];
     let default () =
@@ -585,27 +585,27 @@ let%diagn2_sexp alloc_if_needed ctx device ~key ~data:node ctx_arrays =
       { ptr; tracking = None }
     in
     let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
-    let physical = device.physical in
+    let device = stream.device in
     if node.read_only then
-      if Hash_set.mem physical.non_cross_device key then add_new ()
+      if Hash_set.mem device.non_cross_stream key then add_new ()
       else (
-        if Hashtbl.mem physical.cross_device_candidates key then
-          Hash_set.add physical.cross_device_shared key;
-        let data = Hashtbl.find_or_add physical.cross_device_candidates key ~default in
+        if Hashtbl.mem device.cross_stream_candidates key then
+          Hash_set.add device.cross_stream_shared key;
+        let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
         Map.add_exn ctx_arrays ~key ~data)
-    else if Hash_set.mem physical.cross_device_shared key then (
-      if Hashtbl.mem physical.owner_device_subordinal key then
-        if Hashtbl.find_exn physical.owner_device_subordinal key <> device.subordinal then
+    else if Hash_set.mem device.cross_stream_shared key then (
+      if Hashtbl.mem device.owner_stream_subordinal key then
+        if Hashtbl.find_exn device.owner_stream_subordinal key <> stream.subordinal then
           raise
           @@ Utils.User_error
                ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
-              ^ " assumed to be cross-device-shared but then written to on multiple devices")
-        else Hashtbl.add_exn physical.owner_device_subordinal ~key ~data:device.subordinal;
-      let data = Hashtbl.find_exn physical.cross_device_candidates key in
+              ^ " assumed to be cross-stream-shared but then written to on multiple devices")
+        else Hashtbl.add_exn device.owner_stream_subordinal ~key ~data:stream.subordinal;
+      let data = Hashtbl.find_exn device.cross_stream_candidates key in
       Map.add_exn ctx_arrays ~key ~data)
     else (
-      Hash_set.add physical.non_cross_device key;
-      Hashtbl.remove physical.cross_device_candidates key;
+      Hash_set.add device.non_cross_stream key;
+      Hashtbl.remove device.cross_stream_candidates key;
       add_new ()))
   else ctx_arrays
 
@@ -619,7 +619,7 @@ let%track3_sexp link prior_context (code : code) : context * _ * _ =
   set_ctx ctx;
   let ctx_arrays =
     Hashtbl.fold ~init:prior_context.ctx_arrays code.traced_store
-      ~f:(alloc_if_needed ctx prior_context.device)
+      ~f:(alloc_if_needed ctx prior_context.stream)
   in
   let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
@@ -644,7 +644,7 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
         @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
                let ctx_arrays =
                  Hashtbl.fold ~init:ctx_arrays traced_store
-                   ~f:(alloc_if_needed ctx prior_context.device)
+                   ~f:(alloc_if_needed ctx prior_context.stream)
                in
                let context, task =
                  link_proc ~prior_context:context ~name ~params ~ctx_arrays traced_store

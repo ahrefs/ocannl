@@ -12,8 +12,8 @@ let%expect_test "Micrograd README basic example" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
@@ -87,8 +87,8 @@ let%expect_test "Micrograd half-moons example" =
      of dependencies. *)
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cc" ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let open Operation.At in
   let len = 200 in
   let batch_size = 10 in
@@ -148,7 +148,7 @@ let%expect_test "Micrograd half-moons example" =
         Train.run sgd_routine;
         assert (Backend.to_host sgd_routine.context learning_rate.value);
         assert (Backend.to_host sgd_routine.context scalar_loss.value);
-        Backend.await device;
+        Backend.await stream;
         (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
            step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
            scalar_loss.@[0]; *)
@@ -177,7 +177,7 @@ let%expect_test "Micrograd half-moons example" =
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);
-    Backend.await device;
+    Backend.await stream;
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

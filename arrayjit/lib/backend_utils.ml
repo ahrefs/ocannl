@@ -392,13 +392,13 @@ struct
 end
 
 let check_merge_buffer ~merge_buffer ~code_node =
-  let device_node = Option.map !merge_buffer ~f:snd in
+  let stream_node = Option.map !merge_buffer ~f:snd in
   let name = function Some tn -> Tn.debug_name tn | None -> "none" in
-  match (device_node, code_node) with
+  match (stream_node, code_node) with
   | _, None -> ()
   | Some actual, Some expected when Tn.equal actual expected -> ()
   | _ ->
       raise
       @@ Utils.User_error
-           ("Merge buffer mismatch, on device: " ^ name device_node ^ ", expected by code: "
+           ("Merge buffer mismatch, on stream: " ^ name stream_node ^ ", expected by code: "
           ^ name code_node)

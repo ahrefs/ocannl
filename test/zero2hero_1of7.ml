@@ -13,8 +13,8 @@ let%expect_test "Graph drawing recompile" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let open Operation.At in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
@@ -79,7 +79,7 @@ let%expect_test "Graph drawing recompile" =
         in
         Train.sync_run (module Backend) assign_x x;
         Train.sync_run (module Backend) f_bprop f;
-        Backend.await device;
+        Backend.await stream;
         f.@[0])
   in
   let plot_box =
@@ -134,8 +134,8 @@ let%expect_test "Graph drawing fetch" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -236,8 +236,8 @@ let%expect_test "Simple gradients hosted" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
@@ -348,8 +348,8 @@ let%expect_test "Simple gradients virtual" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
@@ -485,8 +485,8 @@ let%expect_test "2D neuron hosted" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
@@ -514,8 +514,8 @@ let%expect_test "2D neuron virtual" =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in

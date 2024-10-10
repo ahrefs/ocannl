@@ -16,7 +16,7 @@ module Types = struct
   }
   [@@deriving sexp_of]
 
-  type config = Physical_devices_only | For_parallel_copying | Most_parallel_devices
+  type config = Only_devices_parallel | For_parallel_copying | Most_parallel_streams
   [@@deriving equal, sexp, variants]
 
   type merge_buffer_use = No | Streaming | Copy [@@deriving equal, sexp]
@@ -48,7 +48,7 @@ module type No_device_backend = sig
       {!initialize} before using the backend. *)
 
   val init : label:string -> context
-  (** [label] is usually the backend name concatenated with the device number. *)
+  (** [label] is usually the backend name concatenated with the device or stream number. *)
 
   val finalize : context -> unit
   (** Finalizes (just) the context. *)
@@ -59,8 +59,8 @@ module type No_device_backend = sig
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
-      device-agnostic way. If [~shared:false], the backend can opt to postpone compiling altogether
-      until [link] is called, to benefit from more optimizations. *)
+      device-and-stream-agnostic way. If [~shared:false], the backend can opt to postpone compiling
+      altogether until [link] is called, to benefit from more optimizations. *)
 
   val compile_batch :
     ?shared:bool ->
@@ -88,8 +88,8 @@ module type No_device_backend = sig
 
   val unsafe_cleanup : unit -> unit
   (** Cleans up all work on a backend, releases resources. All previously retrieved values
-      (contexts, virtual and physical devices) become invalid. The backend needs to be initialized
-      again to be used again. *)
+      (contexts, streams and devices) become invalid. The backend needs to be initialized again to
+      be used again. *)
 
   val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
@@ -108,8 +108,8 @@ module type Backend = sig
       downstream of all the returned routines. *)
 
   type event
-  (** An event tracks if a device finished computing past a particular point in its schedue. These
-      values are used internally for scheduling across devices of the backend, and can be used for
+  (** An event tracks if a stream finished computing past a particular point in its schedue. These
+      values are used internally for scheduling across streams of the backend, and can be used for
       explicit scheduling. *)
 
   val sync : event -> unit
@@ -120,13 +120,13 @@ module type Backend = sig
 
   val work_for : context -> Tnode.t -> event option
   (** If the tensor node is in the context, returns the event indicating if currently running or
-      scheduled computations modifying that node on the context's device have completed.
+      scheduled computations modifying that node on the context's stream have completed.
 
       NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
-      tracking for [tn] and return the [all_work] event for [ctx]'s device. *)
+      tracking for [tn] and return the [all_work] event for [ctx]'s stream. *)
 
   val will_wait_for : context -> event -> unit
-  (** Schedules waiting for the given event on the context's device.
+  (** Schedules waiting for the given event on the context's stream.
 
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
       called internally when necessary. But there is one exception, see {!device_to_device} when
@@ -135,13 +135,13 @@ module type Backend = sig
   val from_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
       returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
+      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
       overwritten. *)
 
   val to_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
       returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the device (via [await ctx.device] or [sync (work_for ctx tn)]) before the host's data is
+      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
       read. *)
 
   val device_to_device :
@@ -151,50 +151,49 @@ module type Backend = sig
         or [into_merge_buffer] is different from [No]: raises an error.
       - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
       - Executes [will_wait_for dst (work_for src tn)].
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from the device of [src] to
-        the device of [dst].
+      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst].
       - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
         given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
         node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
-        from [src] to the merge buffer of [dst]'s device.
+        from [src] to the merge buffer of [dst]'s stream.
       - If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
         buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
         [into_merge_buffer].
 
       NOTE: If [into_merge_buffer:Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute
-      [will_wait_for src (all_work (get_ctx_device dst))]. *)
+      [will_wait_for src (all_work (get_ctx_stream dst))]. *)
 
-  type physical_device
   type device
+  type stream
 
-  val init : device -> context
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
+  val init : stream -> context
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
-  val await : device -> unit
-  (** Blocks till the device becomes idle, i.e. synchronizes the device. *)
+  val await : stream -> unit
+  (** Blocks till the stream becomes idle, i.e. synchronizes the stream. *)
 
-  val all_work : device -> event
-  (** Returns the event indicating if any currently running or scheduled computations on the device
+  val all_work : stream -> event
+  (** Returns the event indicating if any currently running or scheduled computations on the stream
       have completed. *)
 
-  val is_idle : device -> bool
-  (** Whether the device is currently waiting for work. *)
+  val is_idle : stream -> bool
+  (** Whether the stream is currently waiting for work. *)
 
-  val sexp_of_device : device -> Sexp.t
-  val get_device : ordinal:int -> physical_device
-  val num_physical_devices : unit -> int
+  val sexp_of_stream : stream -> Sexp.t
+  val get_device : ordinal:int -> device
+  val num_devices : unit -> int
 
-  val suggested_num_virtual_devices : physical_device -> int
-  (** The optimal number of virtual devices for the given physical device to follow the
-      {!Types.config} strategy passed to {!No_device_backend.initialize}. *)
+  val suggested_num_streams : device -> int
+  (** The optimal number of streams for the given device to follow the {!Types.config} strategy
+      passed to {!No_device_backend.initialize}. *)
 
-  val new_virtual_device : physical_device -> device
-  val get_ctx_device : context -> device
-  val get_physical_device : device -> physical_device
-  val to_ordinal : physical_device -> int
-  val to_subordinal : device -> int
-  val get_name : device -> string
+  val new_stream : device -> stream
+  val get_ctx_stream : context -> stream
+  val get_stream_device : stream -> device
+  val to_ordinal : device -> int
+  val to_subordinal : stream -> int
+  val get_name : stream -> string
 end
 
 module type Simple_backend = sig
@@ -289,7 +288,7 @@ module type Lowered_backend = sig
 
   val device_to_device :
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** If the array is in both contexts, copies from [dst] to [src]. *)
+  (** If the tensor node is in both contexts, copies from [dst] to [src]. *)
 
   type buffer_ptr [@@deriving sexp_of]
 
@@ -298,23 +297,23 @@ module type Lowered_backend = sig
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 
-  type physical_device
   type device
+  type stream
 
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> device -> buffer_ptr
-  val init : device -> context
-  val await : device -> unit
-  val is_idle : device -> bool
-  val all_work : device -> event
-  val sexp_of_device : device -> Sexplib.Sexp.t
-  val num_physical_devices : unit -> int
-  val suggested_num_virtual_devices : physical_device -> int
-  val get_device : ordinal:int -> physical_device
-  val get_physical_device : device -> physical_device
-  val new_virtual_device : physical_device -> device
-  val get_ctx_device : context -> device
-  val get_name : device -> string
-  val to_ordinal : physical_device -> int
-  val to_subordinal : device -> int
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
+  val init : stream -> context
+  val await : stream -> unit
+  val is_idle : stream -> bool
+  val all_work : stream -> event
+  val sexp_of_stream : stream -> Sexplib.Sexp.t
+  val num_devices : unit -> int
+  val suggested_num_streams : device -> int
+  val get_device : ordinal:int -> device
+  val get_stream_device : stream -> device
+  val new_stream : device -> stream
+  val get_ctx_stream : context -> stream
+  val get_name : stream -> string
+  val to_ordinal : device -> int
+  val to_subordinal : stream -> int
   val name : string
 end

@@ -9,7 +9,7 @@ module Rand = Arrayjit.Rand.Lib
 
 let benchmark_overhead backend () =
   let n_data = 20 in
-  Arrayjit.Backends.reinitialize backend Physical_devices_only;
+  Arrayjit.Backends.reinitialize backend Only_devices_parallel;
   let module Backend = (val backend : Arrayjit.Backend_types.Backend) in
   (* Utils.settings.with_debug <- true; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
@@ -22,8 +22,8 @@ let benchmark_overhead backend () =
   Train.set_hosted f.value;
 
   (* Train.every_non_literal_on_host f; *)
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a
      constant. *)
@@ -50,7 +50,7 @@ let benchmark_overhead backend () =
         (* await device; *)
         Train.run f_routine;
         assert (Backend.to_host f_routine.context f.value);
-        Backend.await device;
+        Backend.await stream;
         f.@[0])
   in
   let plot_box =

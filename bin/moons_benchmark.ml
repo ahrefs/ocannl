@@ -78,7 +78,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
-  Arrayjit.Backends.sync_suggested_num_virtual_devices := num_devices;
+  Arrayjit.Backends.sync_suggested_num_streams := num_devices;
   let backend = Arrayjit.Backends.fresh_backend ~backend_name () in
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
@@ -89,9 +89,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
       epoch_loss
   in
   let module Backend = (val backend) in
-  Backend.initialize Train.BT.Most_parallel_devices;
+  Backend.initialize Train.BT.Most_parallel_streams;
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_devices:num_devices ~data_len
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_streams:num_devices ~data_len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
       ~per_batch_callback ~per_epoch_callback
       (module Backend)

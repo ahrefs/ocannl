@@ -17,8 +17,8 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 let _suspended () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
@@ -39,7 +39,7 @@ let _suspended () =
   Train.every_non_literal_on_host f5;
   Train.forward_and_forget
     (module Backend)
-    Backend.(init @@ new_virtual_device @@ get_device ~ordinal:0)
+    Backend.(init @@ new_stream @@ get_device ~ordinal:0)
     f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
@@ -66,8 +66,8 @@ let () =
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let%op fx = f x in
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let update = Train.grad_update fx in
   let routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn routine.bindings step_sym in
@@ -76,7 +76,7 @@ let () =
   let looping () =
     assert (Backend.to_host routine.context fx.value);
     assert (Backend.to_host routine.context (Option.value_exn ~here:[%here] x.diff).grad);
-    Backend.await device;
+    Backend.await stream;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
   in
@@ -100,8 +100,8 @@ let _suspended () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -160,15 +160,15 @@ let _suspended () =
   let%op l = d *. "f" [ -2 ] in
   Train.every_non_literal_on_host l;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let update = Train.grad_update l in
   let routine =
-    Train.to_routine (module Backend) (Backend.init device) IDX.empty update.fwd_bprop
+    Train.to_routine (module Backend) (Backend.init stream) IDX.empty update.fwd_bprop
   in
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await device;
+  Backend.await stream;
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -191,7 +191,7 @@ let _suspended () =
       assert (Backend.from_host routine.context a));
   Train.run routine;
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await device;
+  Backend.await stream;
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -202,7 +202,7 @@ let _suspended () =
   let routine = Train.to_routine (module Backend) routine.context IDX.empty update.fwd_bprop in
   Train.run routine;
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await device;
+  Backend.await stream;
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

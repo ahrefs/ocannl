@@ -10,8 +10,8 @@ module Debug_runtime = Utils.Debug_runtime
 
 let%diagn_sexp () =
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cc" ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   Utils.set_log_level 2;
@@ -35,8 +35,8 @@ let%diagn_sexp () =
 
 let%diagn_sexp _suspended () : unit =
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in

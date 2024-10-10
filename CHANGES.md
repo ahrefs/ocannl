@@ -8,7 +8,10 @@
 
 - Migrated to cudajit 0.5.
 - Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
-- TODO: Built per-tensor-node device-to-device synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
+- Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
+- TODO: Moved the multicore backend from a `device = stream` model to a single device model.
+- TODO: Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
+- TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
 
 ## [0.4.1] -- 2024-09-17
 

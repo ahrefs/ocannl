@@ -15,8 +15,8 @@ let%expect_test "Pointwise multiplication dims 1" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" 7.0 in
@@ -39,8 +39,8 @@ let%expect_test "Matrix multiplication dims 1x1" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
@@ -75,8 +75,8 @@ let%expect_test "Print constant tensor" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
@@ -376,8 +376,8 @@ let%expect_test "Matrix multiplication dims 2x3" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
@@ -413,8 +413,8 @@ let%expect_test "Big matrix" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = Tensor.param ~values:[| 0.5 |] "hey" in
@@ -471,8 +471,8 @@ let%expect_test "Very big tensor" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   Rand.init 0;
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()

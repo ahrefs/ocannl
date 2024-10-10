@@ -292,7 +292,7 @@ let%track3_sexp sync_run ?looping (type context)
       in
       sequential_loop ~f routine.bindings);
   all_device_to_host (module Backend) routine.context t;
-  Backend.await @@ Backend.get_ctx_device routine.context
+  Backend.await @@ Backend.get_ctx_stream routine.context
 
 module Lazy = Utils.Lazy
 
@@ -358,7 +358,7 @@ let%track3_sexp parallel_update (type context)
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     (* Synchronize the source since we compute on the destionation. *)
-    Backend.(await @@ get_ctx_device ctxs.(from));
+    Backend.(await @@ get_ctx_stream ctxs.(from));
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge =
           Option.value_exn ~here:[%here] ~message:(Tn.debug_name p.value) grad_merges_to.(to_).(i)
@@ -378,15 +378,15 @@ let%track3_sexp parallel_update (type context)
   let%track3_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
     (* We need to wait, because copying happens on other devices. *)
-    Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_device src));
+    Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_stream src));
     Tn.run sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
-    Backend.(await @@ get_ctx_device sgd_update.context);
+    Backend.(await @@ get_ctx_stream sgd_update.context);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       Array.iter all_params ~f:(fun p ->
-          (* Allow the params to be shared across virtual devices. *)
+          (* Allow the params to be shared across streams. *)
           ignore
             (Backend.device_to_device p.value ~into_merge_buffer:No ~dst:ctxs.(to_)
                ~src:sgd_update.context))
@@ -397,18 +397,21 @@ let%track3_sexp parallel_update (type context)
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Tn.run upd.schedule)] in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
-let get_all_suggested_devices ?(max_num_devices : int option) (type device)
-    (backend : (module Backend_type with type device = device)) : device array =
-  let max_num_devices = Option.value max_num_devices ~default:Int.max_value_30_bits in
-  let module Backend = (val backend : Backend_type with type device = device) in
-  let num_physical = min max_num_devices @@ Backend.num_physical_devices () in
-  let devices = Array.init num_physical ~f:(fun ordinal -> Backend.get_device ~ordinal) in
-  Array.folding_mapi devices ~init:0 ~f:(fun ordinal num_collected physical ->
-      let remaining_physical = num_physical - ordinal - 1 in
-      let max_current = Backend.suggested_num_virtual_devices physical in
-      let take_current = min max_current @@ (max_num_devices - remaining_physical) in
+let get_all_suggested_streams ?(max_num_streams : int option) (type device stream)
+    (backend : (module Backend_type with type device = device and type stream = stream)) :
+    stream array =
+  let max_num_streams = Option.value max_num_streams ~default:Int.max_value_30_bits in
+  let module Backend =
+    (val backend : Backend_type with type device = device and type stream = stream)
+  in
+  let num_devices = min max_num_streams @@ Backend.num_devices () in
+  let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
+  Array.folding_mapi devices ~init:0 ~f:(fun ordinal num_collected device ->
+      let remaining_devices = num_devices - ordinal - 1 in
+      let max_current = Backend.suggested_num_streams device in
+      let take_current = min max_current @@ (max_num_streams - remaining_devices) in
       ( num_collected + take_current,
-        Array.init take_current ~f:(fun _subordinal -> Backend.new_virtual_device physical) ))
+        Array.init take_current ~f:(fun _subordinal -> Backend.new_stream device) ))
   |> Array.concat_map ~f:Fn.id
 
 let to_routine (type context) (module Backend : Backend_type with type context = context)
@@ -416,7 +419,7 @@ let to_routine (type context) (module Backend : Backend_type with type context =
   Backend.link context @@ Backend.compile ?shared ?name bindings comp
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
-    ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
+    ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
     ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
     ?(prior_contexts : context array option)
     (backend : (module Backend_type with type context = context)) () =
@@ -428,7 +431,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     match prior_contexts with
     | Some contexts -> contexts
     | None ->
-        let devices = get_all_suggested_devices ?max_num_devices (module Backend) in
+        let devices = get_all_suggested_streams ?max_num_streams (module Backend) in
         Array.map devices ~f:Backend.init
   in
   let num_devices = Array.length prior_contexts in
@@ -478,7 +481,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         assert (Backend.to_host sgd_update.context learning_rate.value);
         (* scalar_loss is not in the sgd_update context. *)
         assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
-        Backend.(await @@ get_ctx_device grad_updates.(0).context);
+        Backend.(await @@ get_ctx_stream grad_updates.(0).context);
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         batch_losses := batch_loss :: !batch_losses;
@@ -522,7 +525,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
-    Backend.(await @@ get_ctx_device routine.context);
+    Backend.(await @@ get_ctx_stream routine.context);
     Tensor.get_values model_result
   in
   (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)

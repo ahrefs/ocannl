@@ -30,19 +30,19 @@ struct
   let is_done Not_implemented_yet = true
 
   (** TODO: If the tensor node is in the context, returns the event indicating if currently running
-      or scheduled computations modifying that node on the context's device have completed.
+      or scheduled computations modifying that node on the context's stream have completed.
 
       NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
       tracking for [tn] and return the event tracking all currently scheduled computations on
-      [ctx]'s device. *)
+      [ctx]'s stream. *)
   let work_for _ctx _tn = Some Not_implemented_yet
 
-  (** TODO: Schedules waiting for the given event on the context's device. *)
+  (** TODO: Schedules waiting for the given event on the context's stream. *)
   let will_wait_for _ctx Not_implemented_yet = ()
 
-  type device_state = {
+  type stream_state = {
     mutable keep_spinning : bool;
-    mutable device_error : exn option;
+    mutable stream_error : exn option;
     queue : task_queue;
     mut : (Mut.t[@sexp.opaque]);
     host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
@@ -53,8 +53,8 @@ struct
 
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
 
-  type device = {
-    state : device_state;
+  type stream = {
+    state : stream_state;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
     ordinal : int;
@@ -62,46 +62,46 @@ struct
   }
   [@@deriving sexp_of]
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _device =
+  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  type physical_device = device [@@deriving sexp_of]
+  type device = stream [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
 
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
   let is_dev_queue_empty state = Queue.size state.queue = 0
-  let is_idle device = is_dev_queue_empty device.state && device.state.is_ready
+  let is_idle stream = is_dev_queue_empty stream.state && stream.state.is_ready
   let name = "multicore " ^ Backend.name
 
-  let%track3_l_sexp await device =
+  let%track3_l_sexp await stream =
     assert (Domain.is_main_domain ());
-    let d = device.state in
-    if (not @@ is_idle device) && d.keep_spinning then (
+    let d = stream.state in
+    if (not @@ is_idle stream) && d.keep_spinning then (
       Mut.lock d.mut;
-      while (not @@ is_idle device) && d.keep_spinning do
-        (* If the device "is ready", it needs to be woken up first to finish the work. *)
+      while (not @@ is_idle stream) && d.keep_spinning do
+        (* If the stream "is ready", it needs to be woken up first to finish the work. *)
         if d.is_ready then Stdlib.Condition.broadcast d.dev_wait_for_work;
         Stdlib.Condition.wait d.host_wait_for_idle d.mut
       done;
       Mut.unlock d.mut;
-      Option.iter d.device_error ~f:(fun e ->
-          Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal))
+      Option.iter d.stream_error ~f:(fun e ->
+          Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.ordinal))
 
   (** TODO: Returns the event indicating if any currently running or scheduled computations on the
-      device have completed. *)
-  let all_work _device = Not_implemented_yet
+      stream have completed. *)
+  let all_work _stream = Not_implemented_yet
 
-  let%track3_l_sexp schedule_task device task =
+  let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Tnode.describe task, "device", (device.ordinal : int)];
-    let d = device.state in
-    Option.iter d.device_error ~f:(fun e ->
-        Exn.reraise e @@ name ^ " device " ^ Int.to_string device.ordinal);
-    if not d.keep_spinning then invalid_arg "Multicore_backend: device not available";
+    [%log_result "schedule_task", Tnode.describe task, "stream", (stream.ordinal : int)];
+    let d = stream.state in
+    Option.iter d.stream_error ~f:(fun e ->
+        Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.ordinal);
+    if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
     if not @@ Queue.try_push d.queue task then (
-      await device;
+      await stream;
       Queue.push_exn d.queue task);
     if d.is_ready then (
       Mut.lock d.mut;
@@ -110,12 +110,12 @@ struct
 
   let global_run_no = ref 0
 
-  let%track3_l_sexp spinup_device ~(ordinal : int) : device =
+  let%track3_l_sexp spinup_stream ~(ordinal : int) : stream =
     Int.incr global_run_no;
     let state =
       {
         keep_spinning = true;
-        device_error = None;
+        stream_error = None;
         queue = Queue.create ~size_exponent:12;
         mut = Mut.create ();
         is_ready = false;
@@ -140,11 +140,11 @@ struct
           | Some task -> Tnode.run task
         done
       with e ->
-        state.device_error <- Some e;
+        state.stream_error <- Some e;
         state.keep_spinning <- false;
-        [%log1 "Device", (ordinal : int), "exception", Exn.to_string e];
+        [%log1 "Stream", (ordinal : int), "exception", Exn.to_string e];
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
-           device_error. But this is fine if we assume all exceptions are fatal. *)
+           stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
     {
@@ -155,57 +155,57 @@ struct
       allocated_buffer = None;
     }
 
-  let%track3_l_sexp make_work device (Tnode.Task { description; _ } as task) =
-    [%log_result "make_work", description, "device", (device.ordinal : int)];
-    let work () = schedule_task device task in
+  let%track3_l_sexp make_work stream (Tnode.Task { description; _ } as task) =
+    [%log_result "make_work", description, "stream", (stream.ordinal : int)];
+    let work () = schedule_task stream task in
     Tnode.Task
       {
         context_lifetime = task;
-        description = "schedules {" ^ description ^ "} on device " ^ Int.to_string device.ordinal;
+        description = "schedules {" ^ description ^ "} on stream " ^ Int.to_string stream.ordinal;
         work;
       }
 
-  type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
+  type context = { stream : stream; ctx : Backend.context; expected_merge_node : Tnode.t option }
   [@@deriving sexp_of]
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init device =
+  let init stream =
     {
-      device;
-      ctx = Backend.init ~label:(name ^ " " ^ Int.to_string device.ordinal);
+      stream;
+      ctx = Backend.init ~label:(name ^ " " ^ Int.to_string stream.ordinal);
       expected_merge_node = None;
     }
 
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
-  let finalize { device; ctx; expected_merge_node = _ } =
-    await device;
+  let finalize { stream; ctx; expected_merge_node = _ } =
+    await stream;
     Backend.finalize ctx
 
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
-  let link { ctx; device; expected_merge_node = _ } code =
-    let task = Backend.link ~merge_buffer:device.merge_buffer ctx code in
+  let link { ctx; stream; expected_merge_node = _ } code =
+    let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
     {
       task with
       context =
-        { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
-      schedule = make_work device task.schedule;
+        { ctx = task.context; stream; expected_merge_node = Backend.expected_merge_node code };
+      schedule = make_work stream task.schedule;
     }
 
-  let link_batch { ctx; device; expected_merge_node } code_batch =
-    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer ctx code_batch in
+  let link_batch { ctx; stream; expected_merge_node } code_batch =
+    let ctx, routines = Backend.link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
     let merge_nodes = Backend.expected_merge_nodes code_batch in
-    ( { ctx; device; expected_merge_node },
+    ( { ctx; stream; expected_merge_node },
       Array.mapi routines ~f:(fun i ->
           Option.map ~f:(fun task ->
               {
                 task with
-                context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
-                schedule = make_work device task.schedule;
+                context = { ctx = task.context; stream; expected_merge_node = merge_nodes.(i) };
+                schedule = make_work stream task.schedule;
               })) )
 
   let from_host (context : context) (tn : Tnode.t) =
@@ -225,13 +225,13 @@ struct
                        in
                        Ndarray.render_array ~indices h_arr]]]
                in
-               schedule_task context.device
+               schedule_task context.stream
                  (Tnode.Task
                     {
                       context_lifetime = context;
                       description =
                         "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.device.ordinal;
+                        ^ Int.to_string context.stream.ordinal;
                       work;
                     });
                true
@@ -259,13 +259,13 @@ struct
                        in
                        Ndarray.render_array ~indices h_arr]]]
                in
-               schedule_task context.device
+               schedule_task context.stream
                  (Tnode.Task
                     {
                       context_lifetime = context;
                       description =
                         "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.device.ordinal;
+                        ^ Int.to_string context.stream.ordinal;
                       work;
                     });
                true
@@ -277,7 +277,7 @@ struct
                false)
 
   let device_to_device tn ~into_merge_buffer ~dst ~src =
-    let dev = dst.device in
+    let dev = dst.stream in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
       && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
@@ -313,7 +313,7 @@ struct
       in
       let description =
         "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
-        ^ Int.to_string src.device.ordinal
+        ^ Int.to_string src.stream.ordinal
       in
       schedule_task dev (Tnode.Task { context_lifetime = (src, dst); description; work })
     in
@@ -323,16 +323,16 @@ struct
         true
     | _ -> false
 
-  let num_physical_devices () = Domain.recommended_domain_count () - 1
-  let suggested_num_virtual_devices _device = 1
-  let devices : physical_device option array = Array.create ~len:(num_physical_devices ()) None
+  let num_devices () = Domain.recommended_domain_count () - 1
+  let suggested_num_streams _device = 1
+  let devices : device option array = Array.create ~len:(num_devices ()) None
 
   let%track2_sexp unsafe_cleanup () =
     assert (Domain.is_main_domain ());
-    let wait_for_finish device =
-      await device;
-      device.state.keep_spinning <- false;
-      Stdlib.Condition.broadcast device.state.dev_wait_for_work
+    let wait_for_finish stream =
+      await stream;
+      stream.state.keep_spinning <- false;
+      Stdlib.Condition.broadcast stream.state.dev_wait_for_work
     in
     Array.iter devices ~f:(Option.iter ~f:wait_for_finish);
     let cleanup ordinal device =
@@ -344,13 +344,13 @@ struct
 
   let get_device ~ordinal =
     Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
-        let dev = spinup_device ~ordinal in
+        let dev = spinup_stream ~ordinal in
         devices.(ordinal) <- Some dev;
         dev)
 
-  let new_virtual_device device = device
-  let get_physical_device device = device
-  let get_ctx_device { device; _ } = device
+  let new_stream device = device
+  let get_stream_device stream = stream
+  let get_ctx_stream { stream; _ } = stream
   let get_name device = Int.to_string device.ordinal
   let to_ordinal { ordinal; _ } = ordinal
   let to_subordinal _ = 0
@@ -360,12 +360,12 @@ struct
   let get_buffer tn context = Backend.get_buffer tn context.ctx
 end
 
-(** For debugging, allow [Sync_backend(...).suggested_num_virtual_devices] calls to return >1
+(** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1
     numbers. *)
-let sync_suggested_num_virtual_devices = ref 1
+let sync_suggested_num_streams = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
-    There is only one physical device, but an arbitrary number of virtual devices. *)
+    There is only one device, but an arbitrary number of streams. *)
 module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend = struct
   type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
   type event = unit
@@ -375,60 +375,60 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   let work_for _context _tn = Some ()
   let will_wait_for _context () = ()
 
-  type device = {
+  type stream = {
     subordinal : int;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
   }
   [@@deriving sexp_of]
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _device =
+  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  type physical_device = CPU [@@deriving sexp_of]
+  type device = CPU [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
 
   let expected_merge_node (code : code) = Backend.expected_merge_node code
   let expected_merge_nodes (codes : code_batch) = Backend.expected_merge_nodes codes
-  let all_work _device = ()
-  let is_idle _device = true
+  let all_work _stream = ()
+  let is_idle _stream = true
   let name = "sync " ^ Backend.name
-  let await _device = ()
+  let await _stream = ()
   (* let global_run_no = ref 0 *)
 
-  type context = { device : device; ctx : Backend.context; expected_merge_node : Tnode.t option }
+  type context = { stream : stream; ctx : Backend.context; expected_merge_node : Tnode.t option }
   [@@deriving sexp_of]
 
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init device = { device; ctx = Backend.init ~label:name; expected_merge_node = None }
+  let init stream = { stream; ctx = Backend.init ~label:name; expected_merge_node = None }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let finalize { device = _; ctx; expected_merge_node = _ } = Backend.finalize ctx
+  let finalize { stream = _; ctx; expected_merge_node = _ } = Backend.finalize ctx
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
-  let link { ctx; device; expected_merge_node = _ } code =
-    let task = Backend.link ~merge_buffer:device.merge_buffer ctx code in
+  let link { ctx; stream; expected_merge_node = _ } code =
+    let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
     {
       task with
       context =
-        { ctx = task.context; device; expected_merge_node = Backend.expected_merge_node code };
+        { ctx = task.context; stream; expected_merge_node = Backend.expected_merge_node code };
     }
 
-  let link_batch { ctx; device; expected_merge_node } code_batch =
-    let ctx, routines = Backend.link_batch ~merge_buffer:device.merge_buffer ctx code_batch in
+  let link_batch { ctx; stream; expected_merge_node } code_batch =
+    let ctx, routines = Backend.link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
     let merge_nodes = Backend.expected_merge_nodes code_batch in
-    ( { ctx; device; expected_merge_node },
+    ( { ctx; stream; expected_merge_node },
       Array.mapi routines ~f:(fun i ->
           Option.map ~f:(fun task ->
               {
                 task with
-                context = { ctx = task.context; device; expected_merge_node = merge_nodes.(i) };
+                context = { ctx = task.context; stream; expected_merge_node = merge_nodes.(i) };
               })) )
 
-  let get_name device = Int.to_string device.subordinal
+  let get_name stream = Int.to_string stream.subordinal
 
   let from_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
@@ -439,7 +439,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
                [%diagn2_l_sexp
                  [%log_block
                    "from_host for " ^ Tnode.debug_name tn;
-                   [%log "copied", Tnode.debug_name tn, "from host to", get_name context.device];
+                   [%log "copied", Tnode.debug_name tn, "from host to", get_name context.stream];
                    [%log3_printbox
                      let indices =
                        Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
@@ -450,7 +450,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
                [%diagn2_l_sexp
                  [%log_block
                    "nothing to copy from host for " ^ Tnode.debug_name tn;
-                   [%log "to", get_name context.device]]];
+                   [%log "to", get_name context.stream]]];
                false)
 
   let to_host (context : context) (tn : Tnode.t) =
@@ -462,7 +462,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
                [%diagn2_l_sexp
                  [%log_block
                    "to_host for " ^ Tnode.debug_name tn;
-                   [%log "copied to host from", get_name context.device];
+                   [%log "copied to host from", get_name context.stream];
                    [%log3_printbox
                      let indices =
                        Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
@@ -473,11 +473,11 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
                [%diagn_sexp
                  [%log_block
                    "nothing to copy to host for " ^ Tnode.debug_name tn;
-                   [%log "from", get_name context.device]]];
+                   [%log "from", get_name context.stream]]];
                false)
 
   let device_to_device tn ~into_merge_buffer ~dst ~src =
-    let dev = dst.device in
+    let dev = dst.stream in
     if
       (not (equal_merge_buffer_use into_merge_buffer No))
       && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
@@ -511,28 +511,28 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
             Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx);
         true
 
-  let num_physical_devices () = 1
-  let suggested_num_virtual_devices _device = !sync_suggested_num_virtual_devices
-  let next_virtual_device_id = ref 0
+  let num_devices () = 1
+  let suggested_num_streams _device = !sync_suggested_num_streams
+  let next_stream_id = ref 0
 
   let unsafe_cleanup () =
-    next_virtual_device_id := 0;
+    next_stream_id := 0;
     Backend.unsafe_cleanup ()
 
   let get_device ~ordinal =
-    if ordinal <> 0 then invalid_arg "Sync_backend backends only have physical device number 0";
+    if ordinal <> 0 then invalid_arg "Sync_backend backends only have device number 0";
     CPU
 
-  let new_virtual_device CPU =
+  let new_stream CPU =
     let result =
-      { subordinal = !next_virtual_device_id; merge_buffer = ref None; allocated_buffer = None }
+      { subordinal = !next_stream_id; merge_buffer = ref None; allocated_buffer = None }
     in
     result
 
-  let get_physical_device _device = CPU
-  let get_ctx_device { device; _ } = device
+  let get_stream_device _stream = CPU
+  let get_ctx_stream { stream; _ } = stream
   let to_ordinal _ = 0
-  let to_subordinal device = device.subordinal
+  let to_subordinal stream = stream.subordinal
   let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
   let host_to_buffer = Backend.host_to_buffer
   let buffer_to_host = Backend.buffer_to_host
@@ -617,7 +617,7 @@ module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
       }
   [@@deriving sexp_of]
 
-  let global_config = ref Physical_devices_only
+  let global_config = ref Only_devices_parallel
 
   let initialize config =
     global_config := config;
@@ -828,8 +828,8 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
                 name;
               })) )
 
-  let init device = { ctx = init device; expected_merge_node = None }
-  let get_ctx_device context = get_ctx_device context.ctx
+  let init stream = { ctx = init stream; expected_merge_node = None }
+  let get_ctx_stream context = get_ctx_stream context.ctx
   let finalize context = finalize context.ctx
   let to_buffer tn ~dst ~src = to_buffer tn ~dst ~src:src.ctx
   let get_buffer tn context = get_buffer tn context.ctx
@@ -861,7 +861,7 @@ let reinitialize (module Backend : Backend_types.Backend) config =
 
 (** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
     the global [backend] setting. *)
-let fresh_backend ?backend_name ?(config = Physical_devices_only) () =
+let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->

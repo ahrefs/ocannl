@@ -58,8 +58,8 @@ let demo () =
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in
@@ -93,7 +93,7 @@ let demo () =
         Train.run routine;
         assert (Backend.to_host routine.context learning_rate.value);
         assert (Backend.to_host routine.context scalar_loss.value);
-        Backend.await device;
+        Backend.await stream;
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         Int.incr step_ref
       done;
@@ -118,7 +118,7 @@ let demo () =
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);
-    Backend.await device;
+    Backend.await stream;
     Float.(mlp_result.@[0] >= 0.)
   in
 

@@ -56,7 +56,7 @@ let main () =
   let module Backend = (val backend) in
   let inputs, outputs, _model_result, infer_callback, _batch_losses, _epoch_losses, _learning_rates
       =
-    Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
+    Train.example_train_loop ~seed ~batch_size ~max_num_streams:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
       ~weight_decay ~per_batch_callback ~per_epoch_callback
       (module Backend)

@@ -17,6 +17,7 @@
 
 NOTE: these are outdated.
 TODO: update regarding events and device-to-device synchronization.
+TODO: rename `device` -> `stream`, `physical_device` -> `device`.
 
 ## Design around compiling and running code, backend interfaces
 
@@ -79,15 +80,15 @@ module type Backend = sig
   val await : device -> unit
   val is_idle : device -> bool
   val get_device : ordinal:int -> physical_device
-  val get_physical_device : device -> physical_device
-  val new_virtual_device : physical_device -> device
+  val get_stream_device : device -> physical_device
+  val new_stream : physical_device -> device
   ...
 end
 ```
 
 `Backend.await` synchronizes the device -- waits for all work on the device to finish -- the device becomes `is_idle`.
 
-When devices natively implement a lightweight threads mechanism, as CUDA does via _streams_, the lightweight threads are exposed via `new_virtual_device` generating a fresh thread. Otherwise, `physical_device = device` and the functions `new_virtual_device` and `get_physical_device` are identities.
+When devices natively implement a lightweight threads mechanism, as CUDA does via _streams_, the lightweight threads are exposed via `new_stream` generating a fresh thread. Otherwise, `physical_device = device` and the functions `new_stream` and `get_stream_device` are identities.
 
 ### Shared (relocatable) compilation, batch compilation
 

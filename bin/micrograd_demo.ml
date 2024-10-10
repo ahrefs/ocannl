@@ -80,8 +80,8 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let device = Backend.(new_virtual_device @@ get_device ~ordinal:0) in
-  let ctx = Backend.init device in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.init stream in
   let routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in
@@ -104,7 +104,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
         Train.run routine;
         assert (Backend.to_host routine.context learning_rate.value);
         assert (Backend.to_host routine.context scalar_loss.value);
-        Backend.await device;
+        Backend.await stream;
         (* Stdio.printf "Data batch=%d, step=%d, lr=%f, batch loss=%f\n%!" !batch_ref !step_ref
            learning_rate.@[0] scalar_loss.@[0]; *)
         learning_rates := learning_rate.@[0] :: !learning_rates;
@@ -142,7 +142,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     assert (Backend.to_host result_routine.context mlp_result.value);
-    Backend.await device;
+    Backend.await stream;
     Float.(mlp_result.@[0] >= 0.)
   in
   let%track3_sexp _plotting : unit =

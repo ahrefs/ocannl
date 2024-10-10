@@ -57,7 +57,7 @@ let experiment ~seed ~backend_name ~config () =
   in
   let module Backend = (val backend) in
   let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~max_num_devices:(batch_size / 2) ~init_lr
+    Train.example_train_loop ~seed ~batch_size ~max_num_streams:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
       ~weight_decay ~per_batch_callback ~per_epoch_callback
       (module Backend)
@@ -126,12 +126,12 @@ let experiment ~seed ~backend_name ~config () =
   let module Backend = (val backend) in
   Backend.unsafe_cleanup ()
 
-let () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
-let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Physical_devices_only ()
-let _suspended () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_devices ()
+let () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()
+let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()
+let _suspended () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_streams ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment ~seed ~backend_name:"cc" ~config:Physical_devices_only ()
+    experiment ~seed ~backend_name:"cc" ~config:Only_devices_parallel ()
   done

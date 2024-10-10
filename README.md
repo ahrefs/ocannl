@@ -97,7 +97,7 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
-* **0.4.1 Half precision, mixed precision, CUDA virtual devices**
+* **0.4.1 Half precision, mixed precision, CUDA virtual devices** (virtual devices renamed to streams in 0.4.2)
   * Half precision. Maybe improvements for mixed-precision computations.
   * Resolve remaining issues with the new scheduler.
   * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
