@@ -341,27 +341,18 @@ let%track3_sexp parallel_update (type context)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
-          let compiled = Backend.compile_batch ~shared:true ~occupancy Idx.Empty grad_merges in
-          let from_prior_context =
-            Set.union_list (module Tn)
-            @@ Array.to_list
-            @@ Array.map grad_merges ~f:(fun c ->
-                   Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes)
-          in
-          snd @@ Backend.link_batch ctx ~from_prior_context compiled
+          snd
+          @@ Backend.(link_batch ctx @@ compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
         else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
-    let compiled =
-      Backend.compile Idx.Empty
-        [%cd
-          ~~("merging" updaten.loss;
-             updaten.loss.value =+ updaten.loss.value.merge)]
-    in
-    let c = updaten.loss.forward in
-    let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
-    Backend.link ~from_prior_context sgd_update.context compiled
+    Backend.(
+      link sgd_update.context
+      @@ compile Idx.Empty
+           [%cd
+             ~~("merging" updaten.loss;
+                updaten.loss.value =+ updaten.loss.value.merge)])
   in
   let into_merge_buffer = if copy_to_merge then BT.Copy else BT.Streaming in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
@@ -422,9 +413,7 @@ let get_all_suggested_devices ?(max_num_devices : int option) (type device)
 
 let to_routine (type context) (module Backend : Backend_type with type context = context)
     (context : context) ?shared ?name bindings comp =
-  let code = Backend.compile ?shared ?name bindings comp in
-  let from_prior_context = Set.diff (Asgns.context_nodes comp.asgns) comp.embedded_nodes in
-  Backend.link ~from_prior_context context code
+  Backend.link context @@ Backend.compile ?shared ?name bindings comp
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_devices ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
@@ -470,11 +459,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
-  let c = update.loss.forward in
-  let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
-  let grad_updates =
-    Array.map prior_contexts ~f:(fun ctx -> Backend.link ~from_prior_context ctx grad_update)
-  in
+  let grad_updates = Array.map prior_contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
   Tensor.log_debug_info ~from_log_level:2 outputs;
@@ -522,16 +507,12 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_on_host Changed_on_devices model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
-    let compiled =
-      Backend.compile IDX.empty
-        [%cd
-          ~~("infer " model_result;
-             infer_fwd)]
-    in
-    let from_prior_context =
-      Set.diff (Asgns.context_nodes infer_fwd.asgns) infer_fwd.embedded_nodes
-    in
-    Backend.link ~from_prior_context sgd_update.context compiled
+    Backend.(
+      link sgd_update.context
+      @@ compile IDX.empty
+           [%cd
+             ~~("infer " model_result;
+                infer_fwd)])
   in
   let infer_callback values =
     Tensor.set_values infer values;
@@ -549,12 +530,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
 
 let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
-  let routine =
-    let c = forward ~disable_rootness_check t in
-    let compiled = Backend.compile bindings c in
-    let from_prior_context = Set.diff (Asgns.context_nodes c.asgns) c.embedded_nodes in
-    Backend.link ~from_prior_context ctx compiled
-  in
+  let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
   sync_run (module Backend) routine t;

@@ -69,3 +69,4 @@ val get_ctx_device : context -> device
 val get_name : device -> string
 val to_ordinal : physical_device -> int
 val to_subordinal : device -> int
+val name : string
