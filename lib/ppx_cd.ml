@@ -768,6 +768,22 @@ let translate (expr : expression) : result =
                 @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: repeated .merge not allowed";
             })
     | [%expr
+        ~~([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as comment];
+           [%e? expr2])] ->
+        let res2 = loop ~proj_in_scope expr2 in
+        {
+          res2 with
+          expr =
+            [%expr
+              let __comment_block = [%e res2.expr] in
+              {
+                Arrayjit.Assignments.asgns =
+                  Arrayjit.Assignments.Block_comment
+                    ([%e comment], __comment_block.Arrayjit.Assignments.asgns);
+                embedded_nodes = __comment_block.Arrayjit.Assignments.embedded_nodes;
+              }];
+        }
+    | [%expr
         ~~([%e? { pexp_desc = Pexp_apply (expr, exprs); pexp_loc; _ }];
            [%e? expr2])] ->
         let elements =

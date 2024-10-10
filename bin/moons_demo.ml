@@ -109,7 +109,7 @@ let demo () =
       (module Backend)
       routine.context IDX.empty
       [%cd
-        ~~("moons" "infer";
+        ~~("moons infer";
            mlp_result.forward)]
   in
   let callback (x, y) =

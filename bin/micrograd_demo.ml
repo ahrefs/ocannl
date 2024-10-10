@@ -129,7 +129,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
       (module Backend)
       routine.context IDX.empty
       [%cd
-        ~~("moons" "infer";
+        ~~("moons infer";
            mlp_result.forward)]
   in
   Stdio.print_endline "\n******** mlp_result **********";
