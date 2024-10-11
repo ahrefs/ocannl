@@ -7,6 +7,17 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+let check_merge_buffer ~scheduled_node ~code_node =
+  let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
+  match (scheduled_node, code_node) with
+  | _, None -> ()
+  | Some actual, Some expected when Tnode.equal actual expected -> ()
+  | _ ->
+      raise
+      @@ Utils.User_error
+           ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
+          ^ name code_node)
+
 module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
 struct
   module Domain = Domain [@warning "-3"]
@@ -690,6 +701,11 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
           verify from_prior_context;
           link_compiled ~merge_buffer prior_context proc
     in
+    let schedule =
+      Task.prepend schedule ~work:(fun () ->
+          check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
+            ~code_node:(expected_merge_node code))
+    in
     { context; schedule; bindings; name }
 
   let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
@@ -711,9 +727,15 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
           verify from_prior_context;
           procs
     in
-    Array.fold_map procs ~init:prior_context ~f:(fun context -> function
+    let code_nodes = expected_merge_nodes code_batch in
+    Array.fold_mapi procs ~init:prior_context ~f:(fun i context -> function
       | Some proc ->
           let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
+          let schedule =
+            Task.prepend schedule ~work:(fun () ->
+                check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
+                  ~code_node:code_nodes.(i))
+          in
           (context, Some { context; schedule; bindings; name })
       | None -> (context, None))
 
@@ -800,6 +822,12 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context.ctx
       ~from_prior_context:code.from_prior_context [| code.traced_store |];
     let ctx, bindings, schedule = link context.ctx code.code in
+    let schedule =
+      Task.prepend schedule ~work:(fun () ->
+          check_merge_buffer
+            ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context.ctx)
+            ~code_node:(expected_merge_node code))
+    in
     { context = { ctx; expected_merge_node = code.expected_merge_node }; schedule; bindings; name }
 
   let link_batch context code_batch =
@@ -809,12 +837,14 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     ( { ctx; expected_merge_node = context.expected_merge_node },
       Array.mapi schedules ~f:(fun i ->
           Option.map ~f:(fun schedule ->
-              {
-                context = { ctx; expected_merge_node = code_batch.expected_merge_nodes.(i) };
-                schedule;
-                bindings;
-                name;
-              })) )
+              let expected_merge_node = code_batch.expected_merge_nodes.(i) in
+              let schedule =
+                Task.prepend schedule ~work:(fun () ->
+                    check_merge_buffer
+                      ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context.ctx)
+                      ~code_node:expected_merge_node)
+              in
+              { context = { ctx; expected_merge_node }; schedule; bindings; name })) )
 
   let init stream = { ctx = init stream; expected_merge_node = None }
   let get_ctx_stream context = get_ctx_stream context.ctx

@@ -97,6 +97,8 @@ let will_wait_for context event = Cu.Delimited_event.wait context.stream.cu_stre
 let sync event = Cu.Delimited_event.synchronize event
 let all_work stream = Cu.Delimited_event.record stream.cu_stream
 
+let scheduled_merge_node stream = Option.map ~f:snd stream.merge_buffer
+
 let is_initialized, initialize =
   let initialized = ref false in
   let init (config : config) : unit =
@@ -462,7 +464,7 @@ end
 let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = [| lowered |]
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
@@ -477,7 +479,7 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
 
 let compile_batch ~names bindings lowereds =
   let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
-  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
   end)) in
   let idx_params = Indexing.bound_symbols bindings in

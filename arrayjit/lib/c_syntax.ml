@@ -390,15 +390,3 @@ struct
     fprintf ppf "@;<0 -2>}@]@.";
     params
 end
-
-let check_merge_buffer ~merge_buffer ~code_node =
-  let stream_node = Option.map !merge_buffer ~f:snd in
-  let name = function Some tn -> Tn.debug_name tn | None -> "none" in
-  match (stream_node, code_node) with
-  | _, None -> ()
-  | Some actual, Some expected when Tn.equal actual expected -> ()
-  | _ ->
-      raise
-      @@ Utils.User_error
-           ("Merge buffer mismatch, on stream: " ^ name stream_node ^ ", expected by code: "
-          ^ name code_node)

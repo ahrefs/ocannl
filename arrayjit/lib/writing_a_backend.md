@@ -138,7 +138,7 @@ type mem_properties =
   | Constant_from_host  (** The array is read directly from the host. *)
 ```
 
-while the CC and CUDA backends do it implicitly via the input to the `Backend_utils.C_syntax` functor:
+while the CC and CUDA backends do it implicitly via the input to the `C_syntax.C_syntax` functor:
 
 ```ocaml
 module C_syntax (B : sig

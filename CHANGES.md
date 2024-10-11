@@ -9,10 +9,14 @@
 - Migrated to cudajit 0.5.
 - Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
 - Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
-- New files: split out `backend_types.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; TODO: renamed `backend_utils.ml` to `c_syntax.ml`.
+- New files: split out `backend_types.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
 - TODO: Moved the multicore backend from a `device = stream` model to a single device model.
 - TODO: Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
+
+### Fixed
+
+- Validating merge nodes for the CUDA backend.
 
 ## [0.4.1] -- 2024-09-17
 

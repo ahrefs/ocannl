@@ -165,7 +165,7 @@ module type Backend = sig
       [will_wait_for src (all_work (get_ctx_stream dst))]. *)
 
   type device
-  type stream
+  type stream [@@deriving sexp_of]
 
   val init : stream -> context
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
@@ -180,7 +180,6 @@ module type Backend = sig
   val is_idle : stream -> bool
   (** Whether the stream is currently waiting for work. *)
 
-  val sexp_of_stream : stream -> Sexp.t
   val get_device : ordinal:int -> device
   val num_devices : unit -> int
 
@@ -298,14 +297,18 @@ module type Lowered_backend = sig
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 
   type device
-  type stream
+  type stream [@@deriving sexp_of]
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
   val init : stream -> context
   val await : stream -> unit
   val is_idle : stream -> bool
   val all_work : stream -> event
-  val sexp_of_stream : stream -> Sexplib.Sexp.t
+
+  val scheduled_merge_node : stream -> Tnode.t option
+  (** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge
+      buffer right after [await stream]. *)
+
   val num_devices : unit -> int
   val suggested_num_streams : device -> int
   val get_device : ordinal:int -> device

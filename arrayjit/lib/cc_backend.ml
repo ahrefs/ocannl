@@ -151,7 +151,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
                 else ctx_arrays
             | Some _ -> ctx_arrays))
   in
-  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = [| lowered |]
     let opt_ctx_arrays = opt_ctx_arrays
   end)) in
@@ -185,7 +185,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
                     else ctx_arrays
                 | Some _ -> ctx_arrays)))
   in
-  let module Syntax = Backend_utils.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
     let opt_ctx_arrays = opt_ctx_arrays
   end)) in

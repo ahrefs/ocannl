@@ -36,7 +36,7 @@
   assignments
   task
   backend_types
-  backend_utils
+  c_syntax
   cc_backend
   gcc_backend
   cuda_backend
