@@ -47,7 +47,7 @@ end  (* in backends.ml *)
 Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed. For simple situations like CPU backends, `Backends` has a helper functor:
 
 ```ocaml
-module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend = struct
+module Lowered_no_device_backend (Backend : Lowered_no_device_backend) : No_device_backend = struct
   type code =
     | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
     | Compiled of Backend.procedure
@@ -66,7 +66,7 @@ module Simple_no_device_backend (Backend : Simple_backend) : No_device_backend =
 end
 ```
 
-where `Simple_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
+where `Lowered_no_device_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
 
 `No_device_backend`s do not themselves deal with the device abstraction, they are intended for targetting CPU. There's the functor `Multicore_backend (Backend : No_device_backend) : Backend` that assigns a device to a domain, and manages the given `No_device_backend` on the domain-based devices. Running `schedule` on a `No_device_backend` _should block_ (till execution finishes), but it _should not block_ for a proper `Backend` -- it should just put the work on the device's queue.
 
@@ -170,10 +170,10 @@ end
 
 The functor input signature will grow as the backends that use `C_syntax` evolve: when we cover more CUDA functionality and we introduce the METAL backend targetting Apple hardware. Correspondingly, tensor nodes will get categorized into more memory classes on the devices (at least implicitly).
 
-`Simple_backend` requires:
+`Lowered_no_device_backend` requires:
 
 ```ocaml
-module type Simple_backend = sig
+module type Lowered_no_device_backend = sig
   type context
   type procedure
   type ctx_arrays
@@ -246,7 +246,7 @@ Currently, OCANNL expects backends to implement a FIFO queue scheduling mechanis
 
 Since this is significantly simpler than what other frameworks do, it might evolve in the future. (In particular, scheduling in `tinygrad` expresses tensor graph dependencies.) A natural next step would be to add "acknowledge" events that indirectly keep track of (and signal) which tasks a device has already executed.
 
-Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Simple_backend` (i.e. CPU backends) should run the tasks by executing them directly.
+Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Implementations of `No_device_backend` and `Lowered_no_device_backend` (i.e. CPU backends) should run the tasks by executing them directly.
 
 ### Data transfers
 

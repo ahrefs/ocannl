@@ -196,7 +196,7 @@ module type Backend = sig
   val get_name : stream -> string
 end
 
-module type Simple_backend = sig
+module type Lowered_no_device_backend = sig
   type context [@@deriving sexp_of]
   type procedure [@@deriving sexp_of]
   type ctx_array [@@deriving sexp_of]

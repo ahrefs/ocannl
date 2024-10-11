@@ -360,8 +360,7 @@ struct
   let get_buffer tn context = Backend.get_buffer tn context.ctx
 end
 
-(** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1
-    numbers. *)
+(** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
 let sync_suggested_num_streams = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
@@ -585,7 +584,7 @@ let from_prior_context_batch comps =
           Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
-module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
+module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_backend) :
   Backend_types.No_device_backend = struct
   include Backend
 
@@ -652,7 +651,7 @@ module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
 
     if shared then
-      let proc = Backend.compile ~name ~opt_ctx_arrays:None bindings lowered in
+      let proc = compile ~name ~opt_ctx_arrays:None bindings lowered in
       let from_prior_context =
         Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes
       in
@@ -682,9 +681,8 @@ module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
 
   let link ~merge_buffer (prior_context : context) (code : code) =
     let verify from_prior_context =
-      Backend.(
-        verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-          [| get_traced_store code |])
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+        [| get_traced_store code |]
     in
     let context, bindings, schedule, name =
       match code with
@@ -705,9 +703,8 @@ module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
 
   let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
     let verify from_prior_context =
-      Backend.(
-        verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-        @@ get_traced_stores code_batch)
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+      @@ get_traced_stores code_batch
     in
     let _opt_ctx_arrays, procs =
       match code_batch with
@@ -737,14 +734,14 @@ module Simple_no_device_backend (Backend : Backend_types.Simple_backend) :
     Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
 end
 
-module C_device : Backend_types.No_device_backend = Simple_no_device_backend ((
-  Cc_backend : Backend_types.Simple_backend with type context = Cc_backend.context))
+module C_device : Backend_types.No_device_backend = Lowered_no_device_backend ((
+  Cc_backend : Backend_types.Lowered_no_device_backend with type context = Cc_backend.context))
 
 module Cc_backend = Multicore_backend (C_device)
 module Sync_cc_backend = Sync_backend (C_device)
 
-module Gccjit_device : Backend_types.No_device_backend = Simple_no_device_backend ((
-  Gcc_backend : Backend_types.Simple_backend with type context = Gcc_backend.context))
+module Gccjit_device : Backend_types.No_device_backend = Lowered_no_device_backend ((
+  Gcc_backend : Backend_types.Lowered_no_device_backend with type context = Gcc_backend.context))
 
 module Gccjit_backend = Multicore_backend (Gccjit_device)
 module Sync_gccjit_backend = Sync_backend (Gccjit_device)
