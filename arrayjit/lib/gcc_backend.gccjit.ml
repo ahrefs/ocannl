@@ -82,7 +82,7 @@ let init ~label =
 
 type tn_info = {
   tn : Tn.t;  (** The original array. *)
-  mutable ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
+  ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
       (** Pointer to the first value of the associated array.
           - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
           - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when
@@ -130,11 +130,8 @@ let is_in_context node =
   | _ -> true
 
 type gccjit_param = Gccjit.param
-type gccjit_lvalue = Gccjit.lvalue
-type gccjit_rvalue = Gccjit.rvalue
 
 let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
-let sexp_of_gccjit_lvalue v = Sexp.Atom (Gccjit.LValue.to_string v)
 let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
 
 type ctx_nodes =
@@ -717,10 +714,6 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     match ctx_nodes with Param_ptrs _ -> None | Ctx_arrays { contents } -> Some contents
   in
   (ctx_info, opt_ctx_arrays, params)
-
-let header_sep =
-  let open Re in
-  compile (seq [ str " "; opt any; str "="; str " " ])
 
 let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
