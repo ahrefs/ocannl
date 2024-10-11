@@ -116,7 +116,6 @@ type procedure = {
   result : (Gccjit.result[@sexp.opaque]);
   opt_ctx_arrays : Ndarray.t Map.M(Tn).t option;
   params : param_source list;
-  expected_merge_node : Tn.t option;
 }
 [@@deriving sexp_of]
 
@@ -737,7 +736,6 @@ let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optim
     name;
     opt_ctx_arrays;
     params = List.map ~f:snd params;
-    expected_merge_node = lowered.merge_node;
   }
 
 let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
@@ -783,8 +781,6 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
               name;
               opt_ctx_arrays;
               params = List.map ~f:snd params;
-              expected_merge_node =
-                Option.(join @@ map lowereds.(i) ~f:(fun optim -> optim.merge_node));
             })) )
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =

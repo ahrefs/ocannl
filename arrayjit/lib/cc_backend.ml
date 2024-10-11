@@ -57,7 +57,6 @@ let init ~label =
 type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]
 
 type procedure = {
-  lowered : Low_level.optimized;
   bindings : Indexing.unit_bindings;
   name : string;
   result : library;
@@ -157,7 +156,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered in
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in
-  { lowered; result; params; bindings; name; opt_ctx_arrays }
+  { result; params; bindings; name; opt_ctx_arrays }
 
 let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
@@ -207,9 +206,8 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
   let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
   ( opt_ctx_arrays,
     Array.mapi params ~f:(fun i params ->
-        Option.map2 names.(i) lowereds.(i) ~f:(fun name lowered ->
+        Option.map names.(i) ~f:(fun name  ->
             {
-              lowered;
               result;
               params = Option.value_exn ~here:[%here] params;
               bindings;
