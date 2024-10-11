@@ -277,7 +277,6 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
   in
   let%diagn_l_sexp work () : unit =
     [%log_result name];
-    Backend_utils.check_merge_buffer ~merge_buffer ~code_node:code.lowered.merge_node;
     Indexing.apply run_variadic ();
     if Utils.debug_log_from_routines () then (
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
@@ -285,7 +284,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
   in
   ( context,
     Indexing.lowered_bindings code.bindings run_variadic,
-    Tn.Task
+    Task.Task
       {
         (* In particular, keep code alive so it doesn't get unloaded. *)
         context_lifetime = (context, code);

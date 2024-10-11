@@ -10,7 +10,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 module Types = struct
   type 'context routine = {
     context : 'context;
-    schedule : Tnode.task;
+    schedule : Task.t;
     bindings : Indexing.lowered_bindings;
     name : string;
   }
@@ -232,7 +232,7 @@ module type Lowered_no_device_backend = sig
     merge_buffer:(buffer_ptr * Tnode.t) option ref ->
     context ->
     procedure ->
-    context * Indexing.lowered_bindings * Tnode.task * string
+    context * Indexing.lowered_bindings * Task.t * string
 
   val name : string
   val initialize : unit -> unit
@@ -273,10 +273,10 @@ module type Lowered_backend = sig
 
   val is_in_context : Low_level.traced_array -> bool
   val ctx_arrays : context -> ctx_array Map.M(Tnode).t
-  val link : context -> code -> context * Indexing.lowered_bindings * Tnode.task
+  val link : context -> code -> context * Indexing.lowered_bindings * Task.t
 
   val link_batch :
-    context -> code_batch -> context * Indexing.lowered_bindings * Tnode.task option array
+    context -> code_batch -> context * Indexing.lowered_bindings * Task.t option array
 
   val unsafe_cleanup : unit -> unit
 

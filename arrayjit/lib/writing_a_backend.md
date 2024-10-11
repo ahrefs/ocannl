@@ -27,7 +27,7 @@ Currently, OCANNL integrates new backends via code in [Backends](backends.ml), s
 type lowered_bindings = (static_symbol, int ref) List.Assoc.t  (* in indexing.ml *)
 
 type task =
-  | Task : { context_lifetime : 'a; description : string; work : unit -> unit; } -> task  (* in tnode.ml *)
+  | Task.t : { context_lifetime : 'a; description : string; work : unit -> unit; } -> task  (* in tnode.ml *)
 
 type 'context routine = {
   context : 'context;
@@ -190,7 +190,7 @@ module type Lowered_no_device_backend = sig
   ...
 
   val link_compiled :
-    context -> procedure -> context * Indexing.lowered_bindings * Tnode.task * string
+    context -> procedure -> context * Indexing.lowered_bindings * Task.t * string
 
   ...
 end

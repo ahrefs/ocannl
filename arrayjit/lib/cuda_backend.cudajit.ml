@@ -569,7 +569,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     [%log "kernel launched"]
   in
   ( context,
-    Tn.Task
+    Task.Task
       {
         context_lifetime = context;
         description = "launches " ^ name ^ " on " ^ context.label;

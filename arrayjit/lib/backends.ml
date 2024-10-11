@@ -11,12 +11,12 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_t
 struct
   module Domain = Domain [@warning "-3"]
 
-  type task_list = Tnode.task Utils.mutable_list [@@deriving sexp_of]
+  type task_list = Task.t Utils.mutable_list [@@deriving sexp_of]
 
   module Mut = Stdlib.Mutex
   module Queue = Saturn_lockfree.Single_prod_single_cons_queue
 
-  type task_queue = Tnode.task Queue.t
+  type task_queue = Task.t Queue.t
 
   let sexp_of_task_queue q =
     Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
@@ -95,7 +95,7 @@ struct
 
   let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Tnode.describe task, "stream", (stream.ordinal : int)];
+    [%log_result "schedule_task", Task.describe task, "stream", (stream.ordinal : int)];
     let d = stream.state in
     Option.iter d.stream_error ~f:(fun e ->
         Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.ordinal);
@@ -137,7 +137,7 @@ struct
               done;
               state.is_ready <- false;
               Mut.unlock state.mut
-          | Some task -> Tnode.run task
+          | Some task -> Task.run task
         done
       with e ->
         state.stream_error <- Some e;
@@ -154,16 +154,6 @@ struct
       merge_buffer = ref None;
       allocated_buffer = None;
     }
-
-  let%track3_l_sexp make_work stream (Tnode.Task { description; _ } as task) =
-    [%log_result "make_work", description, "stream", (stream.ordinal : int)];
-    let work () = schedule_task stream task in
-    Tnode.Task
-      {
-        context_lifetime = task;
-        description = "schedules {" ^ description ^ "} on stream " ^ Int.to_string stream.ordinal;
-        work;
-      }
 
   type context = { stream : stream; ctx : Backend.context; expected_merge_node : Tnode.t option }
   [@@deriving sexp_of]
@@ -186,6 +176,7 @@ struct
 
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
+  let get_stream_name s = "stream " ^ Int.to_string s.ordinal
 
   let link { ctx; stream; expected_merge_node = _ } code =
     let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
@@ -193,7 +184,7 @@ struct
       task with
       context =
         { ctx = task.context; stream; expected_merge_node = Backend.expected_merge_node code };
-      schedule = make_work stream task.schedule;
+      schedule = Task.enschedule ~schedule_task ~get_stream_name stream task.schedule;
     }
 
   let link_batch { ctx; stream; expected_merge_node } code_batch =
@@ -205,7 +196,7 @@ struct
               {
                 task with
                 context = { ctx = task.context; stream; expected_merge_node = merge_nodes.(i) };
-                schedule = make_work stream task.schedule;
+                schedule = Task.enschedule ~schedule_task ~get_stream_name stream task.schedule;
               })) )
 
   let from_host (context : context) (tn : Tnode.t) =
@@ -226,7 +217,7 @@ struct
                        Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.stream
-                 (Tnode.Task
+                 (Task.Task
                     {
                       context_lifetime = context;
                       description =
@@ -260,7 +251,7 @@ struct
                        Ndarray.render_array ~indices h_arr]]]
                in
                schedule_task context.stream
-                 (Tnode.Task
+                 (Task.Task
                     {
                       context_lifetime = context;
                       description =
@@ -315,7 +306,7 @@ struct
         "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
         ^ Int.to_string src.stream.ordinal
       in
-      schedule_task dev (Tnode.Task { context_lifetime = (src, dst); description; work })
+      schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
     in
     match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
     | Some dst, Some _ ->

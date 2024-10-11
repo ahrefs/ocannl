@@ -8,21 +8,6 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type task =
-  | Task : {
-      context_lifetime : ('a[@sexp.opaque]);
-      description : string;
-      work : unit -> unit;
-    }
-      -> task
-[@@deriving sexp_of]
-
-let describe (Task task) = task.description
-
-let%diagn_l_sexp run (Task task) =
-  [%log_result "run", task.description];
-  task.work ()
-
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
   | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)

@@ -1,0 +1,43 @@
+open Base
+module Lazy = Utils.Lazy
+module Debug_runtime = Utils.Debug_runtime
+
+let _get_local_debug_runtime = Utils._get_local_debug_runtime
+
+[%%global_debug_log_level 9]
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
+type t =
+  | Task : {
+      context_lifetime : ('a[@sexp.opaque]);
+      description : string;
+      work : unit -> unit;
+    }
+      -> t
+[@@deriving sexp_of]
+
+let describe (Task task) = task.description
+
+let%diagn_l_sexp run (Task task) =
+  [%log_result "run", task.description];
+  task.work ()
+
+let prepend ~work (Task task) =
+  Task
+    {
+      task with
+      work =
+        (fun () ->
+          work ();
+          task.work ());
+    }
+
+let%track3_l_sexp enschedule ~schedule_task ~get_stream_name stream (Task { description; _ } as task) =
+  [%log_result "enschedule", description, "on", get_stream_name stream];
+  let work () = schedule_task stream task in
+  Task
+    {
+      context_lifetime = task;
+      description = "schedules {" ^ description ^ "} on " ^ get_stream_name stream;
+      work;
+    }
