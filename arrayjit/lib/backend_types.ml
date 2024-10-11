@@ -54,8 +54,6 @@ module type No_device_backend = sig
   (** Finalizes (just) the context. *)
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-  val expected_merge_node : code -> Tnode.t option
-  val expected_merge_nodes : code_batch -> Tnode.t option array
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
@@ -202,7 +200,6 @@ module type Lowered_no_device_backend = sig
   val buffer_ptr : ctx_array -> buffer_ptr
   val ctx_arrays : context -> ctx_arrays
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-  val expected_merge_node : procedure -> Tnode.t option
 
   val is_in_context : Low_level.traced_array -> bool
   (** If true, the node is required to be in the contexts linked with code that uses it.

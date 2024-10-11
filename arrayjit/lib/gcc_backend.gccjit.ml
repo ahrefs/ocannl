@@ -120,8 +120,6 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let expected_merge_node proc = proc.expected_merge_node
-
 let is_in_context node =
   Tnode.default_to_most_local node.Low_level.tn 33;
   match node.tn.memory_mode with
