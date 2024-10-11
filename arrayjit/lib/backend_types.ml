@@ -156,11 +156,8 @@ module type Backend = sig
         given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
         node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
         from [src] to the merge buffer of [dst]'s stream.
-      - If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
-        buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
-        [into_merge_buffer].
 
-      NOTE: If [into_merge_buffer:Streaming], after scheduling the work on [dst] using the merge
+      NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute
       [will_wait_for src (all_work (get_ctx_stream dst))]. *)
 
@@ -287,7 +284,7 @@ module type Lowered_backend = sig
 
   val device_to_device :
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** If the tensor node is in both contexts, copies from [dst] to [src]. *)
+  (** See {!Backend.device_to_device}. *)
 
   type buffer_ptr [@@deriving sexp_of]
 

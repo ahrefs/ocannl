@@ -280,15 +280,6 @@ struct
 
   let device_to_device tn ~into_merge_buffer ~dst ~src =
     let dev = dst.stream in
-    if
-      (not (equal_merge_buffer_use into_merge_buffer No))
-      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
-    then
-      raise
-      @@ Utils.User_error
-           ("Multicore_backend.device_to_device: merge node mismatch, expected "
-           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
-           ^ ", actual " ^ Tnode.debug_name tn);
     let schedule dst =
       let work =
         (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
@@ -479,15 +470,6 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
 
   let device_to_device tn ~into_merge_buffer ~dst ~src =
     let dev = dst.stream in
-    if
-      (not (equal_merge_buffer_use into_merge_buffer No))
-      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
-    then
-      raise
-      @@ Utils.User_error
-           ("Multicore_backend.device_to_device: merge node mismatch, expected "
-           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
-           ^ ", actual " ^ Tnode.debug_name tn);
     (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
     match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
     | None, _ | _, None -> false
@@ -855,15 +837,6 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
   let to_host context tn = to_host context.ctx tn
 
   let device_to_device tn ~into_merge_buffer ~dst ~src =
-    if
-      (not (equal_merge_buffer_use into_merge_buffer No))
-      && not (Option.equal Tnode.equal (Some tn) dst.expected_merge_node)
-    then
-      raise
-      @@ Utils.User_error
-           ("Multicore_backend.device_to_device: merge node mismatch, expected "
-           ^ Option.(value ~default:"none" @@ map ~f:Tnode.debug_name dst.expected_merge_node)
-           ^ ", actual " ^ Tnode.debug_name tn);
     device_to_device tn ~into_merge_buffer ~dst:dst.ctx ~src:src.ctx
 end
 

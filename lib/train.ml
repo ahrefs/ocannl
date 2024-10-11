@@ -364,14 +364,16 @@ let%track3_sexp parallel_update (type context)
         let grad_merge =
           Option.value_exn ~here:[%here] ~message:(Tn.debug_name p.value) grad_merges_to.(to_).(i)
         in
+        (* NOTE: we no longer have to to pass [grad_merge.context] as [dst]. *)
         assert (
           Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer
-            ~dst:grad_merge.context ~src:ctxs.(from));
+            ~dst:ctxs.(to_) ~src:ctxs.(from));
         (Task.run grad_merge.schedule : unit))
   in
   let merge_loss ~src =
+    (* NOTE: we no longer have to to pass [loss_merge.context] as [dst]. *)
     assert (
-      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:loss_merge.context ~src);
+      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
     Task.run loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)

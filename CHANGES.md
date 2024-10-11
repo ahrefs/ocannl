@@ -10,6 +10,7 @@
 - Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
 - Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
 - New files: split out `backend_types.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
+- Removed half-static verification of merge buffer nodes inside `device_to_device`.
 - TODO: Moved the multicore backend from a `device = stream` model to a single device model.
 - TODO: Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
