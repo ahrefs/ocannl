@@ -271,7 +271,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         else Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.read_before_write <- true;
-        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Changed_on_devices) 38
+        if Tn.mode_is_unspecified tn then
+          Tn.update_memory_mode tn (Hosted (Changed_on_devices Unset)) 38
         else Tn.update_memory_mode tn Materialized 36))
 
 let%diagn_sexp check_and_store_virtual traced static_indices top_llc =

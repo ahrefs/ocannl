@@ -1,22 +1,3 @@
-(** In the current design of the CUDA backend, unlike in the CPU backends, context arrays for
-    incomparable contexts do not need be disjoint, as long as they share a device. If a tensor node
-    is read-only for all contexts, its array will be shared even by incomparable contexts. The
-    particular design is as follows, within a single device:
-    - If a tensor node is read-only for a context, and not otherwise recorded, it is stored as a
-      cross-stream sharing candidate.
-    - If a cross-stream sharing candidate is read-only for another context, whose parent does not
-      have the corresponding array (i.e. it is a different stream), it is recorded as cross-stream
-      shared, and the same array is reused.
-    - If a tensor node is writable by a context, and it is not cross-stream shared, it is marked as
-      non-cross-stream, the array is removed from cross-stream sharing candidates if present. If it
-      is cross-stream shared, it is recorded as owned by the corresponding stream. It is an error if
-      the node was already owned by a different stream.
-
-    If a tensor node is cross-stream shared, within-device copying is a NOOP as source and
-    destination pointers are in that case identical.
-
-    FIXME(#286): this should be controllable via {!Tnode.memory_mode}. *)
-
 open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy

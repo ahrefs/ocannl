@@ -105,12 +105,15 @@ let restore_params t =
       let f arr = Npy.Npz.restore in_file name arr in
       Nd.map { f } @@ Option.value_exn ~here:[%here] @@ Lazy.force v.array)
 
-let set_on_host memtype (a : Tn.t) = Tn.update_memory_mode a (Hosted memtype) 27
+let set_on_host ?(from_device = true) (a : Tn.t) =
+  let memtype = if from_device then Tn.(Changed_on_devices Unset) else Volatile in
+  Tn.update_memory_mode a (Hosted memtype) 27
+
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 
 let set_hosted (a : Tn.t) =
   if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 41
-  else Tn.update_memory_mode a (Hosted Changed_on_devices) 41
+  else Tn.update_memory_mode a (Hosted (Changed_on_devices Unset)) 41
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
     label-derived comment. *)
@@ -510,7 +513,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     else Tensor.consume_forward_code model_result
   in
   if not disable_rootness_check then Tensor.remove_bprop_root model_result;
-  set_on_host Changed_on_devices model_result.Tensor.value;
+  set_on_host model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
     Backend.(

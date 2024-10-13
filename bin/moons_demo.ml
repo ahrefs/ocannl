@@ -103,7 +103,7 @@ let demo () =
   in
 
   let%op mlp_result = mlp "point" in
-  Train.set_on_host Changed_on_devices mlp_result.value;
+  Train.set_on_host mlp_result.value;
   let result_routine =
     Train.to_routine
       (module Backend)
