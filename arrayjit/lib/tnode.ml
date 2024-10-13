@@ -132,16 +132,13 @@ let log_debug_info ~from_log_level tn =
         | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
       else [%log "<not-in-yet>"]]]
 
-(** The one exception to "most local" is the sharing property: defaults to [Shared_cross_stream]. *)
+(** The one exception to "most local" is that the sharing property is kept at [Unset]. *)
 let default_to_most_local tn provenance =
   match tn.memory_mode with
   | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
   | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)
   | Some (Device_only, _) -> tn.memory_mode <- Some (Local, provenance)
-  | Some (Materialized, _) -> tn.memory_mode <- Some (On_device Shared_cross_stream, provenance)
-  | Some (On_device Unset, _) -> tn.memory_mode <- Some (On_device Shared_cross_stream, provenance)
-  | Some (Hosted (Changed_on_devices Unset), _) ->
-      tn.memory_mode <- Some (Hosted (Changed_on_devices Shared_cross_stream), provenance)
+  | Some (Materialized, _) -> tn.memory_mode <- Some (On_device Unset, provenance)
   | Some ((Virtual | Local | On_device _ | Hosted _), _) -> ()
 
 let is_virtual_force tn provenance =
@@ -191,6 +188,18 @@ let known_not_param tn =
       ( ( Virtual | Local | Effectively_constant | Device_only | On_device _
         | Hosted (Constant | Volatile) ),
         _ ) ->
+      true
+  | _ -> false
+
+let known_shared_cross_stream tn =
+  match tn.memory_mode with
+  | Some ((On_device Shared_cross_stream | Hosted (Changed_on_devices Shared_cross_stream)), _) ->
+      true
+  | _ -> false
+
+let known_non_cross_stream tn =
+  match tn.memory_mode with
+  | Some ((On_device Per_stream | Hosted (Changed_on_devices Per_stream)), _) ->
       true
   | _ -> false
 
@@ -246,7 +255,7 @@ let update_memory_sharing tn sharing provenance =
            [%string
              "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for \
               %{debug_name tn} -- change from non-shared to shared is currently not permitted"]
-  | Some ((On_device _ | Device_only | Materialized), _), Shared_cross_stream ->
+  | Some ((On_device _ | Device_only | Materialized), _), _ ->
       tn.memory_mode <- Some (On_device sharing, provenance)
   | Some (Hosted (Changed_on_devices Per_stream), prov2), Shared_cross_stream ->
       raise

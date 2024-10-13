@@ -11,7 +11,7 @@ module Rand = Arrayjit.Rand.Lib
 let hello1 () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  Utils.set_log_level 2;
+  (* Utils.set_log_level 2; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
