@@ -103,6 +103,10 @@ let alloc_buffer ?old_buffer ~size_in_bytes stream =
       set_ctx stream.device.primary_context;
       Cu.Deviceptr.mem_alloc ~size_in_bytes
 
+let get_used_memory () =
+  let free, total = Cudajit.Device.get_free_and_total_mem () in
+  total - free
+
 let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
   if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
     set_ctx phys_dev.primary_context;

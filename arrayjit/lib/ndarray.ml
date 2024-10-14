@@ -378,19 +378,30 @@ let ptr_to_string_hum nd =
 
 (** {2 *** Creating ***} *)
 
+let used_memory = Atomic.make 0
+
 let create_array ~debug:_debug prec ~dims init_op =
+  let size_in_bytes =
+    (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
+  in
+  let%diagn2_sexp finalizer _result =
+    let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
+    [%log "Deleting", _debug, ptr_to_string_hum _result]
+  in
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   let result = Ops.map_prec { f } prec in
+  Stdlib.Gc.finalise finalizer result;
+  let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
   [%debug2_sexp
     [%log_block
       "create_array";
       [%log _debug, ptr_to_string_hum result]]];
-  let%debug2_sexp debug_finalizer _result = [%log "Deleting", _debug, ptr_to_string_hum _result] in
-  if Utils.settings.log_level > 1 then Stdlib.Gc.finalise debug_finalizer result;
   result
 
 let empty_array prec =
   create_array prec ~dims:[||] (Constant_fill { values = [| 0.0 |]; strict = false })
+
+let get_used_memory () = Atomic.get used_memory
 
 (** {2 *** Printing ***} *)
 

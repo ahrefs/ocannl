@@ -76,6 +76,8 @@ struct
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
+  let get_used_memory = Backend.get_used_memory
+
   type device = stream [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
@@ -367,6 +369,8 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
 
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+
+  let get_used_memory = Backend.get_used_memory
 
   type device = CPU [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
@@ -700,6 +704,8 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let get_buffer tn context =
     Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
+
+  let get_used_memory = Ndarray.get_used_memory
 end
 
 module C_device : Backend_types.No_device_backend = Lowered_no_device_backend ((

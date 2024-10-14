@@ -55,6 +55,9 @@ module type No_device_backend = sig
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
 
+  val get_used_memory : unit -> int
+  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
       device-and-stream-agnostic way. If [~shared:false], the backend can opt to postpone compiling
@@ -294,14 +297,18 @@ module type Lowered_backend = sig
   type stream [@@deriving sexp_of]
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
+
+  val get_used_memory : unit -> int
+  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
   val init : stream -> context
   val await : stream -> unit
   val is_idle : stream -> bool
   val all_work : stream -> event
 
   val scheduled_merge_node : stream -> Tnode.t option
-  (** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge
-      buffer right after [await stream]. *)
+  (** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge buffer
+      right after [await stream]. *)
 
   val num_devices : unit -> int
   val suggested_num_streams : device -> int
