@@ -15,7 +15,7 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~backend_name
+let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~backend_name
     ~value_prec ~grad_prec () =
   [%track_sexp
     let _debug : string = "started" in
@@ -23,7 +23,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* ignore seed; *)
   let bench_title =
     [%string
-      "seed %{seed#Int}, inline %{inlining_cutoff#Int}, parallel %{num_devices#Int}, batch \
+      "seed %{seed#Int}, inline %{inlining_cutoff#Int}, parallel %{num_streams#Int}, batch \
        %{batch_size#Int}, backend %{backend_name}, val prec %{Ops.prec_string value_prec}, grad \
        prec %{Ops.prec_string grad_prec}"]
   in
@@ -45,11 +45,11 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   (* TINY for debugging: *)
   (* let data_len = 3 * 4 in *)
   let flat_len = data_len / 2 in
-  (* Note: [minibatch_size = batch_size / num_devices] is the actual per-device batch used. *)
+  (* Note: [minibatch_size = batch_size / num_streams] is the actual per-device batch used. *)
   (* let epochs = 200 in *)
-  let epochs = 100 in
+  (* let epochs = 100 in *)
   (* TINY for debugging: *)
-  (* let epochs = 2 in *)
+  let epochs = 2 in
   (* let epochs = 1 in *)
   (* let init_lr = 0.1 in *)
   let init_lr = 0.01 in
@@ -78,7 +78,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
-  Arrayjit.Backends.sync_suggested_num_streams := num_devices;
+  Arrayjit.Backends.sync_suggested_num_streams := num_streams;
   let backend = Arrayjit.Backends.fresh_backend ~backend_name () in
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
@@ -90,8 +90,17 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
   in
   let module Backend = (val backend) in
   Backend.initialize Train.BT.Most_parallel_streams;
-  let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
-    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_streams:num_devices ~data_len
+  let {
+    Train.inputs;
+    outputs;
+    model_result;
+    infer_callback;
+    batch_losses;
+    epoch_losses;
+    learning_rates;
+    used_memory;
+  } =
+    Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_streams:num_streams ~data_len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
       ~per_batch_callback ~per_epoch_callback
       (module Backend)
@@ -161,8 +170,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
       {
         bench_title;
         time_in_sec;
-        (* FIXME: implement total mem assessment. *)
-        mem_in_bytes = 0;
+        mem_in_bytes = used_memory;
         result_label = "init time in sec, min loss, last loss";
         result =
           [%sexp_of: float * float * float]
@@ -176,11 +184,11 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_devices ~batch_size ~b
 
 let _suspend () =
   ignore
-  @@ classify_moons ~seed:0 ~on_device:true ~inlining_cutoff:3 ~num_devices:8 ~batch_size:16
+  @@ classify_moons ~seed:0 ~on_device:true ~inlining_cutoff:3 ~num_streams:8 ~batch_size:16
        ~backend_name:"gccjit" ~value_prec:CDSL.single ~grad_prec:CDSL.double ()
 
-let cuda_benchmarks =
-  List.concat_map [ 1; 3; 6; 12; 16; 20 (* 32; 64 *) ] ~f:(fun num_devices ->
+let _cuda_benchmarks =
+  List.concat_map [ 1; 3; 6; 12; 16; 20 (* 32; 64 *) ] ~f:(fun num_streams ->
       List.concat_map
         [
           (* TINY for debugging: *)
@@ -194,7 +202,26 @@ let cuda_benchmarks =
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
                           [
-                            classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_devices
+                            classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_streams
+                              ~batch_size ~backend_name ~value_prec ~grad_prec:value_prec;
+                          ]))))))
+
+let _mem_benchmarks =
+  List.concat_map [ 1; 3; 6; 12; 16 (* ; 20; 32; 64 *) ] ~f:(fun num_streams ->
+      List.concat_map
+        [
+          (* TINY for debugging: *)
+          (* 3 * 2 *)
+          3 * 5 * 16 (* ; 3 * 5 * 32; 3 * 5 * 64 *);
+        ]
+        ~f:(fun batch_size ->
+          List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+              List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
+                  List.concat_map [ (* "gccjit" ; *) "cc" (* ; "cuda" *) ] ~f:(fun backend_name ->
+                      List.concat_map [ CDSL.double; CDSL.single (* ; CDSL.half *) ]
+                        ~f:(fun value_prec ->
+                          [
+                            classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_streams
                               ~batch_size ~backend_name ~value_prec ~grad_prec:value_prec;
                           ]))))))
 
@@ -204,7 +231,7 @@ let cuda_benchmarks =
    (nth - 1) *)
 
 let fixed_seed_search seed =
-  classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_devices:1 ~batch_size:20
+  classify_moons ~seed ~on_device:true ~inlining_cutoff:3 ~num_streams:1 ~batch_size:20
     ~backend_name:"cuda" ~value_prec:CDSL.single ~grad_prec:CDSL.single ()
 
 let _suspended () =
@@ -213,8 +240,8 @@ let _suspended () =
 (* let () = List.map benchmarks ~f:(nth_best 2) |> PrintBox_utils.table |> PrintBox_text.output
    Stdio.stdout *)
 
-let benchmark () =
-  List.map cuda_benchmarks ~f:(fun bench -> bench ())
+let benchmark benchmarks =
+  List.map benchmarks ~f:(fun bench -> bench ())
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let () = benchmark ()
+let () = benchmark _mem_benchmarks

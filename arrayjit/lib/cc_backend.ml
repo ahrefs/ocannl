@@ -49,9 +49,7 @@ let is_initialized, initialize =
 let finalize _ctx = ()
 
 let init ~label =
-  let result =
-    { label; arrays = { used_memory = Atomic.make 0; ctx_arrays = Map.empty (module Tn) } }
-  in
+  let result = { label; arrays = empty_ctx_arrays } in
   Stdlib.Gc.finalise finalize result;
   result
 

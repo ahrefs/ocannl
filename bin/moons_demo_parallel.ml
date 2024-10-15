@@ -56,7 +56,16 @@ let experiment ~seed ~backend_name ~config () =
       epoch_loss
   in
   let module Backend = (val backend) in
-  let inputs, outputs, model_result, infer_callback, batch_losses, epoch_losses, learning_rates =
+  let {
+    Train.inputs;
+    outputs;
+    model_result;
+    infer_callback;
+    batch_losses;
+    epoch_losses;
+    learning_rates;
+    used_memory;
+  } =
     Train.example_train_loop ~seed ~batch_size ~max_num_streams:(batch_size / 2) ~init_lr
       ~data_len:len ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn
       ~weight_decay ~per_batch_callback ~per_epoch_callback
@@ -68,7 +77,7 @@ let experiment ~seed ~backend_name ~config () =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;
-  Stdio.printf "\n********\n%!";
+  Stdio.printf "\n********\nUsed memory: %d\n%!" used_memory;
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
     let open PrintBox_utils in

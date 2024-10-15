@@ -405,43 +405,53 @@ let%track3_sexp parallel_update (type context)
 
 let get_all_suggested_streams ?(max_num_streams : int option) (type device stream)
     (backend : (module Backend_type with type device = device and type stream = stream)) :
-    stream array =
+    device array * stream array =
   let max_num_streams = Option.value max_num_streams ~default:Int.max_value_30_bits in
   let module Backend =
     (val backend : Backend_type with type device = device and type stream = stream)
   in
   let num_devices = min max_num_streams @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
-  Array.folding_mapi devices ~init:0 ~f:(fun ordinal num_collected device ->
-      let remaining_devices = num_devices - ordinal - 1 in
-      let max_current = Backend.suggested_num_streams device in
-      let take_current = min max_current @@ (max_num_streams - remaining_devices) in
-      ( num_collected + take_current,
-        Array.init take_current ~f:(fun _subordinal -> Backend.new_stream device) ))
-  |> Array.concat_map ~f:Fn.id
+  let result =
+    Array.folding_mapi devices ~init:0 ~f:(fun ordinal num_collected device ->
+        let remaining_devices = num_devices - ordinal - 1 in
+        let max_current = Backend.suggested_num_streams device in
+        let take_current = min max_current @@ (max_num_streams - remaining_devices) in
+        ( num_collected + take_current,
+          Array.init take_current ~f:(fun _subordinal -> Backend.new_stream device) ))
+    |> Array.concat_map ~f:Fn.id
+  in
+  (devices, result)
 
 let to_routine (type context) (module Backend : Backend_type with type context = context)
     (context : context) ?shared ?name bindings comp =
   Backend.link context @@ Backend.compile ?shared ?name bindings comp
 
+type example_train_result = {
+  inputs : Tensor.t;
+  outputs : Tensor.t;
+  model_result : Tensor.t;
+  infer_callback : float array -> float array;
+      (** Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
+  batch_losses : float list;
+  epoch_losses : float list;
+  learning_rates : float list;
+  used_memory : int;
+}
+
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
     ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
-    ?(prior_contexts : context array option)
     (backend : (module Backend_type with type context = context)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
   let module Backend = (val backend : Backend_type with type context = context) in
-  let prior_contexts =
-    match prior_contexts with
-    | Some contexts -> contexts
-    | None ->
-        let devices = get_all_suggested_streams ?max_num_streams (module Backend) in
-        Array.map devices ~f:Backend.init
-  in
-  let num_devices = Array.length prior_contexts in
-  let minibatch_size = batch_size / num_devices in
+  let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
+  let num_streams = Array.length streams in
+  let contexts = Array.map streams ~f:Backend.init in
+  let init_mem = Array.fold devices ~init:0 ~f:(fun acc dev -> acc + Backend.get_used_memory dev) in
+  let minibatch_size = batch_size / num_streams in
   let n_minibatches = data_len / minibatch_size in
   let inputs = inputs ~b:[ n_minibatches; minibatch_size ] in
   let outputs = outputs ~b:[ n_minibatches; minibatch_size ] in
@@ -468,7 +478,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
-  let grad_updates = Array.map prior_contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
+  let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
   Tensor.log_debug_info ~from_log_level:2 outputs;
@@ -534,8 +544,19 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Backend.(await @@ get_ctx_stream routine.context);
     Tensor.get_values model_result
   in
-  (* Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
-  (inputs, outputs, model_result, infer_callback, !batch_losses, !epoch_losses, !learning_rates)
+  let used_memory =
+    Array.fold devices ~init:0 ~f:(fun acc dev -> acc + Backend.get_used_memory dev) - init_mem
+  in
+  {
+    inputs;
+    outputs;
+    model_result;
+    infer_callback;
+    batch_losses = !batch_losses;
+    epoch_losses = !epoch_losses;
+    learning_rates = !learning_rates;
+    used_memory;
+  }
 
 let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
     (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
