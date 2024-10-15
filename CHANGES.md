@@ -2,7 +2,8 @@
 
 ### Added
 
-- TODO: (Virtual) device-to-device synchronization functionality, with lazy per-tensor-node synchronization.
+- TODO: stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
+- Fixed #245: tracking of used memory.
 
 ### Changed
 
@@ -11,8 +12,8 @@
 - Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
 - New files: split out `backend_types.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
 - Removed half-static verification of merge buffer nodes inside `device_to_device`.
+- Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - TODO: Moved the multicore backend from a `device = stream` model to a single device model.
-- TODO: Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
 
 ### Fixed
