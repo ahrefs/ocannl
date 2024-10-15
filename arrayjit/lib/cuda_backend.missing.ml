@@ -5,13 +5,14 @@ type context = Unimplemented_ctx [@@deriving sexp_of]
 type code = Indexing.unit_bindings [@@deriving sexp_of]
 type code_batch = Indexing.unit_bindings array [@@deriving sexp_of]
 type ctx_array = | [@@deriving sexp_of]
+type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
 type event = unit
 
 let sync () = ()
 let is_done () = true
 let work_for _ctx _tn = Some ()
 let will_wait_for _ctx () = ()
-let initialize (_config : Backend_utils.Types.config) = ()
+let initialize (_config : Backend_types.Types.config) = ()
 let is_initialized () = true
 let finalize _context = ()
 let compile ~name:_ bindings _optimized = bindings

@@ -391,10 +391,15 @@ let parallel_merge merge (num_devices : int) =
   in
   loop (num_devices - 1)
 
+let ( !@ ) = Atomic.get
+
 type atomic_bool = bool Atomic.t
 
 let sexp_of_atomic_bool flag = sexp_of_bool @@ Atomic.get flag
-let ( !@ ) = Atomic.get
+
+type atomic_int = int Atomic.t
+
+let sexp_of_atomic_int flag = sexp_of_int @@ Atomic.get flag
 
 let sexp_append ~elem = function
   | Sexp.List l -> Sexp.List (elem :: l)

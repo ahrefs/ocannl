@@ -19,6 +19,10 @@ type event = Cu.Delimited_event.t
 type ctx_array = { ptr : buffer_ptr; mutable tracking : (event[@sexp.opaque]) option }
 [@@deriving sexp_of]
 
+type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
+
+let get_array = Map.find
+
 type device = {
   dev : (Cu.Device.t[@sexp.opaque]);
   ordinal : int;
@@ -51,7 +55,7 @@ and context = {
   run_module : (Cu.Module.t[@sexp.opaque]) option;
       (** Code jitted for this context, typically independent of the parent and child contexts, but
           shared by batch linked contexts. *)
-  ctx_arrays : ctx_array Map.M(Tn).t;
+  ctx_arrays : ctx_arrays;
       (** This map contains arrays used in this context or an ancestor context (they might be unique
           but might also be cross-stream shared. *)
   finalized : Utils.atomic_bool;
@@ -103,16 +107,17 @@ let alloc_buffer ?old_buffer ~size_in_bytes stream =
       set_ctx stream.device.primary_context;
       Cu.Deviceptr.mem_alloc ~size_in_bytes
 
-let get_used_memory () =
+let get_used_memory dev =
+  set_ctx dev.primary_context;
   let free, total = Cudajit.Device.get_free_and_total_mem () in
   total - free
 
-let opt_alloc_merge_buffer ~size_in_bytes phys_dev =
-  if phys_dev.copy_merge_buffer_capacity < size_in_bytes then (
-    set_ctx phys_dev.primary_context;
-    Cu.Deviceptr.mem_free phys_dev.copy_merge_buffer;
-    phys_dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
-    phys_dev.copy_merge_buffer_capacity <- size_in_bytes)
+let opt_alloc_merge_buffer ~size_in_bytes dev =
+  if dev.copy_merge_buffer_capacity < size_in_bytes then (
+    set_ctx dev.primary_context;
+    Cu.Deviceptr.mem_free dev.copy_merge_buffer;
+    dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
+    dev.copy_merge_buffer_capacity <- size_in_bytes)
 
 let cleanup_device device =
   Cu.Context.set_current device.primary_context;
@@ -367,8 +372,10 @@ end) =
 struct
   let for_lowereds = Input.for_lowereds
 
-  type nonrec ctx_array = buffer_ptr
+  type nonrec ctx_array = buffer_ptr [@@deriving sexp_of]
+  type nonrec ctx_arrays = ctx_array Map.M(Tn).t [@@deriving sexp_of]
 
+  let get_array = Map.find
   let opt_ctx_arrays = None
   let hardcoded_context_ptr = None
   let is_in_context = is_in_context

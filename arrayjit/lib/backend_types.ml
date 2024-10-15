@@ -7,6 +7,16 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+module No_device_types = struct
+  type ctx_array = Ndarray.t [@@deriving sexp_of]
+
+  type ctx_arrays = { used_memory : Utils.atomic_int; ctx_arrays : ctx_array Map.M(Tnode).t }
+  [@@deriving sexp_of]
+
+  let empty_ctx_arrays = { used_memory = Atomic.make 0; ctx_arrays = Map.empty (module Tnode) }
+  let get_array arrays = Map.find arrays.ctx_arrays
+end
+
 module Types = struct
   type 'context routine = {
     context : 'context;
@@ -168,6 +178,9 @@ module type Backend = sig
   val init : stream -> context
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
+  val get_used_memory : device -> int
+  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
   val await : stream -> unit
   (** Blocks till the stream becomes idle, i.e. synchronizes the stream. *)
 
@@ -198,11 +211,12 @@ module type Lowered_no_device_backend = sig
   type procedure [@@deriving sexp_of]
   type ctx_array [@@deriving sexp_of]
   type buffer_ptr [@@deriving sexp_of]
-  type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
+  type ctx_arrays [@@deriving sexp_of]
 
   val buffer_ptr : ctx_array -> buffer_ptr
-  val ctx_arrays : context -> ctx_arrays
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  val ctx_arrays : context -> ctx_arrays
+  val get_array : ctx_arrays -> Tnode.t -> ctx_array option
 
   val is_in_context : Low_level.traced_array -> bool
   (** If true, the node is required to be in the contexts linked with code that uses it.
@@ -246,6 +260,7 @@ module type Lowered_backend = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
   type ctx_array [@@deriving sexp_of]
+  type ctx_arrays [@@deriving sexp_of]
   type event
 
   val sync : event -> unit
@@ -268,7 +283,8 @@ module type Lowered_backend = sig
     code_batch
 
   val is_in_context : Low_level.traced_array -> bool
-  val ctx_arrays : context -> ctx_array Map.M(Tnode).t
+  val ctx_arrays : context -> ctx_arrays
+  val get_array : ctx_arrays -> Tnode.t -> ctx_array option
   val link : context -> code -> context * Indexing.lowered_bindings * Task.t
 
   val link_batch :
@@ -298,7 +314,7 @@ module type Lowered_backend = sig
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
-  val get_used_memory : unit -> int
+  val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
   val init : stream -> context

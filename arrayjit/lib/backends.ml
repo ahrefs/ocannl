@@ -76,7 +76,7 @@ struct
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  let get_used_memory = Backend.get_used_memory
+  let get_used_memory _device = Backend.get_used_memory ()
 
   type device = stream [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
@@ -370,9 +370,10 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  let get_used_memory = Backend.get_used_memory
-
   type device = CPU [@@deriving sexp_of]
+
+  let get_used_memory CPU = Backend.get_used_memory ()
+
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
 
@@ -534,14 +535,14 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
            )
          else (None, None))
 
-let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
-    =
+let verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+    traced_stores =
   let olds = ctx_arrays prior_context in
   Set.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
         Option.value_map node ~default:false ~f:(fun node ->
-            is_in_context node && not (Map.mem olds tn))
+            is_in_context node && not (Option.is_some @@ get_array olds tn))
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 let from_prior_context_batch comps =
@@ -646,7 +647,8 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let link ~merge_buffer (prior_context : context) (code : code) =
     let verify from_prior_context =
-      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+      verify_prior_context ~get_array:Backend.get_array ~ctx_arrays ~is_in_context ~prior_context
+        ~from_prior_context
         [| get_traced_store code |]
     in
     let context, bindings, schedule, name =
@@ -673,7 +675,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
     let verify from_prior_context =
-      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+      verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
       @@ get_traced_stores code_batch
     in
     let _opt_ctx_arrays, procs =
@@ -703,7 +705,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
       | None -> (context, None))
 
   let get_buffer tn context =
-    Map.find (Backend.ctx_arrays context) tn |> Option.map ~f:Backend.buffer_ptr
+    Backend.(ctx_arrays context |> Fn.flip get_array tn |> Option.map ~f:buffer_ptr)
 
   let get_used_memory = Ndarray.get_used_memory
 end
@@ -776,7 +778,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     }
 
   let link context (code : code) =
-    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context:context
       ~from_prior_context:code.from_prior_context [| code.traced_store |];
     let context, bindings, schedule = link context code.code in
     let schedule =
@@ -788,7 +790,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     { context; schedule; bindings; name }
 
   let link_batch context code_batch =
-    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context:context
       ~from_prior_context:code_batch.from_prior_context code_batch.traced_stores;
     let context, bindings, schedules = link_batch context code_batch.code_batch in
     ( context,
