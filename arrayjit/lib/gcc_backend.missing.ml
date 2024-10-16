@@ -45,6 +45,6 @@ let physical_merge_buffers = false
 let name = "gccjit"
 let initialize () = ()
 let is_initialized () = true
-let init ~label:_ = Unimplemented_ctx
+let init _ = Unimplemented_ctx
 let finalize Unimplemented_ctx = ()
 let unsafe_cleanup () = ()

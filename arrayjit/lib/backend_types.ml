@@ -39,12 +39,17 @@ module Types = struct
   [@@deriving sexp_of]
 end
 
-module type No_device_backend = sig
+module type Backend_common = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
   type buffer_ptr [@@deriving sexp_of]
   type context [@@deriving sexp_of]
   type routine = context Types.routine [@@deriving sexp_of]
+  type stream
+
+  type init_info
+  (** For backends derived via {!No_device_backend}, this is usually the backend name concatenated
+      with the device or stream number. For {!Backend}, [init_info = stream]. *)
 
   val name : string
 
@@ -57,13 +62,12 @@ module type No_device_backend = sig
       recent call was followed by {!unsafe_cleanup}. If it returns false, one must call
       {!initialize} before using the backend. *)
 
-  val init : label:string -> context
-  (** [label] is usually the backend name concatenated with the device or stream number. *)
+  val init : init_info -> context
 
   val finalize : context -> unit
   (** Finalizes (just) the context. *)
 
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
   val get_used_memory : unit -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
@@ -85,6 +89,15 @@ module type No_device_backend = sig
       execution, but there can be backend-specific differences. Only array entries for which
       [occupancy] returns true are included. *)
 
+  val unsafe_cleanup : unit -> unit
+  (** Cleans up all work on a backend, releases resources. All previously retrieved values
+      (contexts, streams and devices) become invalid. The backend needs to be initialized again to
+      be used again. *)
+end
+
+module type No_device_backend = sig
+  include Backend_common with type init_info := string and type stream := unit
+
   val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
@@ -97,11 +110,6 @@ module type No_device_backend = sig
       downstream of all the returned routines (in particular, the routines' contexts are not
       independent). *)
 
-  val unsafe_cleanup : unit -> unit
-  (** Cleans up all work on a backend, releases resources. All previously retrieved values
-      (contexts, streams and devices) become invalid. The backend needs to be initialized again to
-      be used again. *)
-
   val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
@@ -109,7 +117,9 @@ module type No_device_backend = sig
 end
 
 module type Backend = sig
-  include No_device_backend
+  type stream [@@deriving sexp_of]
+
+  include Backend_common with type init_info := stream and type stream := stream
 
   val link : context -> code -> routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
@@ -173,10 +183,6 @@ module type Backend = sig
       [will_wait_for src (all_work (get_ctx_stream dst))]. *)
 
   type device
-  type stream [@@deriving sexp_of]
-
-  val init : stream -> context
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
@@ -206,15 +212,17 @@ module type Backend = sig
   val get_name : stream -> string
 end
 
-module type Lowered_no_device_backend = sig
+module type Lowered_backend_common = sig
   type context [@@deriving sexp_of]
-  type procedure [@@deriving sexp_of]
   type ctx_array [@@deriving sexp_of]
-  type buffer_ptr [@@deriving sexp_of]
   type ctx_arrays [@@deriving sexp_of]
+  type buffer_ptr [@@deriving sexp_of]
+  type config
+  type init_info
+  type stream
 
   val buffer_ptr : ctx_array -> buffer_ptr
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
+  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
   val ctx_arrays : context -> ctx_arrays
   val get_array : ctx_arrays -> Tnode.t -> ctx_array option
 
@@ -223,6 +231,23 @@ module type Lowered_no_device_backend = sig
 
       Should return false for nodes that are virtual, local, or which the backend prefers to access
       directly from the host. *)
+
+  val initialize : config -> unit
+  val is_initialized : unit -> bool
+  val init : init_info -> context
+  val finalize : context -> unit
+  val unsafe_cleanup : unit -> unit
+  val name : string
+end
+
+module type Lowered_no_device_backend = sig
+  include
+    Lowered_backend_common
+      with type stream := unit
+       and type config := unit
+       and type init_info := string
+
+  type procedure [@@deriving sexp_of]
 
   val compile :
     name:string ->
@@ -244,23 +269,22 @@ module type Lowered_no_device_backend = sig
     procedure ->
     context * Indexing.lowered_bindings * Task.t * string
 
-  val name : string
-  val initialize : unit -> unit
-  val is_initialized : unit -> bool
-  val init : label:string -> context
-  val finalize : context -> unit
-  val unsafe_cleanup : unit -> unit
   val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 end
 
 module type Lowered_backend = sig
-  type context [@@deriving sexp_of]
+  type stream [@@deriving sexp_of]
+
+  include
+    Lowered_backend_common
+      with type config := Types.config
+       and type stream := stream
+       and type init_info := stream
+
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
-  type ctx_array [@@deriving sexp_of]
-  type ctx_arrays [@@deriving sexp_of]
   type event
 
   val sync : event -> unit
@@ -270,9 +294,6 @@ module type Lowered_backend = sig
 
   open Types
 
-  val initialize : config -> unit
-  val is_initialized : unit -> bool
-  val finalize : context -> unit
   val sexp_of_context : context -> Sexplib.Sexp.t
   val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
@@ -282,15 +303,10 @@ module type Lowered_backend = sig
     Low_level.optimized option array ->
     code_batch
 
-  val is_in_context : Low_level.traced_array -> bool
-  val ctx_arrays : context -> ctx_arrays
-  val get_array : ctx_arrays -> Tnode.t -> ctx_array option
   val link : context -> code -> context * Indexing.lowered_bindings * Task.t
 
   val link_batch :
     context -> code_batch -> context * Indexing.lowered_bindings * Task.t option array
-
-  val unsafe_cleanup : unit -> unit
 
   val from_host : context -> Tnode.t -> bool
   (** If the array is both hosted and in-context, copies from host to context. *)
@@ -302,22 +318,11 @@ module type Lowered_backend = sig
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
   (** See {!Backend.device_to_device}. *)
 
-  type buffer_ptr [@@deriving sexp_of]
-
-  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
-  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
-  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
-  val get_buffer : Tnode.t -> context -> buffer_ptr option
-
   type device
-  type stream [@@deriving sexp_of]
-
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
-  val init : stream -> context
   val await : stream -> unit
   val is_idle : stream -> bool
   val all_work : stream -> event
@@ -335,5 +340,4 @@ module type Lowered_backend = sig
   val get_name : stream -> string
   val to_ordinal : device -> int
   val to_subordinal : stream -> int
-  val name : string
 end

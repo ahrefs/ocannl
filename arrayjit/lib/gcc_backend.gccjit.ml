@@ -74,7 +74,7 @@ let finalize ctx =
   let open Gccjit in
   Option.iter ctx.result ~f:Result.release
 
-let init ~label =
+let init label =
   let result = { label; result = None; arrays = empty_ctx_arrays } in
   Stdlib.Gc.finalise finalize result;
   result

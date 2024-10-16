@@ -48,7 +48,7 @@ let is_initialized, initialize =
 
 let finalize _ctx = ()
 
-let init ~label =
+let init label =
   let result = { label; arrays = empty_ctx_arrays } in
   Stdlib.Gc.finalise finalize result;
   result

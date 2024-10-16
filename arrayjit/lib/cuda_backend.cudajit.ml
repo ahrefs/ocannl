@@ -19,6 +19,8 @@ type event = Cu.Delimited_event.t
 type ctx_array = { ptr : buffer_ptr; mutable tracking : (event[@sexp.opaque]) option }
 [@@deriving sexp_of]
 
+let buffer_ptr ctx_array = ctx_array.ptr
+
 type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
 
 let get_array = Map.find
@@ -640,8 +642,4 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
   in
   (context, lowered_bindings, procs)
 
-let to_buffer _tn ~dst:_ ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
-let host_to_buffer _tn ~dst:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
-let buffer_to_host _tn ~src:_ = failwith "CUDA low-level: NOT IMPLEMENTED YET"
-let get_buffer _tn _context = failwith "CUDA low-level: NOT IMPLEMENTED YET"
 let name = "cuda"

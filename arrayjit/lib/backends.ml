@@ -169,9 +169,7 @@ struct
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init stream =
-    { stream; ctx = Backend.init ~label:(name ^ " " ^ Int.to_string stream.ordinal) }
-
+  let init stream = { stream; ctx = Backend.init (name ^ " " ^ Int.to_string stream.ordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
@@ -340,10 +338,6 @@ struct
   let get_name device = Int.to_string device.ordinal
   let to_ordinal { ordinal; _ } = ordinal
   let to_subordinal _ = 0
-  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
-  let host_to_buffer = Backend.host_to_buffer
-  let buffer_to_host = Backend.buffer_to_host
-  let get_buffer tn context = Backend.get_buffer tn context.ctx
 end
 
 (** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
@@ -386,7 +380,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init stream = { stream; ctx = Backend.init ~label:name }
+  let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
   let finalize { stream = _; ctx } = Backend.finalize ctx
@@ -499,10 +493,6 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   let get_ctx_stream { stream; _ } = stream
   let to_ordinal _ = 0
   let to_subordinal stream = stream.subordinal
-  let to_buffer tn ~dst ~src = Backend.to_buffer tn ~dst ~src:src.ctx
-  let host_to_buffer = Backend.host_to_buffer
-  let buffer_to_host = Backend.buffer_to_host
-  let get_buffer tn context = Backend.get_buffer tn context.ctx
 end
 
 let lower_assignments ?name bindings asgns =
