@@ -18,7 +18,7 @@ let check_merge_buffer ~scheduled_node ~code_node =
            ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
           ^ name code_node)
 
-module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
+module Multicore_backend (Backend : Backend_types.No_device_backend) (* : Backend_types.Backend *) =
 struct
   module Domain = Domain [@warning "-3"]
 
@@ -68,7 +68,7 @@ struct
     state : stream_state;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
-    ordinal : int;
+    subordinal : int;
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
@@ -78,7 +78,7 @@ struct
 
   let get_used_memory _device = Backend.get_used_memory ()
 
-  type device = stream [@@deriving sexp_of]
+  type device = CPU [@@deriving sexp_of]
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
 
@@ -98,7 +98,7 @@ struct
       done;
       Mut.unlock d.mut;
       Option.iter d.stream_error ~f:(fun e ->
-          Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.ordinal))
+          Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.subordinal))
 
   (** TODO: Returns the event indicating if any currently running or scheduled computations on the
       stream have completed. *)
@@ -106,10 +106,10 @@ struct
 
   let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Task.describe task, "stream", (stream.ordinal : int)];
+    [%log_result "schedule_task", Task.describe task, "stream", (stream.subordinal : int)];
     let d = stream.state in
     Option.iter d.stream_error ~f:(fun e ->
-        Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.ordinal);
+        Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.subordinal);
     if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
     if not @@ Queue.try_push d.queue task then (
       await stream;
@@ -121,7 +121,7 @@ struct
 
   let global_run_no = ref 0
 
-  let%track3_l_sexp spinup_stream ~(ordinal : int) : stream =
+  let%track3_l_sexp spinup_stream ~(subordinal : int) : stream =
     Int.incr global_run_no;
     let state =
       {
@@ -153,14 +153,14 @@ struct
       with e ->
         state.stream_error <- Some e;
         state.keep_spinning <- false;
-        [%log1 "Stream", (ordinal : int), "exception", Exn.to_string e];
+        [%log1 "Stream", (subordinal : int), "exception", Exn.to_string e];
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
            stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
     {
       state;
-      ordinal;
+      subordinal;
       domain = Domain.spawn worker;
       merge_buffer = ref None;
       allocated_buffer = None;
@@ -169,7 +169,7 @@ struct
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init stream = { stream; ctx = Backend.init (name ^ " " ^ Int.to_string stream.ordinal) }
+  let init stream = { stream; ctx = Backend.init (name ^ " " ^ Int.to_string stream.subordinal) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
@@ -179,7 +179,7 @@ struct
 
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
-  let get_stream_name s = "stream " ^ Int.to_string s.ordinal
+  let get_stream_name s = "stream " ^ Int.to_string s.subordinal
 
   let link { ctx; stream } code =
     let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
@@ -224,7 +224,7 @@ struct
                       context_lifetime = context;
                       description =
                         "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.stream.ordinal;
+                        ^ Int.to_string context.stream.subordinal;
                       work;
                     });
                true
@@ -258,7 +258,7 @@ struct
                       context_lifetime = context;
                       description =
                         "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.stream.ordinal;
+                        ^ Int.to_string context.stream.subordinal;
                       work;
                     });
                true
@@ -296,8 +296,8 @@ struct
               Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
       in
       let description =
-        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.ordinal ^ " src "
-        ^ Int.to_string src.stream.ordinal
+        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.subordinal ^ " src "
+        ^ Int.to_string src.stream.subordinal
       in
       schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
     in
@@ -307,37 +307,40 @@ struct
         true
     | _ -> false
 
-  let num_devices () = Domain.recommended_domain_count () - 1
-  let suggested_num_streams _device = 1
-  let devices : device option array = Array.create ~len:(num_devices ()) None
+  module Dynarr = Stdlib.Dynarray
+
+  let num_devices () = 1
+  let suggested_num_streams CPU = Domain.recommended_domain_count () - 1
+  let latest_subordinal = ref 0
+
+  let cleanup_stream stream =
+    assert (Domain.is_main_domain ());
+    await stream;
+    stream.state.keep_spinning <- false;
+    Stdlib.Condition.broadcast stream.state.dev_wait_for_work;
+    Domain.join stream.domain
 
   let%track2_sexp unsafe_cleanup () =
-    assert (Domain.is_main_domain ());
-    let wait_for_finish stream =
-      await stream;
-      stream.state.keep_spinning <- false;
-      Stdlib.Condition.broadcast stream.state.dev_wait_for_work
-    in
-    Array.iter devices ~f:(Option.iter ~f:wait_for_finish);
-    let cleanup ordinal device =
-      Domain.join device.domain;
-      devices.(ordinal) <- None
-    in
-    Array.iteri devices ~f:(fun ordinal -> Option.iter ~f:(cleanup ordinal));
+    latest_subordinal := 0;
     Backend.unsafe_cleanup ()
 
   let get_device ~ordinal =
-    Option.value_or_thunk devices.(ordinal) ~default:(fun () ->
-        let dev = spinup_stream ~ordinal in
-        devices.(ordinal) <- Some dev;
-        dev)
+    if ordinal <> 0 then
+      invalid_arg [%string "Multicore_backend.get_device %{ordinal#Int}: only device 0 exists"];
+    CPU
 
-  let new_stream device = device
-  let get_stream_device stream = stream
+  let new_stream CPU =
+    let subordinal = !latest_subordinal in
+    Int.incr latest_subordinal;
+    let stream = spinup_stream ~subordinal in
+    Stdlib.Gc.finalise cleanup_stream stream;
+    stream
+
+  let get_stream_device _stream = CPU
   let get_ctx_stream { stream; _ } = stream
-  let get_name device = Int.to_string device.ordinal
-  let to_ordinal { ordinal; _ } = ordinal
-  let to_subordinal _ = 0
+  let get_name stream = Int.to_string stream.subordinal
+  let to_ordinal _ = 0
+  let to_subordinal { subordinal; _ } = subordinal
 end
 
 (** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
@@ -799,6 +802,7 @@ end
 module Cuda_backend : Backend_types.Backend = Lowered_backend ((
   Cuda_backend : Backend_types.Lowered_backend))
 
+(** Initializes the backend, and if it was already initialized, performs garbage collection. *)
 let reinitialize (module Backend : Backend_types.Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
@@ -807,7 +811,7 @@ let reinitialize (module Backend : Backend_types.Backend) config =
     Backend.initialize config)
 
 (** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
-    the global [backend] setting. *)
+    the global [backend] setting. See {!reinitialize}. *)
 let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
   let backend =
     match
