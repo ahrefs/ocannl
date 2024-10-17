@@ -39,8 +39,7 @@ let _suspended () =
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Utils.capture_stdout_logs @@ fun () ->
   Train.forward_and_forget backend ctx ho2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
-  Backend.unsafe_cleanup ()
+  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2
 
 let () =
   Utils.set_log_level 2;

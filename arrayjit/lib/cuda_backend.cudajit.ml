@@ -235,18 +235,6 @@ let init stream =
   Stdlib.Gc.finalise finalize ctx;
   ctx
 
-let unsafe_cleanup () =
-  let len = Core.Weak.length !devices in
-  (* NOTE: releasing the context should free its resources, there's no need to finalize the
-     remaining contexts, and [finalize], [finalize_device] will not do anything for a [released]
-     device. *)
-  for i = 0 to len - 1 do
-    Option.iter (Core.Weak.get !devices i) ~f:(fun device ->
-        if Atomic.compare_and_set device.released false true then cleanup_device device)
-  done;
-  Core.Weak.fill !devices 0 len None;
-  Stdlib.Gc.compact ()
-
 let%diagn2_l_sexp from_host (ctx : context) tn =
   match (tn, Map.find ctx.ctx_arrays tn) with
   | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->

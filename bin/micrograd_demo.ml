@@ -180,8 +180,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
       [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
   in
-  PrintBox_text.output Stdio.stdout plot_lr;
-  Backend.unsafe_cleanup ()
+  PrintBox_text.output Stdio.stdout plot_lr
 
 let () = experiment 4 ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
 let () = experiment 4 ~no_batch_shape_inference:false ~use_builtin_weight_decay:false ()

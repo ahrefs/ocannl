@@ -131,9 +131,7 @@ let experiment ~seed ~backend_name ~config () =
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
       [ Line_plot { points = Array.of_list_rev learning_rates; pixel = "-" } ]
   in
-  PrintBox_text.output Stdio.stdout plot_lr;
-  let module Backend = (val backend) in
-  Backend.unsafe_cleanup ()
+  PrintBox_text.output Stdio.stdout plot_lr
 
 let () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()
 let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()

@@ -136,6 +136,6 @@ let demo () =
     PrintBox_text.output Stdio.stdout plot_moons;
     Stdio.print_endline "\n"
   in
-  Backend.unsafe_cleanup ()
+  ()
 
 let () = demo ()

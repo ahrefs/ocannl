@@ -54,12 +54,11 @@ module type Backend_common = sig
   val name : string
 
   val initialize : Types.config -> unit
-  (** Initializes a backend before first use or (on some backends) after {!unsafe_cleanup}. Does
-      nothing if the backend is already initialized. *)
+  (** Initializes a backend before first use. Typically does nothing if the backend is already
+      initialized, but some backends can do some safe cleanups. *)
 
   val is_initialized : unit -> bool
-  (** Returns false if there was no previous {!initialize} call, or, on some backends, the most
-      recent call was followed by {!unsafe_cleanup}. If it returns false, one must call
+  (** Returns false if there was no previous {!initialize} call. If it returns false, one must call
       {!initialize} before using the backend. *)
 
   val init : init_info -> context
@@ -88,11 +87,6 @@ module type Backend_common = sig
       compile time and debugging convenience by generating fewer files -- ideally does not affect
       execution, but there can be backend-specific differences. Only array entries for which
       [occupancy] returns true are included. *)
-
-  val unsafe_cleanup : unit -> unit
-  (** Cleans up all work on a backend, releases resources. All previously retrieved values
-      (contexts, streams and devices) become invalid. The backend needs to be initialized again to
-      be used again. *)
 end
 
 module type No_device_backend = sig
@@ -236,7 +230,6 @@ module type Lowered_backend_common = sig
   val is_initialized : unit -> bool
   val init : init_info -> context
   val finalize : context -> unit
-  val unsafe_cleanup : unit -> unit
   val name : string
 end
 

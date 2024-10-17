@@ -320,10 +320,6 @@ struct
     Stdlib.Condition.broadcast stream.state.dev_wait_for_work;
     Domain.join stream.domain
 
-  let%track2_sexp unsafe_cleanup () =
-    latest_subordinal := 0;
-    Backend.unsafe_cleanup ()
-
   let get_device ~ordinal =
     if ordinal <> 0 then
       invalid_arg [%string "Multicore_backend.get_device %{ordinal#Int}: only device 0 exists"];
@@ -477,10 +473,6 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   let num_devices () = 1
   let suggested_num_streams _device = !sync_suggested_num_streams
   let next_stream_id = ref 0
-
-  let unsafe_cleanup () =
-    next_stream_id := 0;
-    Backend.unsafe_cleanup ()
 
   let get_device ~ordinal =
     if ordinal <> 0 then invalid_arg "Sync_backend backends only have device number 0";
@@ -807,7 +799,6 @@ let reinitialize (module Backend : Backend_types.Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Core.Gc.full_major ();
-    Backend.unsafe_cleanup ();
     Backend.initialize config)
 
 (** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via

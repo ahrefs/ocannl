@@ -47,4 +47,3 @@ let initialize () = ()
 let is_initialized () = true
 let init _ = Unimplemented_ctx
 let finalize Unimplemented_ctx = ()
-let unsafe_cleanup () = ()

@@ -40,7 +40,6 @@ let to_buffer tn ~dst ~src =
 
 let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let unsafe_cleanup () = Stdlib.Gc.compact ()
 
 let is_initialized, initialize =
   let initialized = ref false in

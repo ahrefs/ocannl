@@ -52,7 +52,6 @@ let link_batch (Unimplemented_ctx : context) (code_batch : code_batch) =
   in
   ((Unimplemented_ctx : context), lowered_bindings, task)
 
-let unsafe_cleanup () = ()
 let from_host _context _tn = false
 let to_host _context _tn = false
 let device_to_device _tn ~into_merge_buffer:_ ~dst:_ ~src:_ = false

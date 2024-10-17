@@ -55,12 +55,6 @@ let to_buffer tn ~dst ~src =
 let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
-let unsafe_cleanup () =
-  let open Gccjit in
-  Option.iter ~f:Context.release !root_ctx;
-  root_ctx := None;
-  Stdlib.Gc.compact ()
-
 let is_initialized () = Option.is_some !root_ctx
 
 let initialize () =

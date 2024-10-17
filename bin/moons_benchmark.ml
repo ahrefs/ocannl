@@ -178,8 +178,6 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
       }
   in
   Stdio.printf "\n\n%!";
-  let module Backend = (val backend) in
-  Backend.unsafe_cleanup ();
   result
 
 let _suspend () =
