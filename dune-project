@@ -76,9 +76,14 @@
    (>= 2.0.0)))
  (depopts
   (cudajit
-   (>= 0.4.1))
+   (>= 0.5.1))
   (gccjit
    (>= 0.3.2)))
+ (conflicts
+  (cudajit
+   (< 0.5.1))
+  (gccjit
+   (< 0.3.2)))
  (tags
   (deeplearning array jit CUDA)))
 

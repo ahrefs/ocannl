@@ -10,14 +10,21 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+let () =
+  Cu.cuda_call_hook :=
+    Some
+      (fun ~message ~status ->
+        [%debug_l_sexp
+          [%log5_block
+            message;
+            if not @@ Cu.is_success status then [%log (status : Cu.result)]]])
+
 type buffer_ptr = Cu.Deviceptr.t
 
 let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
-type event = Cu.Delimited_event.t
-
-type ctx_array = { ptr : buffer_ptr; mutable tracking : (event[@sexp.opaque]) option }
-[@@deriving sexp_of]
+type event = Cu.Delimited_event.t [@@deriving sexp_of]
+type ctx_array = { ptr : buffer_ptr; mutable tracking : event option } [@@deriving sexp_of]
 
 let buffer_ptr ctx_array = ctx_array.ptr
 
@@ -26,9 +33,9 @@ type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
 let get_array = Map.find
 
 type device = {
-  dev : (Cu.Device.t[@sexp.opaque]);
+  dev : Cu.Device.t;
   ordinal : int;
-  primary_context : (Cu.Context.t[@sexp.opaque]);
+  primary_context : Cu.Context.t;
   mutable copy_merge_buffer : buffer_ptr;
   mutable copy_merge_buffer_capacity : int;
   mutable latest_subordinal : int;
@@ -43,15 +50,14 @@ type device = {
 
 and stream = {
   device : device;
-  cu_stream : (Cu.Stream.t[@sexp.opaque]);
+  cu_stream : Cu.Stream.t;
   subordinal : int;
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
 
 and context = {
   label : string;
-  ctx : (Cu.Context.t[@sexp.opaque]);
-      (** Currently, this is always the same as [stream.device.primary_context]. *)
+  ctx : Cu.Context.t;  (** Currently, this is always the same as [stream.device.primary_context]. *)
   stream : stream;
   parent : context option;
   run_module : (Cu.Module.t[@sexp.opaque]) option;
@@ -84,9 +90,9 @@ let scheduled_merge_node stream = Option.map ~f:snd stream.merge_buffer
 let is_initialized, initialize =
   let initialized = ref false in
   let init (config : config) : unit =
+    if not !initialized then Cu.init ();
     initialized := true;
-    global_config := config;
-    Cu.init ()
+    global_config := config
   in
   ((fun () -> !initialized), init)
 
@@ -314,7 +320,7 @@ let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : co
 
 type code = {
   traced_store : Low_level.traced_store;
-  ptx : (Cu.Nvrtc.compile_to_ptx_result[@sexp.opaque]);
+  ptx : Cu.Nvrtc.compile_to_ptx_result;
   params : (string * param_source) list;
   bindings : Indexing.unit_bindings;
   name : string;
@@ -323,7 +329,7 @@ type code = {
 
 type code_batch = {
   traced_stores : Low_level.traced_store option array;
-  ptx : (Cu.Nvrtc.compile_to_ptx_result[@sexp.opaque]);
+  ptx : Cu.Nvrtc.compile_to_ptx_result;
   bindings : Indexing.unit_bindings;
   params_and_names : ((string * param_source) list * string) option array;
 }
