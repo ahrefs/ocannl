@@ -7,6 +7,7 @@
   printbox-text
   npy
   stdio
+  sexplib
   str
   ctypes
   ctypes.foreign
@@ -23,7 +24,7 @@
    (-> cuda_backend.missing.ml))
   ppx_minidebug.runtime)
  (preprocess
-  (pps ppx_jane ppx_minidebug))
+  (pps ppx_compare ppx_hash ppx_here ppx_sexp_conv ppx_string ppx_variants_conv ppx_minidebug))
  (modules
   utils
   rand
@@ -48,4 +49,4 @@
  (modules ppx_helper)
  (libraries base ppxlib str)
  (preprocess
-  (pps ppx_jane ppxlib.metaquot)))
+  (pps ppxlib.metaquot)))

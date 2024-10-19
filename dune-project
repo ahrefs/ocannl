@@ -64,11 +64,17 @@
   printbox-text
   ocannl_npy
   stdio
+  sexplib
   num
   (saturn_lockfree
    (>= 0.5.0))
   ppxlib
-  ppx_jane
+  ppx_compare
+  ppx_hash
+  ppx_here
+  ppx_sexp_conv
+  ppx_string
+  ppx_variants_conv
   ppx_expect
   (ppx_minidebug
    (>= 2.0.0)))
@@ -110,9 +116,17 @@
   (angstrom
    (>= 0.15))
   stdio
+  sexplib
   num
+  time_now
   ppxlib
-  ppx_jane
+  ppx_compare
+  ppx_fields_conv
+  ppx_hash
+  ppx_here
+  ppx_sexp_conv
+  ppx_string
+  ppx_variants_conv
   ppx_expect
   (ppx_minidebug
    (>= 2.0.0))

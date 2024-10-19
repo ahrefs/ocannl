@@ -16,7 +16,7 @@
 - Moved the multicore backend from a `device = stream` model to a single device model.
 - Got rid of `unsafe_cleanup`.
 - Got rid of `subordinal`.
-- Removed dependency on `Core`.
+- Removed dependency on `dore`, broke up dependency on `ppx_jane`.
 - TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
 
 ### Fixed

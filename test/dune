@@ -7,7 +7,7 @@
  (deps ocannl_config)
  (libraries ocannl)
  (preprocess
-  (pps ppx_jane ppx_ocannl)))
+  (pps ppx_ocannl)))
 
 (library
  (name tutorials)
@@ -22,5 +22,5 @@
   zero2hero_1of7
   moons_demo_parallel)
  (preprocess
-  (pps ppx_jane ppx_expect ppx_inline_test ppx_ocannl))
+  (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes native))
