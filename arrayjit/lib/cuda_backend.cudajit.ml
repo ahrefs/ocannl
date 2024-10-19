@@ -121,49 +121,54 @@ let opt_alloc_merge_buffer ~size_in_bytes dev =
     dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
     dev.copy_merge_buffer_capacity <- size_in_bytes)
 
-let cleanup_device device =
+let%track3_sexp cleanup_device (device : device) =
   Cu.Context.set_current device.primary_context;
   Cu.Context.synchronize ();
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
+  (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
   Cu.Deviceptr.mem_free device.copy_merge_buffer;
   Hashtbl.iter device.cross_stream_candidates ~f:(fun ctx_array ->
       Cu.Deviceptr.mem_free ctx_array.ptr)
 
-let finalize_device device =
+let%track5_sexp finalize_device device =
   if Atomic.compare_and_set device.released false true then cleanup_device device
 
-let get_device ~(ordinal : int) : device =
+let%track3_sexp get_device ~(ordinal : int) : device =
   if num_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
   if Core.Weak.length !devices <= ordinal then (
     let old = !devices in
     devices := Core.Weak.create (ordinal + 1);
     Core.Weak.blit old 0 !devices 0 (Core.Weak.length old));
-  Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default:(fun () ->
-      let dev = Cu.Device.get ~ordinal in
-      let primary_context = Cu.Context.get_primary dev in
-      let copy_merge_buffer_capacity = 8 in
-      set_ctx primary_context;
-      if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
-        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
-      Hash_set.add initialized_devices ordinal;
-      let copy_merge_buffer = Cu.Deviceptr.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
-      let result =
-        {
-          dev;
-          ordinal;
-          latest_subordinal = 0;
-          primary_context;
-          copy_merge_buffer;
-          copy_merge_buffer_capacity;
-          released = Atomic.make false;
-          cross_stream_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
-          owner_stream_subordinal = Hashtbl.create (module Tn);
-        }
-      in
-      Stdlib.Gc.finalise finalize_device result;
-      Core.Weak.set !devices ordinal (Some result);
-      result)
+  let default () =
+    let dev : Cu.Device.t = Cu.Device.get ~ordinal in
+    let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
+    let copy_merge_buffer_capacity = 8 in
+    set_ctx primary_context;
+    if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
+      Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
+    Hash_set.add initialized_devices ordinal;
+    let copy_merge_buffer = Cu.Deviceptr.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
+    let result =
+      {
+        dev;
+        ordinal;
+        used_names = Hash_set.create (module String);
+        primary_context;
+        copy_merge_buffer;
+        copy_merge_buffer_capacity;
+        released = Atomic.make false;
+        cross_stream_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
+        owner_streams = Hashtbl.create (module Tn);
+      }
+    in
+    Stdlib.Gc.finalise finalize_device result;
+    Core.Weak.set !devices ordinal (Some result);
+    result
+  in
+  let result = Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default in
+  (* We need this: there can be an arbitrary gap between the finalizer run and the deallocation. *)
+  if Atomic.get result.released then default () else result
 
 let new_stream device =
   let subordinal = device.latest_subordinal in
@@ -206,7 +211,7 @@ let await stream : unit =
 
 let is_idle stream = Cu.Stream.is_ready stream.cu_stream
 
-let finalize ctx =
+let%track3_sexp finalize (ctx : context) : unit =
   if
     Atomic.compare_and_set ctx.finalized false true && (not @@ Atomic.get ctx.stream.device.released)
   then (

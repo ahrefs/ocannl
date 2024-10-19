@@ -20,6 +20,7 @@
 ### Fixed
 
 - Validating merge nodes for the CUDA backend.
+- Checking `is_released` on weak array retrieval.
 
 ## [0.4.1] -- 2024-09-17
 

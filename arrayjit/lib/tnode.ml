@@ -469,6 +469,9 @@ let create ?default_prec ~id ~label ~dims init_op =
       code_name = None;
     }
   in
+  (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
+     that is checked in the find function, or to convert it to a find_exn function that should never
+     be called on potentially GCed nodes. *)
   Registry.add registry tn;
   tn
 
