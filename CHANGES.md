@@ -15,6 +15,7 @@
 - Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - Moved the multicore backend from a `device = stream` model to a single device model.
 - Got rid of `unsafe_cleanup`.
+- Got rid of `subordinal`.
 - TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
 
 ### Fixed

@@ -15,56 +15,15 @@
 
 <!-- /TOC -->
 
-NOTE: these are outdated.
-TODO: update regarding events and device-to-device synchronization.
-TODO: rename `device` -> `stream`, `physical_device` -> `device`.
-
 ## Design around compiling and running code, backend interfaces
 
-Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_utils](backend_utils.ml) is the "source". `Backend_utils.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.comp` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`, since currently all backends use the optimized C-like representation `Low_level.t`. The user-facing interface `Backends.Backend` builds on top of `No_device_backend` providing multi-device functionality. The functor `Multicore_backend` converts a `No_device_backend` targetting the CPU into a `Backend` whose devices are parallel threads (and ultimately the CPU cores).
+Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_types](backend_types.ml) is the "source". `Backend_types.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.comp` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`, since currently all backends use the optimized C-like representation `Low_level.t`. `Backends.Backend` is the user-facing interface.
 
-```ocaml
-type lowered_bindings = (static_symbol, int ref) List.Assoc.t  (* in indexing.ml *)
+The functor `Multicore_backend` converts a `No_device_backend` typically targetting the CPU into a `Backend` whose devices are parallel threads (and ultimately the CPU cores).
 
-type task =
-  | Task.t : { context_lifetime : 'a; description : string; work : unit -> unit; } -> task  (* in tnode.ml *)
+Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed.
 
-type 'context routine = {
-  context : 'context;
-  schedule : task;
-  bindings : lowered_bindings;
-  name : string;
-}  (* in backend_utils.ml *)
-
-module type No_device_backend = sig
-  type code
-  type context
-  type nonrec routine = context routine
-  ...
-end  (* in backends.ml *)
-```
-
-Backends need to provide the `code` (for compilation result) and `context` types. `code` is some intermediate state between assignments and `context routine`. A backend may postpone doing anything specific until linking, e.g. `code = Low_level.optimized`, or linking may be a no-op, effectively `code = routine`, usually it will fall somewhere in between and depend on whether `~shared:true` is passed. For simple situations like CPU backends, `Backends` has a helper functor:
-
-```ocaml
-module Lowered_no_device_backend (Backend : Lowered_no_device_backend) : No_device_backend = struct
-  type code =
-    | Postponed of { lowered : Low_level.optimized; bindings : Indexing.unit_bindings; name : string }
-    | Compiled of Backend.procedure
-  [@@deriving sexp_of]
-
-  include Backend
-
-  type nonrec routine = context routine [@@deriving sexp_of]
-
-  let compile ?(shared = false) ?name bindings asgns =
-    let name, lowered = lower_assignments ?name bindings asgns in
-    if shared then Compiled (Backend.compile ~name ~opt_ctx_arrays:None bindings lowered)
-    else Postponed { lowered; bindings; name }
-
-  ...
-end
-```
+For simple situations like CPU backends, `Backends` has a helper functor:
 
 where `Lowered_no_device_backend` implements a `No_device_backend` functionality, but only needs to deal with `Low_level.optimized` and its compilation result type `procedure`.
 

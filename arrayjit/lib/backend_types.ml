@@ -202,7 +202,6 @@ module type Backend = sig
   val get_ctx_stream : context -> stream
   val get_stream_device : stream -> device
   val to_ordinal : device -> int
-  val to_subordinal : stream -> int
   val get_name : stream -> string
 end
 
@@ -332,5 +331,4 @@ module type Lowered_backend = sig
   val get_ctx_stream : context -> stream
   val get_name : stream -> string
   val to_ordinal : device -> int
-  val to_subordinal : stream -> int
 end

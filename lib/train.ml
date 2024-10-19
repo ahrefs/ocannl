@@ -418,7 +418,7 @@ let get_all_suggested_streams ?(max_num_streams : int option) (type device strea
         let max_current = Backend.suggested_num_streams device in
         let take_current = min max_current @@ (max_num_streams - remaining_devices) in
         ( num_collected + take_current,
-          Array.init take_current ~f:(fun _subordinal -> Backend.new_stream device) ))
+          Array.init take_current ~f:(fun _stream_no -> Backend.new_stream device) ))
     |> Array.concat_map ~f:Fn.id
   in
   (devices, result)

@@ -18,7 +18,7 @@ let check_merge_buffer ~scheduled_node ~code_node =
            ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
           ^ name code_node)
 
-module Multicore_backend (Backend : Backend_types.No_device_backend) (* : Backend_types.Backend *) =
+module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
 struct
   module Domain = Domain [@warning "-3"]
 
@@ -68,7 +68,7 @@ struct
     state : stream_state;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
-    subordinal : int;
+    unique_name : string;
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
@@ -97,8 +97,7 @@ struct
         Stdlib.Condition.wait d.host_wait_for_idle d.mut
       done;
       Mut.unlock d.mut;
-      Option.iter d.stream_error ~f:(fun e ->
-          Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.subordinal))
+      Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ name ^ " " ^ stream.unique_name))
 
   (** TODO: Returns the event indicating if any currently running or scheduled computations on the
       stream have completed. *)
@@ -106,10 +105,9 @@ struct
 
   let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Task.describe task, "stream", (stream.subordinal : int)];
+    [%log_result "schedule_task", Task.describe task, stream.unique_name];
     let d = stream.state in
-    Option.iter d.stream_error ~f:(fun e ->
-        Exn.reraise e @@ name ^ " stream " ^ Int.to_string stream.subordinal);
+    Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ name ^ " " ^ stream.unique_name);
     if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
     if not @@ Queue.try_push d.queue task then (
       await stream;
@@ -121,7 +119,7 @@ struct
 
   let global_run_no = ref 0
 
-  let%track3_l_sexp spinup_stream ~(subordinal : int) : stream =
+  let%track3_l_sexp spinup_stream ~unique_name : stream =
     Int.incr global_run_no;
     let state =
       {
@@ -153,14 +151,14 @@ struct
       with e ->
         state.stream_error <- Some e;
         state.keep_spinning <- false;
-        [%log1 "Stream", (subordinal : int), "exception", Exn.to_string e];
+        [%log1 unique_name, "exception", Exn.to_string e];
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
            stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
     {
       state;
-      subordinal;
+      unique_name;
       domain = Domain.spawn worker;
       merge_buffer = ref None;
       allocated_buffer = None;
@@ -169,7 +167,7 @@ struct
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
   type nonrec routine = context routine [@@deriving sexp_of]
 
-  let init stream = { stream; ctx = Backend.init (name ^ " " ^ Int.to_string stream.subordinal) }
+  let init stream = { stream; ctx = Backend.init (name ^ " " ^ stream.unique_name) }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
 
@@ -179,14 +177,14 @@ struct
 
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
-  let get_stream_name s = "stream " ^ Int.to_string s.subordinal
+  let get_name stream = stream.unique_name
 
   let link { ctx; stream } code =
     let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
     {
       task with
       context = { ctx = task.context; stream };
-      schedule = Task.enschedule ~schedule_task ~get_stream_name stream task.schedule;
+      schedule = Task.enschedule ~schedule_task ~get_stream_name:get_name stream task.schedule;
     }
 
   let link_batch { ctx; stream } code_batch =
@@ -198,7 +196,8 @@ struct
                {
                  task with
                  context = { ctx = task.context; stream };
-                 schedule = Task.enschedule ~schedule_task ~get_stream_name stream task.schedule;
+                 schedule =
+                   Task.enschedule ~schedule_task ~get_stream_name:get_name stream task.schedule;
                })) )
 
   let from_host (context : context) (tn : Tnode.t) =
@@ -223,8 +222,7 @@ struct
                     {
                       context_lifetime = context;
                       description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.stream.subordinal;
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
                       work;
                     });
                true
@@ -257,8 +255,7 @@ struct
                     {
                       context_lifetime = context;
                       description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst "
-                        ^ Int.to_string context.stream.subordinal;
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
                       work;
                     });
                true
@@ -296,8 +293,8 @@ struct
               Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
       in
       let description =
-        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ Int.to_string dev.subordinal ^ " src "
-        ^ Int.to_string src.stream.subordinal
+        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
+        ^ src.stream.unique_name
       in
       schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
     in
@@ -311,13 +308,14 @@ struct
 
   let num_devices () = 1
   let suggested_num_streams CPU = Domain.recommended_domain_count () - 1
-  let latest_subordinal = ref 0
+  let used_names = Hash_set.create (module String)
 
   let cleanup_stream stream =
     assert (Domain.is_main_domain ());
     await stream;
     stream.state.keep_spinning <- false;
     Stdlib.Condition.broadcast stream.state.dev_wait_for_work;
+    Hash_set.remove used_names stream.unique_name;
     Domain.join stream.domain
 
   let get_device ~ordinal =
@@ -326,17 +324,20 @@ struct
     CPU
 
   let new_stream CPU =
-    let subordinal = !latest_subordinal in
-    Int.incr latest_subordinal;
-    let stream = spinup_stream ~subordinal in
+    assert (Domain.is_main_domain ());
+    let rec unique_name suffix =
+      let name = "stream " ^ Int.to_string suffix in
+      if Hash_set.mem used_names name then unique_name (suffix + 1) else name
+    in
+    let unique_name = unique_name 0 in
+    Hash_set.add used_names unique_name;
+    let stream = spinup_stream ~unique_name in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
 
   let get_stream_device _stream = CPU
   let get_ctx_stream { stream; _ } = stream
-  let get_name stream = Int.to_string stream.subordinal
   let to_ordinal _ = 0
-  let to_subordinal { subordinal; _ } = subordinal
 end
 
 (** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
@@ -354,7 +355,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   let will_wait_for _context () = ()
 
   type stream = {
-    subordinal : int;
+    unique_name : string;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
     mutable allocated_buffer : (buffer_ptr * int) option;
   }
@@ -396,7 +397,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
       Array.map routines
         ~f:(Option.map ~f:(fun task -> { task with context = { ctx = task.context; stream } })) )
 
-  let get_name stream = Int.to_string stream.subordinal
+  let get_name stream = stream.unique_name
 
   let from_host (context : context) (tn : Tnode.t) =
     Option.value ~default:false
@@ -472,22 +473,32 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
 
   let num_devices () = 1
   let suggested_num_streams _device = !sync_suggested_num_streams
-  let next_stream_id = ref 0
 
   let get_device ~ordinal =
     if ordinal <> 0 then invalid_arg "Sync_backend backends only have device number 0";
     CPU
 
+  let used_names = Hash_set.create (module String)
+
+  let cleanup_stream stream =
+    assert (Domain.is_main_domain ());
+    await stream;
+    Hash_set.remove used_names stream.unique_name
+
   let new_stream CPU =
-    let result =
-      { subordinal = !next_stream_id; merge_buffer = ref None; allocated_buffer = None }
+    let rec unique_name suffix =
+      let name = "stream " ^ Int.to_string suffix in
+      if Hash_set.mem used_names name then unique_name (suffix + 1) else name
     in
+    let unique_name = unique_name 0 in
+    Hash_set.add used_names unique_name;
+    let result = { unique_name; merge_buffer = ref None; allocated_buffer = None } in
+    Stdlib.Gc.finalise cleanup_stream result;
     result
 
   let get_stream_device _stream = CPU
   let get_ctx_stream { stream; _ } = stream
   let to_ordinal _ = 0
-  let to_subordinal stream = stream.subordinal
 end
 
 let lower_assignments ?name bindings asgns =
