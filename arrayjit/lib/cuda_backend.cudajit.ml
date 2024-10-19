@@ -97,7 +97,7 @@ let is_initialized, initialize =
   ((fun () -> !initialized), init)
 
 let num_devices = Cu.Device.get_count
-let devices = ref @@ Core.Weak.create 0
+let devices = ref @@ Stdlib.Weak.create 0
 
 (* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
@@ -142,10 +142,10 @@ let%track5_sexp finalize_device device =
 let%track3_sexp get_device ~(ordinal : int) : device =
   if num_devices () <= ordinal then
     invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
-  if Core.Weak.length !devices <= ordinal then (
+  if Stdlib.Weak.length !devices <= ordinal then (
     let old = !devices in
-    devices := Core.Weak.create (ordinal + 1);
-    Core.Weak.blit old 0 !devices 0 (Core.Weak.length old));
+    devices := Stdlib.Weak.create (ordinal + 1);
+    Stdlib.Weak.blit old 0 !devices 0 (Stdlib.Weak.length old));
   let default () =
     let dev : Cu.Device.t = Cu.Device.get ~ordinal in
     let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
@@ -169,10 +169,10 @@ let%track3_sexp get_device ~(ordinal : int) : device =
       }
     in
     Stdlib.Gc.finalise finalize_device result;
-    Core.Weak.set !devices ordinal (Some result);
+    Stdlib.Weak.set !devices ordinal (Some result);
     result
   in
-  let result = Option.value_or_thunk (Core.Weak.get !devices ordinal) ~default in
+  let result = Option.value_or_thunk (Stdlib.Weak.get !devices ordinal) ~default in
   (* We need this: there can be an arbitrary gap between the finalizer run and the deallocation. *)
   if Atomic.get result.released then default () else result
 

@@ -74,7 +74,7 @@ let read_cmdline_or_env_var n =
   let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
   let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n ^ "_"; n ^ "-"; n ^ "="; n ]) in
   match
-    Array.find_map (Core.Sys.get_argv ()) ~f:(fun arg ->
+    Array.find_map Stdlib.Sys.argv ~f:(fun arg ->
         List.find_map cmd_variants ~f:(fun prefix ->
             Option.some_if (String.is_prefix ~prefix arg) (prefix, arg)))
   with
@@ -87,7 +87,7 @@ let read_cmdline_or_env_var n =
         List.find_map env_variants ~f:(fun env_n ->
             Option.(
               join
-              @@ map (Core.Sys.getenv env_n) ~f:(fun v ->
+              @@ map (Stdlib.Sys.getenv_opt env_n) ~f:(fun v ->
                      if String.is_empty v then None else Some (env_n, v))))
       with
       | None | Some (_, "") -> None
@@ -96,16 +96,31 @@ let read_cmdline_or_env_var n =
           if with_debug then Stdio.printf "Found %s, environment %s\n%!" result p;
           Some result)
 
+(* Originally from the library core.filename_base. *)
+let filename_parts filename =
+  let rec loop acc filename =
+    match (Stdlib.Filename.dirname filename, Stdlib.Filename.basename filename) with
+    | ("." as base), "." -> base :: acc
+    | ("/" as base), "/" -> base :: acc
+    | rest, dir -> loop (dir :: acc) rest
+  in
+  loop [] filename
+
+(* Originally from the library core.filename_base. *)
+let filename_of_parts = function
+  | [] -> invalid_arg "Utils.filename_of_parts: empty parts list"
+  | root :: rest -> List.fold rest ~init:root ~f:Stdlib.Filename.concat
+
 let config_file_args =
   match read_cmdline_or_env_var "no_config_file" with
   | None | Some "false" ->
       let read = Stdio.In_channel.read_lines in
       let fname, config_lines =
-        let rev_dirs = List.rev @@ Filename_base.parts @@ Stdlib.Sys.getcwd () in
+        let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
         let rec find_up = function
           | [] -> failwith "OCANNL could not find the ocannl_config file along current path"
           | _ :: tl as rev_dirs -> (
-              let fname = Filename_base.of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
+              let fname = filename_of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
               try (fname, read fname) with Sys_error _ -> find_up tl)
         in
         find_up rev_dirs
@@ -155,11 +170,30 @@ let get_global_arg ~default ~arg_name:n =
   Hash_set.add accessed_global_args n;
   result
 
+(* Originally from the library core.filename_base. *)
+let filename_concat p1 p2 =
+  if String.is_empty p1 then
+    invalid_arg
+    @@ "Utils.filename_concat called with an empty string as its first argument, second argument: "
+    ^ p2;
+  let rec collapse_trailing s =
+    match String.rsplit2 s ~on:'/' with
+    | Some ("", ("." | "")) -> ""
+    | Some (s, ("." | "")) -> collapse_trailing s
+    | None | Some _ -> s
+  in
+  let rec collapse_leading s =
+    match String.lsplit2 s ~on:'/' with
+    | Some (("." | ""), s) -> collapse_leading s
+    | Some _ | None -> s
+  in
+  collapse_trailing p1 ^ "/" ^ collapse_leading p2
+
 let build_file fname =
   let build_files_dir = "build_files" in
   (try assert (Stdlib.Sys.is_directory build_files_dir)
    with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir build_files_dir 0o777);
-  Filename_base.concat build_files_dir fname
+  filename_concat build_files_dir fname
 
 let diagn_log_file fname =
   let log_files_dir = "log_files" in
@@ -167,7 +201,7 @@ let diagn_log_file fname =
    with Stdlib.Sys_error _ -> (
      (* FIXME: is this called concurrently or what? *)
      try Stdlib.Sys.mkdir log_files_dir 0o777 with Stdlib.Sys_error _ -> ()));
-  Filename_base.concat log_files_dir fname
+  filename_concat log_files_dir fname
 
 let get_debug name =
   let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in

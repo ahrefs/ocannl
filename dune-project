@@ -52,8 +52,6 @@
   dune
   (base
    (>= v0.17.0))
-  (core
-   (>= v0.17.0))
   (ctypes
    (>= 0.23))
   (ctypes-foreign
@@ -98,8 +96,6 @@
    (>= 5.2.0))
   dune
   (base
-   (>= v0.17.0))
-  (core
    (>= v0.17.0))
   ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
   ; (ocamlformat

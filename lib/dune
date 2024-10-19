@@ -3,7 +3,6 @@
  (public_name neural_nets_lib)
  (libraries
   base
-  core
   printbox
   printbox-text
   npy

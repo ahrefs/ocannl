@@ -431,7 +431,7 @@ let header tn =
     }: %{Sexp.to_string_hum @@
      [%sexp_of: (memory_mode * int) option] tn.memory_mode}; %{dims_to_string tn}; mem in bytes: %{mem_size}|}]
 
-module Registry = Core.Weak.Make (struct
+module Registry = Stdlib.Weak.Make (struct
   type nonrec t = t
 
   let equal = equal
@@ -493,11 +493,11 @@ let find =
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";
-  Core.Gc.full_major ();
+  Stdlib.Gc.full_major ();
   Registry.iter (fun arr -> Stdio.print_endline @@ header arr) registry;
   Stdio.printf "Tnode: Finished printing headers.%!\n"
 
 let%debug_sexp log_accessible_headers () =
-  Core.Gc.full_major ();
+  Stdlib.Gc.full_major ();
   Registry.iter (fun _arr -> [%log header _arr]) registry;
   ()

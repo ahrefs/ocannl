@@ -73,7 +73,7 @@ let get_global_run_id =
     !next_id
 
 let c_compile_and_load ~f_name =
-  let base_name = Filename_base.chop_extension f_name in
+  let base_name = Stdlib.Filename.chop_extension f_name in
   (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
      is not required to unload the library, although ideally it should. *)
   let run_id = Int.to_string @@ get_global_run_id () in

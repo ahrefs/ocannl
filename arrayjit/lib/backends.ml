@@ -809,7 +809,7 @@ module Cuda_backend : Backend_types.Backend = Lowered_backend ((
 let reinitialize (module Backend : Backend_types.Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
-    Core.Gc.full_major ();
+    Stdlib.Gc.full_major ();
     Backend.initialize config)
 
 (** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
