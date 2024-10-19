@@ -38,16 +38,7 @@ struct
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
 
-  (* let pp_semi ppf () = Stdlib.Format.fprintf ppf ";@ " *)
-  let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-
-  (* let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym *)
-  let pp_index ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
-
-  let pp_index_axis ppf = function
-    | Indexing.Iterator it -> pp_index ppf it
-    | Fixed_idx i when i < 0 -> Stdlib.Format.fprintf ppf "(%d)" i
-    | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
+  open Indexing.Pp_helpers
 
   let pp_array_offset ppf (idcs, dims) =
     let open Stdlib.Format in
@@ -57,9 +48,9 @@ struct
     done;
     for i = 0 to Array.length idcs - 1 do
       let dim = dims.(i) in
-      if i = 0 then fprintf ppf "%a" pp_index_axis idcs.(i)
-      else if i = Array.length idcs - 1 then fprintf ppf " * %d + %a" dim pp_index_axis idcs.(i)
-      else fprintf ppf " * %d +@ %a@;<0 -1>)@]" dim pp_index_axis idcs.(i)
+      if i = 0 then fprintf ppf "%a" pp_axis_index idcs.(i)
+      else if i = Array.length idcs - 1 then fprintf ppf " * %d + %a" dim pp_axis_index idcs.(i)
+      else fprintf ppf " * %d +@ %a@;<0 -1>)@]" dim pp_axis_index idcs.(i)
     done
 
   let array_offset_to_string (idcs, dims) =
@@ -113,15 +104,15 @@ struct
           fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
             (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
       | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-          fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ " pp_index i from_ pp_index i
-            to_ pp_index i;
+          fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ " pp_symbol i from_ pp_symbol i
+            to_ pp_symbol i;
           if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
               fprintf ppf {|printf(@[<h>"%s%%d: index %a = %%d\n",@] log_id, %a);@ |}
-                !Utils.captured_log_prefix pp_index i pp_index i
+                !Utils.captured_log_prefix pp_symbol i pp_symbol i
             else
-              fprintf ppf {|fprintf(log_file,@ @[<h>"index %a = %%d\n",@] %a);@ |} pp_index i
-                pp_index i;
+              fprintf ppf {|fprintf(log_file,@ @[<h>"index %a = %%d\n",@] %a);@ |} pp_symbol i
+                pp_symbol i;
           fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
       | Zero_out tn ->
           let traced = Low_level.(get_node traced_store tn) in
@@ -235,7 +226,7 @@ struct
           fprintf ppf "%s%.16g%s" prefix c postfix
       | Embed_index idx ->
           let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
-          fprintf ppf "%s%a%s" prefix pp_index_axis idx postfix
+          fprintf ppf "%s%a%s" prefix pp_axis_index idx postfix
       | Binop (Arg1, v1, _v2) -> loop ppf v1
       | Binop (Arg2, _v1, v2) -> loop ppf v2
       | Binop (op, v1, v2) ->

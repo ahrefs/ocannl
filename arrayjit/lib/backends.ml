@@ -805,15 +805,12 @@ end
 module Cuda_backend : Backend_types.Backend = Lowered_backend ((
   Cuda_backend : Backend_types.Lowered_backend))
 
-(** Initializes the backend, and if it was already initialized, performs garbage collection. *)
 let reinitialize (module Backend : Backend_types.Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Stdlib.Gc.full_major ();
     Backend.initialize config)
 
-(** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
-    the global [backend] setting. See {!reinitialize}. *)
 let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
   let backend =
     match

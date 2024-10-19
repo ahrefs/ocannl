@@ -1,7 +1,6 @@
 open Base
 
 module Lazy = Utils.Lazy
-(** The code for operating on n-dimensional arrays. *)
 
 module Nd = Ndarray
 module Tn = Tnode
@@ -26,15 +25,12 @@ end
 type scope_id = Scope_id.t = { tn : Tn.t; scope_id : int }
 [@@deriving sexp_of, equal, hash, compare]
 
-(** *** Low-level representation. *)
-
 let get_scope =
   let uid = ref 0 in
   fun tn ->
     Int.incr uid;
     { tn; scope_id = !uid }
 
-(** Cases: [t] -- code, [float_t] -- single number at some precision. *)
 type t =
   | Noop
   | Comment of string
@@ -71,12 +67,6 @@ let rec unflat_lines = function
   | Noop :: tl -> unflat_lines tl
   | llc :: tl -> Seq (llc, unflat_lines tl)
 
-let comment_to_name =
-  let nonliteral = Str.regexp {|[^a-zA-Z0-9_]|} in
-  Str.global_replace nonliteral "_"
-
-(** *** Optimization *** *)
-
 type virtualize_settings = {
   mutable enable_device_only : bool;
   mutable max_visits : int;
@@ -102,31 +92,18 @@ let virtualize_settings =
 type visits =
   | Visits of int
   | Recurrent
-      (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
 [@@deriving sexp, equal, variants]
 
 type traced_array = {
   tn : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the tensor node) are retrieved for optimization just as they are
-          populated, so that the inlined code corresponds precisely to the changes to the arrays
-          that would happen up till that point. Within the code blocks paired with an index tuple,
-          all assignments and accesses must happen via the index tuple; if this is not the case for
-          some assignment, the node cannot be virtual. Currently, we only allow for-loop symbols in
-          assignment indices of virtual nodes. *)
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
-      (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which
-          is safe. *)
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;
-      (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
-      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
-          before accessed, is assigned at most once, and from an expression involving only constants
-          or tensor nodes that were at the time is_scalar_constexpr. *)
 }
 [@@deriving sexp_of]
 
@@ -143,22 +120,6 @@ let get_node store tn =
         read_only = false;
         is_scalar_constexpr = false;
       })
-
-let partition_tf_with_comment cs ~f =
-  let both = Array.map cs ~f:(fun c -> if f c then Either.First c else Either.Second c) in
-  let trues =
-    Array.filter_map both ~f:(function
-      | First x -> Some x
-      | Second (Comment _ as x) -> Some x
-      | Second _ -> None)
-  in
-  let falses =
-    Array.filter_map both ~f:(function
-      | First (Comment _ as x) -> Some x
-      | First _ -> None
-      | Second x -> Some x)
-  in
-  (trues, falses)
 
 let visit ~is_assigned old =
   if not is_assigned then Recurrent
@@ -801,21 +762,8 @@ let%diagn2_sexp optimize_proc static_indices llc =
   { traced_store; llc; merge_node }
 
 let code_hum_margin = ref 100
-let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ Indexing.symbol_ident sym
 
-let pp_static_symbol ppf { Indexing.static_symbol; static_range } =
-  match static_range with
-  | None -> pp_symbol ppf static_symbol
-  | Some range -> Stdlib.Format.fprintf ppf "%a : [0..%d]" pp_symbol static_symbol (range - 1)
-
-let pp_index ppf idx =
-  match idx with
-  | Indexing.Iterator sym -> pp_symbol ppf sym
-  | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
-
-let pp_indices ppf idcs =
-  Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_index ppf @@ Array.to_list idcs
+open Indexing.Pp_helpers
 
 let fprint_function_header ?name ?static_indices () ppf =
   let open Stdlib.Format in
@@ -924,7 +872,7 @@ let fprint_hum ?name ?static_indices () ppf llc =
         fprintf ppf "@[<2>%a.merge[@,%a]@]" pp_ident tn pp_indices idcs
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%.16g" c
-    | Embed_index idx -> pp_index ppf idx
+    | Embed_index idx -> pp_axis_index ppf idx
     | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
     | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
     | Binop (op, v1, v2) ->

@@ -175,3 +175,21 @@ let derive_index ~product_syms ~(projection : axis_index array) =
       | it -> Second it)
   in
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
+
+module Pp_helpers = struct
+  let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
+  let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ symbol_ident sym
+
+  let pp_static_symbol ppf { static_symbol; static_range } =
+    match static_range with
+    | None -> pp_symbol ppf static_symbol
+    | Some range -> Stdlib.Format.fprintf ppf "%a : [0..%d]" pp_symbol static_symbol (range - 1)
+
+  let pp_axis_index ppf idx =
+    match idx with
+    | Iterator sym -> pp_symbol ppf sym
+    | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
+
+  let pp_indices ppf idcs =
+    Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_axis_index ppf @@ Array.to_list idcs
+end
