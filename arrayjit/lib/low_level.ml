@@ -886,7 +886,7 @@ let fprint_hum ?name ?static_indices () ppf llc =
   pp_ll ppf llc;
   fprintf ppf "@]"
 
-let%diagn2_sexp optimize_proc ~unoptim_ll_source ~ll_source ~(name : string)
+let%diagn2_sexp optimize ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun ppf ->
       Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);

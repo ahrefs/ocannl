@@ -17,7 +17,7 @@
 
 ## Design around compiling and running code, backend interfaces
 
-Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_types](backend_types.ml) is the "source". `Backend_types.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.comp` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize_proc`, since currently all backends use the optimized C-like representation `Low_level.t`. `Backends.Backend` is the user-facing interface.
+Currently, OCANNL integrates new backends via code in [Backends](backends.ml), so it's the "sink" of backend module dependencies; [Backend_types](backend_types.ml) is the "source". `Backend_types.Types` introduces the context-specific `routine` type, for code executable on a backend. The interface `Backends.No_device_backend` has `compile` functions that take `Assignments.comp` as input, to allow full flexibility in backend implementations. There is a helper `Backends.lower_assignments` that wraps `Assignments.lower` and `Low_level.optimize`, since currently all backends use the optimized C-like representation `Low_level.t`. `Backends.Backend` is the user-facing interface.
 
 The functor `Multicore_backend` converts a `No_device_backend` typically targetting the CPU into a `Backend` whose devices are parallel threads (and ultimately the CPU cores).
 

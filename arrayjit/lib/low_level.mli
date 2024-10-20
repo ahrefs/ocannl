@@ -91,7 +91,7 @@ type traced_store = (Tnode.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 type optimized = { traced_store : traced_store; llc : t; merge_node : Tnode.t option }
 [@@deriving sexp_of]
 
-val optimize_proc :
+val optimize :
   unoptim_ll_source:Stdlib.Format.formatter option ->
   ll_source:Stdlib.Format.formatter option ->
   name:string ->

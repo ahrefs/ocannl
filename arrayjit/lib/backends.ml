@@ -507,7 +507,7 @@ let lower_assignments ?name bindings asgns =
   let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
   let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
   ( name,
-    Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name
+    Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name
       (Indexing.bound_symbols bindings) asgns )
 
 let lower_batch_assignments ?names ?occupancy bindings asgns_l =
@@ -526,9 +526,7 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
          let asgns = asgns_l.(src_n) in
          if occupancy ~name ~src_n then
            ( Some name,
-             Some
-               (Assignments.lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
-           )
+             Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
 let verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context

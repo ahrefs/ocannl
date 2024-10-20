@@ -378,7 +378,7 @@ let fprint_hum ?name ?static_indices () ppf c =
   loop c;
   fprintf ppf "@]"
 
-let lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
+let lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
     Low_level.optimized =
   let llc = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
@@ -387,4 +387,4 @@ let lower_proc ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (pr
   | Some ppf ->
       fprint_hum ~name ~static_indices () ppf proc;
       Stdlib.Format.pp_print_flush ppf ());
-  Low_level.optimize_proc ~unoptim_ll_source ~ll_source ~name static_indices llc
+  Low_level.optimize ~unoptim_ll_source ~ll_source ~name static_indices llc

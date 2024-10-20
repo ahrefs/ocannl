@@ -3,8 +3,8 @@
 ### Added
 
 - Interface files for `Backends` and `Low_level`.
-- TODO: stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
 - Fixed #245: tracking of used memory.
+- TODO: stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
 
 ### Changed
 
