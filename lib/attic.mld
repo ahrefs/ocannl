@@ -338,3 +338,23 @@ let input_or_recurrent_nodes asgns =
   loop asgns
 
 ]}
+
+Upcoming in backend_types.ml:
+{[
+  
+  val from_host : dst_ptr:buffer_ptr -> dst:context -> Tnode.t -> unit
+  (** Like {!Backend.from_host}, but without synchronization and buffer retrieval. *)
+
+  val to_host : src_ptr:buffer_ptr -> src:context -> Tnode.t -> unit
+  (** Like {!Backend.to_host}, but without synchronization and buffer retrieval. *)
+
+  val device_to_device :
+    Tnode.t ->
+    into_merge_buffer:merge_buffer_use ->
+    dst_ptr:buffer_ptr ->
+    dst:context ->
+    src_ptr:buffer_ptr ->
+    src:context ->
+    unit
+  (** Like {!Backend.device_to_device}, but without synchronization and buffer retrieval. *)
+]}

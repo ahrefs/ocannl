@@ -25,7 +25,6 @@ type mem_properties =
 let root_ctx = ref None
 
 module Tn = Tnode
-include Backend_types.No_device_types
 
 type buffer_ptr = ctx_array [@@deriving sexp_of]
 (** Alternative approach:
@@ -57,7 +56,7 @@ let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
 let is_initialized () = Option.is_some !root_ctx
 
-let initialize () =
+let initialize _config =
   if Option.is_none !root_ctx then (
     let open Gccjit in
     let ctx = Context.create () in

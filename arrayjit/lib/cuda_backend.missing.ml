@@ -60,6 +60,7 @@ type stream = Unimplemented_stream [@@deriving sexp_of]
 type device = Unimplemented_device [@@deriving sexp_of]
 
 let init Unimplemented_stream = Unimplemented_ctx
+let buffer_ptr _ctx_array = Unimplemented_buffer_ptr
 let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ Unimplemented_stream = Unimplemented_buffer_ptr
 let await _stream = ()
 let is_idle _stream = true

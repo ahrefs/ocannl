@@ -43,7 +43,7 @@ let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
 let is_initialized, initialize =
   let initialized = ref false in
-  ((fun () -> !initialized), fun () -> initialized := true)
+  ((fun () -> !initialized), fun _config -> initialized := true)
 
 let finalize _ctx = ()
 

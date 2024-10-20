@@ -18,7 +18,7 @@
 - Got rid of `unsafe_cleanup`.
 - Got rid of `subordinal`.
 - Removed dependency on `core`, broke up dependency on `ppx_jane`.
-- TODO: Built per-tensor-node stream-to-stream synchronization into device-to-device copying functions, removed obsolete blocking synchronizations.
+- TODO: Built per-tensor-node stream-to-stream synchronization into copying functions, removed obsolete blocking synchronizations.
 
 ### Fixed
 

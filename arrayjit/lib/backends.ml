@@ -18,6 +18,8 @@ let check_merge_buffer ~scheduled_node ~code_node =
            ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
           ^ name code_node)
 
+          (* module  *)
+          
 module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
 struct
   module Domain = Domain [@warning "-3"]
@@ -581,7 +583,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let initialize config =
     global_config := config;
-    initialize ()
+    initialize config
 
   type nonrec routine = context routine [@@deriving sexp_of]
 

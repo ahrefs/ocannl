@@ -26,6 +26,8 @@ module Types = struct
   }
   [@@deriving sexp_of]
 
+  (** For now, we only configure a backend with regard to how many streams it should suggest using
+      (where applicable). *)
   type config = Only_devices_parallel | For_parallel_copying | Most_parallel_streams
   [@@deriving equal, sexp, variants]
 
@@ -39,12 +41,10 @@ module Types = struct
   [@@deriving sexp_of]
 end
 
-module type Backend_common = sig
-  type code [@@deriving sexp_of]
-  type code_batch [@@deriving sexp_of]
+(** Parts shared by both assignments-level and lowered-level backend interfaces. *)
+module type Backend_any_common = sig
   type buffer_ptr [@@deriving sexp_of]
   type context [@@deriving sexp_of]
-  type routine = context Types.routine [@@deriving sexp_of]
   type stream
 
   type init_info
@@ -67,9 +67,15 @@ module type Backend_common = sig
   (** Finalizes (just) the context. *)
 
   val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
+end
 
-  val get_used_memory : unit -> int
-  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+(** Parts shared by assignments-level backend interfaces. *)
+module type Backend_common = sig
+  include Backend_any_common
+
+  type routine = context Types.routine [@@deriving sexp_of]
+  type code [@@deriving sexp_of]
+  type code_batch [@@deriving sexp_of]
 
   val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
@@ -89,6 +95,7 @@ module type Backend_common = sig
       [occupancy] returns true are included. *)
 end
 
+(** An intermediate interface for stream-agnostic (typically CPU) backend implementations. *)
 module type No_device_backend = sig
   include Backend_common with type init_info := string and type stream := unit
 
@@ -104,23 +111,21 @@ module type No_device_backend = sig
       downstream of all the returned routines (in particular, the routines' contexts are not
       independent). *)
 
+  val get_used_memory : unit -> int
+  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
   val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
   val get_buffer : Tnode.t -> context -> buffer_ptr option
 end
 
-module type Backend = sig
+(** Parts shared by both assignments-level and lowered-level backend interfaces providing streams
+    and devices. *)
+module type Backend_device_common = sig
   type stream [@@deriving sexp_of]
 
-  include Backend_common with type init_info := stream and type stream := stream
-
-  val link : context -> code -> routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
-
-  val link_batch : context -> code_batch -> context * routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is
-      downstream of all the returned routines. *)
+  include Backend_any_common with type init_info := stream and type stream := stream
 
   type event
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
@@ -146,35 +151,6 @@ module type Backend = sig
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
       called internally when necessary. But there is one exception, see {!device_to_device} when
       [into_merge_buffer=Streaming]. *)
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      overwritten. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      read. *)
-
-  val device_to_device :
-    Tnode.t -> into_merge_buffer:Types.merge_buffer_use -> dst:context -> src:context -> bool
-  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
-      - If the node is absent from the [src] context and either it is present in the [dst] context
-        or [into_merge_buffer] is different from [No]: raises an error.
-      - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
-      - Executes [will_wait_for dst (work_for src tn)].
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst].
-      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
-        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
-        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
-        from [src] to the merge buffer of [dst]'s stream.
-
-      NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
-      buffer but before scheduling work on [src] that modifies [tn], execute
-      [will_wait_for src (all_work (get_ctx_stream dst))]. *)
 
   type device
 
@@ -205,17 +181,60 @@ module type Backend = sig
   val get_name : stream -> string
 end
 
+module type Backend = sig
+  include Backend_device_common
+
+  include
+    Backend_common
+      with type context := context
+       and type init_info := stream
+       and type stream := stream
+
+  val link : context -> code -> routine
+  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
+
+  val link_batch : context -> code_batch -> context * routine option array
+  (** Returns the routines for the procedures included in the code batch. The returned context is
+      downstream of all the returned routines. *)
+
+  val from_host : context -> Tnode.t -> bool
+  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
+      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
+      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
+      overwritten. *)
+
+  val to_host : context -> Tnode.t -> bool
+  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
+      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
+      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
+      read. *)
+
+  val device_to_device :
+    Tnode.t -> into_merge_buffer:Types.merge_buffer_use -> dst:context -> src:context -> bool
+  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
+      - If the node is absent from the [src] context and either it is present in the [dst] context
+        or [into_merge_buffer] is different from [No]: raises an error.
+      - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
+      - Executes [will_wait_for dst (work_for src tn)].
+      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst].
+      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
+        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
+        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
+        from [src] to the merge buffer of [dst]'s stream.
+
+      NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
+      buffer but before scheduling work on [src] that modifies [tn], execute
+      [will_wait_for src (all_work (get_ctx_stream dst))]. *)
+end
+
+(** Parts shared by lowered-level backends excluding what's already in {!Backend_any_common}. *)
 module type Lowered_backend_common = sig
   type context [@@deriving sexp_of]
   type ctx_array [@@deriving sexp_of]
   type ctx_arrays [@@deriving sexp_of]
-  type buffer_ptr [@@deriving sexp_of]
-  type config
-  type init_info
-  type stream
+  type buffer_ptr
 
   val buffer_ptr : ctx_array -> buffer_ptr
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> stream -> buffer_ptr
   val ctx_arrays : context -> ctx_arrays
   val get_array : ctx_arrays -> Tnode.t -> ctx_array option
 
@@ -224,20 +243,18 @@ module type Lowered_backend_common = sig
 
       Should return false for nodes that are virtual, local, or which the backend prefers to access
       directly from the host. *)
-
-  val initialize : config -> unit
-  val is_initialized : unit -> bool
-  val init : init_info -> context
-  val finalize : context -> unit
-  val name : string
 end
 
+(** Lowered-level stream agnostic backend interface: implementation-facing API for CPU backends. *)
 module type Lowered_no_device_backend = sig
+  include Lowered_backend_common
+
   include
-    Lowered_backend_common
-      with type stream := unit
-       and type config := unit
+    Backend_any_common
+      with type context := context
+       and type stream := unit
        and type init_info := string
+       and type buffer_ptr := buffer_ptr
 
   type procedure [@@deriving sexp_of]
 
@@ -266,27 +283,15 @@ module type Lowered_no_device_backend = sig
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 end
 
+(** Lowered-level backend interface: implementation-facing API for device-based (typically GPU)
+    backends. *)
 module type Lowered_backend = sig
-  type stream [@@deriving sexp_of]
-
-  include
-    Lowered_backend_common
-      with type config := Types.config
-       and type stream := stream
-       and type init_info := stream
-
+  include Lowered_backend_common
+  include Backend_device_common with type context := context and type buffer_ptr := buffer_ptr
+ 
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
-  type event
 
-  val sync : event -> unit
-  val is_done : event -> bool
-  val work_for : context -> Tnode.t -> event option
-  val will_wait_for : context -> event -> unit
-
-  open Types
-
-  val sexp_of_context : context -> Sexplib.Sexp.t
   val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
   val compile_batch :
@@ -301,34 +306,13 @@ module type Lowered_backend = sig
     context -> code_batch -> context * Indexing.lowered_bindings * Task.t option array
 
   val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from host to context. *)
 
   val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, copies from context to host. *)
 
   val device_to_device :
-    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** See {!Backend.device_to_device}. *)
-
-  type device
-
-  val get_used_memory : device -> int
-  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
-
-  val await : stream -> unit
-  val is_idle : stream -> bool
-  val all_work : stream -> event
+    Tnode.t -> into_merge_buffer:Types.merge_buffer_use -> dst:context -> src:context -> bool
 
   val scheduled_merge_node : stream -> Tnode.t option
   (** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge buffer
       right after [await stream]. *)
-
-  val num_devices : unit -> int
-  val suggested_num_streams : device -> int
-  val get_device : ordinal:int -> device
-  val get_stream_device : stream -> device
-  val new_stream : device -> stream
-  val get_ctx_stream : context -> stream
-  val get_name : stream -> string
-  val to_ordinal : device -> int
 end
