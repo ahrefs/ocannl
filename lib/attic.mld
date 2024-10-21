@@ -339,22 +339,111 @@ let input_or_recurrent_nodes asgns =
 
 ]}
 
-Upcoming in backend_types.ml:
+Old copying mechanism in backends.ml Multicore_backend:
 {[
-  
-  val from_host : dst_ptr:buffer_ptr -> dst:context -> Tnode.t -> unit
-  (** Like {!Backend.from_host}, but without synchronization and buffer retrieval. *)
 
-  val to_host : src_ptr:buffer_ptr -> src:context -> Tnode.t -> unit
-  (** Like {!Backend.to_host}, but without synchronization and buffer retrieval. *)
+  let from_host (context : context) (tn : Tnode.t) =
+    Option.value ~default:false
+    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
+           match tn.Tnode.array with
+           | (lazy (Some h_arr)) ->
+               let%diagn_l_sexp work () =
+                 Backend.host_to_buffer h_arr ~dst:c_arr;
+                 [%diagn_sexp
+                   [%log_block
+                     "from_host " ^ Tnode.debug_name tn;
+                     [%log "copied", Tnode.debug_name tn, "from host"];
+                     [%log2_printbox
+                       let indices =
+                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                       in
+                       Ndarray.render_array ~indices h_arr]]]
+               in
+               schedule_task context.stream
+                 (Task.Task
+                    {
+                      context_lifetime = context;
+                      description =
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
+                      work;
+                    });
+               true
+           | (lazy None) ->
+               [%diagn_sexp
+                 [%log_block
+                   "nothing to copy from host";
+                   [%log "for", Tnode.debug_name tn]]];
+               false)
 
-  val device_to_device :
-    Tnode.t ->
-    into_merge_buffer:merge_buffer_use ->
-    dst_ptr:buffer_ptr ->
-    dst:context ->
-    src_ptr:buffer_ptr ->
-    src:context ->
-    unit
-  (** Like {!Backend.device_to_device}, but without synchronization and buffer retrieval. *)
+  let to_host (context : context) (tn : Tnode.t) =
+    Option.value ~default:false
+    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
+           match tn.Tnode.array with
+           | (lazy (Some h_arr)) ->
+               let%diagn_l_sexp work () =
+                 Backend.buffer_to_host h_arr ~src:c_arr;
+                 [%diagn_sexp
+                   [%log_block
+                     "to_host " ^ Tnode.debug_name tn;
+                     [%log "copied to host"];
+                     [%log2_printbox
+                       let indices =
+                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
+                       in
+                       Ndarray.render_array ~indices h_arr]]]
+               in
+               schedule_task context.stream
+                 (Task.Task
+                    {
+                      context_lifetime = context;
+                      description =
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
+                      work;
+                    });
+               true
+           | (lazy None) ->
+               [%diagn_sexp
+                 [%log_block
+                   "nothing to copy to host";
+                   [%log "for", Tnode.debug_name tn]]];
+               false)
+
+  let device_to_device tn ~into_merge_buffer ~dst ~src =
+    let dev = dst.stream in
+    let schedule dst =
+      let work =
+        (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+        match into_merge_buffer with
+        | No -> fun () -> Backend.to_buffer tn ~dst ~src:src.ctx
+        | Streaming ->
+            fun () ->
+              dev.merge_buffer :=
+                Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
+        | Copy ->
+            fun () ->
+              let size_in_bytes = Tnode.size_in_bytes tn in
+              let allocated_capacity =
+                Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+              in
+              if allocated_capacity < size_in_bytes then
+                dev.allocated_buffer <-
+                  Some
+                    ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
+                      size_in_bytes );
+              let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+              dev.merge_buffer := Some (merge_ptr, tn);
+              Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
+      in
+      let description =
+        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
+        ^ src.stream.unique_name
+      in
+      schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
+    in
+    match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
+    | Some dst, Some _ ->
+        schedule dst;
+        true
+    | _ -> false
+
 ]}

@@ -1,6 +1,7 @@
 open Base
 open Backend_types.Types
 module Debug_runtime = Utils.Debug_runtime
+module Tn = Tnode
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
@@ -18,10 +19,72 @@ let check_merge_buffer ~scheduled_node ~code_node =
            ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
           ^ name code_node)
 
-          (* module  *)
-          
-module Multicore_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend =
+module Add_buffer_retrieval_and_syncing (Backend : Backend_types.No_buffer_retrieval_or_syncing) =
 struct
+  type context = Backend.context
+
+  let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
+    match (tn, Backend.get_array (Backend.ctx_arrays ctx) tn) with
+    | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
+        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.ctx_array), "from host"];
+        Backend.from_host ~dst_ptr:(Backend.buffer_ptr dst) ~dst:ctx hosted;
+        true
+    | _ -> false
+
+  let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
+    match (tn, Backend.(get_array @@ ctx_arrays ctx) tn) with
+    | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
+        [%log "copying", Tn.debug_name tn, "at", (src : Backend.ctx_array), "to host"];
+        Backend.to_host ~src_ptr:(Backend.buffer_ptr src) ~src:ctx hosted;
+        true
+    | _ -> false
+
+  let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
+      ~(src : Backend.context) =
+    let ordinal_of ctx = Backend.(to_ordinal @@ get_stream_device @@ get_ctx_stream ctx) in
+    let name_of ctx = Backend.(get_name @@ get_ctx_stream ctx) in
+    let same_device = ordinal_of dst = ordinal_of src in
+    if same_device && (Tn.known_shared_cross_stream tn || String.equal (name_of src) (name_of dst))
+    then false
+    else
+      match Backend.(get_array @@ ctx_arrays src) tn with
+      | None -> false
+      | Some s_arr -> (
+          match into_merge_buffer with
+          | No -> (
+              match Backend.(get_array @@ ctx_arrays dst) tn with
+              | None -> false
+              | Some d_arr ->
+                  Backend.(
+                    device_to_device tn ~into_merge_buffer
+                      ~dst_ptr:(Some (buffer_ptr d_arr))
+                      ~dst ~src_ptr:(buffer_ptr s_arr) ~src);
+                  [%log
+                    "copied",
+                      Tn.debug_name tn,
+                      "from",
+                      name_of src,
+                      "at",
+                      (s_arr : Backend.ctx_array),
+                      "to",
+                      (d_arr : Backend.ctx_array)];
+                  true)
+          | Streaming when same_device ->
+              Backend.(
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst
+                  ~src_ptr:(buffer_ptr s_arr) ~src);
+              [%log "using merge buffer for", Tn.debug_name tn, "from", name_of src];
+              true
+          | Copy | Streaming ->
+              Backend.(
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst
+                  ~src_ptr:(buffer_ptr s_arr) ~src);
+              [%log "copied into merge buffer", Tn.debug_name tn, "from", name_of src];
+              true)
+end
+
+module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
+  include Backend
   module Domain = Domain [@warning "-3"]
 
   type task_list = Task.t Utils.mutable_list [@@deriving sexp_of]
@@ -64,8 +127,6 @@ struct
   }
   [@@deriving sexp_of]
 
-  type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
-
   type stream = {
     state : stream_state;
     merge_buffer : (buffer_ptr * Tnode.t) option ref;
@@ -75,18 +136,16 @@ struct
   }
   [@@deriving sexp_of]
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
-    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
-
-  let get_used_memory _device = Backend.get_used_memory ()
+  let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
+  let get_used_memory _device = get_used_memory ()
 
   type device = CPU [@@deriving sexp_of]
-  type code = Backend.code [@@deriving sexp_of]
-  type code_batch = Backend.code_batch [@@deriving sexp_of]
+  type nonrec code = code [@@deriving sexp_of]
+  type nonrec code_batch = code_batch [@@deriving sexp_of]
 
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.state && stream.state.is_ready
-  let name = "multicore " ^ Backend.name
+  let name = "multicore " ^ name
 
   let%track3_l_sexp await stream =
     assert (Domain.is_main_domain ());
@@ -166,23 +225,26 @@ struct
       allocated_buffer = None;
     }
 
-  type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
-  type nonrec routine = context routine [@@deriving sexp_of]
+  type nonrec context = { stream : stream; ctx : context } [@@deriving sexp_of]
 
-  let init stream = { stream; ctx = Backend.init (name ^ " " ^ stream.unique_name) }
-  let initialize = Backend.initialize
-  let is_initialized = Backend.is_initialized
+  let ctx_arrays context = ctx_arrays context.ctx
+
+  type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
+
+  let init stream = { stream; ctx = init (name ^ " " ^ stream.unique_name) }
+  let initialize = initialize
+  let is_initialized = is_initialized
 
   let finalize { stream; ctx } =
     await stream;
-    Backend.finalize ctx
+    finalize ctx
 
-  let compile = Backend.compile
-  let compile_batch = Backend.compile_batch
+  let compile = compile
+  let compile_batch = compile_batch
   let get_name stream = stream.unique_name
 
   let link { ctx; stream } code =
-    let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
+    let task = link ~merge_buffer:stream.merge_buffer ctx code in
     {
       task with
       context = { ctx = task.context; stream };
@@ -190,7 +252,7 @@ struct
     }
 
   let link_batch { ctx; stream } code_batch =
-    let ctx, routines = Backend.link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
+    let ctx, routines = link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
     ( { ctx; stream },
       Array.map routines
         ~f:
@@ -201,110 +263,6 @@ struct
                  schedule =
                    Task.enschedule ~schedule_task ~get_stream_name:get_name stream task.schedule;
                })) )
-
-  let from_host (context : context) (tn : Tnode.t) =
-    Option.value ~default:false
-    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
-           match tn.Tnode.array with
-           | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
-                 Backend.host_to_buffer h_arr ~dst:c_arr;
-                 [%diagn_sexp
-                   [%log_block
-                     "from_host " ^ Tnode.debug_name tn;
-                     [%log "copied", Tnode.debug_name tn, "from host"];
-                     [%log2_printbox
-                       let indices =
-                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                       in
-                       Ndarray.render_array ~indices h_arr]]]
-               in
-               schedule_task context.stream
-                 (Task.Task
-                    {
-                      context_lifetime = context;
-                      description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
-                      work;
-                    });
-               true
-           | (lazy None) ->
-               [%diagn_sexp
-                 [%log_block
-                   "nothing to copy from host";
-                   [%log "for", Tnode.debug_name tn]]];
-               false)
-
-  let to_host (context : context) (tn : Tnode.t) =
-    Option.value ~default:false
-    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
-           match tn.Tnode.array with
-           | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
-                 Backend.buffer_to_host h_arr ~src:c_arr;
-                 [%diagn_sexp
-                   [%log_block
-                     "to_host " ^ Tnode.debug_name tn;
-                     [%log "copied to host"];
-                     [%log2_printbox
-                       let indices =
-                         Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                       in
-                       Ndarray.render_array ~indices h_arr]]]
-               in
-               schedule_task context.stream
-                 (Task.Task
-                    {
-                      context_lifetime = context;
-                      description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
-                      work;
-                    });
-               true
-           | (lazy None) ->
-               [%diagn_sexp
-                 [%log_block
-                   "nothing to copy to host";
-                   [%log "for", Tnode.debug_name tn]]];
-               false)
-
-  let device_to_device tn ~into_merge_buffer ~dst ~src =
-    let dev = dst.stream in
-    let schedule dst =
-      let work =
-        (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
-        match into_merge_buffer with
-        | No -> fun () -> Backend.to_buffer tn ~dst ~src:src.ctx
-        | Streaming ->
-            fun () ->
-              dev.merge_buffer :=
-                Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
-        | Copy ->
-            fun () ->
-              let size_in_bytes = Tnode.size_in_bytes tn in
-              let allocated_capacity =
-                Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
-              in
-              if allocated_capacity < size_in_bytes then
-                dev.allocated_buffer <-
-                  Some
-                    ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
-                      size_in_bytes );
-              let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
-              dev.merge_buffer := Some (merge_ptr, tn);
-              Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
-      in
-      let description =
-        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
-        ^ src.stream.unique_name
-      in
-      schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
-    in
-    match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
-    | Some dst, Some _ ->
-        schedule dst;
-        true
-    | _ -> false
 
   module Dynarr = Stdlib.Dynarray
 
@@ -340,6 +298,49 @@ struct
   let get_stream_device _stream = CPU
   let get_ctx_stream { stream; _ } = stream
   let to_ordinal _ = 0
+
+  let from_host ~dst_ptr ~dst hosted =
+    let work () = host_to_buffer hosted ~dst:dst_ptr in
+    (* TODO: pass description to from_host. *)
+    schedule_task dst.stream
+      (Task.Task
+         { context_lifetime = dst; description = "from_host on " ^ dst.stream.unique_name; work })
+
+  let to_host ~src_ptr ~src hosted =
+    let work () = buffer_to_host hosted ~src:src_ptr in
+    (* TODO: pass description to to_host. *)
+    schedule_task src.stream
+      (Task.Task
+         { context_lifetime = src; description = "to_host on " ^ src.stream.unique_name; work })
+
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+    let dev = dst.stream in
+    let work =
+      (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+      match (into_merge_buffer, dst_ptr) with
+      | No, None -> invalid_arg "Multicore_backend.device_to_device: missing dst_ptr"
+      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr
+      | Streaming, _ -> fun () -> dev.merge_buffer := Some (src_ptr, tn)
+      | Copy, _ ->
+          fun () ->
+            let size_in_bytes = Tnode.size_in_bytes tn in
+            let allocated_capacity =
+              Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+            in
+            if allocated_capacity < size_in_bytes then
+              dev.allocated_buffer <-
+                Some
+                  ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
+                    size_in_bytes );
+            let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+            dev.merge_buffer := Some (merge_ptr, tn);
+            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr
+    in
+    let description =
+      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
+      ^ src.stream.unique_name
+    in
+    schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
 (** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
@@ -347,8 +348,9 @@ let sync_suggested_num_streams = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one device, but an arbitrary number of streams. *)
-module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.Backend = struct
-  type buffer_ptr = Backend.buffer_ptr [@@deriving sexp_of]
+module Sync_backend (Backend : Backend_types.No_device_backend) = struct
+  include Backend
+
   type event = unit
 
   let sync () = ()
@@ -368,7 +370,26 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
 
   type device = CPU [@@deriving sexp_of]
 
+  let to_ordinal CPU = 0
+
+  let get_device ~ordinal =
+    if ordinal <> 0 then
+      invalid_arg @@ "Sync_backend.get_device: there is only one device, but ordinal="
+      ^ Int.to_string ordinal;
+    CPU
+
+  let num_devices () = 1
+  let suggested_num_streams CPU = !sync_suggested_num_streams
   let get_used_memory CPU = Backend.get_used_memory ()
+  let next_stream = ref 0
+
+  let new_stream CPU =
+    Int.incr next_stream;
+    {
+      unique_name = "stream " ^ Int.to_string (!next_stream - 1);
+      merge_buffer = ref None;
+      allocated_buffer = None;
+    }
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
@@ -380,7 +401,12 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
   (* let global_run_no = ref 0 *)
 
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
-  type nonrec routine = context routine [@@deriving sexp_of]
+
+  let get_ctx_stream context = context.stream
+  let get_stream_device _stream = CPU
+  let ctx_arrays context = ctx_arrays context.ctx
+
+  type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
 
   let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
@@ -400,107 +426,29 @@ module Sync_backend (Backend : Backend_types.No_device_backend) : Backend_types.
         ~f:(Option.map ~f:(fun task -> { task with context = { ctx = task.context; stream } })) )
 
   let get_name stream = stream.unique_name
+  let from_host ~dst_ptr ~dst:_ hosted = host_to_buffer hosted ~dst:dst_ptr
+  let to_host ~src_ptr ~src:_ hosted = buffer_to_host hosted ~src:src_ptr
 
-  let from_host (context : context) (tn : Tnode.t) =
-    Option.value ~default:false
-    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
-           match tn.Tnode.array with
-           | (lazy (Some h_arr)) ->
-               Backend.host_to_buffer h_arr ~dst:c_arr;
-               [%diagn2_l_sexp
-                 [%log_block
-                   "from_host for " ^ Tnode.debug_name tn;
-                   [%log "copied", Tnode.debug_name tn, "from host to", get_name context.stream];
-                   [%log3_printbox
-                     let indices =
-                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                     in
-                     Ndarray.render_array ~indices h_arr]]];
-               true
-           | (lazy None) ->
-               [%diagn2_l_sexp
-                 [%log_block
-                   "nothing to copy from host for " ^ Tnode.debug_name tn;
-                   [%log "to", get_name context.stream]]];
-               false)
-
-  let to_host (context : context) (tn : Tnode.t) =
-    Option.value ~default:false
-    @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
-           match tn.Tnode.array with
-           | (lazy (Some h_arr)) ->
-               Backend.buffer_to_host h_arr ~src:c_arr;
-               [%diagn2_l_sexp
-                 [%log_block
-                   "to_host for " ^ Tnode.debug_name tn;
-                   [%log "copied to host from", get_name context.stream];
-                   [%log3_printbox
-                     let indices =
-                       Array.init (Array.length @@ Lazy.force tn.dims) ~f:(fun i -> i - 5)
-                     in
-                     Ndarray.render_array ~indices h_arr]]];
-               true
-           | (lazy None) ->
-               [%diagn_sexp
-                 [%log_block
-                   "nothing to copy to host for " ^ Tnode.debug_name tn;
-                   [%log "from", get_name context.stream]]];
-               false)
-
-  let device_to_device tn ~into_merge_buffer ~dst ~src =
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let dev = dst.stream in
     (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
-    match (Backend.get_buffer tn dst.ctx, Backend.get_buffer tn src.ctx) with
-    | None, _ | _, None -> false
-    | Some dst, Some _ ->
-        (match into_merge_buffer with
-        | No -> Backend.to_buffer tn ~dst ~src:src.ctx
-        | Streaming ->
-            dev.merge_buffer :=
-              Option.map ~f:(fun ptr -> (ptr, tn)) @@ Backend.get_buffer tn src.ctx
-        | Copy ->
-            let size_in_bytes = Tnode.size_in_bytes tn in
-            let allocated_capacity =
-              Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
-            in
-            if allocated_capacity < size_in_bytes then
-              dev.allocated_buffer <-
-                Some
-                  ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
-                    size_in_bytes );
-            let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
-            dev.merge_buffer := Some (merge_ptr, tn);
-            Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx);
-        true
-
-  let num_devices () = 1
-  let suggested_num_streams _device = !sync_suggested_num_streams
-
-  let get_device ~ordinal =
-    if ordinal <> 0 then invalid_arg "Sync_backend backends only have device number 0";
-    CPU
-
-  let used_names = Hash_set.create (module String)
-
-  let cleanup_stream stream =
-    assert (Domain.is_main_domain ());
-    await stream;
-    Hash_set.remove used_names stream.unique_name
-
-  let new_stream CPU =
-    let rec unique_name suffix =
-      let name = "stream " ^ Int.to_string suffix in
-      if Hash_set.mem used_names name then unique_name (suffix + 1) else name
-    in
-    let unique_name = unique_name 0 in
-    Hash_set.add used_names unique_name;
-    let result = { unique_name; merge_buffer = ref None; allocated_buffer = None } in
-    Stdlib.Gc.finalise cleanup_stream result;
-    result
-
-  let get_stream_device _stream = CPU
-  let get_ctx_stream { stream; _ } = stream
-  let to_ordinal _ = 0
+    match (into_merge_buffer, dst_ptr) with
+    | No, None -> invalid_arg "Sync_backend.device_to_device: missing dst_ptr"
+    | No, Some dst_ptr -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr
+    | Streaming, _ -> dev.merge_buffer := Some (src_ptr, tn)
+    | Copy, _ ->
+        let size_in_bytes = Tnode.size_in_bytes tn in
+        let allocated_capacity =
+          Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+        in
+        if allocated_capacity < size_in_bytes then
+          dev.allocated_buffer <-
+            Some
+              ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
+                size_in_bytes );
+        let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+        dev.merge_buffer := Some (merge_ptr, tn);
+        buffer_to_buffer ~dst:merge_ptr ~src:src_ptr
 end
 
 let lower_assignments ?name bindings asgns =
@@ -547,8 +495,7 @@ let from_prior_context_batch comps =
           Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
-module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_backend) :
-  Backend_types.No_device_backend = struct
+module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_backend) = struct
   include Backend
 
   type code =
@@ -700,26 +647,31 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
           (context, Some { context; schedule; bindings; name })
       | None -> (context, None))
 
-  let get_buffer tn context =
-    Backend.(ctx_arrays context |> Fn.flip get_array tn |> Option.map ~f:buffer_ptr)
-
   let get_used_memory = Ndarray.get_used_memory
 end
 
-module C_device : Backend_types.No_device_backend = Lowered_no_device_backend ((
-  Cc_backend : Backend_types.Lowered_no_device_backend with type context = Cc_backend.context))
+module Make_no_device_backend (Backend_impl : Backend_types.Lowered_no_device_backend) = struct
+  module No_device = Lowered_no_device_backend (Backend_impl)
 
-module Cc_backend = Multicore_backend (C_device)
-module Sync_cc_backend = Sync_backend (C_device)
+  module Multicore = struct
+    module Device = Multicore_backend (No_device)
+    include Device
+    include Add_buffer_retrieval_and_syncing (Device)
+  end
 
-module Gccjit_device : Backend_types.No_device_backend = Lowered_no_device_backend ((
-  Gcc_backend : Backend_types.Lowered_no_device_backend with type context = Gcc_backend.context))
+  module Sync = struct
+    module Device = Sync_backend (No_device)
+    include Device
+    include Add_buffer_retrieval_and_syncing (Device)
+  end
+end
 
-module Gccjit_backend = Multicore_backend (Gccjit_device)
-module Sync_gccjit_backend = Sync_backend (Gccjit_device)
+module Cc = Make_no_device_backend (Cc_backend)
+module Gcc = Make_no_device_backend (Gcc_backend)
 
 module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.Backend = struct
   include Device
+  include Add_buffer_retrieval_and_syncing (Device)
 
   type nonrec code = {
     from_prior_context : Set.M(Tnode).t;
@@ -738,9 +690,6 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
   [@@deriving sexp_of]
 
   type nonrec routine = context routine [@@deriving sexp_of]
-
-  let work_for context = work_for context
-  let will_wait_for context = will_wait_for context
 
   let compile ?shared:_ ?name bindings comp : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
@@ -818,10 +767,10 @@ let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
           Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
-    | "cc" -> (module Cc_backend : Backend_types.Backend)
-    | "gccjit" -> (module Gccjit_backend : Backend_types.Backend)
-    | "sync_cc" -> (module Sync_cc_backend : Backend_types.Backend)
-    | "sync_gccjit" -> (module Sync_gccjit_backend : Backend_types.Backend)
+    | "cc" -> (module Cc.Multicore : Backend_types.Backend)
+    | "gccjit" -> (module Gcc.Multicore : Backend_types.Backend)
+    | "sync_cc" -> (module Cc.Sync : Backend_types.Backend)
+    | "sync_gccjit" -> (module Gcc.Sync : Backend_types.Backend)
     | "cuda" -> (module Cuda_backend : Backend_types.Backend)
     | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
   in

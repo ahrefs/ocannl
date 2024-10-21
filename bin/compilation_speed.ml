@@ -7,6 +7,8 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Rand = Arrayjit.Rand.Lib
 
+let fresh_backend = Arrayjit.Backends.fresh_backend
+
 let benchmark_overhead backend () =
   let n_data = 20 in
   Arrayjit.Backends.reinitialize backend Only_devices_parallel;
@@ -80,9 +82,9 @@ let benchmark_overhead backend () =
 
 let benchmarks =
   [
-    (* benchmark_overhead (module Arrayjit.Backends.Gccjit_backend); *)
-    benchmark_overhead (module Arrayjit.Backends.Cc_backend);
-    (* benchmark_overhead (module Arrayjit.Backends.Cuda_backend); *)
+    (* benchmark_overhead (fresh_backend "gccjit" ()); *)
+    benchmark_overhead (fresh_backend ~backend_name:"cc" ());
+    benchmark_overhead (fresh_backend ~backend_name:"cuda" ());
   ]
 
 let () =

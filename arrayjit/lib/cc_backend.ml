@@ -34,10 +34,7 @@ let alloc_buffer ?old_buffer ~size_in_bytes () =
   | Some (_old_ptr, _old_size) -> assert false
   | None -> assert false
 
-let to_buffer tn ~dst ~src =
-  let src = Map.find_exn src.arrays.ctx_arrays tn in
-  Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-
+let buffer_to_buffer ~dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 

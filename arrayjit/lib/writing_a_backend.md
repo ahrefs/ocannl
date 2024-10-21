@@ -211,66 +211,6 @@ Besides routines, calling `from_host`, `to_host`, `device_to_device` from a back
 
 OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism. `No_device_backend` exposes the following low-level building blocks, which for CPU backends are synchronous and are used by `Multicore_backend` to provide the asynchronous operations.
 
-```ocaml
-module type No_device_backend = sig
-  type buffer_ptr [@@deriving sexp_of]
-  ...
-  val alloc_buffer : ?old_buffer:buffer_ptr * int -> size_in_bytes:int -> unit -> buffer_ptr
-  ...
-  val to_buffer : Tnode.t -> dst:buffer_ptr -> src:context -> unit
-
-  val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
-
-  val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
-
-  val get_buffer : Tnode.t -> context -> buffer_ptr option
-end
-module type Backend = sig
-  include No_device_backend
-  ...
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from host to context and returns
-      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
-      to synchronize the device before the host's data is overwritten. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the array is both hosted and in-context, schedules a copy from context to host and returns
-      true, otherwise returns false. NOTE: when run for a device, it's the caller's responsibility
-      to synchronize the device before the host's data is read. *)
-
-  val device_to_device :
-    Tnode.t ->
-    into_merge_buffer:merge_buffer_use ->
-    dst:context ->
-    src:context ->
-    bool
-  (** If the node is absent from the [src] context and either it is present in the [dst] context or
-      [~into_merge_buffer] is different from [No]: raises an error.
-
-      If [~into_merge_buffer:No]: If the node is present in the [dst] context, schedules a copy of
-      the tensor node from the device of [src] to the device of [dst] and returns true, otherwise
-      returns false.
-
-      If [~into_merge_buffer] is different from [No]: schedules the following task and returns true.
-
-      The merge-buffer task sets on [dst] the merge buffer source to the given node. If
-      [~into_merge_buffer:Streaming], remembers the buffer pointer of the source node to use for
-      streaming, without blocking. If [~into_merge_buffer:Copy], copies from [src] to the merge
-      buffer of [dst]'s device.
-
-      If the [dst] context resulted from a compilation with [Streaming] or [Copy] specific merge
-      buffer code, the [device_to_device] call should fail immediately if there's a mismatch with
-      [~into_merge_buffer].
-
-      NOTE: it's the caller's responsibility to synchronize the [src] device, if needed, {i before}
-      calling [device_to_device], and if [~into_merge_buffer:Streaming], the [dst] device
-      {i afterward}, before any computations on the [src] device overwrite the node. *)
-
-   ...
-end
-```
-
 OCANNL provides explicit _merge buffers_ for performing tensor node updates, where different versions of a tensor node from two devices feature in the same computation. The `%cd` syntax for using merge buffers is via applying `.merge` pseudo-field. For example, the code for merging gradients might be: `[%cd p.grad =+ p.grad.merge]`. There's at most one merge buffer per virtual device, and the memory is reused for merging different nodes. We keep track of the specific tensor node that occupies this buffer in the (virtual) device, and the expected tensor node via the context, so that we can detect mismatches. For `Multicore_backend` (CPU backends) this happens at runtime, for CUDA at scheduling time. The `device_to_device tn ~into_merge_buffer:Copy ~dst ~src` call requires that `tn` is the expected merge buffer node in the `dst` context; that is, it should be the context of the routine that does the merging. Currently, we only grow the merge buffer (for `~into_merge_buffer:Copy`).
 
 The interface exposes two modes of utilizing merge buffers. The `Streaming` mode relies in some way on the array from the source context. Currently, this simply means using the source array (buffer) pointer, and the CUDA backend falls back to using `~into_merge_buffer:Copy` when the source and destination contexts live on different physical devices. The `Copy` mode uses physical arrays to back merge buffers. The merge buffer array (one per virtual device) is resized (grown) if needed to fit a node's array.

@@ -46,14 +46,9 @@ type context = {
 [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
-
-let to_buffer tn ~dst ~src =
-  let src = Option.value_exn ~here:[%here] @@ get_array (ctx_arrays src) tn in
-  Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-
+let buffer_to_buffer ~dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-
 let is_initialized () = Option.is_some !root_ctx
 
 let initialize _config =

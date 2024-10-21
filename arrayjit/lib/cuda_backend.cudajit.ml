@@ -247,79 +247,40 @@ let init stream =
   Stdlib.Gc.finalise finalize ctx;
   ctx
 
-let%diagn2_l_sexp from_host (ctx : context) tn =
-  match (tn, Map.find ctx.ctx_arrays tn) with
-  | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
-      set_ctx ctx.ctx;
-      [%log "copying", Tn.debug_name tn, "to", (dst : ctx_array), "from host"];
-      let f src = Cu.Stream.memcpy_H_to_D ~dst:dst.ptr ~src ctx.stream.cu_stream in
-      Ndarray.map { f } hosted;
-      true
-  | _ -> false
+let from_host ~dst_ptr ~dst hosted =
+  set_ctx dst.ctx;
+  let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.cu_stream in
+  Ndarray.map { f } hosted
 
-let%diagn2_l_sexp to_host (ctx : context) (tn : Tn.t) =
-  match (tn, Map.find ctx.ctx_arrays tn) with
-  | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
-      set_ctx ctx.ctx;
-      [%log "copying", Tn.debug_name tn, "at", (src : ctx_array), "to host"];
-      let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src.ptr ctx.stream.cu_stream in
-      Ndarray.map { f } hosted;
-      true
-  | _ -> false
+let to_host ~src_ptr ~src hosted =
+  set_ctx src.ctx;
+  let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.cu_stream in
+  Ndarray.map { f } hosted
 
-let%diagn2_l_sexp rec device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : context)
-    ~(src : context) =
-  let same_device = phys_equal dst.stream.device src.stream.device in
-  let memcpy ~d_arr ~s_arr =
+let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
+  let memcpy ~dst_ptr =
     if same_device then
-      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~src:s_arr.ptr
+      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~src:src_ptr
         dst.stream.cu_stream
     else
-      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:d_arr.ptr ~dst_ctx:dst.ctx
-        ~src:s_arr.ptr ~src_ctx:src.ctx dst.stream.cu_stream
+      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~dst_ctx:dst.ctx
+        ~src:src_ptr ~src_ctx:src.ctx dst.stream.cu_stream
   in
-  if
-    same_device
-    && (Tn.known_shared_cross_stream tn
-       || String.equal src.stream.unique_name dst.stream.unique_name)
-  then false
-  else
-    match Map.find src.ctx_arrays tn with
-    | None -> false
-    | Some s_arr -> (
-        match into_merge_buffer with
-        | No -> (
-            match Map.find dst.ctx_arrays tn with
-            | None -> false
-            | Some d_arr ->
-                set_ctx dst.ctx;
-                memcpy ~d_arr ~s_arr;
-                [%log
-                  "copied",
-                    Tn.debug_name tn,
-                    "from",
-                    src.label,
-                    "at",
-                    (s_arr : ctx_array),
-                    "to",
-                    (d_arr : ctx_array)];
-                true)
-        | Streaming ->
-            if phys_equal dst.stream.device src.stream.device then (
-              dst.stream.merge_buffer <- Some (s_arr.ptr, tn);
-              [%log "using merge buffer for", Tn.debug_name tn, "from", src.label];
-              true)
-            else
-              (* TODO: support proper streaming, but it might be difficult. *)
-              device_to_device tn ~into_merge_buffer:Copy ~dst ~src
-        | Copy ->
-            set_ctx dst.ctx;
-            let size_in_bytes = Tn.size_in_bytes tn in
-            opt_alloc_merge_buffer ~size_in_bytes dst.stream.device;
-            memcpy ~d_arr:{ ptr = dst.stream.device.copy_merge_buffer; tracking = None } ~s_arr;
-            dst.stream.merge_buffer <- Some (dst.stream.device.copy_merge_buffer, tn);
-            [%log "copied into merge buffer", Tn.debug_name tn, "from", src.label];
-            true)
+  match (into_merge_buffer, dst_ptr) with
+  | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
+  | No, Some dst_ptr ->
+      set_ctx dst.ctx;
+      memcpy ~dst_ptr
+  | Streaming, _ ->
+      assert same_device;
+      dst.stream.merge_buffer <- Some (src_ptr, tn)
+  | Copy, _ ->
+      set_ctx dst.ctx;
+      let size_in_bytes = Tn.size_in_bytes tn in
+      opt_alloc_merge_buffer ~size_in_bytes dst.stream.device;
+      memcpy ~dst_ptr:dst.stream.device.copy_merge_buffer;
+      dst.stream.merge_buffer <- Some (dst.stream.device.copy_merge_buffer, tn)
 
 type code = {
   traced_store : Low_level.traced_store;
