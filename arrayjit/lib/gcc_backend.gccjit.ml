@@ -697,7 +697,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   let opt_ctx_arrays =
     match (opt_ctx_arrays, ctx_nodes) with
     | None, _ | _, Param_ptrs _ -> None
-    | Some arrays, Ctx_arrays { contents } -> Some { arrays with ctx_arrays = contents }
+    | Some _arrays, Ctx_arrays { contents } -> Some { ctx_arrays = contents }
   in
   (ctx_info, opt_ctx_arrays, params)
 
@@ -786,7 +786,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
           | _ -> arrays)
   in
   let context =
-    { label; arrays = { prior_context.arrays with ctx_arrays }; result = Some code.result }
+    { label; arrays = { ctx_arrays }; result = Some code.result }
   in
   let log_file_name = Utils.diagn_log_file [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =

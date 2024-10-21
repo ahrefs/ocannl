@@ -137,7 +137,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
                     Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
-                  { ctx_arrays with ctx_arrays = Map.add_exn ctx_arrays.ctx_arrays ~key:tn ~data }
+                  { ctx_arrays = Map.add_exn ctx_arrays.ctx_arrays ~key:tn ~data }
                 else ctx_arrays
             | Some _ -> ctx_arrays))
   in
@@ -176,7 +176,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
                       else ctx_arrays
                   | Some _ -> ctx_arrays))
         in
-        { arrays with ctx_arrays })
+        { ctx_arrays })
   in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
@@ -231,7 +231,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
                     Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
-              { ctx_arrays with ctx_arrays = Map.update ctx_arrays.ctx_arrays tn ~f }
+              { ctx_arrays = Map.update ctx_arrays.ctx_arrays tn ~f }
           | _ -> ctx_arrays)
   in
   let context = { label; arrays } in

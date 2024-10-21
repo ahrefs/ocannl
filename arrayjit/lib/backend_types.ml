@@ -9,11 +9,9 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
 module No_device_types = struct
   type ctx_array = Ndarray.t [@@deriving sexp_of]
+  type ctx_arrays = { ctx_arrays : ctx_array Map.M(Tnode).t } [@@deriving sexp_of]
 
-  type ctx_arrays = { used_memory : Utils.atomic_int; ctx_arrays : ctx_array Map.M(Tnode).t }
-  [@@deriving sexp_of]
-
-  let empty_ctx_arrays = { used_memory = Atomic.make 0; ctx_arrays = Map.empty (module Tnode) }
+  let empty_ctx_arrays = { ctx_arrays = Map.empty (module Tnode) }
   let get_array arrays = Map.find arrays.ctx_arrays
 end
 

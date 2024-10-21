@@ -97,25 +97,6 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   let sexp_of_task_queue q =
     Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
 
-  type event = Not_implemented_yet  (** TODO: NOT IMPLEMENTED YET *)
-
-  (** TODO: Blocks till the event completes, if it's not done already. *)
-  let sync Not_implemented_yet = ()
-
-  (** TODO: Whether the event completed. *)
-  let is_done Not_implemented_yet = true
-
-  (** TODO: If the tensor node is in the context, returns the event indicating if currently running
-      or scheduled computations modifying that node on the context's stream have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
-      tracking for [tn] and return the event tracking all currently scheduled computations on
-      [ctx]'s stream. *)
-  let work_for _ctx _tn = Some Not_implemented_yet
-
-  (** TODO: Schedules waiting for the given event on the context's stream. *)
-  let will_wait_for _ctx Not_implemented_yet = ()
-
   type stream_state = {
     mutable keep_spinning : bool;
     mutable stream_error : exn option;
@@ -135,6 +116,25 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
     domain : (unit Domain.t[@sexp.opaque]);
   }
   [@@deriving sexp_of]
+
+  type event = Not_implemented_yet
+
+  (** TODO: Blocks till the event completes, if it's not done already. *)
+  let sync Not_implemented_yet = ()
+
+  (** TODO: Whether the event completed. *)
+  let is_done Not_implemented_yet = true
+
+  (** TODO: If the tensor node is in the context, returns the event indicating if currently running
+      or scheduled computations modifying that node on the context's stream have completed.
+
+      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
+      tracking for [tn] and return the event tracking all currently scheduled computations on
+      [ctx]'s stream. *)
+  let work_for _ctx _tn = Some Not_implemented_yet
+
+  (** TODO: Schedules waiting for the given event on the context's stream. *)
+  let will_wait_for _ctx Not_implemented_yet = ()
 
   let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
   let get_used_memory _device = get_used_memory ()
