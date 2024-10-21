@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_types.No_device_types
+include Backend_types.No_device_buffer_ptr
 open Backend_types.Types
 
 let name = "gccjit"
@@ -25,18 +25,6 @@ type mem_properties =
 let root_ctx = ref None
 
 module Tn = Tnode
-
-type buffer_ptr = ctx_array [@@deriving sexp_of]
-(** Alternative approach:
-
-    {[
-      type buffer_ptr = unit Ctypes_static.ptr
-
-      let sexp_of_buffer_ptr ptr = Sexp.Atom (Ops.ptr_to_string ptr Ops.Void_prec)
-      let buffer_ptr ctx_array = Ndarray.get_voidptr_not_managed ctx_array
-    ]} *)
-
-let buffer_ptr ctx_array = ctx_array
 
 type context = {
   label : string;
@@ -63,7 +51,7 @@ let finalize ctx =
   Option.iter ctx.result ~f:Result.release
 
 let init label =
-  let result = { label; result = None; arrays = empty_ctx_arrays } in
+  let result = { label; result = None; arrays = Map.empty (module Tn) } in
   Stdlib.Gc.finalise finalize result;
   result
 
@@ -636,7 +624,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   let ctx_nodes : ctx_nodes =
     match opt_ctx_arrays with
     | None -> Param_ptrs params
-    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays.ctx_arrays)
+    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
   in
   let initializations = ref [] in
   let nodes = Hashtbl.create (module Tn) in
@@ -697,7 +685,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   let opt_ctx_arrays =
     match (opt_ctx_arrays, ctx_nodes) with
     | None, _ | _, Param_ptrs _ -> None
-    | Some _arrays, Ctx_arrays { contents } -> Some { ctx_arrays = contents }
+    | Some _arrays, Ctx_arrays { contents } -> Some contents
   in
   (ctx_info, opt_ctx_arrays, params)
 
@@ -769,11 +757,11 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
     context * _ * _ * string =
   let label : string = prior_context.label in
   let name : string = code.name in
-  let ctx_arrays : Ndarray.t Base.Map.M(Tn).t =
+  let arrays : Ndarray.t Base.Map.M(Tn).t =
     match code with
-    | { opt_ctx_arrays = Some arrays; _ } -> arrays.ctx_arrays
+    | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
-        List.fold params ~init:(ctx_arrays prior_context).ctx_arrays ~f:(fun arrays -> function
+        List.fold params ~init:(ctx_arrays prior_context) ~f:(fun arrays -> function
           | Param_ptr tn ->
               let f = function
                 | Some arr -> arr
@@ -785,9 +773,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               Map.update arrays tn ~f
           | _ -> arrays)
   in
-  let context =
-    { label; arrays = { ctx_arrays }; result = Some code.result }
-  in
+  let context = { label; arrays; result = Some code.result } in
   let log_file_name = Utils.diagn_log_file [%string "debug-%{label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -808,7 +794,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let nd = match Map.find ctx_arrays tn with Some nd -> nd | None -> assert false in
+            let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
             let c_ptr = Ndarray.get_voidptr_not_managed nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->

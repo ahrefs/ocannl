@@ -22,20 +22,24 @@ let check_merge_buffer ~scheduled_node ~code_node =
 module Add_buffer_retrieval_and_syncing (Backend : Backend_types.No_buffer_retrieval_or_syncing) =
 struct
   type context = Backend.context
+  type event = Backend.event
+
+  (* FIXME: *)
+  let work_for _context _tn = failwith "NOT IMPLEMENTED YET"
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
-    match (tn, Backend.get_array (Backend.ctx_arrays ctx) tn) with
+    match (tn, Map.find (Backend.ctx_arrays ctx) tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
-        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.ctx_array), "from host"];
-        Backend.from_host ~dst_ptr:(Backend.buffer_ptr dst) ~dst:ctx hosted;
+        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
+        Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         true
     | _ -> false
 
   let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
-    match (tn, Backend.(get_array @@ ctx_arrays ctx) tn) with
+    match (tn, Backend.(Map.find @@ ctx_arrays ctx) tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
-        [%log "copying", Tn.debug_name tn, "at", (src : Backend.ctx_array), "to host"];
-        Backend.to_host ~src_ptr:(Backend.buffer_ptr src) ~src:ctx hosted;
+        [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
+        Backend.to_host ~src_ptr:src ~src:ctx hosted;
         true
     | _ -> false
 
@@ -47,38 +51,35 @@ struct
     if same_device && (Tn.known_shared_cross_stream tn || String.equal (name_of src) (name_of dst))
     then false
     else
-      match Backend.(get_array @@ ctx_arrays src) tn with
+      match Backend.(Map.find @@ ctx_arrays src) tn with
       | None -> false
       | Some s_arr -> (
           match into_merge_buffer with
           | No -> (
-              match Backend.(get_array @@ ctx_arrays dst) tn with
+              match Backend.(Map.find @@ ctx_arrays dst) tn with
               | None -> false
               | Some d_arr ->
                   Backend.(
-                    device_to_device tn ~into_merge_buffer
-                      ~dst_ptr:(Some (buffer_ptr d_arr))
-                      ~dst ~src_ptr:(buffer_ptr s_arr) ~src);
+                    device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
+                      ~src);
                   [%log
                     "copied",
                       Tn.debug_name tn,
                       "from",
                       name_of src,
                       "at",
-                      (s_arr : Backend.ctx_array),
+                      (s_arr : Backend.buffer_ptr),
                       "to",
-                      (d_arr : Backend.ctx_array)];
+                      (d_arr : Backend.buffer_ptr)];
                   true)
           | Streaming when same_device ->
               Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst
-                  ~src_ptr:(buffer_ptr s_arr) ~src);
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               [%log "using merge buffer for", Tn.debug_name tn, "from", name_of src];
               true
           | Copy | Streaming ->
               Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst
-                  ~src_ptr:(buffer_ptr s_arr) ~src);
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               [%log "copied into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 end
@@ -124,14 +125,6 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
 
   (** TODO: Whether the event completed. *)
   let is_done Not_implemented_yet = true
-
-  (** TODO: If the tensor node is in the context, returns the event indicating if currently running
-      or scheduled computations modifying that node on the context's stream have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not registered for [tn], will register work
-      tracking for [tn] and return the event tracking all currently scheduled computations on
-      [ctx]'s stream. *)
-  let work_for _ctx _tn = Some Not_implemented_yet
 
   (** TODO: Schedules waiting for the given event on the context's stream. *)
   let will_wait_for _ctx Not_implemented_yet = ()
@@ -355,7 +348,6 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
 
   let sync () = ()
   let is_done () = true
-  let work_for _context _tn = Some ()
   let will_wait_for _context () = ()
 
   type stream = {
@@ -479,14 +471,14 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-    traced_stores =
+let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
+    =
   let olds = ctx_arrays prior_context in
   Set.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
         Option.value_map node ~default:false ~f:(fun node ->
-            is_in_context node && not (Option.is_some @@ get_array olds tn))
+            is_in_context node && not (Option.is_some @@ Map.find olds tn))
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 let from_prior_context_batch comps =
@@ -590,8 +582,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let link ~merge_buffer (prior_context : context) (code : code) =
     let verify from_prior_context =
-      verify_prior_context ~get_array:Backend.get_array ~ctx_arrays ~is_in_context ~prior_context
-        ~from_prior_context
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
         [| get_traced_store code |]
     in
     let context, bindings, schedule, name =
@@ -618,7 +609,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
 
   let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
     let verify from_prior_context =
-      verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
       @@ get_traced_stores code_batch
     in
     let _opt_ctx_arrays, procs =
@@ -723,7 +714,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     }
 
   let link context (code : code) =
-    verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
       ~from_prior_context:code.from_prior_context [| code.traced_store |];
     let context, bindings, schedule = link context code.code in
     let schedule =
@@ -735,7 +726,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     { context; schedule; bindings; name }
 
   let link_batch context code_batch =
-    verify_prior_context ~get_array ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
       ~from_prior_context:code_batch.from_prior_context code_batch.traced_stores;
     let context, bindings, schedules = link_batch context code_batch.code_batch in
     ( context,

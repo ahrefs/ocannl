@@ -7,12 +7,14 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-module No_device_types = struct
-  type ctx_array = Ndarray.t [@@deriving sexp_of]
-  type ctx_arrays = { ctx_arrays : ctx_array Map.M(Tnode).t } [@@deriving sexp_of]
+module type Buffer_ptr = sig
+  type buffer_ptr [@@deriving sexp_of]
+  type ctx_arrays = buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
+end
 
-  let empty_ctx_arrays = { ctx_arrays = Map.empty (module Tnode) }
-  let get_array arrays = Map.find arrays.ctx_arrays
+module No_device_buffer_ptr : Buffer_ptr with type buffer_ptr = Ndarray.t = struct
+  type buffer_ptr = Ndarray.t [@@deriving sexp_of]
+  type ctx_arrays = buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
 end
 
 module Types = struct
@@ -96,13 +98,10 @@ end
 (** Parts shared by backend implementations excluding what's already in {!Backend_any_common}. *)
 module type Backend_impl_common = sig
   type context [@@deriving sexp_of]
-  type ctx_array [@@deriving sexp_of]
-  type ctx_arrays [@@deriving sexp_of]
-  type buffer_ptr [@@deriving sexp_of]
 
-  val buffer_ptr : ctx_array -> buffer_ptr
+  include Buffer_ptr
+
   val ctx_arrays : context -> ctx_arrays
-  val get_array : ctx_arrays -> Tnode.t -> ctx_array option
 
   val is_in_context : Low_level.traced_array -> bool
   (** If true, the node is required to be in the contexts linked with code that uses it.
@@ -160,13 +159,6 @@ module type Backend_device_common = sig
   val is_done : event -> bool
   (** Whether the event completed. *)
 
-  val work_for : context -> Tnode.t -> event option
-  (** If the tensor node is in the context, returns the event indicating if currently running or
-      scheduled computations modifying that node on the context's stream have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
-      tracking for [tn] and return the [all_work] event for [ctx]'s stream. *)
-
   val will_wait_for : context -> event -> unit
   (** Schedules waiting for the given event on the context's stream.
 
@@ -205,6 +197,14 @@ end
 
 module type With_buffer_retrieval_and_syncing = sig
   type context
+  type event
+
+  val work_for : context -> Tnode.t -> event option
+  (** If the tensor node is in the context, returns the event indicating if currently running or
+      scheduled computations modifying that node on the context's stream have completed.
+
+      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
+      tracking for [tn] and return the [all_work] event for [ctx]'s stream. *)
 
   val from_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
@@ -252,7 +252,7 @@ module type Backend = sig
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines. *)
 
-  include With_buffer_retrieval_and_syncing with type context := context
+  include With_buffer_retrieval_and_syncing with type context := context and type event := event
 end
 
 (** Lowered-level stream agnostic backend interface: implementation-facing API for CPU backends. *)

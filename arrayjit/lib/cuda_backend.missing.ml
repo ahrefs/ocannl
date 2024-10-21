@@ -10,7 +10,6 @@ type event = unit
 
 let sync () = ()
 let is_done () = true
-let work_for _ctx _tn = Some ()
 let will_wait_for _ctx () = ()
 let initialize (_config : Backend_types.Types.config) = ()
 let is_initialized () = true

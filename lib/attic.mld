@@ -447,3 +447,13 @@ Old copying mechanism in backends.ml Multicore_backend:
     | _ -> false
 
 ]}
+
+Old post-launch code in Cuda_backend.link_proc:
+{[
+    Map.iteri ctx_arrays ~f:(fun ~key ~data ->
+        (* Note: a tensor node can only be a context array if it is materialized. *)
+        if Option.is_some data.tracking then
+          let traced = Low_level.get_node traced_store key in
+          if not traced.read_only then
+            data.tracking <- Some (Cu.Delimited_event.record context.stream.cu_stream));
+]}

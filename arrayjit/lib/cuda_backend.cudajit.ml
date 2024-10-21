@@ -24,13 +24,7 @@ type buffer_ptr = Cu.Deviceptr.t
 let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
 type event = Cu.Delimited_event.t [@@deriving sexp_of]
-type ctx_array = { ptr : buffer_ptr; mutable tracking : event option } [@@deriving sexp_of]
-
-let buffer_ptr ctx_array = ctx_array.ptr
-
-type ctx_arrays = ctx_array Map.M(Tnode).t [@@deriving sexp_of]
-
-let get_array = Map.find
+type ctx_arrays = buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
 
 type device = {
   dev : Cu.Device.t;
@@ -40,7 +34,7 @@ type device = {
   mutable copy_merge_buffer_capacity : int;
   used_names : Hash_set.M(String).t;  (** Unique names of streams. *)
   released : Utils.atomic_bool;
-  cross_stream_candidates : ctx_array Hashtbl.M(Tn).t;
+  cross_stream_candidates : buffer_ptr Hashtbl.M(Tn).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
           shrink. See the explanation on top of this file. *)
   owner_streams : string Hashtbl.M(Tn).t;
@@ -48,14 +42,15 @@ type device = {
 }
 [@@deriving sexp_of]
 
-and stream = {
+type stream = {
   device : device;
   cu_stream : Cu.Stream.t;
   unique_name : string;
   mutable merge_buffer : (buffer_ptr * Tn.t) option;
 }
+[@@deriving sexp_of]
 
-and context = {
+type context = {
   label : string;
   ctx : Cu.Context.t;  (** Currently, this is always the same as [stream.device.primary_context]. *)
   stream : stream;
@@ -72,15 +67,6 @@ and context = {
 
 let ctx_arrays ctx = ctx.ctx_arrays
 let global_config = ref For_parallel_copying
-
-let work_for ctx tn =
-  match Map.find ctx.ctx_arrays tn with
-  | None -> None
-  | Some { tracking = Some event; _ } -> Some event
-  | Some ctx_array ->
-      ctx_array.tracking <- Some (Cu.Delimited_event.record ctx.stream.cu_stream);
-      ctx_array.tracking
-
 let is_done event = Cu.Delimited_event.query event
 let will_wait_for context event = Cu.Delimited_event.wait context.stream.cu_stream event
 let sync event = Cu.Delimited_event.synchronize event
@@ -133,8 +119,8 @@ let%track3_sexp cleanup_device (device : device) =
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
   (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
   Cu.Deviceptr.mem_free device.copy_merge_buffer;
-  Hashtbl.iter device.cross_stream_candidates ~f:(fun ctx_array ->
-      Cu.Deviceptr.mem_free ctx_array.ptr)
+  Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
+      Cu.Deviceptr.mem_free buffer_ptr)
 
 let%track5_sexp finalize_device device =
   if Atomic.compare_and_set device.released false true then cleanup_device device
@@ -164,7 +150,7 @@ let%track3_sexp get_device ~(ordinal : int) : device =
         copy_merge_buffer;
         copy_merge_buffer_capacity;
         released = Atomic.make false;
-        cross_stream_candidates = (Hashtbl.create (module Tn) : ctx_array Hashtbl.M(Tn).t);
+        cross_stream_candidates = (Hashtbl.create (module Tn) : buffer_ptr Hashtbl.M(Tn).t);
         owner_streams = Hashtbl.create (module Tn);
       }
     in
@@ -230,7 +216,7 @@ let%track3_sexp finalize (ctx : context) : unit =
         if
           (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
           && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
-        then Cu.Deviceptr.mem_free data.ptr))
+        then Cu.Deviceptr.mem_free data))
 
 let init stream =
   let ctx =
@@ -337,10 +323,8 @@ end) =
 struct
   let for_lowereds = Input.for_lowereds
 
-  type nonrec ctx_array = buffer_ptr [@@deriving sexp_of]
-  type nonrec ctx_arrays = ctx_array Map.M(Tn).t [@@deriving sexp_of]
+  type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
 
-  let get_array = Map.find
   let opt_ctx_arrays = None
   let hardcoded_context_ptr = None
   let is_in_context = is_in_context
@@ -456,8 +440,8 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays traced_store
-    lowered_bindings run_module =
+let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
+    _traced_store lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.Module.get_function run_module ~name in
   let context =
@@ -476,7 +460,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
       List.map params ~f:(function
         | _name, Param_ptr tn ->
             let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
-            S.Tensor arr.ptr
+            S.Tensor arr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
             let ptr = fst @@ Option.value_exn ~here:[%here] context.stream.merge_buffer in
@@ -510,12 +494,6 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
          Utils.log_trace_tree _output]);
     S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.cu_stream
       args;
-    Map.iteri ctx_arrays ~f:(fun ~key ~data ->
-        (* Note: a tensor node can only be a context array if it is materialized. *)
-        if Option.is_some data.tracking then
-          let traced = Low_level.get_node traced_store key in
-          if not traced.read_only then
-            data.tracking <- Some (Cu.Delimited_event.record context.stream.cu_stream));
     [%log "kernel launched"]
   in
   ( context,
@@ -530,10 +508,9 @@ let%track3_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
   if is_in_context node && not (Map.mem ctx_arrays key) then (
     [%log2 Tn.debug_name key, "read_only", (node.read_only : bool)];
     [%log3 (key : Tn.t)];
-    let default () : ctx_array =
+    let default () : buffer_ptr =
       set_ctx ctx;
-      let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key) in
-      { ptr; tracking = None }
+      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
     in
     let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
     let device = stream.device in

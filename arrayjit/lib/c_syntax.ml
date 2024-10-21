@@ -12,12 +12,10 @@ module Tn = Tnode
 module C_syntax (B : sig
   val for_lowereds : Low_level.optimized array
 
-  type ctx_array
-  type ctx_arrays
+  type buffer_ptr
 
-  val opt_ctx_arrays : ctx_arrays option
-  val get_array : ctx_arrays -> Tn.t -> ctx_array option
-  val hardcoded_context_ptr : (ctx_array -> string) option
+  val opt_ctx_arrays : buffer_ptr Map.M(Tnode).t option
+  val hardcoded_context_ptr : (buffer_ptr -> string) option
   val is_in_context : Low_level.traced_array -> bool
   val host_ptrs_for_readonly : bool
   val logs_to_stdout : bool
@@ -79,7 +77,7 @@ struct
               | true, Some get_ptr, Some ctx_arrays, _, _, _ ->
                   let ident = get_ident node.tn in
                   let ctx_array =
-                    Option.value_exn ~here:[%here] ~message:ident @@ B.get_array ctx_arrays node.tn
+                    Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays node.tn
                   in
                   fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array;
                   Hash_set.add is_global node.tn

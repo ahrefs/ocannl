@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_types.No_device_types
+include Backend_types.No_device_buffer_ptr
 open Backend_types.Types
 
 let name = "cc"
@@ -22,10 +22,6 @@ module Tn = Tnode
 type context = { label : string; arrays : ctx_arrays } [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
-
-type buffer_ptr = ctx_array [@@deriving sexp_of]
-
-let buffer_ptr ctx_array = ctx_array
 
 let alloc_buffer ?old_buffer ~size_in_bytes () =
   (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
@@ -45,7 +41,7 @@ let is_initialized, initialize =
 let finalize _ctx = ()
 
 let init label =
-  let result = { label; arrays = empty_ctx_arrays } in
+  let result = { label; arrays = Map.empty (module Tn) } in
   Stdlib.Gc.finalise finalize result;
   result
 
@@ -103,10 +99,8 @@ module C_syntax_config (Input : sig
   val opt_ctx_arrays : ctx_arrays option
 end) =
 struct
-  type nonrec ctx_array = ctx_array
-  type nonrec ctx_arrays = ctx_arrays
+  type nonrec buffer_ptr = buffer_ptr
 
-  let get_array = get_array
   let for_lowereds = Input.for_lowereds
   let opt_ctx_arrays = Input.opt_ctx_arrays
   let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
@@ -129,7 +123,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let opt_ctx_arrays =
     Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
         Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:node ctx_arrays ->
-            match Map.find ctx_arrays.ctx_arrays tn with
+            match Map.find ctx_arrays tn with
             | None ->
                 if is_in_context node then
                   let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
@@ -137,7 +131,7 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
                     Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
                   in
-                  { ctx_arrays = Map.add_exn ctx_arrays.ctx_arrays ~key:tn ~data }
+                  Map.add_exn ctx_arrays ~key:tn ~data
                 else ctx_arrays
             | Some _ -> ctx_arrays))
   in
@@ -159,24 +153,21 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
   let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
   let opt_ctx_arrays =
     Option.map opt_ctx_arrays ~f:(fun arrays ->
-        let ctx_arrays =
-          Array.fold for_lowereds ~init:arrays.ctx_arrays ~f:(fun ctx_arrays lowered ->
-              Hashtbl.fold lowered.traced_store ~init:ctx_arrays
-                ~f:(fun ~key:tn ~data:node ctx_arrays ->
-                  match Map.find ctx_arrays tn with
-                  | None ->
-                      if is_in_context node then
-                        let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
-                        let data =
-                          Ndarray.create_array ~debug (Lazy.force tn.Tn.prec)
-                            ~dims:(Lazy.force tn.dims)
-                          @@ Constant_fill { values = [| 0. |]; strict = false }
-                        in
-                        Map.add_exn ctx_arrays ~key:tn ~data
-                      else ctx_arrays
-                  | Some _ -> ctx_arrays))
-        in
-        { ctx_arrays })
+        Array.fold for_lowereds ~init:arrays ~f:(fun ctx_arrays lowered ->
+            Hashtbl.fold lowered.traced_store ~init:ctx_arrays
+              ~f:(fun ~key:tn ~data:node ctx_arrays ->
+                match Map.find ctx_arrays tn with
+                | None ->
+                    if is_in_context node then
+                      let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
+                      let data =
+                        Ndarray.create_array ~debug (Lazy.force tn.Tn.prec)
+                          ~dims:(Lazy.force tn.dims)
+                        @@ Constant_fill { values = [| 0. |]; strict = false }
+                      in
+                      Map.add_exn ctx_arrays ~key:tn ~data
+                    else ctx_arrays
+                | Some _ -> ctx_arrays)))
   in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
@@ -185,7 +176,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let global_ctx_arrays =
-    ref (match opt_ctx_arrays with Some ctx_arrays -> ctx_arrays | None -> empty_ctx_arrays)
+    ref (match opt_ctx_arrays with Some ctx_arrays -> ctx_arrays | None -> Map.empty (module Tn))
   in
   let base_name =
     String.(
@@ -231,7 +222,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
                     Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
                     @@ Constant_fill { values = [| 0. |]; strict = false }
               in
-              { ctx_arrays = Map.update ctx_arrays.ctx_arrays tn ~f }
+              Map.update ctx_arrays tn ~f
           | _ -> ctx_arrays)
   in
   let context = { label; arrays } in
@@ -258,7 +249,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let nd =
-              match get_array (ctx_arrays context) tn with Some nd -> nd | None -> assert false
+              match Map.find (ctx_arrays context) tn with Some nd -> nd | None -> assert false
             in
             let c_ptr = Ndarray.get_voidptr_not_managed nd in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
