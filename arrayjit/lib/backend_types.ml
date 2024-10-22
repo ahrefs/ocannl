@@ -30,6 +30,28 @@ module Types = struct
   }
   [@@deriving sexp_of]
 
+  type ('buffer_ptr, 'event, 'device, 'state, 'runner) stream = {
+    device : 'device;
+    state : 'state;
+    merge_buffer : ('buffer_ptr * Tnode.t) option ref;
+    unique_name : string;
+    mutable allocated_buffer : ('buffer_ptr * int) option;
+    runner : 'runner;
+    requested_work_for : 'event option Hashtbl.M(Tnode).t;
+  }
+  [@@deriving sexp_of]
+
+  let make_stream ~device ~state ~unique_name ~runner =
+    {
+      device;
+      state;
+      merge_buffer = ref None;
+      unique_name : string;
+      allocated_buffer = None;
+      runner : 'runner;
+      requested_work_for = Hashtbl.create (module Tnode);
+    }
+
   (** For now, we only configure a backend with regard to how many streams it should suggest using
       (where applicable). *)
   type config = Only_devices_parallel | For_parallel_copying | Most_parallel_streams

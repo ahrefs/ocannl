@@ -42,13 +42,7 @@ type device = {
 }
 [@@deriving sexp_of]
 
-type stream = {
-  device : device;
-  cu_stream : Cu.Stream.t;
-  unique_name : string;
-  mutable merge_buffer : (buffer_ptr * Tn.t) option;
-}
-[@@deriving sexp_of]
+type nonrec stream = (buffer_ptr, event, device, unit, Cu.Stream.t) stream [@@deriving sexp_of]
 
 type context = {
   label : string;
@@ -68,10 +62,10 @@ type context = {
 let ctx_arrays ctx = ctx.ctx_arrays
 let global_config = ref For_parallel_copying
 let is_done event = Cu.Delimited_event.query event
-let will_wait_for context event = Cu.Delimited_event.wait context.stream.cu_stream event
+let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
 let sync event = Cu.Delimited_event.synchronize event
-let all_work stream = Cu.Delimited_event.record stream.cu_stream
-let scheduled_merge_node stream = Option.map ~f:snd stream.merge_buffer
+let all_work stream = Cu.Delimited_event.record stream.runner
+let scheduled_merge_node stream = Option.map ~f:snd !(stream.merge_buffer)
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -172,7 +166,7 @@ let%track3_sexp new_stream (device : device) : stream =
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx device.primary_context;
   let cu_stream = Cu.Stream.create ~non_blocking:true () in
-  { device; cu_stream; unique_name; merge_buffer = None }
+  make_stream ~device ~state:() ~unique_name ~runner:cu_stream
 
 let cuda_properties =
   let cache =
@@ -199,10 +193,10 @@ let get_name stream = stream.unique_name
 
 let await stream : unit =
   set_ctx stream.device.primary_context;
-  Cu.Stream.synchronize stream.cu_stream;
+  Cu.Stream.synchronize stream.runner;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
-let is_idle stream = Cu.Stream.is_ready stream.cu_stream
+let is_idle stream = Cu.Stream.is_ready stream.runner
 
 let%track3_sexp finalize (ctx : context) : unit =
   if
@@ -235,12 +229,12 @@ let init stream =
 
 let from_host ~dst_ptr ~dst hosted =
   set_ctx dst.ctx;
-  let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.cu_stream in
+  let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
   Ndarray.map { f } hosted
 
 let to_host ~src_ptr ~src hosted =
   set_ctx src.ctx;
-  let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.cu_stream in
+  let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
   Ndarray.map { f } hosted
 
 let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
@@ -248,10 +242,10 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   let memcpy ~dst_ptr =
     if same_device then
       Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~src:src_ptr
-        dst.stream.cu_stream
+        dst.stream.runner
     else
       Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~dst_ctx:dst.ctx
-        ~src:src_ptr ~src_ctx:src.ctx dst.stream.cu_stream
+        ~src:src_ptr ~src_ctx:src.ctx dst.stream.runner
   in
   match (into_merge_buffer, dst_ptr) with
   | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
@@ -260,13 +254,13 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
       memcpy ~dst_ptr
   | Streaming, _ ->
       assert same_device;
-      dst.stream.merge_buffer <- Some (src_ptr, tn)
+      dst.stream.merge_buffer := Some (src_ptr, tn)
   | Copy, _ ->
       set_ctx dst.ctx;
       let size_in_bytes = Tn.size_in_bytes tn in
       opt_alloc_merge_buffer ~size_in_bytes dst.stream.device;
       memcpy ~dst_ptr:dst.stream.device.copy_merge_buffer;
-      dst.stream.merge_buffer <- Some (dst.stream.device.copy_merge_buffer, tn)
+      dst.stream.merge_buffer := Some (dst.stream.device.copy_merge_buffer, tn)
 
 type code = {
   traced_store : Low_level.traced_store;
@@ -463,7 +457,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
             S.Tensor arr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
-            let ptr = fst @@ Option.value_exn ~here:[%here] context.stream.merge_buffer in
+            let ptr = fst @@ Option.value_exn ~here:[%here] !(context.stream.merge_buffer) in
             S.Tensor ptr
         | _name, Static_idx s ->
             let i = Indexing.find_exn lowered_bindings s in
@@ -492,8 +486,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
        [%log_block
          context.label;
          Utils.log_trace_tree _output]);
-    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.cu_stream
-      args;
+    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.runner args;
     [%log "kernel launched"]
   in
   ( context,

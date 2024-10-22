@@ -109,16 +109,13 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   }
   [@@deriving sexp_of]
 
-  type stream = {
-    state : stream_state;
-    merge_buffer : (buffer_ptr * Tnode.t) option ref;
-    mutable allocated_buffer : (buffer_ptr * int) option;
-    unique_name : string;
-    domain : (unit Domain.t[@sexp.opaque]);
-  }
-  [@@deriving sexp_of]
+  type domain = unit Domain.t
 
-  type event = Not_implemented_yet
+  let sexp_of_domain (d : domain) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
+
+  type device = CPU [@@deriving sexp_of]
+  type event = Not_implemented_yet [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, event, device, stream_state, domain) stream [@@deriving sexp_of]
 
   (** TODO: Blocks till the event completes, if it's not done already. *)
   let sync Not_implemented_yet = ()
@@ -132,7 +129,6 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
   let get_used_memory _device = get_used_memory ()
 
-  type device = CPU [@@deriving sexp_of]
   type nonrec code = code [@@deriving sexp_of]
   type nonrec code_batch = code_batch [@@deriving sexp_of]
 
@@ -210,19 +206,14 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
            stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
-    {
-      state;
-      unique_name;
-      domain = Domain.spawn worker;
-      merge_buffer = ref None;
-      allocated_buffer = None;
-    }
+    make_stream ~device:CPU ~state ~unique_name ~runner:(Domain.spawn worker)
 
   type nonrec context = { stream : stream; ctx : context } [@@deriving sexp_of]
 
   let ctx_arrays context = ctx_arrays context.ctx
 
   type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
+  (** This overrides the routine type from [Backend]. *)
 
   let init stream = { stream; ctx = init (name ^ " " ^ stream.unique_name) }
   let initialize = initialize
@@ -269,7 +260,7 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
     stream.state.keep_spinning <- false;
     Stdlib.Condition.broadcast stream.state.dev_wait_for_work;
     Hash_set.remove used_names stream.unique_name;
-    Domain.join stream.domain
+    Domain.join stream.runner
 
   let get_device ~ordinal =
     if ordinal <> 0 then
@@ -344,18 +335,11 @@ let sync_suggested_num_streams = ref 1
 module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   include Backend
 
-  type event = unit
+  type event = unit [@@deriving sexp_of]
 
   let sync () = ()
   let is_done () = true
   let will_wait_for _context () = ()
-
-  type stream = {
-    unique_name : string;
-    merge_buffer : (buffer_ptr * Tnode.t) option ref;
-    mutable allocated_buffer : (buffer_ptr * int) option;
-  }
-  [@@deriving sexp_of]
 
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
@@ -375,13 +359,13 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   let get_used_memory CPU = Backend.get_used_memory ()
   let next_stream = ref 0
 
-  let new_stream CPU =
+  type nonrec stream = (buffer_ptr, event, device, unit, unit) stream [@@deriving sexp_of]
+
+  let new_stream CPU : stream =
     Int.incr next_stream;
-    {
-      unique_name = "stream " ^ Int.to_string (!next_stream - 1);
-      merge_buffer = ref None;
-      allocated_buffer = None;
-    }
+    make_stream ~device:CPU ~state:()
+      ~unique_name:("stream " ^ Int.to_string (!next_stream - 1))
+      ~runner:()
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
@@ -399,6 +383,7 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   let ctx_arrays context = ctx_arrays context.ctx
 
   type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
+  (** This overrides the routine type from [Backend]. *)
 
   let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
