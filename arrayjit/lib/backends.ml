@@ -536,17 +536,12 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
         Array.map lowereds ~f:(fun lowered ->
             Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
 
-  let get_traced_store : code -> _ = function
-    | Postponed { lowered = Low_level.{ traced_store; _ }; _ }
-    | Compiled { lowered = Low_level.{ traced_store; _ }; _ } ->
-        traced_store
+  let get_lowered : code -> _ = function
+    | Postponed { lowered; _ } | Compiled { lowered; _ } -> lowered
 
-  let get_traced_stores : code_batch -> _ = function
-    | Postponed { lowereds; _ } ->
-        Array.filter_map lowereds ~f:(fun lowered ->
-            Option.map lowered ~f:(fun optim -> optim.traced_store))
-    | Compiled { lowereds; _ } ->
-        Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store))
+  let get_lowereds : code_batch -> _ = function
+    | Postponed { lowereds; _ } -> lowereds
+    | Compiled { lowereds; _ } -> lowereds
 
   let compile ?(shared = false) ?name bindings comp : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
@@ -581,10 +576,12 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
         }
 
   let link ~merge_buffer (prior_context : context) (code : code) =
+    let lowered = get_lowered code in
     let verify from_prior_context =
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-        [| get_traced_store code |]
+        [| lowered.traced_store |]
     in
+    let inputs, outputs = Low_level.input_and_output_nodes lowered in
     let context, bindings, schedule, name =
       match code with
       | Postponed { comp; lowered; bindings; name } ->
@@ -605,12 +602,13 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
           check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
             ~code_node:(expected_merge_node code))
     in
-    { context; schedule; bindings; name }
+    { context; schedule; bindings; name; inputs; outputs }
 
   let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
+    let lowereds = get_lowereds code_batch in
     let verify from_prior_context =
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-      @@ get_traced_stores code_batch
+      @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun opt -> opt.Low_level.traced_store))
     in
     let _opt_ctx_arrays, procs =
       match code_batch with
@@ -630,12 +628,13 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
     Array.fold_mapi procs ~init:prior_context ~f:(fun i context -> function
       | Some proc ->
           let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
+          let inputs, outputs = Low_level.input_and_output_nodes @@ Option.value_exn lowereds.(i) in
           let schedule =
             Task.prepend schedule ~work:(fun () ->
                 check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
                   ~code_node:code_nodes.(i))
           in
-          (context, Some { context; schedule; bindings; name })
+          (context, Some { context; schedule; bindings; name; inputs; outputs })
       | None -> (context, None))
 
   let get_used_memory = Ndarray.get_used_memory
@@ -666,7 +665,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
 
   type nonrec code = {
     from_prior_context : Set.M(Tnode).t;
-    traced_store : Low_level.traced_store;
+    lowered : Low_level.optimized;
     code : code;
     expected_merge_node : Tnode.t option;
   }
@@ -674,7 +673,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
 
   type nonrec code_batch = {
     from_prior_context : Set.M(Tnode).t;
-    traced_stores : Low_level.traced_store array;
+    lowereds : Low_level.optimized option array;
     code_batch : code_batch;
     expected_merge_nodes : Tnode.t option array;
   }
@@ -686,12 +685,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     let code = compile ~name bindings lowered in
     let from_prior_context = Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes in
-    {
-      from_prior_context;
-      traced_store = lowered.traced_store;
-      code;
-      expected_merge_node = lowered.Low_level.merge_node;
-    }
+    { from_prior_context; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
   let compile_batch ?shared:_ ?names ?occupancy bindings comps =
     let names, lowereds =
@@ -705,8 +699,7 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     in
     {
       from_prior_context;
-      traced_stores =
-        Array.filter_map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
+      lowereds;
       code_batch;
       expected_merge_nodes =
         Array.map lowereds ~f:(fun lowered ->
@@ -715,7 +708,8 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
 
   let link context (code : code) =
     verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
-      ~from_prior_context:code.from_prior_context [| code.traced_store |];
+      ~from_prior_context:code.from_prior_context [| code.lowered.traced_store |];
+    let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
     let context, bindings, schedule = link context code.code in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
@@ -723,23 +717,27 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
             ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context)
             ~code_node:code.expected_merge_node)
     in
-    { context; schedule; bindings; name }
+    { context; schedule; bindings; name; inputs; outputs }
 
   let link_batch context code_batch =
     verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
-      ~from_prior_context:code_batch.from_prior_context code_batch.traced_stores;
+      ~from_prior_context:code_batch.from_prior_context
+    @@ Array.filter_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
     let context, bindings, schedules = link_batch context code_batch.code_batch in
     ( context,
       Array.mapi schedules ~f:(fun i ->
           Option.map ~f:(fun schedule ->
               let expected_merge_node = code_batch.expected_merge_nodes.(i) in
+              let inputs, outputs =
+                Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)
+              in
               let schedule =
                 Task.prepend schedule ~work:(fun () ->
                     check_merge_buffer
                       ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context)
                       ~code_node:expected_merge_node)
               in
-              { context; schedule; bindings; name })) )
+              { context; schedule; bindings; name; inputs; outputs })) )
 end
 
 module Cuda_backend : Backend_types.Backend = Lowered_backend ((

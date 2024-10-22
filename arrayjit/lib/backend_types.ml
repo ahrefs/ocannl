@@ -23,6 +23,10 @@ module Types = struct
     schedule : Task.t;
     bindings : Indexing.lowered_bindings;
     name : string;
+    inputs : Set.M(Tnode).t;
+        (** The materialized read-only and read-before-write (within the routine) non-constant
+            nodes. They are inputs in a broad sense, as they could be recurrent nodes or parameters. *)
+    outputs : Set.M(Tnode).t;  (** All the materialized nodes written-to by the routine. *)
   }
   [@@deriving sexp_of]
 

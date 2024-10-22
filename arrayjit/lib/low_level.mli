@@ -99,6 +99,12 @@ val optimize :
   t ->
   optimized
 
+val input_and_output_nodes : optimized -> Set.M(Tnode).t * Set.M(Tnode).t
+(** Inputs are the materialized read-only and read-before-write (within the code) non-constant
+    nodes. They are inputs in a broad sense, as they could be recurrent nodes or parameters.
+
+    Outputs are all the materialized nodes written-to by the code. *)
+
 (** {2 Printing} *)
 
 val code_hum_margin : int ref

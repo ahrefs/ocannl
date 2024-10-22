@@ -77,24 +77,6 @@ let get_name_exn asgns =
 let is_total ~initialize_neutral ~projections =
   initialize_neutral && Indexing.is_bijective projections
 
-(** Returns the left-hand-side nodes of total assignments. NOTE: [output_nodes] forces the
-    computation of the assignments' projections, so should only be called after shape inference. *)
-let output_nodes asgns =
-  let open Utils.Set_O in
-  let empty = Set.empty (module Tn) in
-  let rec loop = function
-    | Noop -> empty
-    | Seq (t1, t2) -> loop t1 + loop t2
-    | Block_comment (_, t) -> loop t
-    | Accum_unop { lhs; initialize_neutral; projections; _ }
-    | Accum_binop { lhs; initialize_neutral; projections; _ } ->
-        if is_total ~initialize_neutral ~projections:(Lazy.force projections) then
-          Set.singleton (module Tn) lhs
-        else empty
-    | Fetch _ -> empty
-  in
-  loop asgns
-
 (** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it ideally should
     be called after compilation. *)
 let context_nodes asgns =

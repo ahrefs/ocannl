@@ -337,6 +337,24 @@ let input_or_recurrent_nodes asgns =
   in
   loop asgns
 
+(** Returns the left-hand-side nodes of total assignments. NOTE: [output_nodes] forces the
+    computation of the assignments' projections, so should only be called after shape inference. *)
+let output_nodes asgns =
+  let open Utils.Set_O in
+  let empty = Set.empty (module Tn) in
+  let rec loop = function
+    | Noop -> empty
+    | Seq (t1, t2) -> loop t1 + loop t2
+    | Block_comment (_, t) -> loop t
+    | Accum_unop { lhs; initialize_neutral; projections; _ }
+    | Accum_binop { lhs; initialize_neutral; projections; _ } ->
+        if is_total ~initialize_neutral ~projections:(Lazy.force projections) then
+          Set.singleton (module Tn) lhs
+        else empty
+    | Fetch _ -> empty
+  in
+  loop asgns
+
 ]}
 
 Old copying mechanism in backends.ml Multicore_backend:
