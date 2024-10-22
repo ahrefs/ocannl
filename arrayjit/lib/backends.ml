@@ -24,8 +24,14 @@ struct
   type context = Backend.context
   type event = Backend.event
 
-  (* FIXME: *)
-  let work_for _context _tn = failwith "NOT IMPLEMENTED YET"
+  let work_for context tn =
+    let stream = Backend.get_ctx_stream context in
+    let default () = Some (Backend.all_work stream) in
+    if not @@ Map.mem (Backend.ctx_arrays context) tn then None
+    else
+      Hashtbl.update_and_return stream.requested_work_for tn ~f:(function
+        | None | Some None -> default ()
+        | Some (Some _ as event) -> event)
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find (Backend.ctx_arrays ctx) tn) with
@@ -109,13 +115,13 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   }
   [@@deriving sexp_of]
 
-  type domain = unit Domain.t
+  type runner = unit Domain.t
 
-  let sexp_of_domain (d : domain) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
+  let sexp_of_runner (d : runner) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
 
   type device = CPU [@@deriving sexp_of]
   type event = Not_implemented_yet [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, event, device, stream_state, domain) stream [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, event, device, stream_state, runner) stream [@@deriving sexp_of]
 
   (** TODO: Blocks till the event completes, if it's not done already. *)
   let sync Not_implemented_yet = ()
@@ -359,7 +365,9 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   let get_used_memory CPU = Backend.get_used_memory ()
   let next_stream = ref 0
 
-  type nonrec stream = (buffer_ptr, event, device, unit, unit) stream [@@deriving sexp_of]
+  type stream_state = unit [@@deriving sexp_of]
+  type runner = unit [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, event, device, stream_state, runner) stream [@@deriving sexp_of]
 
   let new_stream CPU : stream =
     Int.incr next_stream;

@@ -42,7 +42,9 @@ type device = {
 }
 [@@deriving sexp_of]
 
-type nonrec stream = (buffer_ptr, event, device, unit, Cu.Stream.t) stream [@@deriving sexp_of]
+type stream_state = unit [@@deriving sexp_of]
+type runner = Cu.Stream.t [@@deriving sexp_of]
+type nonrec stream = (buffer_ptr, event, device, stream_state, runner) stream [@@deriving sexp_of]
 
 type context = {
   label : string;

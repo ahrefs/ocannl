@@ -170,14 +170,23 @@ end
 (** Parts shared by both assignments-level and lowered-level backend interfaces providing streams
     and devices. *)
 module type Backend_device_common = sig
-  type stream [@@deriving sexp_of]
-
-  include Backend_any_common with type init_info := stream and type stream := stream
+  type buffer_ptr
+  type device
 
   type event
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
       values are used internally for scheduling across streams of the backend, and can be used for
       explicit scheduling. *)
+
+  type stream_state [@@deriving sexp_of]
+  type runner [@@deriving sexp_of]
+  type stream = (buffer_ptr, event, device, stream_state, runner) Types.stream [@@deriving sexp_of]
+
+  include
+    Backend_any_common
+      with type buffer_ptr := buffer_ptr
+       and type init_info := stream
+       and type stream := stream
 
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already. *)
@@ -191,8 +200,6 @@ module type Backend_device_common = sig
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
       called internally when necessary. But there is one exception, see {!device_to_device} when
       [into_merge_buffer=Streaming]. *)
-
-  type device
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
