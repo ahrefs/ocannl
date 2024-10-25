@@ -459,12 +459,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     let children = if single_node then [] else List.map ~f:to_dag t.children in
     let indices = Shape.default_display_indices t.shape in
     let labels = Shape.to_labels t.shape in
-    let where_located a =
-      match a.Tn.memory_mode with
-      | None -> "<waiting>"
-      | Some (m, prov) ->
-          [%string "<%{Sexp.to_string_hum @@ Tn.sexp_of_memory_mode m} %{prov#Int}>"]
-    in
+    let where_located a = Tn.(debug_memory_mode a.memory_mode) in
     let txt =
       if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
       else Tn.label t.value

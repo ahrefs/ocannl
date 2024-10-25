@@ -113,6 +113,27 @@ let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
   get_debug_name ?code_name ~id ~label ()
 
+let debug_memory_mode = function
+  | None -> "unknown"
+  | Some (mem, prov) ->
+      (match mem with
+      | Effectively_constant -> "Const"
+      | Virtual -> "Virt"
+      | Never_virtual -> "Non-virt"
+      | Local -> "Local"
+      | Device_only -> "Dev"
+      | Materialized -> "Material"
+      | On_device Unset -> "On-dev"
+      | On_device Shared_cross_stream -> "Dev-shared"
+      | On_device Per_stream -> "Dev-stream"
+      | Hosted Constant -> "Host-const"
+      | Hosted Nonconstant -> "Host-non-const"
+      | Hosted Volatile -> "Hosted"
+      | Hosted (Changed_on_devices Unset) -> "Host&dev"
+      | Hosted (Changed_on_devices Per_stream) -> "Host&stream"
+      | Hosted (Changed_on_devices Shared_cross_stream) -> "Host&shared")
+      ^ "/" ^ Int.to_string prov
+
 let log_debug_info ~from_log_level tn =
   [%debug_sexp
     [%logN_block
@@ -123,7 +144,7 @@ let log_debug_info ~from_log_level tn =
           "label:",
           (tn.label : string list),
           "mem:",
-          (tn.memory_mode : (memory_mode * int) option),
+          debug_memory_mode tn.memory_mode,
           "backends:",
           (tn.backend_info : Sexp.t)];
       if Lazy.is_val tn.array then
@@ -284,12 +305,11 @@ let update_memory_sharing tn sharing provenance =
         [%string
           "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for %{debug_name \
            tn} -- currently unsetting of sharing not allowed"]
-  | Some (mem_mode, prov2), _ ->
+  | (Some (_, prov2) as mem_mode), _ ->
       invalid_arg
         [%string
           "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
-           %{debug_name tn} -- not materialized on the devices: %{Sexp.to_string_hum @@ \
-           sexp_of_memory_mode mem_mode}"]
+           %{debug_name tn} -- not materialized on the devices: %{debug_memory_mode mem_mode}"]
 
 let update_prec ?only_if tn prec =
   let do_update =
@@ -428,8 +448,7 @@ let header tn =
   [%string
     {|%{id tn} %{label tn} as %{
       styled_ident ~repeating_nograd_idents ~repeating_grad_idents (`Heuristic_ocannl `Dot_grad) tn
-    }: %{Sexp.to_string_hum @@
-     [%sexp_of: (memory_mode * int) option] tn.memory_mode}; %{dims_to_string tn}; mem in bytes: %{mem_size}|}]
+    }: %{debug_memory_mode tn.memory_mode}; %{dims_to_string tn}; mem in bytes: %{mem_size}|}]
 
 module Registry = Stdlib.Weak.Make (struct
   type nonrec t = t
