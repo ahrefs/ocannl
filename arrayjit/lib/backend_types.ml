@@ -123,6 +123,8 @@ module type Device_config = sig
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
       values are used internally for scheduling across streams of the backend, and can be used for
       explicit scheduling. *)
+
+  val name : string
 end
 
 type ('buffer_ptr, 'dev, 'event) device = {
@@ -148,7 +150,9 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   merge_buffer : ('buffer_ptr * Tnode.t) option ref;
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
-  queried_work_for : 'event option Hashtbl.M(Tnode).t; (* The completion event for updating the node via this stream. Only populated after the first time {!} *)
+  queried_work_for : 'event option Hashtbl.M(Tnode).t;
+      (* The completion event for updating the node via this stream. Only populated after the first
+         time {!} *)
 }
 [@@deriving sexp_of]
 
@@ -174,6 +178,7 @@ module type Device = sig
 
   val make_device : dev -> ordinal:int -> device
   val make_stream : device -> runner -> stream_id:int -> stream
+  val get_name : stream -> string
 end
 
 module Device_types (Device_config : Device_config) = struct
@@ -211,6 +216,8 @@ struct
       allocated_buffer = None;
       queried_work_for = Hashtbl.create (module Tnode);
     }
+
+  let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 end
 
 (** Parts shared by both assignments-level and lowered-level backend interfaces. *)
@@ -223,8 +230,6 @@ module type Backend_any_common = sig
   type init_info
   (** For backends derived via {!No_device_backend}, this is usually the backend name concatenated
       with the device or stream number. For {!Backend}, [init_info = stream]. *)
-
-  val name : string
 
   val initialize : config -> unit
   (** Initializes a backend before first use. Typically does nothing if the backend is already
@@ -285,6 +290,8 @@ end
 module type No_device_backend = sig
   include Backend_common with type init_info := string and type stream := unit
   include Backend_impl_common with type context := context and type buffer_ptr := buffer_ptr
+
+  val name : string
 
   val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
@@ -350,9 +357,6 @@ module type Backend_device_common = sig
 
   val new_stream : device -> stream
   val get_ctx_stream : context -> stream
-  val get_stream_device : stream -> device
-  val to_ordinal : device -> int
-  val get_name : stream -> string
 end
 
 module type With_buffer_retrieval_and_syncing = sig
@@ -426,6 +430,8 @@ module type Lowered_no_device_backend = sig
        and type stream := unit
        and type init_info := string
        and type buffer_ptr := buffer_ptr
+
+  val name : string
 
   type procedure [@@deriving sexp_of]
 

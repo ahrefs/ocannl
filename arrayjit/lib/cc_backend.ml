@@ -10,6 +10,8 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 include Backend_types.No_device_buffer_and_copying
 open Backend_types
 
+let name = "cc"
+
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
 
@@ -257,5 +259,3 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         work;
       },
     name )
-
-let name = "cc"

@@ -36,6 +36,8 @@ module Device_config = struct
   type dev = { dev : Cu.Device.t; primary_context : Cu.Context.t } [@@deriving sexp_of]
   type runner = Cu.Stream.t [@@deriving sexp_of]
   type event = Cu.Delimited_event.t [@@deriving sexp_of]
+
+  let name = "cuda"
 end
 
 module Device_stream = Device_types (Device_config)
@@ -185,10 +187,6 @@ let suggested_num_streams device =
   | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
 
 let get_ctx_stream { stream; _ } = stream
-let get_stream_device { device; _ } = device
-let to_ordinal { ordinal; _ } = ordinal
-let name = "cuda"
-let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 
 let await stream : unit =
   set_ctx stream.device.dev.primary_context;

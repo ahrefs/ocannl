@@ -47,7 +47,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
-    let ordinal_of ctx = Backend.(to_ordinal @@ get_stream_device @@ get_ctx_stream ctx) in
+    let ordinal_of ctx = (Backend.get_ctx_stream ctx).device.ordinal in
     let name_of ctx = Backend.(get_name @@ get_ctx_stream ctx) in
     let same_device = ordinal_of dst = ordinal_of src in
     if same_device && (Tn.known_shared_cross_stream tn || String.equal (name_of src) (name_of dst))
@@ -123,6 +123,8 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
     type runner = { state : stream_state; domain : domain } [@@deriving sexp_of]
     type event = Not_implemented_yet [@@deriving sexp_of]
+
+    let name = "multicore_" ^ Backend.name
   end
 
   module Alloc_buffer = struct
@@ -289,9 +291,7 @@ module Multicore_backend (Backend : No_device_backend) = struct
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
 
-  let get_stream_device stream = stream.device
   let get_ctx_stream { stream; _ } = stream
-  let to_ordinal _ = 0
 
   let from_host ~dst_ptr ~dst hosted =
     let work () = host_to_buffer hosted ~dst:dst_ptr in
@@ -350,6 +350,8 @@ module Sync_backend (Backend : No_device_backend) = struct
     type dev = CPU [@@deriving sexp_of]
     type runner = unit [@@deriving sexp_of]
     type event = unit [@@deriving sexp_of]
+
+    let name = "sync_" ^ Backend.name
   end
 
   module Alloc_buffer = struct
@@ -370,7 +372,6 @@ module Sync_backend (Backend : No_device_backend) = struct
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
   let device : device = make_device CPU ~ordinal:0
-  let to_ordinal device = device.ordinal
 
   let get_device ~ordinal =
     if ordinal <> 0 then
@@ -399,7 +400,6 @@ module Sync_backend (Backend : No_device_backend) = struct
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
 
   let get_ctx_stream context = context.stream
-  let get_stream_device stream = stream.device
   let ctx_arrays context = ctx_arrays context.ctx
   let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
