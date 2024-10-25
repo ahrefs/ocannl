@@ -7,11 +7,13 @@ module CDSL = Train.CDSL
 module Asgns = Arrayjit.Assignments
 module Rand = Arrayjit.Rand.Lib
 
+module type Backend = Arrayjit.Backend_intf.Backend
+
 let%expect_test "Micrograd README basic example" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
@@ -86,7 +88,7 @@ let%expect_test "Micrograd half-moons example" =
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cc" ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let open Operation.At in

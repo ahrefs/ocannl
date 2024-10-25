@@ -1,7 +1,8 @@
 open Base
 module Debug_runtime = Utils.Debug_runtime
 module Tn = Tnode
-open Backend_types
+open Backend_intf
+open Backend_impl
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 

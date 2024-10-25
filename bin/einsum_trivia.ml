@@ -6,6 +6,8 @@ module TDSL = Operation.TDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
+module type Backend = Arrayjit.Backend_intf.Backend
+
 let _suspended () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
@@ -26,7 +28,7 @@ let _suspended () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -46,7 +48,7 @@ let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;

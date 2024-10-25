@@ -6,6 +6,8 @@ module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module Rand = Arrayjit.Rand.Lib
 
+module type Backend = Arrayjit.Backend_intf.Backend
+
 let%expect_test "Hello World" =
   Tensor.unsafe_reinitialize ();
   Stdio.printf "Hello World!\n";
@@ -14,7 +16,7 @@ let%expect_test "Hello World" =
 let%expect_test "Pointwise multiplication dims 1" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -38,7 +40,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 let%expect_test "Matrix multiplication dims 1x1" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -74,7 +76,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 let%expect_test "Print constant tensor" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -375,7 +377,7 @@ let%expect_test "Print constant tensor" =
 let%expect_test "Matrix multiplication dims 2x3" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -412,7 +414,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 let%expect_test "Big matrix" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;
@@ -470,7 +472,7 @@ let%expect_test "Big matrix" =
 let%expect_test "Very big tensor" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   Rand.init 0;

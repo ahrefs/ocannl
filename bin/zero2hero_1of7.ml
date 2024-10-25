@@ -9,6 +9,8 @@ module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 module Debug_runtime = Utils.Debug_runtime
 
+module type Backend = Arrayjit.Backend_intf.Backend
+
 let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
 [%%global_debug_log_level 9]
@@ -96,7 +98,7 @@ let _suspended () =
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let open Operation.At in

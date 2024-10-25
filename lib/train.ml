@@ -8,9 +8,9 @@ module Idx = Arrayjit.Indexing
 module Task = Arrayjit.Task
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
-module BT = Arrayjit.Backend_types
+module BT = Arrayjit.Backend_intf
 
-module type Backend_type = Arrayjit.Backend_types.Backend
+module type Backend = Arrayjit.Backend_intf.Backend
 
 module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
@@ -270,12 +270,12 @@ let every_non_literal_on_host =
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
 let%debug2_sexp all_host_to_device (type context)
-    (module Backend : Backend_type with type context = context) context =
+    (module Backend : Backend with type context = context) context =
   let f tn = ignore (Backend.from_host context tn : bool) in
   Tensor.iter_embedded ~f
 
 let%debug2_sexp all_device_to_host (type context)
-    (module Backend : Backend_type with type context = context) context =
+    (module Backend : Backend with type context = context) context =
   let f tn = ignore (Backend.to_host context tn : bool) in
   Tensor.iter_embedded ~f
 
@@ -285,8 +285,8 @@ let%debug2_sexp all_device_to_host (type context)
     iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
     values. *)
 let%track3_sexp sync_run ?looping (type context)
-    (module Backend : Backend_type with type context = context)
-    (routine : Backend.context BT.routine) t =
+    (module Backend : Backend with type context = context) (routine : Backend.context BT.routine) t
+    =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
   | None -> Task.run routine.schedule
@@ -313,7 +313,7 @@ module Lazy = Utils.Lazy
     All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
 let%track3_sexp parallel_update (type context)
-    (module Backend : Backend_type with type context = context)
+    (module Backend : Backend with type context = context)
     ~(grad_updates : Backend.context BT.routine array) ~(sgd_update : Backend.context BT.routine)
     ~copy_to_merge ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
@@ -406,7 +406,7 @@ let%track3_sexp parallel_update (type context)
 
 (* Note: this type signature looks ugly, but it will get simple again with modular explicits. *)
 let get_all_suggested_streams ?(max_num_streams : int option) (type buffer_ptr dev runner event)
-    (module Backend : Backend_type
+    (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
@@ -425,7 +425,7 @@ let get_all_suggested_streams ?(max_num_streams : int option) (type buffer_ptr d
   in
   (devices, result)
 
-let to_routine (type context) (module Backend : Backend_type with type context = context)
+let to_routine (type context) (module Backend : Backend with type context = context)
     (context : context) ?shared ?name bindings comp =
   Backend.link context @@ Backend.compile ?shared ?name bindings comp
 
@@ -444,11 +444,11 @@ type example_train_result = {
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
     ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
-    (backend : (module Backend_type with type context = context)) () =
+    (backend : (module Backend with type context = context)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
-  let module Backend = (val backend : Backend_type with type context = context) in
+  let module Backend = (val backend : Backend with type context = context) in
   let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
   let num_streams = Array.length streams in
   let contexts = Array.map streams ~f:Backend.init in
@@ -561,7 +561,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   }
 
 let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
-    (module Backend : Backend_type with type context = context) ctx ?(bindings = IDX.empty) t =
+    (module Backend : Backend with type context = context) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)

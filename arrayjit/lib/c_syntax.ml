@@ -1,7 +1,7 @@
 open Base
 module Lazy = Utils.Lazy
 module Debug_runtime = Utils.Debug_runtime
-open Backend_types
+open Backend_intf
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 

@@ -3,7 +3,7 @@ module Tn = Tnode
 module Lazy = Utils.Lazy
 module Cu = Cudajit
 module Debug_runtime = Utils.Debug_runtime
-open Backend_types
+open Backend_intf
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
@@ -40,7 +40,7 @@ module Device_config = struct
   let name = "cuda"
 end
 
-module Device_stream = Device_types (Device_config)
+module Device_stream = Backend_impl.Device_types (Device_config)
 open Device_config
 
 let set_ctx ctx = Cu.Context.set_current ctx
@@ -68,7 +68,7 @@ module Alloc_buffer = struct
     Cu.Deviceptr.mem_alloc ~size_in_bytes
 end
 
-include Device (Device_stream) (Alloc_buffer)
+include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
 type context = {
   label : string;

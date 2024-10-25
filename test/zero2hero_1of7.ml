@@ -8,11 +8,13 @@ module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
 
+module type Backend = Arrayjit.Backend_intf.Backend
+
 let%expect_test "Graph drawing recompile" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let open Operation.At in
@@ -133,7 +135,7 @@ let%expect_test "Graph drawing fetch" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let open Operation.At in
@@ -235,7 +237,7 @@ let%expect_test "Simple gradients hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -347,7 +349,7 @@ let%expect_test "Simple gradients virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -484,7 +486,7 @@ let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -513,7 +515,7 @@ let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Train.Backend_type with type context = Backend.context) in
+  let backend = (module Backend : Backend with type context = Backend.context) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.init stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in

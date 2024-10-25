@@ -42,7 +42,8 @@
   low_level
   assignments
   task
-  backend_types
+  backend_intf
+  backend_impl
   c_syntax
   cc_backend
   gcc_backend
