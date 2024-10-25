@@ -129,8 +129,7 @@ type ('buffer_ptr, 'device, 'stream_state, 'runner, 'event) stream = {
   merge_buffer : ('buffer_ptr * Tnode.t) option ref;
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
-  runner : 'runner;
-  requested_work_for : 'event option Hashtbl.M(Tnode).t;
+  queried_work_for : 'event option Hashtbl.M(Tnode).t;
 }
 [@@deriving sexp_of]
 
@@ -180,7 +179,7 @@ struct
       stream_id;
       allocated_buffer = None;
       runner;
-      requested_work_for = Hashtbl.create (module Tnode);
+      queried_work_for = Hashtbl.create (module Tnode);
     }
 end
 

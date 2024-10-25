@@ -25,7 +25,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let default () = Some (Backend.all_work stream) in
     if not @@ Map.mem (Backend.ctx_arrays context) tn then None
     else
-      Hashtbl.update_and_return stream.requested_work_for tn ~f:(function
+      Hashtbl.update_and_return stream.queried_work_for tn ~f:(function
         | None | Some None -> default ()
         | Some (Some _ as event) -> event)
 
