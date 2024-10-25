@@ -405,12 +405,10 @@ let%track3_sexp parallel_update (type context)
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
 (* Note: this type signature looks ugly, but it will get simple again with modular explicits. *)
-let get_all_suggested_streams ?(max_num_streams : int option)
-    (type buffer_ptr device stream_state runner event)
+let get_all_suggested_streams ?(max_num_streams : int option) (type buffer_ptr dev runner event)
     (module Backend : Backend_type
       with type buffer_ptr = buffer_ptr
-       and type device = device
-       and type stream_state = stream_state
+       and type dev = dev
        and type runner = runner
        and type event = event) =
   let max_num_streams = Option.value max_num_streams ~default:Int.max_value_30_bits in

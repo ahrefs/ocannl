@@ -33,28 +33,13 @@ end
 module Device_config = struct
   include Backend_buffer
 
-  type device = {
-    dev : Cu.Device.t;
-    ordinal : int;
-    primary_context : Cu.Context.t;
-    mutable copy_merge_buffer : buffer_ptr;
-    mutable copy_merge_buffer_capacity : int;
-    mutable latest_stream_id : int;
-    released : Utils.atomic_bool;
-    cross_stream_candidates : buffer_ptr Hashtbl.M(Tn).t;
-        (** Freshly created arrays that might be shared across streams. The map can both grow and
-            shrink. See the explanation on top of this file. *)
-    owner_streams : int Hashtbl.M(Tn).t;
-        (** The streams owning the given nodes. This map can only grow. *)
-  }
-  [@@deriving sexp_of]
-
-  type stream_state = unit [@@deriving sexp_of]
+  type dev = { dev : Cu.Device.t; primary_context : Cu.Context.t } [@@deriving sexp_of]
   type runner = Cu.Stream.t [@@deriving sexp_of]
   type event = Cu.Delimited_event.t [@@deriving sexp_of]
 end
 
 module Device_stream = Device_types (Device_config)
+open Device_config
 
 let set_ctx ctx = Cu.Context.set_current ctx
 
@@ -66,18 +51,18 @@ module Alloc_buffer = struct
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
     | Some { ptr; _ } ->
-        set_ctx stream.device.Device_config.primary_context;
+        set_ctx stream.device.dev.primary_context;
         Cu.Deviceptr.mem_free ptr;
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
     | None ->
-        set_ctx stream.device.primary_context;
+        set_ctx stream.device.dev.primary_context;
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
 
   let alloc_zero_init_array prec ~dims stream =
     let size_in_bytes =
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
-    set_ctx stream.device.Device_config.primary_context;
+    set_ctx stream.device.dev.primary_context;
     Cu.Deviceptr.mem_alloc ~size_in_bytes
 end
 
@@ -121,29 +106,32 @@ let devices = ref @@ Stdlib.Weak.create 0
 (* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 
-let get_used_memory dev =
-  set_ctx dev.Device_config.primary_context;
+let get_used_memory (device : device) =
+  set_ctx device.dev.primary_context;
   let free, total = Cudajit.Device.get_free_and_total_mem () in
   total - free
 
-let opt_alloc_merge_buffer ~size_in_bytes dev =
-  if dev.Device_config.copy_merge_buffer_capacity < size_in_bytes then (
-    set_ctx dev.primary_context;
-    Cu.Deviceptr.mem_free dev.copy_merge_buffer;
-    dev.copy_merge_buffer <- Cu.Deviceptr.mem_alloc ~size_in_bytes;
-    dev.copy_merge_buffer_capacity <- size_in_bytes)
+let opt_alloc_merge_buffer ~size_in_bytes device : unit =
+  if
+    Option.value_map ~default:true device.shared_merge_buffer ~f:(fun buffer ->
+        buffer.size_in_bytes < size_in_bytes)
+  then (
+    set_ctx device.dev.primary_context;
+    Option.iter device.shared_merge_buffer ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
+    device.shared_merge_buffer <-
+      Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
 
 let%track3_sexp cleanup_device (device : device) =
-  Cu.Context.set_current device.primary_context;
+  Cu.Context.set_current device.dev.primary_context;
   Cu.Context.synchronize ();
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
   (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-  Cu.Deviceptr.mem_free device.copy_merge_buffer;
+  Option.iter ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr) device.shared_merge_buffer;
   Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
       Cu.Deviceptr.mem_free buffer_ptr)
 
 let%track5_sexp finalize_device device =
-  if Atomic.compare_and_set device.Device_config.released false true then cleanup_device device
+  if Atomic.compare_and_set device.released false true then cleanup_device device
 
 let%track3_sexp get_device ~(ordinal : int) : device =
   if num_devices () <= ordinal then
@@ -153,28 +141,16 @@ let%track3_sexp get_device ~(ordinal : int) : device =
     devices := Stdlib.Weak.create (ordinal + 1);
     Stdlib.Weak.blit old 0 !devices 0 (Stdlib.Weak.length old));
   let default () =
-    let dev : Cu.Device.t = Cu.Device.get ~ordinal in
+    let dev = Cu.Device.get ~ordinal in
     let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
-    let copy_merge_buffer_capacity = 8 in
+    let dev = { dev; primary_context } in
     set_ctx primary_context;
     if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
       Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
     Hash_set.add initialized_devices ordinal;
-    let copy_merge_buffer = Cu.Deviceptr.mem_alloc ~size_in_bytes:copy_merge_buffer_capacity in
-    let result =
-      Device_config.
-        {
-          dev;
-          ordinal;
-          latest_stream_id = -1;
-          primary_context;
-          copy_merge_buffer;
-          copy_merge_buffer_capacity;
-          released = Atomic.make false;
-          cross_stream_candidates = (Hashtbl.create (module Tn) : buffer_ptr Hashtbl.M(Tn).t);
-          owner_streams = Hashtbl.create (module Tn);
-        }
-    in
+    (* let size_in_bytes = 8 in let shared_merge_buffer = { ptr = Cu.Deviceptr.mem_alloc
+       ~size_in_bytes; size_in_bytes } in *)
+    let result = make_device dev ~ordinal in
     Stdlib.Gc.finalise finalize_device result;
     Stdlib.Weak.set !devices ordinal (Some result);
     result
@@ -186,21 +162,21 @@ let%track3_sexp get_device ~(ordinal : int) : device =
 let%track3_sexp new_stream (device : device) : stream =
   device.latest_stream_id <- device.latest_stream_id + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
-  set_ctx device.primary_context;
+  set_ctx device.dev.primary_context;
   let cu_stream = Cu.Stream.create ~non_blocking:true () in
-  make_stream ~device ~state:() ~stream_id:device.latest_stream_id ~runner:cu_stream
+  make_stream device cu_stream ~stream_id:device.latest_stream_id
 
 let cuda_properties =
   let cache =
     lazy
       (Array.init (num_devices ()) ~f:(fun ordinal ->
            let dev = get_device ~ordinal in
-           lazy (Cu.Device.get_attributes dev.dev)))
+           lazy (Cu.Device.get_attributes dev.dev.dev)))
   in
   fun device ->
     if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
     let cache = Lazy.force cache in
-    Lazy.force cache.(device.Device_config.ordinal)
+    Lazy.force cache.(device.ordinal)
 
 let suggested_num_streams device =
   match !global_config with
@@ -210,14 +186,12 @@ let suggested_num_streams device =
 
 let get_ctx_stream { stream; _ } = stream
 let get_stream_device { device; _ } = device
-let to_ordinal Device_config.{ ordinal; _ } = ordinal
+let to_ordinal { ordinal; _ } = ordinal
 let name = "cuda"
-
-let get_name stream =
-  [%string "%{name}:%{stream.device.Device_config.ordinal#Int}:%{stream.stream_id#Int}"]
+let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 
 let await stream : unit =
-  set_ctx stream.device.Device_config.primary_context;
+  set_ctx stream.device.dev.primary_context;
   Cu.Stream.synchronize stream.runner;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
@@ -241,7 +215,7 @@ let init stream =
   let ctx =
     {
       label = "on dev " ^ get_name stream;
-      ctx = stream.device.Device_config.primary_context;
+      ctx = stream.device.dev.primary_context;
       stream;
       parent = None;
       ctx_arrays = Map.empty (module Tn);
@@ -263,7 +237,8 @@ let to_host ~src_ptr ~src hosted =
   Ndarray.map { f } hosted
 
 let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-  let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
+  let dev = dst.stream.device in
+  let same_device = dev.ordinal = src.stream.device.ordinal in
   let memcpy ~dst_ptr =
     if same_device then
       Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~src:src_ptr
@@ -283,9 +258,10 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   | Copy, _ ->
       set_ctx dst.ctx;
       let size_in_bytes = Tn.size_in_bytes tn in
-      opt_alloc_merge_buffer ~size_in_bytes dst.stream.device;
-      memcpy ~dst_ptr:dst.stream.device.copy_merge_buffer;
-      dst.stream.merge_buffer := Some (dst.stream.device.copy_merge_buffer, tn)
+      opt_alloc_merge_buffer ~size_in_bytes dev;
+      (* FIXME: why use the shared buffer? *)
+      Option.iter dev.shared_merge_buffer ~f:(fun buffer -> memcpy ~dst_ptr:buffer.ptr);
+      dst.stream.merge_buffer := Option.map dev.shared_merge_buffer ~f:(fun buf -> (buf.ptr, tn))
 
 type code = {
   traced_store : Low_level.traced_store;
@@ -535,7 +511,7 @@ let%track3_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
     if node.read_only then
       if Tn.known_non_cross_stream key then add_new ()
       else (
-        if Hashtbl.mem device.Device_config.cross_stream_candidates key then
+        if Hashtbl.mem device.cross_stream_candidates key then
           Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
         let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
         Map.add_exn ctx_arrays ~key ~data)

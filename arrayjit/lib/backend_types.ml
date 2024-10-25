@@ -113,9 +113,11 @@ type 'context routine = {
 module type Device_config = sig
   include Buffer
 
-  type device [@@deriving sexp_of]
-  type stream_state [@@deriving sexp_of]
+  type dev [@@deriving sexp_of]
+  (** Interface to a device driver. *)
+
   type runner [@@deriving sexp_of]
+  (** Interface to a stream driver. *)
 
   type event [@@deriving sexp_of]
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
@@ -123,30 +125,46 @@ module type Device_config = sig
       explicit scheduling. *)
 end
 
-type ('buffer_ptr, 'device, 'stream_state, 'runner, 'event) stream = {
-  device : 'device;
-  state : 'stream_state;
+type ('buffer_ptr, 'dev, 'event) device = {
+  dev : 'dev;
+  ordinal : int;
+  mutable shared_merge_buffer : 'buffer_ptr buffer option;
+  mutable latest_stream_id : int;
+  released : Utils.atomic_bool;
+  cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
+      (** Freshly created arrays that might be shared across streams. The map can both grow and
+          shrink. See the explanation on top of this file. *)
+  owner_streams : int Hashtbl.M(Tnode).t;
+      (** The streams owning the given nodes. This map can only grow. *)
+  stream_working_on : (int * 'event) option Hashtbl.M(Tnode).t;
+      (** The stream that most recently has been updating the node, and the associated update
+          completion event. Only populated when {!field-queried_work_for} is populated. *)
+}
+[@@deriving sexp_of]
+
+type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
+  device : ('buffer_ptr, 'dev, 'event) device;
+  runner : 'runner;
   merge_buffer : ('buffer_ptr * Tnode.t) option ref;
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
-  queried_work_for : 'event option Hashtbl.M(Tnode).t;
+  queried_work_for : 'event option Hashtbl.M(Tnode).t; (* The completion event for updating the node via this stream. Only populated after the first time {!} *)
 }
 [@@deriving sexp_of]
 
 module type Device_types = sig
   include Device_config
 
-  type nonrec stream = (buffer_ptr, device, stream_state, runner, event) stream [@@deriving sexp_of]
+  type nonrec device = (buffer_ptr, dev, event) device [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
 end
 
 module Stream (Device_config : Device_config) = struct
+  type nonrec device = (Device_config.buffer_ptr, Device_config.dev, Device_config.event) device
+  [@@deriving sexp_of]
+
   type nonrec stream =
-    ( Device_config.buffer_ptr,
-      Device_config.device,
-      Device_config.stream_state,
-      Device_config.runner,
-      Device_config.event )
-    stream
+    (Device_config.buffer_ptr, Device_config.dev, Device_config.runner, Device_config.event) stream
   [@@deriving sexp_of]
 end
 
@@ -154,7 +172,8 @@ module type Device = sig
   include Device_types
   include Alloc_buffer with type buffer_ptr := buffer_ptr and type stream := stream
 
-  val make_stream : device:device -> state:stream_state -> stream_id:int -> runner:runner -> stream
+  val make_device : dev -> ordinal:int -> device
+  val make_stream : device -> runner -> stream_id:int -> stream
 end
 
 module Device_types (Device_config : Device_config) = struct
@@ -171,14 +190,25 @@ struct
   include Device_types
   include Alloc_buffer
 
-  let make_stream ~device ~state ~stream_id ~runner =
+  let make_device dev ~ordinal =
+    {
+      dev;
+      ordinal;
+      shared_merge_buffer = None;
+      latest_stream_id = -1;
+      released = Atomic.make false;
+      cross_stream_candidates = Hashtbl.create (module Tnode);
+      owner_streams = Hashtbl.create (module Tnode);
+      stream_working_on = Hashtbl.create (module Tnode);
+    }
+
+  let make_stream device runner ~stream_id =
     {
       device;
-      state;
+      runner;
       merge_buffer = ref None;
       stream_id;
       allocated_buffer = None;
-      runner;
       queried_work_for = Hashtbl.create (module Tnode);
     }
 end
