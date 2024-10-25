@@ -382,7 +382,7 @@ Old copying mechanism in backends.ml Multicore_backend:
                     {
                       context_lifetime = context;
                       description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.stream_id;
                       work;
                     });
                true
@@ -415,7 +415,7 @@ Old copying mechanism in backends.ml Multicore_backend:
                     {
                       context_lifetime = context;
                       description =
-                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.unique_name;
+                        "from_host " ^ Tnode.debug_name tn ^ " dst " ^ context.stream.stream_id;
                       work;
                     });
                true
@@ -453,8 +453,8 @@ Old copying mechanism in backends.ml Multicore_backend:
               Backend.to_buffer tn ~dst:merge_ptr ~src:src.ctx
       in
       let description =
-        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
-        ^ src.stream.unique_name
+        "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.stream_id ^ " src "
+        ^ src.stream.stream_id
       in
       schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
     in

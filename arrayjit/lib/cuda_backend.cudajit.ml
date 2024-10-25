@@ -39,12 +39,12 @@ module Device_config = struct
     primary_context : Cu.Context.t;
     mutable copy_merge_buffer : buffer_ptr;
     mutable copy_merge_buffer_capacity : int;
-    used_names : Hash_set.M(String).t;  (** Unique names of streams. *)
+    mutable latest_stream_id : int;
     released : Utils.atomic_bool;
     cross_stream_candidates : buffer_ptr Hashtbl.M(Tn).t;
         (** Freshly created arrays that might be shared across streams. The map can both grow and
             shrink. See the explanation on top of this file. *)
-    owner_streams : string Hashtbl.M(Tn).t;
+    owner_streams : int Hashtbl.M(Tn).t;
         (** The streams owning the given nodes. This map can only grow. *)
   }
   [@@deriving sexp_of]
@@ -166,7 +166,7 @@ let%track3_sexp get_device ~(ordinal : int) : device =
         {
           dev;
           ordinal;
-          used_names = Hash_set.create (module String);
+          latest_stream_id = -1;
           primary_context;
           copy_merge_buffer;
           copy_merge_buffer_capacity;
@@ -184,16 +184,11 @@ let%track3_sexp get_device ~(ordinal : int) : device =
   if Atomic.get result.released then default () else result
 
 let%track3_sexp new_stream (device : device) : stream =
-  let rec unique_name suffix =
-    let name = "stream " ^ Int.to_string suffix in
-    if Hash_set.mem device.used_names name then unique_name (suffix + 1) else name
-  in
-  let unique_name = unique_name 0 in
-  Hash_set.add device.used_names unique_name;
+  device.latest_stream_id <- device.latest_stream_id + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx device.primary_context;
   let cu_stream = Cu.Stream.create ~non_blocking:true () in
-  make_stream ~device ~state:() ~unique_name ~runner:cu_stream
+  make_stream ~device ~state:() ~stream_id:device.latest_stream_id ~runner:cu_stream
 
 let cuda_properties =
   let cache =
@@ -216,7 +211,10 @@ let suggested_num_streams device =
 let get_ctx_stream { stream; _ } = stream
 let get_stream_device { device; _ } = device
 let to_ordinal Device_config.{ ordinal; _ } = ordinal
-let get_name stream = stream.unique_name
+let name = "cuda"
+
+let get_name stream =
+  [%string "%{name}:%{stream.device.Device_config.ordinal#Int}:%{stream.stream_id#Int}"]
 
 let await stream : unit =
   set_ctx stream.device.Device_config.primary_context;
@@ -543,12 +541,12 @@ let%track3_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
         Map.add_exn ctx_arrays ~key ~data)
     else if Tn.known_shared_cross_stream key then (
       if Hashtbl.mem device.owner_streams key then
-        if not @@ String.equal stream.unique_name @@ Hashtbl.find_exn device.owner_streams key then
+        if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
           raise
           @@ Utils.User_error
                ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
               ^ " assumed to be cross-stream-shared but then written to on multiple devices")
-        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.unique_name;
+        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
       let data = Hashtbl.find_exn device.cross_stream_candidates key in
       Map.add_exn ctx_arrays ~key ~data)
     else (
@@ -601,5 +599,3 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
                ((context, ctx_arrays), Some task)))
   in
   (context, lowered_bindings, procs)
-
-let name = "cuda"

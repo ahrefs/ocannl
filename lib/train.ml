@@ -404,6 +404,7 @@ let%track3_sexp parallel_update (type context)
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Task.run upd.schedule)] in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
+(* Note: this type signature looks ugly, but it will get simple again with modular explicits. *)
 let get_all_suggested_streams ?(max_num_streams : int option)
     (type buffer_ptr device stream_state runner event)
     (module Backend : Backend_type

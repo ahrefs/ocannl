@@ -127,7 +127,7 @@ type ('buffer_ptr, 'device, 'stream_state, 'runner, 'event) stream = {
   device : 'device;
   state : 'stream_state;
   merge_buffer : ('buffer_ptr * Tnode.t) option ref;
-  unique_name : string;
+  stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
   runner : 'runner;
   requested_work_for : 'event option Hashtbl.M(Tnode).t;
@@ -155,8 +155,7 @@ module type Device = sig
   include Device_types
   include Alloc_buffer with type buffer_ptr := buffer_ptr and type stream := stream
 
-  val make_stream :
-    device:device -> state:stream_state -> unique_name:string -> runner:runner -> stream
+  val make_stream : device:device -> state:stream_state -> stream_id:int -> runner:runner -> stream
 end
 
 module Device_types (Device_config : Device_config) = struct
@@ -173,14 +172,14 @@ struct
   include Device_types
   include Alloc_buffer
 
-  let make_stream ~device ~state ~unique_name ~runner =
+  let make_stream ~device ~state ~stream_id ~runner =
     {
       device;
       state;
       merge_buffer = ref None;
-      unique_name : string;
+      stream_id;
       allocated_buffer = None;
-      runner : 'runner;
+      runner;
       requested_work_for = Hashtbl.create (module Tnode);
     }
 end

@@ -149,7 +149,8 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let is_dev_queue_empty state = Queue.size state.Device_config.queue = 0
   let is_idle stream = is_dev_queue_empty stream.state && stream.state.is_ready
-  let name = "multicore " ^ name
+  let name = "multicore_" ^ name
+  let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
 
   let%track3_l_sexp await stream =
     assert (Domain.is_main_domain ());
@@ -162,7 +163,7 @@ module Multicore_backend (Backend : No_device_backend) = struct
         Stdlib.Condition.wait d.host_wait_for_idle d.mut
       done;
       Mut.unlock d.mut;
-      Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ name ^ " " ^ stream.unique_name))
+      Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream))
 
   (** TODO: Returns the event indicating if any currently running or scheduled computations on the
       stream have completed. *)
@@ -170,10 +171,9 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Task.describe task, stream.unique_name];
+    [%log_result "schedule_task", Task.describe task, get_name stream];
     let d = stream.state in
-    Option.iter d.Device_config.stream_error ~f:(fun e ->
-        Exn.reraise e @@ name ^ " " ^ stream.unique_name);
+    Option.iter d.Device_config.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream);
     if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
     if not @@ Queue.try_push d.queue task then (
       await stream;
@@ -185,7 +185,7 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let global_run_no = ref 0
 
-  let%track3_l_sexp spinup_stream ~unique_name : stream =
+  let%track3_l_sexp spinup_stream ~stream_id : stream =
     Int.incr global_run_no;
     let state =
       {
@@ -217,17 +217,17 @@ module Multicore_backend (Backend : No_device_backend) = struct
       with e ->
         state.stream_error <- Some e;
         state.keep_spinning <- false;
-        [%log1 unique_name, "exception", Exn.to_string e];
+        [%log1 "stream", (stream_id : int), "exception", Exn.to_string e];
         (* TODO: we risk raising this error multiple times because await and schedule_task raise
            stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
-    make_stream ~device:Device_config.CPU ~state ~unique_name ~runner:(Domain.spawn worker)
+    make_stream ~device:Device_config.CPU ~state ~stream_id ~runner:(Domain.spawn worker)
 
   type nonrec context = { stream : stream; ctx : context } [@@deriving sexp_of]
 
   let ctx_arrays context = ctx_arrays context.ctx
-  let init stream = { stream; ctx = init (name ^ " " ^ stream.unique_name) }
+  let init stream = { stream; ctx = init (get_name stream) }
   let initialize = initialize
   let is_initialized = is_initialized
 
@@ -237,7 +237,6 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let compile = compile
   let compile_batch = compile_batch
-  let get_name stream = stream.unique_name
 
   let link { ctx; stream } code =
     let task = link ~merge_buffer:stream.merge_buffer ctx code in
@@ -264,14 +263,12 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let num_devices () = 1
   let suggested_num_streams Device_config.CPU = Domain.recommended_domain_count () - 1
-  let used_names = Hash_set.create (module String)
 
   let cleanup_stream stream =
     assert (Domain.is_main_domain ());
     await stream;
     stream.state.keep_spinning <- false;
     Stdlib.Condition.broadcast stream.state.dev_wait_for_work;
-    Hash_set.remove used_names stream.unique_name;
     Domain.join stream.runner
 
   let get_device ~ordinal =
@@ -279,15 +276,12 @@ module Multicore_backend (Backend : No_device_backend) = struct
       invalid_arg [%string "Multicore_backend.get_device %{ordinal#Int}: only device 0 exists"];
     Device_config.CPU
 
+  let latest_stream_id = ref (-1)
+
   let new_stream Device_config.CPU =
     assert (Domain.is_main_domain ());
-    let rec unique_name suffix =
-      let name = "stream " ^ Int.to_string suffix in
-      if Hash_set.mem used_names name then unique_name (suffix + 1) else name
-    in
-    let unique_name = unique_name 0 in
-    Hash_set.add used_names unique_name;
-    let stream = spinup_stream ~unique_name in
+    Int.incr latest_stream_id;
+    let stream = spinup_stream ~stream_id:!latest_stream_id in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
 
@@ -300,14 +294,13 @@ module Multicore_backend (Backend : No_device_backend) = struct
     (* TODO: pass description to from_host. *)
     schedule_task dst.stream
       (Task.Task
-         { context_lifetime = dst; description = "from_host on " ^ dst.stream.unique_name; work })
+         { context_lifetime = dst; description = "from_host on " ^ get_name dst.stream; work })
 
   let to_host ~src_ptr ~src hosted =
     let work () = buffer_to_host hosted ~src:src_ptr in
     (* TODO: pass description to to_host. *)
     schedule_task src.stream
-      (Task.Task
-         { context_lifetime = src; description = "to_host on " ^ src.stream.unique_name; work })
+      (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream in
@@ -332,8 +325,8 @@ module Multicore_backend (Backend : No_device_backend) = struct
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
     in
     let description =
-      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
-      ^ src.stream.unique_name
+      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
+      ^ get_name src.stream
     in
     schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
@@ -383,20 +376,18 @@ module Sync_backend (Backend : No_device_backend) = struct
   let num_devices () = 1
   let suggested_num_streams Device_config.CPU = !sync_suggested_num_streams
   let get_used_memory Device_config.CPU = Backend.get_used_memory ()
-  let next_stream = ref 0
+  let latest_stram_id = ref (-1)
 
   let new_stream Device_config.CPU : stream =
-    Int.incr next_stream;
-    make_stream ~device:Device_config.CPU ~state:()
-      ~unique_name:("stream " ^ Int.to_string (!next_stream - 1))
-      ~runner:()
+    Int.incr latest_stram_id;
+    make_stream ~device:Device_config.CPU ~state:() ~stream_id:!latest_stram_id ~runner:()
 
   type code = Backend.code [@@deriving sexp_of]
   type code_batch = Backend.code_batch [@@deriving sexp_of]
 
   let all_work _stream = ()
   let is_idle _stream = true
-  let name = "sync " ^ Backend.name
+  let name = "sync_" ^ Backend.name
   let await _stream = ()
   (* let global_run_no = ref 0 *)
 
@@ -422,7 +413,7 @@ module Sync_backend (Backend : No_device_backend) = struct
       Array.map routines
         ~f:(Option.map ~f:(fun task -> { task with context = { ctx = task.context; stream } })) )
 
-  let get_name stream = stream.unique_name
+  let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
   let from_host ~dst_ptr ~dst:_ hosted = host_to_buffer hosted ~dst:dst_ptr
   let to_host ~src_ptr ~src:_ hosted = buffer_to_host hosted ~src:src_ptr
 
