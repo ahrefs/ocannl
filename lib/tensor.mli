@@ -194,8 +194,8 @@ val consume_backprop_code : t -> asgns * comp
 
 val iter_embedded : f:(tn -> unit) -> t -> unit
 (** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are not members of
-    [t.forward.embedded_nodes] or '[t.diff.backprop.embedded_nodes]' (if any). Note: [iter_embedded] should only be
-    called after shape inference finishes. *)
+    [t.forward.embedded_nodes] or '[t.diff.backprop.embedded_nodes]' (if any). Note: [iter_embedded]
+    should only be called after shape inference finishes. *)
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors

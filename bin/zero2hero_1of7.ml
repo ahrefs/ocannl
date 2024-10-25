@@ -37,10 +37,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget
-    (module Backend)
-    Backend.(init @@ new_stream @@ get_device ~ordinal:0)
-    f5;
+  Train.forward_and_forget (module Backend) Backend.(init @@ new_stream @@ get_device ~ordinal:0) f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"

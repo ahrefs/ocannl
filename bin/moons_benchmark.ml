@@ -216,7 +216,7 @@ let _mem_benchmarks =
           List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
                   List.concat_map [ (* "gccjit" ; *) "cc"; "cuda" ] ~f:(fun backend_name ->
-                      List.concat_map [ (* CDSL.double; *) CDSL.single ; CDSL.half ]
+                      List.concat_map [ (* CDSL.double; *) CDSL.single; CDSL.half ]
                         ~f:(fun value_prec ->
                           [
                             classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_streams
