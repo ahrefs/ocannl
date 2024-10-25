@@ -7,10 +7,8 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_types.No_device_buffer_ptr
-open Backend_types.Types
-
-let name = "cc"
+include Backend_types.No_device_buffer_and_copying
+open Backend_types
 
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
@@ -22,17 +20,6 @@ module Tn = Tnode
 type context = { label : string; arrays : ctx_arrays } [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
-
-let alloc_buffer ?old_buffer ~size_in_bytes () =
-  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
-  match old_buffer with
-  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
-  | Some (_old_ptr, _old_size) -> assert false
-  | None -> assert false
-
-let buffer_to_buffer ~dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -103,7 +90,7 @@ struct
 
   let for_lowereds = Input.for_lowereds
   let opt_ctx_arrays = Input.opt_ctx_arrays
-  let hardcoded_context_ptr = Some Ndarray.c_ptr_to_string
+  let hardcoded_context_ptr = c_ptr_to_string
   let is_in_context = is_in_context
   let host_ptrs_for_readonly = true
   let logs_to_stdout = false
@@ -126,10 +113,9 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
             match Map.find ctx_arrays tn with
             | None ->
                 if is_in_context node then
-                  let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
+                  (* let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in *)
                   let data =
-                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
-                    @@ Constant_fill { values = [| 0. |]; strict = false }
+                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
                   in
                   Map.add_exn ctx_arrays ~key:tn ~data
                 else ctx_arrays
@@ -159,11 +145,9 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
                 match Map.find ctx_arrays tn with
                 | None ->
                     if is_in_context node then
-                      let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in
+                      (* let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in *)
                       let data =
-                        Ndarray.create_array ~debug (Lazy.force tn.Tn.prec)
-                          ~dims:(Lazy.force tn.dims)
-                        @@ Constant_fill { values = [| 0. |]; strict = false }
+                        alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
                       in
                       Map.add_exn ctx_arrays ~key:tn ~data
                     else ctx_arrays
@@ -218,9 +202,8 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               let f = function
                 | Some arr -> arr
                 | None ->
-                    let debug = "CC link-time ctx array for " ^ Tn.debug_name tn in
-                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
-                    @@ Constant_fill { values = [| 0. |]; strict = false }
+                    (* let debug = "CC link-time ctx array for " ^ Tn.debug_name tn in *)
+                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
               in
               Map.update ctx_arrays tn ~f
           | _ -> ctx_arrays)
@@ -245,13 +228,10 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (buffer, _) = Ndarray.get_voidptr_not_managed buffer in
+            let get_ptr (ptr, _tn) = ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let nd =
-              match Map.find (ctx_arrays context) tn with Some nd -> nd | None -> assert false
-            in
-            let c_ptr = Ndarray.get_voidptr_not_managed nd in
+            let c_ptr = Map.find_exn arrays tn in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
@@ -277,3 +257,5 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         work;
       },
     name )
+
+let name = "cc"

@@ -47,6 +47,7 @@ type settings = {
       (** If not [None], the setting will be used for the size of the CUDA devices buffer for
           storing logs, see [debug_log_from_routines] above. If [None], the default buffer size on
           the devices is not altered. *)
+  mutable validate_mem : bool;
 }
 [@@deriving sexp]
 
@@ -60,6 +61,7 @@ let settings =
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
     cuda_printf_fifo_size = None;
+    validate_mem = true;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -362,7 +364,8 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.cuda_printf_fifo_size <-
-    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
+    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:"";
+  settings.validate_mem <- Bool.of_string @@ get_global_arg ~arg_name:"validate_mem" ~default:"true"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1

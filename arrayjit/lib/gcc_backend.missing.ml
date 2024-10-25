@@ -24,6 +24,9 @@ let buffer_to_host _dst ~src:_ =
 let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
+let alloc_zero_init_array _prec ~dims:_ () =
+  failwith "gcc backend missing: install the optional dependency gccjit"
+
 let compile ~name:_ ~opt_ctx_arrays:_ _bindings _code = Unimplemented_proc
 
 let compile_batch ~names:_ ~opt_ctx_arrays:_ _bindings _codes =

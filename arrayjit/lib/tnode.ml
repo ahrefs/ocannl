@@ -52,9 +52,9 @@ type memory_mode =
   | Materialized  (** One of: [On_device], [Hosted]. *)
   | Hosted of memory_type
       (** The tensor node is stored in a globally addressable memory, in addition to on devices
-          where it is computed with (or as part of one of them, if "hosting on device", or only on
-          the host and not on devices, for some backends). It is available for all operations, and
-          visible to OCaml programs as an {!Ndarray} (the optional [array] of {!t}). *)
+          where it is computed with (or only on the host and not on the device, for some backends).
+          It is available for all operations, and visible to OCaml programs as an {!Ndarray} (the
+          optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
 type delayed_prec =

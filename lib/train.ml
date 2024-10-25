@@ -8,7 +8,7 @@ module Idx = Arrayjit.Indexing
 module Task = Arrayjit.Task
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
-module BT = Arrayjit.Backend_types.Types
+module BT = Arrayjit.Backend_types
 
 module type Backend_type = Arrayjit.Backend_types.Backend
 
@@ -285,7 +285,8 @@ let%debug2_sexp all_device_to_host (type context)
     iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
     values. *)
 let%track3_sexp sync_run ?looping (type context)
-    (module Backend : Backend_type with type context = context) (routine : Backend.routine) t =
+    (module Backend : Backend_type with type context = context)
+    (routine : Backend.context BT.routine) t =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
   | None -> Task.run routine.schedule
@@ -313,8 +314,8 @@ module Lazy = Utils.Lazy
     lost. Bindings without ranges remain at their initial values. *)
 let%track3_sexp parallel_update (type context)
     (module Backend : Backend_type with type context = context)
-    ~(grad_updates : Backend.routine array) ~(sgd_update : Backend.routine) ~copy_to_merge
-    ~post_sync updaten : unit -> unit =
+    ~(grad_updates : Backend.context BT.routine array) ~(sgd_update : Backend.context BT.routine)
+    ~copy_to_merge ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -340,7 +341,7 @@ let%track3_sexp parallel_update (type context)
           ~~("merging gradient of" p;
              p.grad =+ p.grad.merge)])
   in
-  let grad_merges_to : Backend.routine option array array =
+  let grad_merges_to : Backend.context BT.routine option array array =
     (* For now, we need all params on all devices. *)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
@@ -352,7 +353,7 @@ let%track3_sexp parallel_update (type context)
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
     Backend.(
-      link sgd_update.context
+      link sgd_update.BT.context
       @@ compile Idx.Empty
            [%cd
              ~~("merging" updaten.loss;
@@ -403,13 +404,15 @@ let%track3_sexp parallel_update (type context)
   let fs = [%debug_notrace Array.map grad_updates ~f:(fun upd () -> Task.run upd.schedule)] in
   fun () -> round_robin fs lowered_bindings sgd_update.bindings ~sync
 
-let get_all_suggested_streams ?(max_num_streams : int option) (type device stream)
-    (backend : (module Backend_type with type device = device and type stream = stream)) :
-    device array * stream array =
+let get_all_suggested_streams ?(max_num_streams : int option)
+    (type buffer_ptr device stream_state runner event)
+    (module Backend : Backend_type
+      with type buffer_ptr = buffer_ptr
+       and type device = device
+       and type stream_state = stream_state
+       and type runner = runner
+       and type event = event) =
   let max_num_streams = Option.value max_num_streams ~default:Int.max_value_30_bits in
-  let module Backend =
-    (val backend : Backend_type with type device = device and type stream = stream)
-  in
   let num_devices = min max_num_streams @@ Backend.num_devices () in
   let devices = Array.init num_devices ~f:(fun ordinal -> Backend.get_device ~ordinal) in
   let result =

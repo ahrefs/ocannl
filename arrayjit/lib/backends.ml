@@ -1,7 +1,7 @@
 open Base
-open Backend_types.Types
 module Debug_runtime = Utils.Debug_runtime
 module Tn = Tnode
+open Backend_types
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
@@ -19,11 +19,7 @@ let check_merge_buffer ~scheduled_node ~code_node =
            ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
           ^ name code_node)
 
-module Add_buffer_retrieval_and_syncing (Backend : Backend_types.No_buffer_retrieval_or_syncing) =
-struct
-  type context = Backend.context
-  type event = Backend.event
-
+module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let work_for context tn =
     let stream = Backend.get_ctx_stream context in
     let default () = Some (Backend.all_work stream) in
@@ -90,7 +86,7 @@ struct
               true)
 end
 
-module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
+module Multicore_backend (Backend : No_device_backend) = struct
   include Backend
   module Domain = Domain [@warning "-3"]
 
@@ -104,41 +100,54 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   let sexp_of_task_queue q =
     Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
 
-  type stream_state = {
-    mutable keep_spinning : bool;
-    mutable stream_error : exn option;
-    queue : task_queue;
-    mut : (Mut.t[@sexp.opaque]);
-    host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
-    dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
-    mutable is_ready : bool;
-  }
-  [@@deriving sexp_of]
+  module Device_config = struct
+    include (
+      Backend : Buffer with type buffer_ptr = Backend.buffer_ptr and type buffer = Backend.buffer)
 
-  type runner = unit Domain.t
+    type device = CPU [@@deriving sexp_of]
 
-  let sexp_of_runner (d : runner) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
+    type stream_state = {
+      mutable keep_spinning : bool;
+      mutable stream_error : exn option;
+      queue : task_queue;
+      mut : (Mut.t[@sexp.opaque]);
+      host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
+      dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
+      mutable is_ready : bool;
+    }
+    [@@deriving sexp_of]
 
-  type device = CPU [@@deriving sexp_of]
-  type event = Not_implemented_yet [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, event, device, stream_state, runner) stream [@@deriving sexp_of]
+    type runner = unit Domain.t
+
+    let sexp_of_runner (d : runner) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
+
+    type event = Not_implemented_yet [@@deriving sexp_of]
+  end
+
+  module Alloc_buffer = struct
+    include Backend
+
+    let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
+    let alloc_zero_init_array prec ~dims _stream = alloc_zero_init_array prec ~dims ()
+  end
+
+  include Device (Device_types (Device_config)) (Alloc_buffer)
 
   (** TODO: Blocks till the event completes, if it's not done already. *)
-  let sync Not_implemented_yet = ()
+  let sync Device_config.Not_implemented_yet = ()
 
   (** TODO: Whether the event completed. *)
-  let is_done Not_implemented_yet = true
+  let is_done Device_config.Not_implemented_yet = true
 
   (** TODO: Schedules waiting for the given event on the context's stream. *)
-  let will_wait_for _ctx Not_implemented_yet = ()
+  let will_wait_for _ctx Device_config.Not_implemented_yet = ()
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
   let get_used_memory _device = get_used_memory ()
 
   type nonrec code = code [@@deriving sexp_of]
   type nonrec code_batch = code_batch [@@deriving sexp_of]
 
-  let is_dev_queue_empty state = Queue.size state.queue = 0
+  let is_dev_queue_empty state = Queue.size state.Device_config.queue = 0
   let is_idle stream = is_dev_queue_empty stream.state && stream.state.is_ready
   let name = "multicore " ^ name
 
@@ -157,13 +166,14 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
 
   (** TODO: Returns the event indicating if any currently running or scheduled computations on the
       stream have completed. *)
-  let all_work _stream = Not_implemented_yet
+  let all_work _stream = Device_config.Not_implemented_yet
 
   let%track3_l_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
     [%log_result "schedule_task", Task.describe task, stream.unique_name];
     let d = stream.state in
-    Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ name ^ " " ^ stream.unique_name);
+    Option.iter d.Device_config.stream_error ~f:(fun e ->
+        Exn.reraise e @@ name ^ " " ^ stream.unique_name);
     if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
     if not @@ Queue.try_push d.queue task then (
       await stream;
@@ -179,7 +189,7 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
     Int.incr global_run_no;
     let state =
       {
-        keep_spinning = true;
+        Device_config.keep_spinning = true;
         stream_error = None;
         queue = Queue.create ~size_exponent:12;
         mut = Mut.create ();
@@ -212,15 +222,11 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
            stream_error. But this is fine if we assume all exceptions are fatal. *)
         raise e
     in
-    make_stream ~device:CPU ~state ~unique_name ~runner:(Domain.spawn worker)
+    make_stream ~device:Device_config.CPU ~state ~unique_name ~runner:(Domain.spawn worker)
 
   type nonrec context = { stream : stream; ctx : context } [@@deriving sexp_of]
 
   let ctx_arrays context = ctx_arrays context.ctx
-
-  type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
-  (** This overrides the routine type from [Backend]. *)
-
   let init stream = { stream; ctx = init (name ^ " " ^ stream.unique_name) }
   let initialize = initialize
   let is_initialized = is_initialized
@@ -257,7 +263,7 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   module Dynarr = Stdlib.Dynarray
 
   let num_devices () = 1
-  let suggested_num_streams CPU = Domain.recommended_domain_count () - 1
+  let suggested_num_streams Device_config.CPU = Domain.recommended_domain_count () - 1
   let used_names = Hash_set.create (module String)
 
   let cleanup_stream stream =
@@ -271,9 +277,9 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
   let get_device ~ordinal =
     if ordinal <> 0 then
       invalid_arg [%string "Multicore_backend.get_device %{ordinal#Int}: only device 0 exists"];
-    CPU
+    Device_config.CPU
 
-  let new_stream CPU =
+  let new_stream Device_config.CPU =
     assert (Domain.is_main_domain ());
     let rec unique_name suffix =
       let name = "stream " ^ Int.to_string suffix in
@@ -285,7 +291,7 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
 
-  let get_stream_device _stream = CPU
+  let get_stream_device _stream = Device_config.CPU
   let get_ctx_stream { stream; _ } = stream
   let to_ordinal _ = 0
 
@@ -305,26 +311,25 @@ module Multicore_backend (Backend : Backend_types.No_device_backend) = struct
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream in
+    let size_in_bytes = Tnode.size_in_bytes tn in
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
       match (into_merge_buffer, dst_ptr) with
       | No, None -> invalid_arg "Multicore_backend.device_to_device: missing dst_ptr"
-      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr
+      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
       | Streaming, _ -> fun () -> dev.merge_buffer := Some (src_ptr, tn)
       | Copy, _ ->
           fun () ->
             let size_in_bytes = Tnode.size_in_bytes tn in
             let allocated_capacity =
-              Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+              match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
             in
             if allocated_capacity < size_in_bytes then
               dev.allocated_buffer <-
-                Some
-                  ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
-                    size_in_bytes );
-            let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+                Some (alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes dst.stream);
+            let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
             dev.merge_buffer := Some (merge_ptr, tn);
-            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr
+            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
     in
     let description =
       "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ dev.unique_name ^ " src "
@@ -338,10 +343,27 @@ let sync_suggested_num_streams = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one device, but an arbitrary number of streams. *)
-module Sync_backend (Backend : Backend_types.No_device_backend) = struct
+module Sync_backend (Backend : No_device_backend) = struct
   include Backend
 
-  type event = unit [@@deriving sexp_of]
+  module Device_config = struct
+    include (
+      Backend : Buffer with type buffer_ptr = Backend.buffer_ptr and type buffer = Backend.buffer)
+
+    type device = CPU [@@deriving sexp_of]
+    type stream_state = unit [@@deriving sexp_of]
+    type runner = unit [@@deriving sexp_of]
+    type event = unit [@@deriving sexp_of]
+  end
+
+  module Alloc_buffer = struct
+    include Backend
+
+    let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
+    let alloc_zero_init_array prec ~dims _stream = alloc_zero_init_array prec ~dims ()
+  end
+
+  include Device (Device_types (Device_config)) (Alloc_buffer)
 
   let sync () = ()
   let is_done () = true
@@ -350,28 +372,22 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  type device = CPU [@@deriving sexp_of]
-
-  let to_ordinal CPU = 0
+  let to_ordinal Device_config.CPU = 0
 
   let get_device ~ordinal =
     if ordinal <> 0 then
       invalid_arg @@ "Sync_backend.get_device: there is only one device, but ordinal="
       ^ Int.to_string ordinal;
-    CPU
+    Device_config.CPU
 
   let num_devices () = 1
-  let suggested_num_streams CPU = !sync_suggested_num_streams
-  let get_used_memory CPU = Backend.get_used_memory ()
+  let suggested_num_streams Device_config.CPU = !sync_suggested_num_streams
+  let get_used_memory Device_config.CPU = Backend.get_used_memory ()
   let next_stream = ref 0
 
-  type stream_state = unit [@@deriving sexp_of]
-  type runner = unit [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, event, device, stream_state, runner) stream [@@deriving sexp_of]
-
-  let new_stream CPU : stream =
+  let new_stream Device_config.CPU : stream =
     Int.incr next_stream;
-    make_stream ~device:CPU ~state:()
+    make_stream ~device:Device_config.CPU ~state:()
       ~unique_name:("stream " ^ Int.to_string (!next_stream - 1))
       ~runner:()
 
@@ -387,12 +403,8 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
 
   let get_ctx_stream context = context.stream
-  let get_stream_device _stream = CPU
+  let get_stream_device _stream = Device_config.CPU
   let ctx_arrays context = ctx_arrays context.ctx
-
-  type nonrec routine = context Backend_types.Types.routine [@@deriving sexp_of]
-  (** This overrides the routine type from [Backend]. *)
-
   let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
@@ -417,23 +429,21 @@ module Sync_backend (Backend : Backend_types.No_device_backend) = struct
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let dev = dst.stream in
     (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+    let size_in_bytes = Tnode.size_in_bytes tn in
     match (into_merge_buffer, dst_ptr) with
     | No, None -> invalid_arg "Sync_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr
+    | No, Some dst_ptr -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
     | Streaming, _ -> dev.merge_buffer := Some (src_ptr, tn)
     | Copy, _ ->
-        let size_in_bytes = Tnode.size_in_bytes tn in
         let allocated_capacity =
-          Option.value ~default:0 @@ Option.map dev.allocated_buffer ~f:snd
+          match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
         in
         if allocated_capacity < size_in_bytes then
           dev.allocated_buffer <-
-            Some
-              ( Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes (),
-                size_in_bytes );
-        let merge_ptr = fst @@ Option.value_exn dev.allocated_buffer in
+            Some (Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes ());
+        let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
         dev.merge_buffer := Some (merge_ptr, tn);
-        buffer_to_buffer ~dst:merge_ptr ~src:src_ptr
+        buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
 end
 
 let lower_assignments ?name bindings asgns =
@@ -480,7 +490,9 @@ let from_prior_context_batch comps =
           Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
-module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_backend) = struct
+module Lowered_no_device_backend (Backend : Lowered_no_device_backend) :
+  No_device_backend with type buffer_ptr = Backend.buffer_ptr and type context = Backend.context =
+struct
   include Backend
 
   type code =
@@ -516,8 +528,6 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
   let initialize config =
     global_config := config;
     initialize config
-
-  type nonrec routine = context routine [@@deriving sexp_of]
 
   let expected_merge_node : code -> _ = function
     | Postponed { lowered = Low_level.{ merge_node; _ }; _ }
@@ -568,7 +578,7 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
           names;
         }
 
-  let link ~merge_buffer (prior_context : context) (code : code) =
+  let link ~merge_buffer (prior_context : context) (code : code) : context routine =
     let lowered = get_lowered code in
     let verify from_prior_context =
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
@@ -597,7 +607,8 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
     in
     { context; schedule; bindings; name; inputs; outputs }
 
-  let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) =
+  let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) :
+      context * context routine option array =
     let lowereds = get_lowereds code_batch in
     let verify from_prior_context =
       verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
@@ -633,26 +644,29 @@ module Lowered_no_device_backend (Backend : Backend_types.Lowered_no_device_back
   let get_used_memory = Ndarray.get_used_memory
 end
 
-module Make_no_device_backend (Backend_impl : Backend_types.Lowered_no_device_backend) = struct
+module Make_no_device_backend (Backend_impl : Lowered_no_device_backend) = struct
   module No_device = Lowered_no_device_backend (Backend_impl)
 
   module Multicore = struct
-    module Device = Multicore_backend (No_device)
-    include Device
-    include Add_buffer_retrieval_and_syncing (Device)
+    module Backend_device = Multicore_backend (No_device)
+
+    (* include Add_buffer_retrieval_and_syncing (Backend_device) *)
+    module Syncing = Add_buffer_retrieval_and_syncing (Backend_device)
+    include Backend_device
+    include Syncing
   end
 
   module Sync = struct
-    module Device = Sync_backend (No_device)
-    include Device
-    include Add_buffer_retrieval_and_syncing (Device)
+    module Backend_device = Sync_backend (No_device)
+    include Backend_device
+    include Add_buffer_retrieval_and_syncing (Backend_device)
   end
 end
 
 module Cc = Make_no_device_backend (Cc_backend)
 module Gcc = Make_no_device_backend (Gcc_backend)
 
-module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.Backend = struct
+module Lowered_backend (Device : Lowered_backend) : Backend = struct
   include Device
   include Add_buffer_retrieval_and_syncing (Device)
 
@@ -671,8 +685,6 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
     expected_merge_nodes : Tnode.t option array;
   }
   [@@deriving sexp_of]
-
-  type nonrec routine = context routine [@@deriving sexp_of]
 
   let compile ?shared:_ ?name bindings comp : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
@@ -733,10 +745,9 @@ module Lowered_backend (Device : Backend_types.Lowered_backend) : Backend_types.
               { context; schedule; bindings; name; inputs; outputs })) )
 end
 
-module Cuda_backend : Backend_types.Backend = Lowered_backend ((
-  Cuda_backend : Backend_types.Lowered_backend))
+module Cuda_backend : Backend = Lowered_backend ((Cuda_backend : Lowered_backend))
 
-let reinitialize (module Backend : Backend_types.Backend) config =
+let reinitialize (module Backend : Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Stdlib.Gc.full_major ();
@@ -749,11 +760,11 @@ let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
           Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
-    | "cc" -> (module Cc.Multicore : Backend_types.Backend)
-    | "gccjit" -> (module Gcc.Multicore : Backend_types.Backend)
-    | "sync_cc" -> (module Cc.Sync : Backend_types.Backend)
-    | "sync_gccjit" -> (module Gcc.Sync : Backend_types.Backend)
-    | "cuda" -> (module Cuda_backend : Backend_types.Backend)
+    | "cc" -> (module Cc.Multicore : Backend)
+    | "gccjit" -> (module Gcc.Multicore : Backend)
+    | "sync_cc" -> (module Cc.Sync : Backend)
+    | "sync_gccjit" -> (module Gcc.Sync : Backend)
+    | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
   in
   reinitialize backend config;

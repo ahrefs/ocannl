@@ -178,15 +178,17 @@ let map2 { f2 } x1 x2 =
 
 let dims = map { f = A.dims }
 
-let get_voidptr_not_managed nd : unit Ctypes.ptr =
+let get_fatptr_not_managed nd =
   let f arr =
-    Ctypes_static.CPointer
-      (Ctypes_memory.make_unmanaged ~reftyp:Ctypes_static.void @@ bigarray_start_not_managed arr)
-    (* This doesn't work because Ctypes.bigarray_start doesn't support half precision: *)
-    (* let open Ctypes in coerce (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr) (ptr
-       void) (bigarray_start genarray arr) *)
+    Ctypes_memory.make_unmanaged ~reftyp:Ctypes_static.void @@ bigarray_start_not_managed arr
   in
   map { f } nd
+
+let get_voidptr_not_managed nd : unit Ctypes.ptr =
+  Ctypes_static.CPointer (get_fatptr_not_managed nd)
+(* This doesn't work because Ctypes.bigarray_start doesn't support half precision: *)
+(* let open Ctypes in coerce (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr) (ptr void)
+   (bigarray_start genarray arr) *)
 
 let set_from_float arr idx v =
   match arr with

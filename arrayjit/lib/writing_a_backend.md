@@ -106,7 +106,7 @@ module C_syntax (B : sig
   type ctx_array
 
   val opt_ctx_arrays : ctx_array Map.M(Tnode).t option
-  val hardcoded_context_ptr : (ctx_array -> string) option
+  val hardcoded_context_ptr : (ctx_array -> Ops.prec -> string) option
   val is_in_context : Low_level.traced_array -> bool
   val host_ptrs_for_readonly : bool
   val logs_to_stdout : bool

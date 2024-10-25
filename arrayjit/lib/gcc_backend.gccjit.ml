@@ -7,8 +7,8 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_types.No_device_buffer_ptr
-open Backend_types.Types
+include Backend_types.No_device_buffer_and_copying
+open Backend_types
 
 let name = "gccjit"
 
@@ -34,9 +34,6 @@ type context = {
 [@@deriving sexp_of]
 
 let ctx_arrays context = context.arrays
-let buffer_to_buffer ~dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let host_to_buffer src ~dst = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
-let buffer_to_host dst ~src = Ndarray.map2 { f2 = Ndarray.A.blit } src dst
 let is_initialized () = Option.is_some !root_ctx
 
 let initialize _config =
@@ -107,7 +104,7 @@ let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
 let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
 
 type ctx_nodes =
-  | Ctx_arrays of Ndarray.t Map.M(Tn).t ref
+  | Ctx_arrays of buffer_ptr Map.M(Tn).t ref
   | Param_ptrs of (gccjit_param * param_source) list ref
 [@@deriving sexp_of]
 
@@ -139,9 +136,7 @@ let zero_out ctx block node =
          RValue.int ctx c_index @@ Tn.size_in_bytes node.tn;
        ]
 
-let get_c_ptr ctx num_typ ba =
-  (* FIXME(#284): half precision support breaks here. *)
-  Gccjit.(RValue.ptr ctx (Type.pointer num_typ) @@ Ctypes.bigarray_start Ctypes_static.Genarray ba)
+let get_c_ptr ctx num_typ ptr = Gccjit.(RValue.ptr ctx (Type.pointer num_typ) ptr)
 
 let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes initializations
     (tn : Tn.t) =
@@ -173,23 +168,20 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes
           | From_context, Ctx_arrays ctx_arrays -> (
               match Map.find !ctx_arrays tn with
               | None ->
-                  let debug = "GCCJIT compile-time ctx array for " ^ Tn.debug_name tn in
-                  let data =
-                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims
-                    @@ Constant_fill { values = [| 0. |]; strict = false }
-                  in
+                  (* let debug = "GCCJIT compile-time ctx array for " ^ Tn.debug_name tn in *)
+                  let data = alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims () in
                   ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
-                  let f arr = get_c_ptr ctx num_typ arr in
-                  Lazy.from_val @@ Ndarray.(map { f } data)
-              | Some data ->
-                  let f arr = get_c_ptr ctx num_typ arr in
-                  Lazy.from_val @@ Ndarray.(map { f } data))
+                  Lazy.from_val @@ get_c_ptr ctx num_typ data
+              | Some data -> Lazy.from_val @@ get_c_ptr ctx num_typ data)
           | From_context, Param_ptrs ptrs ->
               let p = Param.create ctx ptr_typ ident in
               ptrs := (p, Param_ptr tn) :: !ptrs;
               Lazy.from_val (RValue.param p)
           | Constant_from_host, _ -> (
-              let addr arr = Lazy.from_val @@ get_c_ptr ctx num_typ arr in
+              let addr arr =
+                Lazy.from_val @@ get_c_ptr ctx num_typ
+                @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
+              in
               match Lazy.force tn.array with
               | Some (Byte_nd arr) -> addr arr
               | Some (Half_nd arr) -> addr arr
@@ -746,18 +738,11 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
         Option.map2 names.(i) ~f:(fun name (info, opt_ctx_arrays, params) ->
             { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
 
-let alloc_buffer ?old_buffer ~size_in_bytes () =
-  (* FIXME: NOT IMPLEMENTED YET but should not be needed for the streaming case. *)
-  match old_buffer with
-  | Some (old_ptr, old_size) when size_in_bytes <= old_size -> old_ptr
-  | Some (_old_ptr, _old_size) -> assert false
-  | None -> assert false
-
 let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
     context * _ * _ * string =
   let label : string = prior_context.label in
   let name : string = code.name in
-  let arrays : Ndarray.t Base.Map.M(Tn).t =
+  let arrays =
     match code with
     | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
@@ -766,9 +751,8 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               let f = function
                 | Some arr -> arr
                 | None ->
-                    let debug = "GCCJIT link-time ctx array for " ^ Tn.debug_name tn in
-                    Ndarray.create_array ~debug (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims)
-                    @@ Constant_fill { values = [| 0. |]; strict = false }
+                    (* let debug = "GCCJIT link-time ctx array for " ^ Tn.debug_name tn in *)
+                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
               in
               Map.update arrays tn ~f
           | _ -> arrays)
@@ -794,11 +778,10 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let nd = match Map.find arrays tn with Some nd -> nd | None -> assert false in
-            let c_ptr = Ndarray.get_voidptr_not_managed nd in
+            let c_ptr = Map.find_exn arrays tn in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (buffer, _) = Ndarray.get_voidptr_not_managed buffer in
+            let get_ptr (ptr, _tn) = ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed

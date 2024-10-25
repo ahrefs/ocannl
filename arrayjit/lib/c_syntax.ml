@@ -1,6 +1,7 @@
 open Base
 module Lazy = Utils.Lazy
 module Debug_runtime = Utils.Debug_runtime
+open Backend_types
 
 let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
@@ -15,7 +16,7 @@ module C_syntax (B : sig
   type buffer_ptr
 
   val opt_ctx_arrays : buffer_ptr Map.M(Tnode).t option
-  val hardcoded_context_ptr : (buffer_ptr -> string) option
+  val hardcoded_context_ptr : (buffer_ptr -> Ops.prec -> string) option
   val is_in_context : Low_level.traced_array -> bool
   val host_ptrs_for_readonly : bool
   val logs_to_stdout : bool
@@ -28,8 +29,6 @@ module C_syntax (B : sig
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end) =
 struct
-  open Backend_types.Types
-
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.for_lowereds ~f:(fun l -> l.llc)
 
@@ -67,25 +66,26 @@ struct
       B.include_lines;
     Array.iter B.for_lowereds ~f:(fun l ->
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
-            if not @@ Hash_set.mem is_global node.tn then
+            let tn = node.tn in
+            if not @@ Hash_set.mem is_global tn then
               let in_ctx : bool = B.is_in_context node in
               let ctx_ptr = B.hardcoded_context_ptr in
-              let mem : (Tn.memory_mode * int) option = node.tn.memory_mode in
+              let mem : (Tn.memory_mode * int) option = tn.memory_mode in
               match
                 (in_ctx, ctx_ptr, B.opt_ctx_arrays, B.host_ptrs_for_readonly, mem, node.read_only)
               with
               | true, Some get_ptr, Some ctx_arrays, _, _, _ ->
-                  let ident = get_ident node.tn in
+                  let ident = get_ident tn in
                   let ctx_array =
-                    Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays node.tn
+                    Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays tn
                   in
-                  fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array;
-                  Hash_set.add is_global node.tn
+                  fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array (Lazy.force tn.prec);
+                  Hash_set.add is_global tn
               | false, _, _, true, Some (Hosted _, _), true ->
                   (* In-context nodes to read directly from host would be error prone. *)
-                  let nd = Option.value_exn ~here:[%here] @@ Lazy.force node.tn.array in
-                  fprintf ppf "#define %s (%s)@," (get_ident node.tn) (Ndarray.c_ptr_to_string nd);
-                  Hash_set.add is_global node.tn
+                  let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.array in
+                  fprintf ppf "#define %s (%s)@," (get_ident tn) (Ndarray.c_ptr_to_string nd);
+                  Hash_set.add is_global tn
               | _ -> ()));
     fprintf ppf "@,@]";
     is_global
