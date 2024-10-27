@@ -70,6 +70,8 @@ module Device_types (Device_config : Device_config) = struct
   type nonrec stream =
     (Device_config.buffer_ptr, Device_config.dev, Device_config.runner, Device_config.event) stream
   [@@deriving sexp_of]
+
+  type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
 end
 
 module Device
@@ -104,16 +106,19 @@ struct
     }
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
+
+  let make_context ?(ctx_arrays = Map.empty (module Tnode)) stream =
+    { stream; parent = None; ctx_arrays; finalized = Atomic.make false }
+
+  let make_child ?ctx_arrays parent =
+    let ctx_arrays = Option.value ctx_arrays ~default:parent.ctx_arrays in
+    { stream = parent.stream; parent = Some parent; ctx_arrays; finalized = Atomic.make false }
 end
 
 (** Parts shared by backend implementations excluding what's already in {!Backend_any_common},
     except for {!Buffer} which is duplicated for technical reasons. *)
 module type Backend_impl_common = sig
-  type context [@@deriving sexp_of]
-
   include Buffer
-
-  val ctx_arrays : context -> ctx_arrays
 
   val is_in_context : Low_level.traced_array -> bool
   (** If true, the node is required to be in the contexts linked with code that uses it.
@@ -124,19 +129,25 @@ end
 
 (** An intermediate interface for stream-agnostic (typically CPU) backend implementations. *)
 module type No_device_backend = sig
-  include Backend_common with type init_info := string and type stream := unit
-  include Backend_impl_common with type context := context and type buffer_ptr := buffer_ptr
+  include Backend_common
+  include Backend_impl_common with type buffer_ptr := buffer_ptr
 
   val name : string
 
-  val link : merge_buffer:(buffer_ptr * Tnode.t) option ref -> context -> code -> context routine
+  val link :
+    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
+    runner_label:string ->
+    ctx_arrays ->
+    code ->
+    ctx_arrays routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
 
   val link_batch :
     merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    context ->
+    runner_label:string ->
+    ctx_arrays ->
     code_batch ->
-    context * context routine option array
+    ctx_arrays * ctx_arrays routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines (in particular, the routines' contexts are not
       independent). *)
@@ -191,13 +202,7 @@ end
 (** Lowered-level stream agnostic backend interface: implementation-facing API for CPU backends. *)
 module type Lowered_no_device_backend = sig
   include Backend_impl_common
-
-  include
-    Backend_any_common
-      with type context := context
-       and type stream := unit
-       and type init_info := string
-       and type buffer_ptr := buffer_ptr
+  include Backend_any_common with type buffer_ptr := buffer_ptr
 
   val name : string
 
@@ -219,16 +224,18 @@ module type Lowered_no_device_backend = sig
 
   val link_compiled :
     merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    context ->
+    runner_label:string ->
+    ctx_arrays ->
     procedure ->
-    context * Indexing.lowered_bindings * Task.t * string
+    ctx_arrays * Indexing.lowered_bindings * Task.t * string
+  (** [runner_label] will be [get_name stream] of the stream from which the [ctx_arrays] come from. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
 
 module type No_buffer_retrieval_or_syncing = sig
   include Backend_impl_common
-  include Backend_device_common with type context := context and type buffer_ptr := buffer_ptr
+  include Backend_device_common with type buffer_ptr := buffer_ptr
 
   val from_host : dst_ptr:buffer_ptr -> dst:context -> Ndarray.t -> unit
   (** Like {!Backend.from_host}, but without synchronization and buffer retrieval. *)

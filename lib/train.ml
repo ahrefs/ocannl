@@ -269,13 +269,23 @@ let every_non_literal_on_host =
   Tensor.iter_embedded ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
-let%debug2_sexp all_host_to_device (type context)
-    (module Backend : Backend with type context = context) context =
+(* Note: this will get nicer with modular explicits. *)
+let%debug2_sexp all_host_to_device (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) (context : Backend.context) =
   let f tn = ignore (Backend.from_host context tn : bool) in
   Tensor.iter_embedded ~f
 
-let%debug2_sexp all_device_to_host (type context)
-    (module Backend : Backend with type context = context) context =
+(* Note: this will get nicer with modular explicits. *)
+let%debug2_sexp all_device_to_host (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) (context : Backend.context) =
   let f tn = ignore (Backend.to_host context tn : bool) in
   Tensor.iter_embedded ~f
 
@@ -284,9 +294,12 @@ let%debug2_sexp all_device_to_host (type context)
     the given function inside the loop after a run. All and only bindings with associated ranges are
     iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
     values. *)
-let%track3_sexp sync_run ?looping (type context)
-    (module Backend : Backend with type context = context) (routine : Backend.context BT.routine) t
-    =
+let%track3_sexp sync_run ?looping (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) (routine : Backend.context BT.routine) t =
   all_host_to_device (module Backend) routine.context t;
   (match looping with
   | None -> Task.run routine.schedule
@@ -297,7 +310,7 @@ let%track3_sexp sync_run ?looping (type context)
       in
       sequential_loop ~f routine.bindings);
   all_device_to_host (module Backend) routine.context t;
-  Backend.await @@ Backend.get_ctx_stream routine.context
+  Backend.await routine.context.stream
 
 module Lazy = Utils.Lazy
 
@@ -312,10 +325,13 @@ module Lazy = Utils.Lazy
 
     All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
-let%track3_sexp parallel_update (type context)
-    (module Backend : Backend with type context = context)
-    ~(grad_updates : Backend.context BT.routine array) ~(sgd_update : Backend.context BT.routine)
-    ~copy_to_merge ~post_sync updaten : unit -> unit =
+let%track3_sexp parallel_update (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) ~(grad_updates : Backend.context BT.routine array)
+    ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
   let num_devices : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -363,7 +379,7 @@ let%track3_sexp parallel_update (type context)
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     (* Synchronize the source since we compute on the destionation. *)
-    Backend.(await @@ get_ctx_stream ctxs.(from));
+    Backend.(await ctxs.(from).stream);
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge =
           Option.value_exn ~here:[%here] ~message:(Tn.debug_name p.value) grad_merges_to.(to_).(i)
@@ -385,11 +401,11 @@ let%track3_sexp parallel_update (type context)
   let%track3_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
     (* We need to wait, because copying happens on other devices. *)
-    Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await @@ get_ctx_stream src));
+    Array.iteri ctxs ~f:(fun i src -> if i <> 0 then Backend.(await src.stream));
     Task.run sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
-    Backend.(await @@ get_ctx_stream sgd_update.context);
+    Backend.(await sgd_update.context.stream);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_devices - 1 do
       Array.iter all_params ~f:(fun p ->
@@ -425,8 +441,12 @@ let get_all_suggested_streams ?(max_num_streams : int option) (type buffer_ptr d
   in
   (devices, result)
 
-let to_routine (type context) (module Backend : Backend with type context = context)
-    (context : context) ?shared ?name bindings comp =
+let to_routine (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) (context : Backend.context) ?shared ?name bindings comp =
   Backend.link context @@ Backend.compile ?shared ?name bindings comp
 
 type example_train_result = {
@@ -443,15 +463,27 @@ type example_train_result = {
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
-    ~weight_decay ?per_batch_callback ?per_epoch_callback (type context)
-    (backend : (module Backend with type context = context)) () =
+    ~weight_decay ?per_batch_callback ?per_epoch_callback (type buffer_ptr dev runner event)
+    (backend :
+      (module Backend
+         with type buffer_ptr = buffer_ptr
+          and type dev = dev
+          and type runner = runner
+          and type event = event)) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
-  let module Backend = (val backend : Backend with type context = context) in
+  let module Backend =
+    (val backend
+        : Backend
+        with type buffer_ptr = buffer_ptr
+         and type dev = dev
+         and type runner = runner
+         and type event = event)
+  in
   let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
   let num_streams = Array.length streams in
-  let contexts = Array.map streams ~f:Backend.init in
+  let contexts = Array.map streams ~f:(Backend.make_context ?ctx_arrays:None) in
   let init_mem = Array.fold devices ~init:0 ~f:(fun acc dev -> acc + Backend.get_used_memory dev) in
   let minibatch_size = batch_size / num_streams in
   let n_minibatches = data_len / minibatch_size in
@@ -499,7 +531,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         assert (Backend.to_host sgd_update.context learning_rate.value);
         (* scalar_loss is not in the sgd_update context. *)
         assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
-        Backend.(await @@ get_ctx_stream grad_updates.(0).context);
+        Backend.(await grad_updates.(0).context.stream);
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         batch_losses := batch_loss :: !batch_losses;
@@ -543,7 +575,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
-    Backend.(await @@ get_ctx_stream routine.context);
+    Backend.(await routine.context.stream);
     Tensor.get_values model_result
   in
   let used_memory =
@@ -560,8 +592,13 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     used_memory;
   }
 
-let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type context)
-    (module Backend : Backend with type context = context) ctx ?(bindings = IDX.empty) t =
+(* Note: this will get nicer with modular explicits. *)
+let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)

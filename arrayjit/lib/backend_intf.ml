@@ -5,13 +5,14 @@
 open Base
 
 type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
+type 'buffer_ptr ctx_arrays = 'buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
 
 module Buffer_types (Buffer_ptr : sig
   type buffer_ptr [@@deriving sexp_of]
 end) =
 struct
   type nonrec buffer = Buffer_ptr.buffer_ptr buffer [@@deriving sexp_of]
-  type ctx_arrays = Buffer_ptr.buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
+  type nonrec ctx_arrays = Buffer_ptr.buffer_ptr ctx_arrays [@@deriving sexp_of]
 end
 
 module type Buffer = sig
@@ -105,11 +106,22 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
 }
 [@@deriving sexp_of]
 
+type ('buffer_ptr, 'stream) context = {
+  stream : 'stream;
+  parent : ('buffer_ptr, 'stream) context option;
+  ctx_arrays : 'buffer_ptr ctx_arrays;
+      (** This map contains arrays used in this context or an ancestor context (they might be unique
+          but might also be cross-stream shared. *)
+  finalized : Utils.atomic_bool;
+}
+[@@deriving sexp_of]
+
 module type Device_types = sig
   include Device_config
 
   type nonrec device = (buffer_ptr, dev, event) device [@@deriving sexp_of]
   type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
+  type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
 end
 
 module type Device = sig
@@ -118,19 +130,20 @@ module type Device = sig
 
   val make_device : dev -> ordinal:int -> device
   val make_stream : device -> runner -> stream_id:int -> stream
+
+  val make_context : ?ctx_arrays:ctx_arrays -> stream -> context
+  (** Returns a context without a parent. *)
+
+  val make_child : ?ctx_arrays:ctx_arrays -> context -> context
+  (** Returns a context with the same {!field-stream}, and {!field-ctx_arrays} if omitted, as the
+      given context's, which is also the {!field-parent}. *)
+
   val get_name : stream -> string
 end
 
 (** Parts shared by both assignments-level and lowered-level backend interfaces. *)
 module type Backend_any_common = sig
   include Buffer
-
-  type context [@@deriving sexp_of]
-  type stream
-
-  type init_info
-  (** For backends derived via {!No_device_backend}, this is usually the backend name concatenated
-      with the device or stream number. For {!Backend}, [init_info = stream]. *)
 
   val initialize : config -> unit
   (** Initializes a backend before first use. Typically does nothing if the backend is already
@@ -139,11 +152,6 @@ module type Backend_any_common = sig
   val is_initialized : unit -> bool
   (** Returns false if there was no previous {!initialize} call. If it returns false, one must call
       {!initialize} before using the backend. *)
-
-  val init : init_info -> context
-
-  val finalize : context -> unit
-  (** Finalizes (just) the context. *)
 end
 
 (** Parts shared by assignments-level backend interfaces. *)
@@ -175,12 +183,7 @@ end
     and devices. *)
 module type Backend_device_common = sig
   include Device
-
-  include
-    Backend_any_common
-      with type buffer_ptr := buffer_ptr
-       and type init_info := stream
-       and type stream := stream
+  include Backend_any_common with type buffer_ptr := buffer_ptr
 
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already. *)
@@ -216,7 +219,6 @@ module type Backend_device_common = sig
       {!No_device_backend.initialize}. *)
 
   val new_stream : device -> stream
-  val get_ctx_stream : context -> stream
 end
 
 module type With_buffer_retrieval_and_syncing = sig
@@ -262,13 +264,7 @@ end
 
 module type Backend = sig
   include Backend_device_common
-
-  include
-    Backend_common
-      with type buffer_ptr := buffer_ptr
-       and type context := context
-       and type init_info := stream
-       and type stream := stream
+  include Backend_common with type buffer_ptr := buffer_ptr
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)

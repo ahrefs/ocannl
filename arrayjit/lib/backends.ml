@@ -22,16 +22,16 @@ let check_merge_buffer ~scheduled_node ~code_node =
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let work_for context tn =
-    let stream = Backend.get_ctx_stream context in
+    let stream = context.stream in
     let default () = Some (Backend.all_work stream) in
-    if not @@ Map.mem (Backend.ctx_arrays context) tn then None
+    if not @@ Map.mem context.ctx_arrays tn then None
     else
       Hashtbl.update_and_return stream.queried_work_for tn ~f:(function
         | None | Some None -> default ()
         | Some (Some _ as event) -> event)
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
-    match (tn, Map.find (Backend.ctx_arrays ctx) tn) with
+    match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
@@ -39,7 +39,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | _ -> false
 
   let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
-    match (tn, Backend.(Map.find @@ ctx_arrays ctx) tn) with
+    match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
@@ -48,18 +48,18 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
-    let ordinal_of ctx = (Backend.get_ctx_stream ctx).device.ordinal in
-    let name_of ctx = Backend.(get_name @@ get_ctx_stream ctx) in
+    let ordinal_of ctx = ctx.stream.device.ordinal in
+    let name_of ctx = Backend.(get_name ctx.stream) in
     let same_device = ordinal_of dst = ordinal_of src in
     if same_device && (Tn.known_shared_cross_stream tn || String.equal (name_of src) (name_of dst))
     then false
     else
-      match Backend.(Map.find @@ ctx_arrays src) tn with
+      match Map.find src.ctx_arrays tn with
       | None -> false
       | Some s_arr -> (
           match into_merge_buffer with
           | No -> (
-              match Backend.(Map.find @@ ctx_arrays dst) tn with
+              match Map.find dst.ctx_arrays tn with
               | None -> false
               | Some d_arr ->
                   Backend.(
@@ -230,39 +230,39 @@ module Multicore_backend (Backend : No_device_backend) = struct
     in
     make_stream device { state; domain = Domain.spawn worker } ~stream_id
 
-  type nonrec context = { stream : stream; ctx : context } [@@deriving sexp_of]
-
-  let ctx_arrays context = ctx_arrays context.ctx
-  let init stream = { stream; ctx = init (get_name stream) }
   let initialize = initialize
   let is_initialized = is_initialized
-
-  let finalize { stream; ctx } =
-    await stream;
-    finalize ctx
-
   let compile = compile
   let compile_batch = compile_batch
 
-  let link { ctx; stream } code =
-    let task = link ~merge_buffer:stream.merge_buffer ctx code in
+  let link (context : context) code =
+    let routine =
+      link ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
+        context.ctx_arrays code
+    in
+    let context = make_child ~ctx_arrays:routine.context context in
     {
-      task with
-      context = { ctx = task.context; stream };
-      schedule = Task.enschedule ~schedule_task ~get_stream_name:get_name stream task.schedule;
+      routine with
+      context;
+      schedule =
+        Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream routine.schedule;
     }
 
-  let link_batch { ctx; stream } code_batch =
-    let ctx, routines = link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
-    ( { ctx; stream },
+  let link_batch (context : context) code_batch =
+    let ctx_arrays, routines =
+      link_batch ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
+        context.ctx_arrays code_batch
+    in
+    ( make_child ~ctx_arrays context,
       Array.map routines
         ~f:
           (Option.map ~f:(fun task ->
                {
                  task with
-                 context = { ctx = task.context; stream };
+                 context = make_child ~ctx_arrays:task.context context;
                  schedule =
-                   Task.enschedule ~schedule_task ~get_stream_name:get_name stream task.schedule;
+                   Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream
+                     task.schedule;
                })) )
 
   module Dynarr = Stdlib.Dynarray
@@ -291,8 +291,6 @@ module Multicore_backend (Backend : No_device_backend) = struct
     let stream = spinup_stream ~stream_id:!latest_stream_id in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
-
-  let get_ctx_stream { stream; _ } = stream
 
   let from_host ~dst_ptr ~dst hosted =
     let work () = host_to_buffer hosted ~dst:dst_ptr in
@@ -398,26 +396,28 @@ module Sync_backend (Backend : No_device_backend) = struct
   let await _stream = ()
   (* let global_run_no = ref 0 *)
 
-  type context = { stream : stream; ctx : Backend.context } [@@deriving sexp_of]
-
-  let get_ctx_stream context = context.stream
-  let ctx_arrays context = ctx_arrays context.ctx
-  let init stream = { stream; ctx = Backend.init name }
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let finalize { stream = _; ctx } = Backend.finalize ctx
   let compile = Backend.compile
   let compile_batch = Backend.compile_batch
 
-  let link { ctx; stream } code =
-    let task = Backend.link ~merge_buffer:stream.merge_buffer ctx code in
-    { task with context = { ctx = task.context; stream } }
+  let link context code =
+    let task =
+      Backend.link ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
+        context.ctx_arrays code
+    in
+    { task with context = make_child ~ctx_arrays:task.context context }
 
-  let link_batch { ctx; stream } code_batch =
-    let ctx, routines = Backend.link_batch ~merge_buffer:stream.merge_buffer ctx code_batch in
-    ( { ctx; stream },
+  let link_batch context code_batch =
+    let ctx_arrays, routines =
+      Backend.link_batch ~merge_buffer:context.stream.merge_buffer
+        ~runner_label:(get_name context.stream) context.ctx_arrays code_batch
+    in
+    ( make_child ~ctx_arrays context,
       Array.map routines
-        ~f:(Option.map ~f:(fun task -> { task with context = { ctx = task.context; stream } })) )
+        ~f:
+          (Option.map ~f:(fun task ->
+               { task with context = make_child ~ctx_arrays:task.context context })) )
 
   let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
   let from_host ~dst_ptr ~dst:_ hosted = host_to_buffer hosted ~dst:dst_ptr
@@ -471,14 +471,12 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context traced_stores
-    =
-  let olds = ctx_arrays prior_context in
+let verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context traced_stores =
   Set.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
         Option.value_map node ~default:false ~f:(fun node ->
-            is_in_context node && not (Option.is_some @@ Map.find olds tn))
+            is_in_context node && not (Option.is_some @@ Map.find ctx_arrays tn))
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 let from_prior_context_batch comps =
@@ -488,8 +486,7 @@ let from_prior_context_batch comps =
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
 module Lowered_no_device_backend (Backend : Lowered_no_device_backend) :
-  No_device_backend with type buffer_ptr = Backend.buffer_ptr and type context = Backend.context =
-struct
+  No_device_backend with type buffer_ptr = Backend.buffer_ptr = struct
   include Backend
 
   type code =
@@ -575,49 +572,43 @@ struct
           names;
         }
 
-  let link ~merge_buffer (prior_context : context) (code : code) : context routine =
+  let link ~merge_buffer ~runner_label ctx_arrays (code : code) =
     let lowered = get_lowered code in
     let verify from_prior_context =
-      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
-        [| lowered.traced_store |]
+      verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context [| lowered.traced_store |]
     in
     let inputs, outputs = Low_level.input_and_output_nodes lowered in
-    let context, bindings, schedule, name =
+    let ctx_arrays, bindings, schedule, name =
       match code with
       | Postponed { comp; lowered; bindings; name } ->
-          let proc =
-            Backend.compile ~name ~opt_ctx_arrays:(Some (ctx_arrays prior_context)) bindings lowered
-          in
+          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
           let from_prior_context =
             Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes
           in
           verify from_prior_context;
-          link_compiled ~merge_buffer prior_context proc
+          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
       | Compiled { from_prior_context; proc; _ } ->
           verify from_prior_context;
-          link_compiled ~merge_buffer prior_context proc
+          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
     in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
             ~code_node:(expected_merge_node code))
     in
-    { context; schedule; bindings; name; inputs; outputs }
+    { context = ctx_arrays; schedule; bindings; name; inputs; outputs }
 
-  let link_batch ~merge_buffer (prior_context : context) (code_batch : code_batch) :
-      context * context routine option array =
+  let link_batch ~merge_buffer ~runner_label ctx_arrays (code_batch : code_batch) =
     let lowereds = get_lowereds code_batch in
     let verify from_prior_context =
-      verify_prior_context ~ctx_arrays ~is_in_context ~prior_context ~from_prior_context
+      verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context
       @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun opt -> opt.Low_level.traced_store))
     in
     let _opt_ctx_arrays, procs =
       match code_batch with
       | Postponed { comps; lowereds; bindings; names } ->
           let procs =
-            Backend.compile_batch ~names
-              ~opt_ctx_arrays:(Some (ctx_arrays prior_context))
-              bindings lowereds
+            Backend.compile_batch ~names ~opt_ctx_arrays:(Some ctx_arrays) bindings lowereds
           in
           verify @@ from_prior_context_batch comps;
           procs
@@ -626,17 +617,19 @@ struct
           procs
     in
     let code_nodes = expected_merge_nodes code_batch in
-    Array.fold_mapi procs ~init:prior_context ~f:(fun i context -> function
+    Array.fold_mapi procs ~init:ctx_arrays ~f:(fun i ctx_arrays -> function
       | Some proc ->
-          let context, bindings, schedule, name = link_compiled ~merge_buffer context proc in
+          let ctx_arrays, bindings, schedule, name =
+            link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+          in
           let inputs, outputs = Low_level.input_and_output_nodes @@ Option.value_exn lowereds.(i) in
           let schedule =
             Task.prepend schedule ~work:(fun () ->
                 check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
                   ~code_node:code_nodes.(i))
           in
-          (context, Some { context; schedule; bindings; name; inputs; outputs })
-      | None -> (context, None))
+          (ctx_arrays, Some { context = ctx_arrays; schedule; bindings; name; inputs; outputs })
+      | None -> (ctx_arrays, None))
 
   let get_used_memory = Ndarray.get_used_memory
 end
@@ -709,20 +702,20 @@ module Lowered_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let link context (code : code) =
-    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context [| code.lowered.traced_store |];
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
     let context, bindings, schedule = link context code.code in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer
-            ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context)
+            ~scheduled_node:(scheduled_merge_node context.stream)
             ~code_node:code.expected_merge_node)
     in
     { context; schedule; bindings; name; inputs; outputs }
 
   let link_batch context code_batch =
-    verify_prior_context ~ctx_arrays ~is_in_context ~prior_context:context
+    verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code_batch.from_prior_context
     @@ Array.filter_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
     let context, bindings, schedules = link_batch context code_batch.code_batch in
@@ -736,7 +729,7 @@ module Lowered_backend (Device : Lowered_backend) : Backend = struct
               let schedule =
                 Task.prepend schedule ~work:(fun () ->
                     check_merge_buffer
-                      ~scheduled_node:(scheduled_merge_node @@ get_ctx_stream context)
+                      ~scheduled_node:(scheduled_merge_node context.stream)
                       ~code_node:expected_merge_node)
               in
               { context; schedule; bindings; name; inputs; outputs })) )

@@ -12,7 +12,7 @@ let _suspended () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   Utils.settings.output_debug_files_in_build_directory <- true;
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
@@ -28,9 +28,15 @@ let _suspended () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend =
+    (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
@@ -48,9 +54,13 @@ let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   Rand.init 0;
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in

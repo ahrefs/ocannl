@@ -27,7 +27,7 @@ let benchmark_overhead backend () =
 
   (* Train.every_non_literal_on_host f; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let init_mem = Backend.(get_used_memory stream.device) in
   let update_f = Train.grad_update f in
   (* Initialize the context with a mock update of x to ensure that it is not optimized as a

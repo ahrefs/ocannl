@@ -26,14 +26,6 @@ let root_ctx = ref None
 
 module Tn = Tnode
 
-type context = {
-  label : string;
-  arrays : ctx_arrays;
-  result : (Gccjit.result option[@sexp.opaque]);
-}
-[@@deriving sexp_of]
-
-let ctx_arrays context = context.arrays
 let is_initialized () = Option.is_some !root_ctx
 
 let initialize _config =
@@ -42,15 +34,6 @@ let initialize _config =
     let ctx = Context.create () in
     Context.set_option ctx Optimization_level (optimization_level ());
     root_ctx := Some ctx)
-
-let finalize ctx =
-  let open Gccjit in
-  Option.iter ctx.result ~f:Result.release
-
-let init label =
-  let result = { label; result = None; arrays = Map.empty (module Tn) } in
-  Stdlib.Gc.finalise finalize result;
-  result
 
 type tn_info = {
   tn : Tn.t;  (** The original array. *)
@@ -86,7 +69,7 @@ type procedure = {
   bindings : Indexing.unit_bindings;
   name : string;
   result : (Gccjit.result[@sexp.opaque]);
-  opt_ctx_arrays : ctx_arrays option;
+  opt_ctx_arrays : buffer_ptr ctx_arrays option;
   params : param_source list;
 }
 [@@deriving sexp_of]
@@ -697,6 +680,7 @@ let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optim
      let f_name = Utils.build_file @@ name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
+  Stdlib.Gc.finalise Result.release result;
   Context.release ctx;
   { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
 
@@ -738,15 +722,13 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
         Option.map2 names.(i) ~f:(fun name (info, opt_ctx_arrays, params) ->
             { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
 
-let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
-    context * _ * _ * string =
-  let label : string = prior_context.label in
+let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
   let arrays =
     match code with
     | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
-        List.fold params ~init:(ctx_arrays prior_context) ~f:(fun arrays -> function
+        List.fold params ~init:ctx_arrays ~f:(fun arrays -> function
           | Param_ptr tn ->
               let f = function
                 | Some arr -> arr
@@ -757,8 +739,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               Map.update arrays tn ~f
           | _ -> arrays)
   in
-  let context = { label; arrays; result = Some code.result } in
-  let log_file_name = Utils.diagn_log_file [%string "debug-%{label}-%{code.name}.log"] in
+  let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
       0;
@@ -796,12 +777,12 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
-  ( context,
+  ( arrays,
     Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task
       {
-        context_lifetime = context;
-        description = "executes " ^ code.name ^ " on " ^ context.label;
+        context_lifetime = (arrays, code.result);
+        description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       },
     name )

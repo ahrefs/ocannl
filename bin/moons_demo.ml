@@ -59,7 +59,7 @@ let demo () =
 
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in

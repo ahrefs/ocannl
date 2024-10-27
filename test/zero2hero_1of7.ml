@@ -14,9 +14,13 @@ let%expect_test "Graph drawing recompile" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let open Operation.At in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
@@ -135,9 +139,13 @@ let%expect_test "Graph drawing fetch" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -237,9 +245,13 @@ let%expect_test "Simple gradients hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
@@ -349,9 +361,13 @@ let%expect_test "Simple gradients virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
@@ -486,9 +502,13 @@ let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
@@ -515,9 +535,13 @@ let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend = (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in

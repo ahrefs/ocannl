@@ -19,20 +19,9 @@ let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backe
 
 module Tn = Tnode
 
-type context = { label : string; arrays : ctx_arrays } [@@deriving sexp_of]
-
-let ctx_arrays context = context.arrays
-
 let is_initialized, initialize =
   let initialized = ref false in
   ((fun () -> !initialized), fun _config -> initialized := true)
-
-let finalize _ctx = ()
-
-let init label =
-  let result = { label; arrays = Map.empty (module Tn) } in
-  Stdlib.Gc.finalise finalize result;
-  result
 
 type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]
 
@@ -41,7 +30,7 @@ type procedure = {
   name : string;
   result : library;
   params : (string * param_source) list;
-  opt_ctx_arrays : ctx_arrays option;
+  opt_ctx_arrays : buffer_ptr ctx_arrays option;
 }
 [@@deriving sexp_of]
 
@@ -85,7 +74,7 @@ let c_compile_and_load ~f_name =
 
 module C_syntax_config (Input : sig
   val for_lowereds : Low_level.optimized array
-  val opt_ctx_arrays : ctx_arrays option
+  val opt_ctx_arrays : buffer_ptr ctx_arrays option
 end) =
 struct
   type nonrec buffer_ptr = buffer_ptr
@@ -191,15 +180,13 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
               opt_ctx_arrays;
             })) )
 
-let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : procedure) :
-    context * _ * _ * string =
-  let label : string = prior_context.label in
+let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
   let arrays =
     match code with
     | { opt_ctx_arrays = Some arrays; _ } -> arrays
     | { params; _ } ->
-        List.fold params ~init:prior_context.arrays ~f:(fun ctx_arrays -> function
+        List.fold params ~init:ctx_arrays ~f:(fun ctx_arrays -> function
           | _, Param_ptr tn ->
               let f = function
                 | Some arr -> arr
@@ -210,8 +197,7 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
               Map.update ctx_arrays tn ~f
           | _ -> ctx_arrays)
   in
-  let context = { label; arrays } in
-  let log_file_name = Utils.diagn_log_file [%string "debug-%{label}-%{code.name}.log"] in
+  let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
       0;
@@ -249,13 +235,13 @@ let%diagn_sexp link_compiled ~merge_buffer (prior_context : context) (code : pro
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
-  ( context,
+  ( arrays,
     Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task
       {
         (* In particular, keep code alive so it doesn't get unloaded. *)
-        context_lifetime = (context, code);
-        description = "executes " ^ code.name ^ " on " ^ context.label;
+        context_lifetime = (arrays, code);
+        description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       },
     name )

@@ -20,7 +20,7 @@ let _suspended () =
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
@@ -39,7 +39,10 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget (module Backend) Backend.(init @@ new_stream @@ get_device ~ordinal:0) f5;
+  Train.forward_and_forget
+    (module Backend)
+    Backend.(make_context @@ new_stream @@ get_device ~ordinal:0)
+    f5;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
@@ -66,7 +69,7 @@ let () =
   let%op fx = f x in
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let update = Train.grad_update fx in
   let routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn routine.bindings step_sym in
@@ -98,9 +101,15 @@ let _suspended () =
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend with type context = Backend.context) in
+  let backend =
+    (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.init stream in
+  let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -159,7 +168,7 @@ let _suspended () =
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let update = Train.grad_update l in
   let routine =
-    Train.to_routine (module Backend) (Backend.init stream) IDX.empty update.fwd_bprop
+    Train.to_routine (module Backend) (Backend.make_context stream) IDX.empty update.fwd_bprop
   in
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;

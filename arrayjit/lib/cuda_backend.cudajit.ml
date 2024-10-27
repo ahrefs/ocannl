@@ -70,22 +70,7 @@ end
 
 include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
-type context = {
-  label : string;
-  ctx : Cu.Context.t;  (** Currently, this is always the same as [stream.device.primary_context]. *)
-  stream : stream;
-  parent : context option;
-  run_module : (Cu.Module.t[@sexp.opaque]) option;
-      (** Code jitted for this context, typically independent of the parent and child contexts, but
-          shared by batch linked contexts. *)
-  ctx_arrays : ctx_arrays;
-      (** This map contains arrays used in this context or an ancestor context (they might be unique
-          but might also be cross-stream shared. *)
-  finalized : Utils.atomic_bool;
-}
-[@@deriving sexp_of]
-
-let ctx_arrays ctx = ctx.ctx_arrays
+let ctx_of (context : context) = context.stream.device.dev.primary_context
 let global_config = ref For_parallel_copying
 let is_done event = Cu.Delimited_event.query event
 let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
@@ -186,8 +171,6 @@ let suggested_num_streams device =
   | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
   | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
 
-let get_ctx_stream { stream; _ } = stream
-
 let await stream : unit =
   set_ctx stream.device.dev.primary_context;
   Cu.Stream.synchronize stream.runner;
@@ -201,36 +184,20 @@ let%track3_sexp finalize (ctx : context) : unit =
   then (
     (* await does this: set_ctx ctx.stream.device.primary_context; *)
     await ctx.stream;
-    (* Cudajit's contexts, streams and events are destroyed by their respective finalizers. *)
-    Option.iter ctx.run_module ~f:Cu.Module.unload;
+    (* Cudajit's modules, streams and events are destroyed by their respective finalizers. *)
     Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
         if
           (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
           && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
         then Cu.Deviceptr.mem_free data))
 
-let init stream =
-  let ctx =
-    {
-      label = "on dev " ^ get_name stream;
-      ctx = stream.device.dev.primary_context;
-      stream;
-      parent = None;
-      ctx_arrays = Map.empty (module Tn);
-      run_module = None;
-      finalized = Atomic.make false;
-    }
-  in
-  Stdlib.Gc.finalise finalize ctx;
-  ctx
-
 let from_host ~dst_ptr ~dst hosted =
-  set_ctx dst.ctx;
+  set_ctx @@ ctx_of dst;
   let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
   Ndarray.map { f } hosted
 
 let to_host ~src_ptr ~src hosted =
-  set_ctx src.ctx;
+  set_ctx @@ ctx_of src;
   let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
   Ndarray.map { f } hosted
 
@@ -242,19 +209,19 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
       Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~src:src_ptr
         dst.stream.runner
     else
-      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~dst_ctx:dst.ctx
-        ~src:src_ptr ~src_ctx:src.ctx dst.stream.runner
+      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~dst_ctx:(ctx_of dst)
+        ~src:src_ptr ~src_ctx:(ctx_of src) dst.stream.runner
   in
   match (into_merge_buffer, dst_ptr) with
   | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
   | No, Some dst_ptr ->
-      set_ctx dst.ctx;
+      set_ctx @@ ctx_of dst;
       memcpy ~dst_ptr
   | Streaming, _ ->
       assert same_device;
       dst.stream.merge_buffer := Some (src_ptr, tn)
   | Copy, _ ->
-      set_ctx dst.ctx;
+      set_ctx @@ ctx_of dst;
       let size_in_bytes = Tn.size_in_bytes tn in
       opt_alloc_merge_buffer ~size_in_bytes dev;
       (* FIXME: why use the shared buffer? *)
@@ -437,15 +404,18 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     _traced_store lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.Module.get_function run_module ~name in
-  let context =
-    { prior_context with parent = Some prior_context; run_module = Some run_module; ctx_arrays }
-  in
+  let context = make_child ~ctx_arrays prior_context in
   Stdlib.Gc.finalise finalize context;
   let%diagn3_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     [%log_result
-      "Launching", name, context.label, (log_id : int), (params : (string * param_source) list)];
+      "Launching",
+        name,
+        "on",
+        get_name context.stream,
+        (log_id : int),
+        (params : (string * param_source) list)];
     let module S = Cu.Stream in
     let args : S.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
@@ -475,7 +445,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
                           %{upto#Int}"]);
             S.Int !i)
     in
-    set_ctx context.ctx;
+    set_ctx @@ ctx_of context;
     (* FIXME: this happens inside the kernel. *)
     (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
@@ -483,7 +453,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block
-         context.label;
+         get_name context.stream;
          Utils.log_trace_tree _output]);
     S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.runner args;
     [%log "kernel launched"]
@@ -492,7 +462,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     Task.Task
       {
         context_lifetime = context;
-        description = "launches " ^ name ^ " on " ^ context.label;
+        description = "launches " ^ name ^ " on " ^ get_name context.stream;
         work;
       } )
 
@@ -535,7 +505,7 @@ let run_options () =
   else []
 
 let%track3_sexp link prior_context (code : code) : context * _ * _ =
-  let ctx = prior_context.ctx in
+  let ctx = ctx_of prior_context in
   set_ctx ctx;
   let ctx_arrays =
     Hashtbl.fold ~init:prior_context.ctx_arrays code.traced_store
@@ -554,7 +524,7 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
-  let ctx = prior_context.ctx in
+  let ctx = ctx_of prior_context in
   set_ctx ctx;
   let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
   let (context, _ctx_arrays), procs =
