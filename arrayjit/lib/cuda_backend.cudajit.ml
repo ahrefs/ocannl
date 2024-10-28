@@ -461,7 +461,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
   ( context,
     Task.Task
       {
-        context_lifetime = context;
+        context_lifetime = (run_module, context);
         description = "launches " ^ name ^ " on " ^ get_name context.stream;
         work;
       } )
