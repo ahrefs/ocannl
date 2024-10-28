@@ -463,24 +463,10 @@ type example_train_result = {
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
-    ~weight_decay ?per_batch_callback ?per_epoch_callback (type buffer_ptr dev runner event)
-    (backend :
-      (module Backend
-         with type buffer_ptr = buffer_ptr
-          and type dev = dev
-          and type runner = runner
-          and type event = event)) () =
+    ~weight_decay ?per_batch_callback ?per_epoch_callback (module Backend : Backend) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
-  let module Backend =
-    (val backend
-        : Backend
-        with type buffer_ptr = buffer_ptr
-         and type dev = dev
-         and type runner = runner
-         and type event = event)
-  in
   let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
   let num_streams = Array.length streams in
   let contexts = Array.map streams ~f:(Backend.make_context ?ctx_arrays:None) in
