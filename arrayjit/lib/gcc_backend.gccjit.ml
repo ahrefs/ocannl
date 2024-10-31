@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_impl.No_device_buffer_and_copying
+include Backend_impl.No_device_buffer_and_copying ()
 open Backend_intf
 
 let name = "gccjit"
@@ -75,6 +75,7 @@ type procedure = {
 [@@deriving sexp_of]
 
 let is_in_context node =
+  (* FIXME: shouldn't we use Tnode.is_in_context_force? *)
   Tnode.default_to_most_local node.Low_level.tn 33;
   match node.tn.memory_mode with
   | Some (Hosted (Constant | Volatile), _) -> false
@@ -784,5 +785,4 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
         context_lifetime = (arrays, code.result);
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
-      },
-    name )
+      } )

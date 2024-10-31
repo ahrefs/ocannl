@@ -475,3 +475,39 @@ Old post-launch code in Cuda_backend.link_proc:
           if not traced.read_only then
             data.tracking <- Some (Cu.Delimited_event.record context.stream.cu_stream));
 ]}
+
+Obsoleted part of interfaces in backend_impl.ml:
+{[
+  let expected_merge_node : code -> _ = function
+    | Postponed { lowered = Low_level.{ merge_node; _ }; _ }
+    | Compiled { lowered = Low_level.{ merge_node; _ }; _ } ->
+        merge_node
+
+  let expected_merge_nodes : code_batch -> _ = function
+    | Postponed { lowereds; _ } | Compiled { lowereds; _ } ->
+        Array.map lowereds ~f:(fun lowered ->
+            Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
+
+  let get_lowered : code -> _ = function
+    | Postponed { lowered; _ } | Compiled { lowered; _ } -> lowered
+
+  let get_lowereds : code_batch -> _ = function
+    | Postponed { lowereds; _ } -> lowereds
+    | Compiled { lowereds; _ } -> lowereds
+]}
+
+Old context finalizer from the cuda backend:
+{[
+let%track3_sexp finalize (ctx : context) : unit =
+  if
+    Atomic.compare_and_set ctx.finalized false true && (not @@ Atomic.get ctx.stream.device.released)
+  then (
+    (* await does this: set_ctx ctx.stream.device.primary_context; *)
+    await ctx.stream;
+    (* Cudajit's modules, streams and events are destroyed by their respective finalizers. *)
+    Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
+        if
+          (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
+          && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
+        then Cu.Deviceptr.mem_free data))
+]}

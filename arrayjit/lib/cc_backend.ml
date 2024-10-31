@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-include Backend_impl.No_device_buffer_and_copying
+include Backend_impl.No_device_buffer_and_copying ()
 open Backend_intf
 
 let name = "cc"
@@ -243,5 +243,4 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
         context_lifetime = (arrays, code);
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
-      },
-    name )
+      } )

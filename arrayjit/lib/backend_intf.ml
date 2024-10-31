@@ -32,6 +32,7 @@ module type Alloc_buffer = sig
 
   val alloc_buffer : ?old_buffer:buffer -> size_in_bytes:int -> stream -> buffer
   val alloc_zero_init_array : Ops.prec -> dims:int array -> stream -> buffer_ptr
+  val free_buffer : (stream -> buffer_ptr -> unit) option
 end
 
 (** For now, we only configure a backend with regard to how many streams it should suggest using
@@ -105,6 +106,10 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
          time {!} *)
 }
 [@@deriving sexp_of]
+
+(** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge buffer
+    right after [await stream]. *)
+let scheduled_merge_node stream = Option.map ~f:snd !(stream.merge_buffer)
 
 type ('buffer_ptr, 'stream) context = {
   stream : 'stream;
@@ -180,7 +185,10 @@ module type Backend_common = sig
 end
 
 (** Parts shared by both assignments-level and lowered-level backend interfaces providing streams
-    and devices. *)
+    and devices, both user-facing and implementation-facing. Does not include: compilation and
+    linking (differnt for assignments-level and lowered-level); copying and tensor-node-level
+    synchronization (copying is different for user-facing and implementation-facing APIs,
+    synchronization is provided by a component outside of backend implementations). *)
 module type Backend_device_common = sig
   include Device
   include Backend_any_common with type buffer_ptr := buffer_ptr
@@ -215,8 +223,7 @@ module type Backend_device_common = sig
   val num_devices : unit -> int
 
   val suggested_num_streams : device -> int
-  (** The optimal number of streams for the given device to follow the {!config} strategy passed to
-      {!No_device_backend.initialize}. *)
+  (** The optimal number of streams for the given device to follow the {!config} strategy. *)
 
   val new_stream : device -> stream
 end
@@ -263,8 +270,8 @@ module type With_buffer_retrieval_and_syncing = sig
 end
 
 module type Backend = sig
-  include Backend_device_common
-  include Backend_common with type buffer_ptr := buffer_ptr
+  include Backend_common
+  include Backend_device_common with type buffer_ptr := buffer_ptr
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context. *)

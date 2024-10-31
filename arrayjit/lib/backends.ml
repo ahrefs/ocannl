@@ -87,9 +87,32 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               true)
 end
 
-module Multicore_backend (Backend : No_device_backend) = struct
+module Alloc_buffer_ignore_stream
+    (Device_types : Device_types)
+    (Backend : Alloc_buffer with type buffer_ptr = Device_types.buffer_ptr and type stream := unit) :
+  Alloc_buffer with type buffer_ptr = Backend.buffer_ptr and type stream = Device_types.stream =
+struct
+  include Device_types
+
+  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
+    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+
+  let alloc_zero_init_array prec ~dims _stream = Backend.alloc_zero_init_array prec ~dims ()
+  let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
+end
+
+module Multicore_scheduler (Backend : For_add_scheduler) :
+  With_scheduler with type buffer_ptr = Backend.buffer_ptr = struct
   include Backend
   module Domain = Domain [@warning "-3"]
+
+  let global_config = ref Only_devices_parallel
+
+  let initialize config =
+    global_config := config;
+    initialize config
+
+  let is_initialized = is_initialized
 
   type task_list = Task.t Utils.mutable_list [@@deriving sexp_of]
 
@@ -128,14 +151,8 @@ module Multicore_backend (Backend : No_device_backend) = struct
     let name = "multicore_" ^ Backend.name
   end
 
-  module Alloc_buffer = struct
-    include Backend
-
-    let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
-    let alloc_zero_init_array prec ~dims _stream = alloc_zero_init_array prec ~dims ()
-  end
-
-  include Device (Device_types (Device_config)) (Alloc_buffer)
+  module Device_types = Device_types (Device_config)
+  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
   open Device_config
 
   (** TODO: Blocks till the event completes, if it's not done already. *)
@@ -148,10 +165,6 @@ module Multicore_backend (Backend : No_device_backend) = struct
   let will_wait_for _ctx Not_implemented_yet = ()
 
   let get_used_memory _device = get_used_memory ()
-
-  type nonrec code = code [@@deriving sexp_of]
-  type nonrec code_batch = code_batch [@@deriving sexp_of]
-
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
   let name = "multicore_" ^ name
@@ -179,7 +192,7 @@ module Multicore_backend (Backend : No_device_backend) = struct
     [%log_result "schedule_task", Task.describe task, get_name stream];
     let d = stream.runner.state in
     Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream);
-    if not d.keep_spinning then invalid_arg "Multicore_backend: stream not available";
+    if not d.keep_spinning then invalid_arg "Multicore_scheduler: stream not available";
     if not @@ Queue.try_push d.queue task then (
       await stream;
       Queue.push_exn d.queue task);
@@ -230,41 +243,6 @@ module Multicore_backend (Backend : No_device_backend) = struct
     in
     make_stream device { state; domain = Domain.spawn worker } ~stream_id
 
-  let initialize = initialize
-  let is_initialized = is_initialized
-  let compile = compile
-  let compile_batch = compile_batch
-
-  let link (context : context) code =
-    let routine =
-      link ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
-        context.ctx_arrays code
-    in
-    let context = make_child ~ctx_arrays:routine.context context in
-    {
-      routine with
-      context;
-      schedule =
-        Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream routine.schedule;
-    }
-
-  let link_batch (context : context) code_batch =
-    let ctx_arrays, routines =
-      link_batch ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
-        context.ctx_arrays code_batch
-    in
-    ( make_child ~ctx_arrays context,
-      Array.map routines
-        ~f:
-          (Option.map ~f:(fun task ->
-               {
-                 task with
-                 context = make_child ~ctx_arrays:task.context context;
-                 schedule =
-                   Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream
-                     task.schedule;
-               })) )
-
   module Dynarr = Stdlib.Dynarray
 
   let num_devices () = 1
@@ -280,7 +258,7 @@ module Multicore_backend (Backend : No_device_backend) = struct
 
   let get_device ~ordinal =
     if ordinal <> 0 then
-      invalid_arg [%string "Multicore_backend.get_device %{ordinal#Int}: only device 0 exists"];
+      invalid_arg [%string "Multicore_scheduler.get_device %{ordinal#Int}: only device 0 exists"];
     device
 
   let latest_stream_id = ref (-1)
@@ -291,55 +269,14 @@ module Multicore_backend (Backend : No_device_backend) = struct
     let stream = spinup_stream ~stream_id:!latest_stream_id in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
-
-  let from_host ~dst_ptr ~dst hosted =
-    let work () = host_to_buffer hosted ~dst:dst_ptr in
-    (* TODO: pass description to from_host. *)
-    schedule_task dst.stream
-      (Task.Task
-         { context_lifetime = dst; description = "from_host on " ^ get_name dst.stream; work })
-
-  let to_host ~src_ptr ~src hosted =
-    let work () = buffer_to_host hosted ~src:src_ptr in
-    (* TODO: pass description to to_host. *)
-    schedule_task src.stream
-      (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
-
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-    let dev = dst.stream in
-    let size_in_bytes = Tnode.size_in_bytes tn in
-    let work =
-      (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
-      match (into_merge_buffer, dst_ptr) with
-      | No, None -> invalid_arg "Multicore_backend.device_to_device: missing dst_ptr"
-      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
-      | Streaming, _ -> fun () -> dev.merge_buffer := Some (src_ptr, tn)
-      | Copy, _ ->
-          fun () ->
-            let size_in_bytes = Tnode.size_in_bytes tn in
-            let allocated_capacity =
-              match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
-            in
-            if allocated_capacity < size_in_bytes then
-              dev.allocated_buffer <-
-                Some (alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes dst.stream);
-            let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
-            dev.merge_buffer := Some (merge_ptr, tn);
-            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
-    in
-    let description =
-      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
-      ^ get_name src.stream
-    in
-    schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
-(** For debugging, allow [Sync_backend(...).suggested_num_streams] calls to return >1 numbers. *)
+(** For debugging, allow [Sync_scheduler(...).suggested_num_streams] calls to return >1 numbers. *)
 let sync_suggested_num_streams = ref 1
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one device, but an arbitrary number of streams. *)
-module Sync_backend (Backend : No_device_backend) = struct
+module Sync_scheduler (Backend : For_add_scheduler) = struct
   include Backend
 
   module Device_config = struct
@@ -353,14 +290,8 @@ module Sync_backend (Backend : No_device_backend) = struct
     let name = "sync_" ^ Backend.name
   end
 
-  module Alloc_buffer = struct
-    include Backend
-
-    let alloc_buffer ?old_buffer ~size_in_bytes _stream = alloc_buffer ?old_buffer ~size_in_bytes ()
-    let alloc_zero_init_array prec ~dims _stream = alloc_zero_init_array prec ~dims ()
-  end
-
-  include Device (Device_types (Device_config)) (Alloc_buffer)
+  module Device_types = Device_types (Device_config)
+  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
   open Device_config
 
   let sync () = ()
@@ -374,7 +305,7 @@ module Sync_backend (Backend : No_device_backend) = struct
 
   let get_device ~ordinal =
     if ordinal <> 0 then
-      invalid_arg @@ "Sync_backend.get_device: there is only one device, but ordinal="
+      invalid_arg @@ "Sync_scheduler.get_device: there is only one device, but ordinal="
       ^ Int.to_string ordinal;
     device
 
@@ -387,9 +318,6 @@ module Sync_backend (Backend : No_device_backend) = struct
     Int.incr latest_stram_id;
     make_stream device () ~stream_id:!latest_stram_id
 
-  type code = Backend.code [@@deriving sexp_of]
-  type code_batch = Backend.code_batch [@@deriving sexp_of]
-
   let all_work _stream = ()
   let is_idle _stream = true
   let name = "sync_" ^ Backend.name
@@ -398,49 +326,8 @@ module Sync_backend (Backend : No_device_backend) = struct
 
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let compile = Backend.compile
-  let compile_batch = Backend.compile_batch
-
-  let link context code =
-    let task =
-      Backend.link ~merge_buffer:context.stream.merge_buffer ~runner_label:(get_name context.stream)
-        context.ctx_arrays code
-    in
-    { task with context = make_child ~ctx_arrays:task.context context }
-
-  let link_batch context code_batch =
-    let ctx_arrays, routines =
-      Backend.link_batch ~merge_buffer:context.stream.merge_buffer
-        ~runner_label:(get_name context.stream) context.ctx_arrays code_batch
-    in
-    ( make_child ~ctx_arrays context,
-      Array.map routines
-        ~f:
-          (Option.map ~f:(fun task ->
-               { task with context = make_child ~ctx_arrays:task.context context })) )
-
   let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
-  let from_host ~dst_ptr ~dst:_ hosted = host_to_buffer hosted ~dst:dst_ptr
-  let to_host ~src_ptr ~src:_ hosted = buffer_to_host hosted ~src:src_ptr
-
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
-    let dev = dst.stream in
-    (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
-    let size_in_bytes = Tnode.size_in_bytes tn in
-    match (into_merge_buffer, dst_ptr) with
-    | No, None -> invalid_arg "Sync_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
-    | Streaming, _ -> dev.merge_buffer := Some (src_ptr, tn)
-    | Copy, _ ->
-        let allocated_capacity =
-          match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
-        in
-        if allocated_capacity < size_in_bytes then
-          dev.allocated_buffer <-
-            Some (Backend.alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes ());
-        let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
-        dev.merge_buffer := Some (merge_ptr, tn);
-        buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
+  let schedule_task _stream task = Task.run task
 end
 
 let lower_assignments ?name bindings asgns =
@@ -485,183 +372,131 @@ let from_prior_context_batch comps =
           Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
-module Lowered_no_device_backend (Backend : Lowered_no_device_backend) :
-  No_device_backend with type buffer_ptr = Backend.buffer_ptr = struct
+(** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
+module Add_device
+    (Add_scheduler : functor
+      (Impl : For_add_scheduler)
+      -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
+    (Backend : Lowered_no_device_backend) : Lowered_backend = struct
   include Backend
 
   type code =
     | Postponed of {
-        comp : Assignments.comp;
         lowered : Low_level.optimized;
         bindings : Indexing.unit_bindings;
         name : string;
       }
-    | Compiled of {
-        from_prior_context : Set.M(Tnode).t;
-        lowered : Low_level.optimized;
-        proc : Backend.procedure;
-      }
+    | Compiled of { lowered : Low_level.optimized; proc : Backend.procedure }
   [@@deriving sexp_of]
 
   type code_batch =
     | Postponed of {
-        comps : Assignments.comp option array;
         lowereds : Low_level.optimized option array;
         bindings : Indexing.unit_bindings;
         names : string option array;
       }
     | Compiled of {
-        from_prior_context : Set.M(Tnode).t;
         lowereds : Low_level.optimized option array;
         procs : ctx_arrays option * Backend.procedure option array;
       }
   [@@deriving sexp_of]
 
-  let global_config = ref Only_devices_parallel
-
-  let initialize config =
-    global_config := config;
-    initialize config
-
-  let expected_merge_node : code -> _ = function
-    | Postponed { lowered = Low_level.{ merge_node; _ }; _ }
-    | Compiled { lowered = Low_level.{ merge_node; _ }; _ } ->
-        merge_node
-
-  let expected_merge_nodes : code_batch -> _ = function
-    | Postponed { lowereds; _ } | Compiled { lowereds; _ } ->
-        Array.map lowereds ~f:(fun lowered ->
-            Option.(join @@ map lowered ~f:(fun optim -> optim.merge_node)))
-
-  let get_lowered : code -> _ = function
-    | Postponed { lowered; _ } | Compiled { lowered; _ } -> lowered
-
-  let get_lowereds : code_batch -> _ = function
-    | Postponed { lowereds; _ } -> lowereds
-    | Compiled { lowereds; _ } -> lowereds
-
-  let compile ?(shared = false) ?name bindings comp : code =
-    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
-
+  let compile ?(shared = false) ~name bindings lowered : code =
     if shared then
       let proc = compile ~name ~opt_ctx_arrays:None bindings lowered in
-      let from_prior_context =
-        Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes
-      in
-      Compiled { from_prior_context; lowered; proc }
-    else Postponed { comp; lowered; bindings; name }
+      Compiled { lowered; proc }
+    else Postponed { lowered; bindings; name }
 
-  let compile_batch ?(shared = false) ?names ?occupancy bindings comps : code_batch =
-    let names, lowereds =
-      lower_batch_assignments ?names ?occupancy bindings
-      @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
-    in
+  let compile_batch ?(shared = false) ~names bindings lowereds : code_batch =
     if shared then
       let procs = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
-      let from_prior_context =
-        from_prior_context_batch
-        @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
-      in
-      Compiled { lowereds; procs; from_prior_context }
-    else
-      Postponed
-        {
-          comps = Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)));
-          lowereds;
-          bindings;
-          names;
-        }
+      Compiled { lowereds; procs }
+    else Postponed { lowereds; bindings; names }
 
-  let link ~merge_buffer ~runner_label ctx_arrays (code : code) =
-    let lowered = get_lowered code in
-    let verify from_prior_context =
-      verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context [| lowered.traced_store |]
-    in
-    let inputs, outputs = Low_level.input_and_output_nodes lowered in
-    let ctx_arrays, bindings, schedule, name =
-      match code with
-      | Postponed { comp; lowered; bindings; name } ->
-          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
-          let from_prior_context =
-            Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes
-          in
-          verify from_prior_context;
-          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-      | Compiled { from_prior_context; proc; _ } ->
-          verify from_prior_context;
-          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-    in
-    let schedule =
-      Task.prepend schedule ~work:(fun () ->
-          check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
-            ~code_node:(expected_merge_node code))
-    in
-    { context = ctx_arrays; schedule; bindings; name; inputs; outputs }
+  include Add_scheduler (Backend)
 
-  let link_batch ~merge_buffer ~runner_label ctx_arrays (code_batch : code_batch) =
-    let lowereds = get_lowereds code_batch in
-    let verify from_prior_context =
-      verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context
-      @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun opt -> opt.Low_level.traced_store))
-    in
+  let link context (code : code) =
+    let runner_label = get_name context.stream in
+    let ctx_arrays = context.ctx_arrays in
+    let merge_buffer = context.stream.merge_buffer in
+    match code with
+    | Postponed { lowered; bindings; name } ->
+        let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
+        link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+    | Compiled { proc; _ } -> link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+
+  let link_batch context (code_batch : code_batch) =
+    let runner_label = get_name context.stream in
+    let ctx_arrays = context.ctx_arrays in
+    let merge_buffer = context.stream.merge_buffer in
+    (* FIXME: why are we getting and ignoring opt_ctx_arrays here? *)
     let _opt_ctx_arrays, procs =
       match code_batch with
-      | Postponed { comps; lowereds; bindings; names } ->
-          let procs =
-            Backend.compile_batch ~names ~opt_ctx_arrays:(Some ctx_arrays) bindings lowereds
-          in
-          verify @@ from_prior_context_batch comps;
-          procs
-      | Compiled { from_prior_context; procs; _ } ->
-          verify from_prior_context;
-          procs
+      | Postponed { lowereds; bindings; names } ->
+          Backend.compile_batch ~names ~opt_ctx_arrays:(Some ctx_arrays) bindings lowereds
+      | Compiled { procs; _ } -> procs
     in
-    let code_nodes = expected_merge_nodes code_batch in
-    Array.fold_mapi procs ~init:ctx_arrays ~f:(fun i ctx_arrays -> function
-      | Some proc ->
-          let ctx_arrays, bindings, schedule, name =
-            link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-          in
-          let inputs, outputs = Low_level.input_and_output_nodes @@ Option.value_exn lowereds.(i) in
-          let schedule =
-            Task.prepend schedule ~work:(fun () ->
-                check_merge_buffer ~scheduled_node:(Option.map !merge_buffer ~f:snd)
-                  ~code_node:code_nodes.(i))
-          in
-          (ctx_arrays, Some { context = ctx_arrays; schedule; bindings; name; inputs; outputs })
-      | None -> (ctx_arrays, None))
+    let (ctx_arrays, bindings), schedules =
+      Array.fold_map procs ~init:(ctx_arrays, None) ~f:(fun (ctx_arrays, bindings) -> function
+        | Some proc ->
+            let ctx_arrays, bindings', schedule =
+              link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+            in
+            Option.iter bindings ~f:(fun bindings -> assert (phys_equal bindings bindings'));
+            ((ctx_arrays, Some bindings'), Some (ctx_arrays, schedule))
+        | None -> ((ctx_arrays, bindings), None))
+    in
+    (ctx_arrays, Option.value_exn ~here:[%here] bindings, schedules)
 
-  let get_used_memory = Ndarray.get_used_memory
+  let from_host ~dst_ptr ~dst hosted =
+    let work () = host_to_buffer hosted ~dst:dst_ptr in
+    (* TODO: pass description to from_host. *)
+    schedule_task dst.stream
+      (Task.Task
+         { context_lifetime = dst; description = "from_host on " ^ get_name dst.stream; work })
+
+  let to_host ~src_ptr ~src hosted =
+    let work () = buffer_to_host hosted ~src:src_ptr in
+    (* TODO: pass description to to_host. *)
+    schedule_task src.stream
+      (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
+
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+    let dev = dst.stream in
+    let size_in_bytes = Tnode.size_in_bytes tn in
+    let work =
+      (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+      match (into_merge_buffer, dst_ptr) with
+      | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_ptr"
+      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
+      | Streaming, _ -> fun () -> dev.merge_buffer := Some (src_ptr, tn)
+      | Copy, _ ->
+          fun () ->
+            let size_in_bytes = Tnode.size_in_bytes tn in
+            let allocated_capacity =
+              match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
+            in
+            if allocated_capacity < size_in_bytes then
+              dev.allocated_buffer <-
+                Some (alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes dst.stream);
+            let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
+            dev.merge_buffer := Some (merge_ptr, tn);
+            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
+    in
+    let description =
+      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
+      ^ get_name src.stream
+    in
+    schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
-module Make_no_device_backend (Backend_impl : Lowered_no_device_backend) = struct
-  module No_device = Lowered_no_device_backend (Backend_impl)
-
-  module Multicore = struct
-    module Backend_device = Multicore_backend (No_device)
-
-    (* include Add_buffer_retrieval_and_syncing (Backend_device) *)
-    module Syncing = Add_buffer_retrieval_and_syncing (Backend_device)
-    include Backend_device
-    include Syncing
-  end
-
-  module Sync = struct
-    module Backend_device = Sync_backend (No_device)
-    include Backend_device
-    include Add_buffer_retrieval_and_syncing (Backend_device)
-  end
-end
-
-module Cc = Make_no_device_backend (Cc_backend)
-module Gcc = Make_no_device_backend (Gcc_backend)
-
-module Lowered_backend (Device : Lowered_backend) : Backend = struct
+module Raise_backend (Device : Lowered_backend) : Backend = struct
   include Device
   include Add_buffer_retrieval_and_syncing (Device)
 
   type nonrec code = {
     from_prior_context : Set.M(Tnode).t;
+    name : string;
     lowered : Low_level.optimized;
     code : code;
     expected_merge_node : Tnode.t option;
@@ -672,28 +507,30 @@ module Lowered_backend (Device : Lowered_backend) : Backend = struct
     from_prior_context : Set.M(Tnode).t;
     lowereds : Low_level.optimized option array;
     code_batch : code_batch;
+    names : string option array;
     expected_merge_nodes : Tnode.t option array;
   }
   [@@deriving sexp_of]
 
-  let compile ?shared:_ ?name bindings comp : code =
+  let compile ?shared ?name bindings comp : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
-    let code = compile ~name bindings lowered in
+    let code = compile ?shared ~name bindings lowered in
     let from_prior_context = Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes in
-    { from_prior_context; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
+    { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let compile_batch ?shared:_ ?names ?occupancy bindings comps =
+  let compile_batch ?shared ?names ?occupancy bindings comps =
     let names, lowereds =
       lower_batch_assignments ?names ?occupancy bindings
       @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
     in
-    let code_batch = compile_batch ~names bindings lowereds in
+    let code_batch = compile_batch ?shared ~names bindings lowereds in
     let from_prior_context =
       from_prior_context_batch
       @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
     in
     {
       from_prior_context;
+      names;
       lowereds;
       code_batch;
       expected_merge_nodes =
@@ -705,43 +542,79 @@ module Lowered_backend (Device : Lowered_backend) : Backend = struct
     verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context [| code.lowered.traced_store |];
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
-    let context, bindings, schedule = link context code.code in
+    let ctx_arrays, bindings, schedule = link context code.code in
+    let context = make_child ~ctx_arrays context in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer
             ~scheduled_node:(scheduled_merge_node context.stream)
             ~code_node:code.expected_merge_node)
     in
-    { context; schedule; bindings; name; inputs; outputs }
+    { context; schedule; bindings; name = code.name; inputs; outputs }
 
   let link_batch context code_batch =
     verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code_batch.from_prior_context
     @@ Array.filter_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
-    let context, bindings, schedules = link_batch context code_batch.code_batch in
-    ( context,
-      Array.mapi schedules ~f:(fun i ->
-          Option.map ~f:(fun schedule ->
-              let expected_merge_node = code_batch.expected_merge_nodes.(i) in
-              let inputs, outputs =
-                Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)
-              in
-              let schedule =
-                Task.prepend schedule ~work:(fun () ->
-                    check_merge_buffer
-                      ~scheduled_node:(scheduled_merge_node context.stream)
-                      ~code_node:expected_merge_node)
-              in
-              { context; schedule; bindings; name; inputs; outputs })) )
+    let _ctx_arrays, bindings, schedules = link_batch context code_batch.code_batch in
+    Array.fold_mapi schedules ~init:context ~f:(fun i context -> function
+      | None -> (context, None)
+      | Some (ctx_arrays, schedule) ->
+          let context = make_child ~ctx_arrays context in
+          let expected_merge_node = code_batch.expected_merge_nodes.(i) in
+          let inputs, outputs =
+            Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)
+          in
+          let schedule =
+            Task.prepend schedule ~work:(fun () ->
+                check_merge_buffer
+                  ~scheduled_node:(scheduled_merge_node context.stream)
+                  ~code_node:expected_merge_node)
+          in
+          (context, Some { context; schedule; bindings; name; inputs; outputs }))
 end
 
-module Cuda_backend : Backend = Lowered_backend ((Cuda_backend : Lowered_backend))
+module Cuda_backend : Backend = Raise_backend ((Cuda_backend : Lowered_backend))
+
+module Make_device_backend_from_lowered
+    (Add_scheduler : functor
+      (Impl : For_add_scheduler)
+      -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
+    (Backend_impl : Lowered_no_device_backend) =
+struct
+  module Lowered_device = Add_device (Add_scheduler) (Backend_impl)
+  module Backend_device = Raise_backend (Lowered_device)
+  include Backend_device
+end
+
+module Cc_multicore = Make_device_backend_from_lowered (Multicore_scheduler) (Cc_backend)
+module Gcc_multicore = Make_device_backend_from_lowered (Multicore_scheduler) (Gcc_backend)
+module Cc_sync = Make_device_backend_from_lowered (Sync_scheduler) (Cc_backend)
+module Gcc_sync = Make_device_backend_from_lowered (Sync_scheduler) (Gcc_backend)
 
 let reinitialize (module Backend : Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
     Stdlib.Gc.full_major ();
     Backend.initialize config)
+
+let%track3_sexp finalize (type buffer_ptr dev runner event)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event) (ctx : Backend.context) : unit =
+  Option.iter Backend.free_buffer ~f:(fun mem_free ->
+      if
+        Atomic.compare_and_set ctx.finalized false true
+        && (not @@ Atomic.get ctx.stream.device.released)
+      then (
+        Backend.await ctx.stream;
+        Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
+            if
+              (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
+              && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
+            then mem_free ctx.stream data)))
 
 let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
   let backend =
@@ -750,10 +623,10 @@ let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
           Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
       |> String.lowercase
     with
-    | "cc" -> (module Cc.Multicore : Backend)
-    | "gccjit" -> (module Gcc.Multicore : Backend)
-    | "sync_cc" -> (module Cc.Sync : Backend)
-    | "sync_gccjit" -> (module Gcc.Sync : Backend)
+    | "cc" -> (module Cc_multicore : Backend)
+    | "gccjit" -> (module Gcc_multicore : Backend)
+    | "sync_cc" -> (module Cc_sync : Backend)
+    | "sync_gccjit" -> (module Gcc_sync : Backend)
     | "cuda" -> (module Cuda_backend : Backend)
     | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
   in

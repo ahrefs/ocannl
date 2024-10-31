@@ -66,6 +66,8 @@ module Alloc_buffer = struct
     in
     set_ctx stream.device.dev.primary_context;
     Cu.Deviceptr.mem_alloc ~size_in_bytes
+
+  let free_buffer = Some (fun _stream ptr -> Cu.Deviceptr.mem_free ptr)
 end
 
 include Backend_impl.Device (Device_stream) (Alloc_buffer)
@@ -76,7 +78,6 @@ let is_done event = Cu.Delimited_event.query event
 let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
 let sync event = Cu.Delimited_event.synchronize event
 let all_work stream = Cu.Delimited_event.record stream.runner
-let scheduled_merge_node stream = Option.map ~f:snd !(stream.merge_buffer)
 
 let is_initialized, initialize =
   let initialized = ref false in
@@ -178,19 +179,6 @@ let await stream : unit =
 
 let is_idle stream = Cu.Stream.is_ready stream.runner
 
-let%track3_sexp finalize (ctx : context) : unit =
-  if
-    Atomic.compare_and_set ctx.finalized false true && (not @@ Atomic.get ctx.stream.device.released)
-  then (
-    (* await does this: set_ctx ctx.stream.device.primary_context; *)
-    await ctx.stream;
-    (* Cudajit's modules, streams and events are destroyed by their respective finalizers. *)
-    Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
-        if
-          (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
-          && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
-        then Cu.Deviceptr.mem_free data))
-
 let from_host ~dst_ptr ~dst hosted =
   set_ctx @@ ctx_of dst;
   let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
@@ -274,6 +262,7 @@ let%diagn2_sexp cuda_to_ptx ~name cu_src =
   ptx
 
 let is_in_context node =
+  (* FIXME: shouldn't we use Tnode.is_in_context_force? *)
   Tnode.default_to_most_local node.Low_level.tn 33;
   match node.tn.memory_mode with Some ((Virtual | Local), _) -> false | _ -> true
 
@@ -353,7 +342,7 @@ struct
     | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 end
 
-let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+let compile ?shared:_ ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
@@ -369,7 +358,7 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { traced_store; ptx; params; bindings; name }
 
-let compile_batch ~names bindings lowereds =
+let compile_batch ?shared:_ ~names bindings lowereds =
   let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let for_lowereds = for_lowereds
@@ -404,18 +393,13 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     _traced_store lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.Module.get_function run_module ~name in
-  let context = make_child ~ctx_arrays prior_context in
-  Stdlib.Gc.finalise finalize context;
+  let stream = prior_context.stream in
+  let runner_label = get_name stream in
   let%diagn3_l_sexp work () : unit =
     let log_id = get_global_run_id () in
     let log_id_prefix = Int.to_string log_id ^ ": " in
     [%log_result
-      "Launching",
-        name,
-        "on",
-        get_name context.stream,
-        (log_id : int),
-        (params : (string * param_source) list)];
+      "Launching", name, "on", runner_label, (log_id : int), (params : (string * param_source) list)];
     let module S = Cu.Stream in
     let args : S.kernel_param list =
       (* TODO: should we prohibit or warn about local-only tensors that are in
@@ -426,7 +410,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
             S.Tensor arr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
-            let ptr = fst @@ Option.value_exn ~here:[%here] !(context.stream.merge_buffer) in
+            let ptr = fst @@ Option.value_exn ~here:[%here] !(stream.merge_buffer) in
             S.Tensor ptr
         | _name, Static_idx s ->
             let i = Indexing.find_exn lowered_bindings s in
@@ -445,7 +429,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
                           %{upto#Int}"]);
             S.Int !i)
     in
-    set_ctx @@ ctx_of context;
+    set_ctx @@ ctx_of prior_context;
     (* FIXME: this happens inside the kernel. *)
     (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
@@ -453,18 +437,17 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block
-         get_name context.stream;
+         runner_label;
          Utils.log_trace_tree _output]);
-    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 context.stream.runner args;
+    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
     [%log "kernel launched"]
   in
-  ( context,
-    Task.Task
-      {
-        context_lifetime = (run_module, context);
-        description = "launches " ^ name ^ " on " ^ get_name context.stream;
-        work;
-      } )
+  Task.Task
+    {
+      context_lifetime = (run_module, ctx_arrays);
+      description = "launches " ^ name ^ " on " ^ runner_label;
+      work;
+    }
 
 let%track3_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
   if is_in_context node && not (Map.mem ctx_arrays key) then (
@@ -504,7 +487,7 @@ let run_options () =
     Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
   else []
 
-let%track3_sexp link prior_context (code : code) : context * _ * _ =
+let%track3_sexp link prior_context (code : code) =
   let ctx = ctx_of prior_context in
   set_ctx ctx;
   let ctx_arrays =
@@ -514,32 +497,32 @@ let%track3_sexp link prior_context (code : code) : context * _ * _ =
   let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let context, task =
+  let task =
     link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays code.traced_store
       lowered_bindings run_module
   in
-  (context, lowered_bindings, task)
+  (ctx_arrays, lowered_bindings, task)
 
-let%track3_sexp link_batch prior_context (code_batch : code_batch) : context * _ * _ =
+let%track3_sexp link_batch prior_context (code_batch : code_batch) =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
   let ctx = ctx_of prior_context in
   set_ctx ctx;
   let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
-  let (context, _ctx_arrays), procs =
-    Array.fold_mapi code_batch.params_and_names ~init:(prior_context, prior_context.ctx_arrays)
-      ~f:(fun i (context, ctx_arrays) pns ->
-        Option.value ~default:((context, ctx_arrays), None)
+  let ctx_arrays, procs =
+    Array.fold_mapi code_batch.params_and_names ~init:prior_context.ctx_arrays
+      ~f:(fun i ctx_arrays pns ->
+        Option.value ~default:(ctx_arrays, None)
         @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
                let ctx_arrays =
                  Hashtbl.fold ~init:ctx_arrays traced_store
                    ~f:(alloc_if_needed ctx prior_context.stream)
                in
-               let context, task =
-                 link_proc ~prior_context:context ~name ~params ~ctx_arrays traced_store
-                   lowered_bindings run_module
+               let task =
+                 link_proc ~prior_context ~name ~params ~ctx_arrays traced_store lowered_bindings
+                   run_module
                in
-               ((context, ctx_arrays), Some task)))
+               (ctx_arrays, Some (ctx_arrays, task))))
   in
-  (context, lowered_bindings, procs)
+  (ctx_arrays, lowered_bindings, procs)

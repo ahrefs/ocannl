@@ -11,12 +11,12 @@ type event = unit
 let sync () = ()
 let is_done () = true
 let will_wait_for _ctx () = ()
-let initialize (_config : Backend_types.config) = ()
+let initialize _config = ()
 let is_initialized () = true
 let finalize _context = ()
-let compile ~name:_ bindings _optimized = bindings
+let compile ?shared:_ ~name:_ bindings _optimized = bindings
 
-let compile_batch ~names:_ (bindings : Indexing.unit_bindings) optimized : code_batch =
+let compile_batch ?shared:_ ~names:_ (bindings : Indexing.unit_bindings) optimized : code_batch =
   Array.map optimized ~f:(fun _ -> bindings)
 
 let is_in_context _traced_array = false

@@ -16,12 +16,15 @@ open Backend_intf
 module type No_device_buffer_and_copying = sig
   include Alloc_buffer with type stream := unit
 
+  val get_used_memory : unit -> int
+  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
   val buffer_to_buffer : dst:buffer_ptr -> src:buffer_ptr -> size_in_bytes:int -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
 end
 
-module No_device_buffer_and_copying :
+module No_device_buffer_and_copying () :
   No_device_buffer_and_copying with type buffer_ptr = unit Ctypes.ptr = struct
   type buffer_ptr = unit Ctypes.ptr
 
@@ -31,18 +34,28 @@ module No_device_buffer_and_copying :
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 
-  let alloc_buffer ?old_buffer ~size_in_bytes () =
-    match old_buffer with
-    | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
-    | _ ->
-        let ptr = Ctypes.(to_voidp @@ allocate_n int8_t ~count:size_in_bytes) in
-        { ptr; size_in_bytes }
+  let used_memory = Atomic.make 0
+  let get_used_memory () = Atomic.get used_memory
+
+  let alloc_impl ~size_in_bytes =
+    let finalize _ptr = ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int) in
+    let ptr = Ctypes.(to_voidp @@ allocate_n int8_t ~count:size_in_bytes) in
+    let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
+    Stdlib.Gc.finalise finalize ptr;
+    ptr
 
   let alloc_zero_init_array prec ~dims () =
     let size_in_bytes =
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
-    Ctypes.(to_voidp @@ allocate_n int8_t ~count:size_in_bytes)
+    alloc_impl ~size_in_bytes
+
+  let alloc_buffer ?old_buffer ~size_in_bytes () =
+    match old_buffer with
+    | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
+    | _ -> { ptr = alloc_impl ~size_in_bytes; size_in_bytes }
+
+  let free_buffer = None
 
   let buffer_to_buffer ~dst:Ctypes_static.(CPointer dst) ~src:Ctypes_static.(CPointer src)
       ~size_in_bytes =
@@ -127,33 +140,11 @@ module type Backend_impl_common = sig
       directly from the host. *)
 end
 
-(** An intermediate interface for stream-agnostic (typically CPU) backend implementations. *)
-module type No_device_backend = sig
-  include Backend_common
-  include Backend_impl_common with type buffer_ptr := buffer_ptr
+(** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations. *)
+module type For_add_scheduler = sig
+  include Backend_any_common
 
   val name : string
-
-  val link :
-    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    runner_label:string ->
-    ctx_arrays ->
-    code ->
-    ctx_arrays routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
-
-  val link_batch :
-    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
-    runner_label:string ->
-    ctx_arrays ->
-    code_batch ->
-    ctx_arrays * ctx_arrays routine option array
-  (** Returns the routines for the procedures included in the code batch. The returned context is
-      downstream of all the returned routines (in particular, the routines' contexts are not
-      independent). *)
-
-  val get_used_memory : unit -> int
-  (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
@@ -227,8 +218,8 @@ module type Lowered_no_device_backend = sig
     runner_label:string ->
     ctx_arrays ->
     procedure ->
-    ctx_arrays * Indexing.lowered_bindings * Task.t * string
-  (** [runner_label] will be [get_name stream] of the stream from which the [ctx_arrays] come from. *)
+    ctx_arrays * Indexing.lowered_bindings * Task.t
+  (** [runner_label] will be [get_name stream] of the stream holding the resulting [ctx_arrays]. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
@@ -255,28 +246,48 @@ module type No_buffer_retrieval_or_syncing = sig
       [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
 end
 
-(** Lowered-level backend interface: implementation-facing API for device-based (typically GPU)
-    backends. *)
+(** A compilation-agnostic backend API -- {!Lowered_backend} instantates it, but
+    {!Lowered_no_device_backend} backends are also converted to its instantations. *)
+module type With_scheduler = sig
+  include Backend_device_common
+
+  val schedule_task : stream -> Task.t -> unit
+end
+
+(** Lowered-level backend interface: implementation-facing API for device-based (GPU, or CPU after
+    adding a scheduler) backends. *)
 module type Lowered_backend = sig
-  include No_buffer_retrieval_or_syncing
+  include Backend_device_common
+
+  include
+    No_buffer_retrieval_or_syncing
+      with type buffer_ptr := buffer_ptr
+       and type dev := dev
+       and type runner := runner
+       and type event := event
 
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
 
-  val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
+  val compile : ?shared:bool -> name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
   val compile_batch :
+    ?shared:bool ->
     names:string option array ->
     Indexing.unit_bindings ->
     Low_level.optimized option array ->
     code_batch
 
-  val link : context -> code -> context * Indexing.lowered_bindings * Task.t
+  val link : context -> code -> ctx_arrays * Indexing.lowered_bindings * Task.t
+  (** The results correspond to the fields {!field-Backend_intf.ctx_arrays} of
+      {!field-Backend_intf.context}, {!field-Backend_intf.bindings} and
+      {!field-Backend_intf.schedule} of {!Backend_intf.routine}. *)
 
   val link_batch :
-    context -> code_batch -> context * Indexing.lowered_bindings * Task.t option array
-
-  val scheduled_merge_node : stream -> Tnode.t option
-  (** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge buffer
-      right after [await stream]. *)
+    context ->
+    code_batch ->
+    ctx_arrays * Indexing.lowered_bindings * (ctx_arrays * Task.t) option array
+  (** Returns the schedule tasks and their [ctx_arrays] for the procedures included in the code
+      batch. The returned [ctx_arrays] will be part of a context downstream of all the tasks and the
+      tasks' contexts are not independent (typically, they are cumulative). *)
 end

@@ -18,6 +18,7 @@
 - Got rid of `unsafe_cleanup`.
 - Got rid of `subordinal`.
 - Removed dependency on `core`, broke up dependency on `ppx_jane`.
+- Huge refactoring of backend internal interfaces and API (not repeating same code).
 - TODO: Built per-tensor-node stream-to-stream synchronization into copying functions, removed obsolete blocking synchronizations.
 
 ### Fixed

@@ -31,6 +31,7 @@ let%track3_l_sexp enschedule ~schedule_task ~get_stream_name stream
     (Task { description; _ } as task) =
   [%log_result "enschedule", description, "on", get_stream_name stream];
   let work () = schedule_task stream task in
+  (* TODO: keeping [task] in [context_lifetime] is redundant because it's captured by [work]. *)
   Task
     {
       context_lifetime = task;

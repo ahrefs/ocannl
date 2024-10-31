@@ -1,5 +1,6 @@
 type procedure = Unimplemented_proc [@@deriving sexp_of]
-type buffer_ptr = Backend_impl.No_device_buffer_and_copying.buffer_ptr [@@deriving sexp_of]
+
+include Backend_impl.No_device_buffer_and_copying ()
 
 let expected_merge_node Unimplemented_proc =
   failwith "gcc backend missing: install the optional dependency gccjit"
