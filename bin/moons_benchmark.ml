@@ -78,7 +78,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
-  Arrayjit.Backends.sync_suggested_num_streams := num_streams;
+  Arrayjit.Schedulers.sync_suggested_num_streams := num_streams;
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name ()) in
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())

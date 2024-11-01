@@ -291,3 +291,17 @@ module type Lowered_backend = sig
       batch. The returned [ctx_arrays] will be part of a context downstream of all the tasks and the
       tasks' contexts are not independent (typically, they are cumulative). *)
 end
+
+module Alloc_buffer_ignore_stream
+    (Device_types : Device_types)
+    (Backend : Alloc_buffer with type buffer_ptr = Device_types.buffer_ptr and type stream := unit) :
+  Alloc_buffer with type buffer_ptr = Backend.buffer_ptr and type stream = Device_types.stream =
+struct
+  include Device_types
+
+  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
+    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+
+  let alloc_zero_init_array prec ~dims _stream = Backend.alloc_zero_init_array prec ~dims ()
+  let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
+end

@@ -2,8 +2,6 @@
 
 open Base
 
-val sync_suggested_num_streams : int ref
-
 val reinitialize : (module Backend_intf.Backend) -> Backend_intf.config -> unit
 (** Initializes the backend, and if it was already initialized, performs garbage collection. *)
 

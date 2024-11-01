@@ -1,4 +1,4 @@
-## [0.4.2] -- current
+## [0.5.0] -- current
 
 ### Added
 
@@ -11,7 +11,7 @@
 - Migrated to cudajit 0.5.
 - Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
 - Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
-- New files: split out `backend_types.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
+- New files: split out `backend_intf.ml`, `backend_impl.ml`, `schedulers.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
 - Removed half-static verification of merge buffer nodes inside `device_to_device`.
 - Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - Moved the multicore backend from a `device = stream` model to a single device model.

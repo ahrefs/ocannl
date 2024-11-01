@@ -48,6 +48,7 @@
   cc_backend
   gcc_backend
   cuda_backend
+  schedulers
   backends)
  (modes byte native))
 
