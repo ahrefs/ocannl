@@ -47,7 +47,7 @@ A possible route to learning OCANNL:
 3. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
 4. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
 5. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_types.ml](arrayjit/lib/backend_types.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
-6. Read [arrayjit/lib/writing_a_backend.md](arrayjit/lib/writing_a_backend.md).
+6. Read [arrayjit/lib/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
 7. Read the implementation overview:
    1. Shape inference details [lib/shape_inference.md](lib/shape_inference.md).
    2. Backend-independent optimizations [arrayjit/lib/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
