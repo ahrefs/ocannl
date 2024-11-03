@@ -1,4 +1,4 @@
-(** {1 The collection of the execution backends} *)
+(** {1 A collection of the execution backends} *)
 
 open Base
 

@@ -91,7 +91,8 @@ type ('buffer_ptr, 'dev, 'event) device = {
       (** The streams owning the given nodes. This map can only grow. *)
   stream_working_on : (int * 'event) option Hashtbl.M(Tnode).t;
       (** The stream that most recently has been updating the node, and the associated update
-          completion event. Only populated when {!field-queried_work_for} is populated. *)
+          completion event. An entry for a tensor node is only populated when
+          {!field-queried_work_for} is also populated. *)
 }
 [@@deriving sexp_of]
 
@@ -102,8 +103,9 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
   queried_work_for : 'event option Hashtbl.M(Tnode).t;
-      (* The completion event for updating the node via this stream. Only populated after the first
-         time {!} *)
+      (* The completion event for updating the node via this stream, if any. Only existing entries
+         are updated, and an entry is populated when {!work_for} is called for the first time on the
+         tensor node. *)
 }
 [@@deriving sexp_of]
 
