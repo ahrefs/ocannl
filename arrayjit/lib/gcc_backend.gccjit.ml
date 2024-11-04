@@ -74,13 +74,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let is_in_context node =
-  (* FIXME: shouldn't we use Tnode.is_in_context_force? *)
-  Tnode.default_to_most_local node.Low_level.tn 33;
-  match node.tn.memory_mode with
-  | Some (Hosted (Constant | Volatile), _) -> false
-  | Some ((Virtual | Local), _) -> false
-  | _ -> true
+let unified_memory = true
 
 type gccjit_param = Gccjit.param
 

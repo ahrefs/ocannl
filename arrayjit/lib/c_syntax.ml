@@ -17,7 +17,7 @@ module C_syntax (B : sig
 
   val opt_ctx_arrays : buffer_ptr Map.M(Tnode).t option
   val hardcoded_context_ptr : (buffer_ptr -> Ops.prec -> string) option
-  val is_in_context : Low_level.traced_array -> bool
+  val unified_memory : bool
   val host_ptrs_for_readonly : bool
   val logs_to_stdout : bool
   val main_kernel_prefix : string
@@ -68,7 +68,7 @@ struct
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
             let tn = node.tn in
             if not @@ Hash_set.mem is_global tn then
-              let in_ctx : bool = B.is_in_context node in
+              let in_ctx : bool = B.unified_memory node in
               let ctx_ptr = B.hardcoded_context_ptr in
               let mem : (Tn.memory_mode * int) option = tn.memory_mode in
               match
@@ -296,14 +296,14 @@ struct
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
              let backend_info =
                Sexp.Atom
-                 (if B.is_in_context node then "From_context"
+                 (if B.unified_memory node then "From_context"
                   else if Hash_set.mem is_global tn then "Constant_from_host"
                   else if Tn.is_virtual_force tn 3331 then "Virtual"
                   else "Local_only")
              in
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-             if B.is_in_context node && not (Hash_set.mem is_global tn) then
+             if B.unified_memory node && not (Hash_set.mem is_global tn) then
                (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
@@ -369,7 +369,7 @@ struct
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if not (Tn.is_virtual_force tn 333 || B.is_in_context node || Hash_set.mem is_global tn)
+        if not (Tn.is_virtual_force tn 333 || B.unified_memory node || Hash_set.mem is_global tn)
         then
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)

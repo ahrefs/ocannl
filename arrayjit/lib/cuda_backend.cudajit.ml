@@ -30,6 +30,8 @@ module Backend_buffer = struct
   end)
 end
 
+let unified_memory = false
+
 module Device_config = struct
   include Backend_buffer
 
@@ -261,11 +263,6 @@ let%diagn2_sexp cuda_to_ptx ~name cu_src =
     Stdio.Out_channel.close oc);
   ptx
 
-let is_in_context node =
-  (* FIXME: shouldn't we use Tnode.is_in_context_force? *)
-  Tnode.default_to_most_local node.Low_level.tn 33;
-  match node.tn.memory_mode with Some ((Virtual | Local), _) -> false | _ -> true
-
 module C_syntax_config (Input : sig
   val for_lowereds : Low_level.optimized array
 end) =
@@ -276,7 +273,7 @@ struct
 
   let opt_ctx_arrays = None
   let hardcoded_context_ptr = None
-  let is_in_context = is_in_context
+  let unified_memory = unified_memory
   let host_ptrs_for_readonly = false
   (* GPUs cannot access host memory pointers directly. *)
 
@@ -448,39 +445,6 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
       description = "launches " ^ name ^ " on " ^ runner_label;
       work;
     }
-
-let%track3_sexp alloc_if_needed ctx stream ~key ~data:node ctx_arrays =
-  if is_in_context node && not (Map.mem ctx_arrays key) then (
-    [%log2 Tn.debug_name key, "read_only", (node.read_only : bool)];
-    [%log3 (key : Tn.t)];
-    let default () : buffer_ptr =
-      set_ctx ctx;
-      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
-    in
-    let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
-    let device = stream.device in
-    if node.read_only then
-      if Tn.known_non_cross_stream key then add_new ()
-      else (
-        if Hashtbl.mem device.cross_stream_candidates key then
-          Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
-        let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
-        Map.add_exn ctx_arrays ~key ~data)
-    else if Tn.known_shared_cross_stream key then (
-      if Hashtbl.mem device.owner_streams key then
-        if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
-          raise
-          @@ Utils.User_error
-               ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
-              ^ " assumed to be cross-stream-shared but then written to on multiple devices")
-        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
-      let data = Hashtbl.find_exn device.cross_stream_candidates key in
-      Map.add_exn ctx_arrays ~key ~data)
-    else (
-      Tn.update_memory_sharing key Tn.Per_stream 41;
-      Hashtbl.remove device.cross_stream_candidates key;
-      add_new ()))
-  else ctx_arrays
 
 let run_options () =
   if Utils.with_runtime_debug () then

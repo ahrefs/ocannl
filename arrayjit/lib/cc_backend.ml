@@ -34,7 +34,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let is_in_context node = Tnode.is_in_context_force node.Low_level.tn 33
+let unified_memory = true
 
 let get_global_run_id =
   let next_id = ref 0 in
@@ -82,7 +82,7 @@ struct
   let for_lowereds = Input.for_lowereds
   let opt_ctx_arrays = Input.opt_ctx_arrays
   let hardcoded_context_ptr = c_ptr_to_string
-  let is_in_context = is_in_context
+  let unified_memory = unified_memory
   let host_ptrs_for_readonly = true
   let logs_to_stdout = false
   let main_kernel_prefix = ""

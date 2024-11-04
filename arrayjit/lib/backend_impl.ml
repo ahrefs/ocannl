@@ -133,7 +133,7 @@ end
 module type Backend_impl_common = sig
   include Buffer
 
-  val is_in_context : Low_level.traced_array -> bool
+  val unified_memory : bool
   (** If true, the node is required to be in the contexts linked with code that uses it.
 
       Should return false for nodes that are virtual, local, or which the backend prefers to access
@@ -305,3 +305,36 @@ struct
   let alloc_zero_init_array prec ~dims _stream = Backend.alloc_zero_init_array prec ~dims ()
   let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
 end
+
+let%track3_sexp alloc_if_needed (type buffer_ptr) ~ ~unified_memory ctx stream ~key ~data:node ctx_arrays =
+  if Tnode.is_in_context ~unified_memory node && not (Map.mem ctx_arrays key) then (
+    [%log2 Tn.debug_name key, "read_only", (node.read_only : bool)];
+    [%log3 (key : Tn.t)];
+    let default () : buffer_ptr =
+      set_ctx ctx;
+      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
+    in
+    let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
+    let device = stream.device in
+    if node.read_only then
+      if Tn.known_non_cross_stream key then add_new ()
+      else (
+        if Hashtbl.mem device.cross_stream_candidates key then
+          Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
+        let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
+        Map.add_exn ctx_arrays ~key ~data)
+    else if Tn.known_shared_cross_stream key then (
+      if Hashtbl.mem device.owner_streams key then
+        if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
+          raise
+          @@ Utils.User_error
+               ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
+              ^ " assumed to be cross-stream-shared but then written to on multiple devices")
+        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
+      let data = Hashtbl.find_exn device.cross_stream_candidates key in
+      Map.add_exn ctx_arrays ~key ~data)
+    else (
+      Tn.update_memory_sharing key Tn.Per_stream 41;
+      Hashtbl.remove device.cross_stream_candidates key;
+      add_new ()))
+  else ctx_arrays

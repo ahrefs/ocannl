@@ -183,10 +183,10 @@ let is_materialized_force tn provenance =
   | Some ((On_device _ | Hosted _ | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
-let is_in_context_force tn provenance =
+let is_in_context_force ~unified_memory tn provenance =
   default_to_most_local tn provenance;
   match tn.memory_mode with
-  | Some (Hosted (Constant | Volatile), _) -> false
+  | Some (Hosted (Constant | Volatile), _) when unified_memory -> false
   | Some ((Virtual | Local), _) -> false
   | _ -> true
 

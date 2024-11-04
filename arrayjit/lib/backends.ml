@@ -115,18 +115,20 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~is_in_context ~ctx_arrays ~from_prior_context traced_stores =
+let verify_prior_context ~unified_memory ~ctx_arrays ~from_prior_context traced_stores =
   Set.iter from_prior_context ~f:(fun tn ->
       let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
         Option.value_map node ~default:false ~f:(fun node ->
-            is_in_context node && not (Option.is_some @@ Map.find ctx_arrays tn))
+            Tn.is_in_context ~unified_memory node && not (Option.is_some @@ Map.find ctx_arrays tn))
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 let from_prior_context_batch comps =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
-          Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
+          Set.diff
+            (Assignments.context_nodes ~unified_memory comp.Assignments.asgns)
+            comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
@@ -296,7 +298,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let link context (code : code) =
-    verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
+    verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context [| code.lowered.traced_store |];
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
     let ctx_arrays, bindings, schedule = link context code.code in
@@ -310,7 +312,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     { context; schedule; bindings; name = code.name; inputs; outputs }
 
   let link_batch context code_batch =
-    verify_prior_context ~is_in_context ~ctx_arrays:context.ctx_arrays
+    verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code_batch.from_prior_context
     @@ Array.filter_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
     let _ctx_arrays, bindings, schedules = link_batch context code_batch.code_batch in
