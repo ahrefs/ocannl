@@ -11,11 +11,12 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 module Tn = Tnode
 
 module C_syntax (B : sig
-  val for_lowereds : Low_level.optimized array
-
   type buffer_ptr
 
-  val opt_ctx_arrays : buffer_ptr Map.M(Tnode).t option
+  val procs : (Low_level.optimized * buffer_ptr ctx_arrays option) array
+  (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
+      shared and already known. *)
+
   val hardcoded_context_ptr : (buffer_ptr -> Ops.prec -> string) option
   val unified_memory : bool
   val host_ptrs_for_readonly : bool
@@ -30,7 +31,9 @@ module C_syntax (B : sig
 end) =
 struct
   let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.for_lowereds ~f:(fun l -> l.llc)
+    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun (l, _) -> l.llc)
+
+  let in_ctx tn = B.(Tn.is_in_context_force ~unified_memory tn 341)
 
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
@@ -64,15 +67,14 @@ struct
     let is_global = Hash_set.create (module Tn) in
     fprintf ppf {|@[<v 0>%a@,/* Global declarations. */@,|} (pp_print_list pp_print_string)
       B.include_lines;
-    Array.iter B.for_lowereds ~f:(fun l ->
+    Array.iter B.procs ~f:(fun (l, ctx_arrays) ->
         Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
             let tn = node.tn in
             if not @@ Hash_set.mem is_global tn then
-              let in_ctx : bool = B.unified_memory node in
               let ctx_ptr = B.hardcoded_context_ptr in
               let mem : (Tn.memory_mode * int) option = tn.memory_mode in
               match
-                (in_ctx, ctx_ptr, B.opt_ctx_arrays, B.host_ptrs_for_readonly, mem, node.read_only)
+                (in_ctx tn, ctx_ptr, ctx_arrays, B.host_ptrs_for_readonly, mem, node.read_only)
               with
               | true, Some get_ptr, Some ctx_arrays, _, _, _ ->
                   let ident = get_ident tn in
@@ -292,18 +294,18 @@ struct
     let params : (string * param_source) list =
       (* Preserve the order in the hashtable, so it's the same as e.g. in compile_globals. *)
       List.rev
-      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:node params ->
+      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
              let backend_info =
                Sexp.Atom
-                 (if B.unified_memory node then "From_context"
-                  else if Hash_set.mem is_global tn then "Constant_from_host"
-                  else if Tn.is_virtual_force tn 3331 then "Virtual"
-                  else "Local_only")
+                 (if in_ctx tn then "Ctx"
+                  else if Hash_set.mem is_global tn then "Host"
+                  else if Tn.is_virtual_force tn 3331 then "Virt"
+                  else "Local")
              in
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-             if B.unified_memory node && not (Hash_set.mem is_global tn) then
+             if in_ctx tn && not (Hash_set.mem is_global tn) then
                (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
@@ -369,8 +371,7 @@ struct
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if not (Tn.is_virtual_force tn 333 || B.unified_memory node || Hash_set.mem is_global tn)
-        then
+        if not (Tn.is_virtual_force tn 333 || in_ctx tn || Hash_set.mem is_global tn) then
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)
             (get_ident tn) (Tn.num_elems tn)

@@ -30,7 +30,6 @@ type procedure = {
   name : string;
   result : library;
   params : (string * param_source) list;
-  opt_ctx_arrays : buffer_ptr ctx_arrays option;
 }
 [@@deriving sexp_of]
 
@@ -73,14 +72,12 @@ let c_compile_and_load ~f_name =
   result
 
 module C_syntax_config (Input : sig
-  val for_lowereds : Low_level.optimized array
-  val opt_ctx_arrays : buffer_ptr ctx_arrays option
+  val procs : (Low_level.optimized * buffer_ptr ctx_arrays option) array
 end) =
 struct
   type nonrec buffer_ptr = buffer_ptr
 
-  let for_lowereds = Input.for_lowereds
-  let opt_ctx_arrays = Input.opt_ctx_arrays
+  let procs = Input.procs
   let hardcoded_context_ptr = c_ptr_to_string
   let unified_memory = unified_memory
   let host_ptrs_for_readonly = true
@@ -98,23 +95,8 @@ struct
 end
 
 let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
-  let opt_ctx_arrays =
-    Option.map opt_ctx_arrays ~f:(fun ctx_arrays ->
-        Hashtbl.fold lowered.traced_store ~init:ctx_arrays ~f:(fun ~key:tn ~data:node ctx_arrays ->
-            match Map.find ctx_arrays tn with
-            | None ->
-                if is_in_context node then
-                  (* let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in *)
-                  let data =
-                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
-                  in
-                  Map.add_exn ctx_arrays ~key:tn ~data
-                else ctx_arrays
-            | Some _ -> ctx_arrays))
-  in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let for_lowereds = [| lowered |]
-    let opt_ctx_arrays = opt_ctx_arrays
+    let procs = [| (lowered, opt_ctx_arrays) |]
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -123,36 +105,18 @@ let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered in
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in
-  { result; params; bindings; name; opt_ctx_arrays }
+  { result; params; bindings; name }
 
 let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
-  let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
-  let opt_ctx_arrays =
-    Option.map opt_ctx_arrays ~f:(fun arrays ->
-        Array.fold for_lowereds ~init:arrays ~f:(fun ctx_arrays lowered ->
-            Hashtbl.fold lowered.traced_store ~init:ctx_arrays
-              ~f:(fun ~key:tn ~data:node ctx_arrays ->
-                match Map.find ctx_arrays tn with
-                | None ->
-                    if is_in_context node then
-                      (* let debug = "CC compile-time ctx array for " ^ Tn.debug_name tn in *)
-                      let data =
-                        alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
-                      in
-                      Map.add_exn ctx_arrays ~key:tn ~data
-                    else ctx_arrays
-                | Some _ -> ctx_arrays)))
-  in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let for_lowereds = for_lowereds
-    let opt_ctx_arrays = opt_ctx_arrays
+    let procs =
+      Array.filter_mapi lowereds ~f:(fun i ->
+          Option.map ~f:(fun lowereds ->
+              (lowereds, Option.(map opt_ctx_arrays ~f:(fun ctx_arrays -> value_exn ctx_arrays.(i))))))
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let global_ctx_arrays =
-    ref (match opt_ctx_arrays with Some ctx_arrays -> ctx_arrays | None -> Map.empty (module Tn))
-  in
   let base_name =
     String.(
       strip ~drop:(equal_char '_')
@@ -168,35 +132,13 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
-  let opt_ctx_arrays = Option.map opt_ctx_arrays ~f:(fun _ -> !global_ctx_arrays) in
-  ( opt_ctx_arrays,
-    Array.mapi params ~f:(fun i params ->
-        Option.map names.(i) ~f:(fun name ->
-            {
-              result;
-              params = Option.value_exn ~here:[%here] params;
-              bindings;
-              name;
-              opt_ctx_arrays;
-            })) )
+  Array.mapi params ~f:(fun i params ->
+      Option.map names.(i) ~f:(fun name ->
+          { result; params = Option.value_exn ~here:[%here] params; bindings; name }))
 
 let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
-  let arrays =
-    match code with
-    | { opt_ctx_arrays = Some arrays; _ } -> arrays
-    | { params; _ } ->
-        List.fold params ~init:ctx_arrays ~f:(fun ctx_arrays -> function
-          | _, Param_ptr tn ->
-              let f = function
-                | Some arr -> arr
-                | None ->
-                    (* let debug = "CC link-time ctx array for " ^ Tn.debug_name tn in *)
-                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
-              in
-              Map.update ctx_arrays tn ~f
-          | _ -> ctx_arrays)
-  in
+  List.iter code.params ~f:(function _, Param_ptr tn -> assert (Map.mem ctx_arrays tn) | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -219,7 +161,7 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
             let get_ptr (ptr, _tn) = ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let c_ptr = Map.find_exn arrays tn in
+            let c_ptr = Map.find_exn ctx_arrays tn in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
@@ -235,12 +177,11 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
-  ( arrays,
-    Indexing.lowered_bindings code.bindings run_variadic,
+  ( Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task
       {
         (* In particular, keep code alive so it doesn't get unloaded. *)
-        context_lifetime = (arrays, code);
+        context_lifetime = (ctx_arrays, code);
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       } )

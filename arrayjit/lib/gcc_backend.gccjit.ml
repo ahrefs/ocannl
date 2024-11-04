@@ -15,13 +15,6 @@ let name = "gccjit"
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"gccjit_backend_optimization_level"
 
-type mem_properties =
-  | Local_only  (** The array is only needed for a local computation, is allocated on the stack. *)
-  | From_context
-      (** The array has a copy allocated per-cpu-device, may or may not exist on the host. *)
-  | Constant_from_host  (** The array is read directly from the host. *)
-[@@deriving sexp, equal, compare, variants]
-
 let root_ctx = ref None
 
 module Tn = Tnode
@@ -38,12 +31,7 @@ let initialize _config =
 type tn_info = {
   tn : Tn.t;  (** The original array. *)
   ptr : (Gccjit.rvalue[@sexp.opaque]) Lazy.t;
-      (** Pointer to the first value of the associated array.
-          - if [mem = Constant_from_host], the pointer to the first element of the hosted [Ndarray],
-          - if [mem = From_context], either a pointer to [Ndarray] from [context.arrays] when
-            [~shared:false], or the function parameter when [~shared:true],
-          - if [mem = Local_only], the address of the on-the-stack array. *)
-  mem : mem_properties;
+      (** Pointer to the first value of the associated array, any of: hosted, in context, local. *)
   dims : int array;
   num_typ : (Gccjit.type_[@sexp.opaque]);
       (** The type of the stored values: [short] (precision [Half]), [float] (precision [Single]),
@@ -52,6 +40,11 @@ type tn_info = {
   zero_initialized : bool;
 }
 [@@deriving sexp_of]
+
+type gccjit_param = Gccjit.param
+
+(* let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p) *)
+let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
 
 type info_nodes = {
   ctx : (Gccjit.context[@sexp.opaque]);
@@ -69,22 +62,11 @@ type procedure = {
   bindings : Indexing.unit_bindings;
   name : string;
   result : (Gccjit.result[@sexp.opaque]);
-  opt_ctx_arrays : buffer_ptr ctx_arrays option;
   params : param_source list;
 }
 [@@deriving sexp_of]
 
 let unified_memory = true
-
-type gccjit_param = Gccjit.param
-
-let sexp_of_gccjit_param p = Sexp.Atom (Gccjit.Param.to_string p)
-let sexp_of_gccjit_rvalue v = Sexp.Atom (Gccjit.RValue.to_string v)
-
-type ctx_nodes =
-  | Ctx_arrays of buffer_ptr Map.M(Tn).t ref
-  | Param_ptrs of (gccjit_param * param_source) list ref
-[@@deriving sexp_of]
 
 let gcc_typ_of_prec =
   let open Gccjit in
@@ -116,79 +98,63 @@ let zero_out ctx block node =
 
 let get_c_ptr ctx num_typ ptr = Gccjit.(RValue.ptr ctx (Type.pointer num_typ) ptr)
 
-let prepare_node ~debug_log_zero_out ~get_ident ctx nodes traced_store ctx_nodes initializations
-    (tn : Tn.t) =
+let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~opt_ctx_arrays ~param_ptrs
+    initializations (tn : Tn.t) =
   let open Gccjit in
-  Hashtbl.update nodes tn ~f:(function
-    | Some old -> old
-    | None ->
-        let traced = Low_level.(get_node traced_store tn) in
-        let dims = Lazy.force tn.dims in
-        let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
-        let is_on_host = Tn.is_hosted_force tn 33 in
-        let is_materialized = Tn.is_materialized_force tn 331 in
-        let is_constant = Tn.is_hosted_force ~specifically:Constant tn 332 in
-        assert (not @@ Tn.is_virtual_force tn 330);
-        assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-        let prec = Lazy.force tn.prec in
-        let zero_initialized = traced.zero_initialized in
-        let c_typ = gcc_typ_of_prec prec in
-        let num_typ = Type.(get ctx c_typ) in
-        let ptr_typ = Type.pointer num_typ in
-        let mem =
-          if not is_materialized then Local_only
-          else if is_constant && traced.read_only then Constant_from_host
-          else From_context
+  let traced = Low_level.(get_node traced_store tn) in
+  let dims = Lazy.force tn.dims in
+  let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
+  let is_on_host = Tn.is_hosted_force tn 33 in
+  assert (not @@ Tn.is_virtual_force tn 330);
+  assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
+  let prec = Lazy.force tn.prec in
+  let zero_initialized = traced.zero_initialized in
+  let c_typ = gcc_typ_of_prec prec in
+  let num_typ = Type.(get ctx c_typ) in
+  let ptr_typ = Type.pointer num_typ in
+  let ident = get_ident tn in
+  let in_ctx = Tn.is_in_context_force ~unified_memory tn 343 in
+  let ptr =
+    match (in_ctx, opt_ctx_arrays, Tn.is_hosted_force tn 344) with
+    | true, Some ctx_arrays, _ ->
+        Lazy.from_val @@ get_c_ptr ctx num_typ @@ Map.find_exn ctx_arrays tn
+    | true, None, _ ->
+        let p = Param.create ctx ptr_typ ident in
+        param_ptrs := (p, Param_ptr tn) :: !param_ptrs;
+        Lazy.from_val (RValue.param p)
+    | false, _, true -> (
+        let addr arr =
+          Lazy.from_val @@ get_c_ptr ctx num_typ @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
         in
-        let ident = get_ident tn in
-        let ptr =
-          match (mem, ctx_nodes) with
-          | From_context, Ctx_arrays ctx_arrays -> (
-              match Map.find !ctx_arrays tn with
-              | None ->
-                  (* let debug = "GCCJIT compile-time ctx array for " ^ Tn.debug_name tn in *)
-                  let data = alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims () in
-                  ctx_arrays := Map.add_exn !ctx_arrays ~key:tn ~data;
-                  Lazy.from_val @@ get_c_ptr ctx num_typ data
-              | Some data -> Lazy.from_val @@ get_c_ptr ctx num_typ data)
-          | From_context, Param_ptrs ptrs ->
-              let p = Param.create ctx ptr_typ ident in
-              ptrs := (p, Param_ptr tn) :: !ptrs;
-              Lazy.from_val (RValue.param p)
-          | Constant_from_host, _ -> (
-              let addr arr =
-                Lazy.from_val @@ get_c_ptr ctx num_typ
-                @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
-              in
-              match Lazy.force tn.array with
-              | Some (Byte_nd arr) -> addr arr
-              | Some (Half_nd arr) -> addr arr
-              | Some (Single_nd arr) -> addr arr
-              | Some (Double_nd arr) -> addr arr
-              | None -> assert false)
-          | Local_only, _ ->
-              let arr_typ = Type.array ctx num_typ size_in_elems in
-              let v = ref None in
-              let initialize _init_block func = v := Some (Function.local func arr_typ ident) in
-              initializations := initialize :: !initializations;
-              (* The array is the pointer but the address of the array is the same pointer. *)
-              lazy (RValue.cast ctx (LValue.address @@ Option.value_exn ~here:[%here] !v) ptr_typ)
-        in
-        let result = { tn; ptr; mem; dims; num_typ; prec; zero_initialized } in
-        let backend_info = sexp_of_mem_properties mem in
-        let initialize init_block _func =
-          Block.comment init_block
-            [%string
-              "Array #%{tn.id#Int} %{Tn.label tn}: %{Sexp.to_string_hum @@ backend_info}; ptr: \
-               %{Sexp.to_string_hum @@ sexp_of_gccjit_rvalue @@ Lazy.force ptr}."];
-          if zero_initialized then (
-            debug_log_zero_out init_block result;
-            zero_out ctx init_block result)
-        in
+        match Lazy.force tn.array with
+        | Some (Byte_nd arr) -> addr arr
+        | Some (Half_nd arr) -> addr arr
+        | Some (Single_nd arr) -> addr arr
+        | Some (Double_nd arr) -> addr arr
+        | None -> assert false)
+    | false, _, false ->
+        let arr_typ = Type.array ctx num_typ size_in_elems in
+        let v = ref None in
+        let initialize _init_block func = v := Some (Function.local func arr_typ ident) in
         initializations := initialize :: !initializations;
-        if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-          tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-        result)
+        (* The array is the pointer but the address of the array is the same pointer. *)
+        lazy (RValue.cast ctx (LValue.address @@ Option.value_exn ~here:[%here] !v) ptr_typ)
+  in
+  let result = { tn; ptr; dims; num_typ; prec; zero_initialized } in
+  let backend_info = [%sexp_of: string * bool] (ident, zero_initialized) in
+  let initialize init_block _func =
+    Block.comment init_block
+      [%string
+        "Array #%{tn.id#Int} %{Tn.label tn}: %{Sexp.to_string_hum @@ backend_info}; ptr: \
+         %{Sexp.to_string_hum @@ sexp_of_gccjit_rvalue @@ Lazy.force ptr}."];
+    if zero_initialized then (
+      debug_log_zero_out init_block result;
+      zero_out ctx init_block result)
+  in
+  initializations := initialize :: !initializations;
+  if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+    tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+  result
 
 let prec_to_kind prec =
   let open Gccjit in
@@ -314,7 +280,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         Block.eval !current_block @@ RValue.call ctx ff [ lf ]
     | _ -> Block.comment !current_block c
   in
-  let get_node = Hashtbl.find_exn nodes in
+  let get_node tn = Hashtbl.find_exn nodes tn in
   let rec debug_float ~env prec value =
     let loop = debug_float ~env prec in
     match value with
@@ -346,7 +312,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get (tn, idcs) ->
         let node = get_node tn in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
+        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
         (node_debug_name get_ident node ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
@@ -533,37 +499,6 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
   loop_proc ~toplevel:true ~name ~env body;
   !current_block
 
-let prepare_nodes ctx ~log_functions ~get_ident nodes traced_store ctx_nodes initializations
-    (llc : Low_level.t) =
-  let debug_log_zero_out = debug_log_zero_out ctx log_functions get_ident in
-  let prepare_node =
-    prepare_node ctx ~debug_log_zero_out ~get_ident nodes traced_store ctx_nodes initializations
-  in
-  let rec loop llc =
-    match llc with
-    | Low_level.Noop | Low_level.Comment _ | Low_level.Staged_compilation _ -> ()
-    | Low_level.Seq (c1, c2) ->
-        loop c1;
-        loop c2
-    | Low_level.For_loop { body; _ } -> loop body
-    | Low_level.Zero_out tn -> prepare_node tn
-    | Low_level.Set { tn; llv; _ } ->
-        prepare_node tn;
-        loop_float llv
-    | Low_level.Set_local (_, llv) -> loop_float llv
-  and loop_float llv =
-    match llv with
-    | Low_level.Local_scope { body; _ } -> loop body
-    | Low_level.Get_local _ | Low_level.Get_global (_, _) -> ()
-    | Low_level.Get (tn, _) -> prepare_node tn
-    | Low_level.Binop (_, v1, v2) ->
-        loop_float v1;
-        loop_float v2
-    | Low_level.Unop (_, v) -> loop_float v
-    | Low_level.Constant _ | Low_level.Embed_index _ -> ()
-  in
-  loop llc
-
 let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
     Low_level.{ traced_store; llc = proc; merge_node } =
   let open Gccjit in
@@ -588,22 +523,22 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
         (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
   in
   let merge_node = Option.map merge_param ~f:(fun (p, _) -> RValue.param p) in
-  let params : (gccjit_param * param_source) list ref =
+  let param_ptrs : (gccjit_param * param_source) list ref =
     ref (Option.to_list log_file_name @ Option.to_list merge_param @ static_indices)
-  in
-  let ctx_nodes : ctx_nodes =
-    match opt_ctx_arrays with
-    | None -> Param_ptrs params
-    | Some ctx_arrays -> Ctx_arrays (ref ctx_arrays)
   in
   let initializations = ref [] in
   let nodes = Hashtbl.create (module Tn) in
   let log_functions_ref = ref None in
   let log_functions = lazy !log_functions_ref in
-  prepare_nodes ctx ~log_functions ~get_ident nodes traced_store ctx_nodes initializations proc;
-  let params : (gccjit_param * param_source) list =
-    match ctx_nodes with Param_ptrs ps -> !ps | Ctx_arrays _ -> !params
-  in
+  Hashtbl.iter_keys traced_store ~f:(fun tn ->
+      if not (Tn.is_virtual_force tn 330) then
+        let data =
+          prepare_node
+            ~debug_log_zero_out:(debug_log_zero_out ctx log_functions get_ident)
+            ~get_ident ctx traced_store ~opt_ctx_arrays ~param_ptrs initializations tn
+        in
+        Hashtbl.add_exn nodes ~key:tn ~data);
+  let params : (gccjit_param * param_source) list = !param_ptrs in
   let func = Function.create ctx fkind (Type.get ctx Void) name @@ List.map ~f:fst params in
   let env =
     Map.of_alist_exn (module Indexing.Symbol)
@@ -652,12 +587,7 @@ let%diagn_sexp compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident
   | None -> ());
   Block.jump init_block main_block;
   Block.return_void after_proc;
-  let opt_ctx_arrays =
-    match (opt_ctx_arrays, ctx_nodes) with
-    | None, _ | _, Param_ptrs _ -> None
-    | Some _arrays, Ctx_arrays { contents } -> Some contents
-  in
-  (ctx_info, opt_ctx_arrays, params)
+  (ctx_info, params)
 
 let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
@@ -668,16 +598,14 @@ let compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optim
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
      Context.Dump_everything true); *)
-  let info, opt_ctx_arrays, params =
-    compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered
-  in
+  let info, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered in
   (if Utils.settings.output_debug_files_in_build_directory then
      let f_name = Utils.build_file @@ name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
   let result = Context.compile ctx in
   Stdlib.Gc.finalise Result.release result;
   Context.release ctx;
-  { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params }
+  { info; result; bindings; name; params = List.map ~f:snd params }
 
 let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bindings
     (lowereds : Low_level.optimized option array) =
@@ -692,15 +620,14 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
      Context.Dump_everything true); *)
-  let opt_ctx_arrays, funcs =
-    Array.fold_mapi lowereds ~init:opt_ctx_arrays ~f:(fun i opt_ctx_arrays lowered ->
+  let funcs =
+    Array.mapi lowereds ~f:(fun i lowered ->
+        let opt_ctx_arrays = Option.(join @@ map opt_ctx_arrays ~f:(fun arrs -> arrs.(i))) in
         match (names.(i), lowered) with
         | Some name, Some lowered ->
-            let info, opt_ctx_arrays, params =
-              compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered
-            in
-            (opt_ctx_arrays, Some (info, opt_ctx_arrays, params))
-        | _ -> (opt_ctx_arrays, None))
+            let info, params = compile_proc ~name ~opt_ctx_arrays ctx bindings ~get_ident lowered in
+            Some (info, params)
+        | _ -> None)
   in
   (if Utils.settings.output_debug_files_in_build_directory then
      let f_name =
@@ -712,28 +639,13 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
      Context.dump_to_file ctx ~update_locs:true @@ Utils.build_file f_name);
   let result = Context.compile ctx in
   Context.release ctx;
-  ( opt_ctx_arrays,
-    Array.mapi funcs ~f:(fun i ->
-        Option.map2 names.(i) ~f:(fun name (info, opt_ctx_arrays, params) ->
-            { info; result; bindings; name; opt_ctx_arrays; params = List.map ~f:snd params })) )
+  Array.mapi funcs ~f:(fun i ->
+      Option.map2 names.(i) ~f:(fun name (info, params) ->
+          { info; result; bindings; name; params = List.map ~f:snd params }))
 
-let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
+let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
-  let arrays =
-    match code with
-    | { opt_ctx_arrays = Some arrays; _ } -> arrays
-    | { params; _ } ->
-        List.fold params ~init:ctx_arrays ~f:(fun arrays -> function
-          | Param_ptr tn ->
-              let f = function
-                | Some arr -> arr
-                | None ->
-                    (* let debug = "GCCJIT link-time ctx array for " ^ Tn.debug_name tn in *)
-                    alloc_zero_init_array (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.dims) ()
-              in
-              Map.update arrays tn ~f
-          | _ -> arrays)
-  in
+  List.iter code.params ~f:(function Param_ptr tn -> assert (Map.mem ctx_arrays tn) | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -754,7 +666,7 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let c_ptr = Map.find_exn arrays tn in
+            let c_ptr = Map.find_exn ctx_arrays tn in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
             let get_ptr (ptr, _tn) = ptr in
@@ -772,11 +684,10 @@ let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : proc
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);
       Stdlib.Sys.remove log_file_name)
   in
-  ( arrays,
-    Indexing.lowered_bindings code.bindings run_variadic,
+  ( Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task
       {
-        context_lifetime = (arrays, code.result);
+        context_lifetime = (ctx_arrays, code.result);
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       } )

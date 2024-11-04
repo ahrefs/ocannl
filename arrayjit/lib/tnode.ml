@@ -186,7 +186,9 @@ let is_materialized_force tn provenance =
 let is_in_context_force ~unified_memory tn provenance =
   default_to_most_local tn provenance;
   match tn.memory_mode with
-  | Some (Hosted (Constant | Volatile), _) when unified_memory -> false
+  | Some (Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream), _)
+    when unified_memory ->
+      false
   | Some ((Virtual | Local), _) -> false
   | _ -> true
 

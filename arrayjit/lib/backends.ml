@@ -115,15 +115,14 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~unified_memory ~ctx_arrays ~from_prior_context traced_stores =
+let verify_prior_context ~unified_memory ~ctx_arrays ~from_prior_context =
   Set.iter from_prior_context ~f:(fun tn ->
-      let node = Array.find_map traced_stores ~f:(fun store -> Hashtbl.find store tn) in
       if
-        Option.value_map node ~default:false ~f:(fun node ->
-            Tn.is_in_context ~unified_memory node && not (Option.is_some @@ Map.find ctx_arrays tn))
+        Tn.is_in_context_force ~unified_memory tn 342
+        && not (Option.is_some @@ Map.find ctx_arrays tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
-let from_prior_context_batch comps =
+let from_prior_context_batch ~unified_memory comps =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
           Set.diff
@@ -156,7 +155,7 @@ module Add_device
       }
     | Compiled of {
         lowereds : Low_level.optimized option array;
-        procs : ctx_arrays option * Backend.procedure option array;
+        procs : Backend.procedure option array;
       }
   [@@deriving sexp_of]
 
@@ -174,9 +173,8 @@ module Add_device
 
   include Add_scheduler (Backend)
 
-  let link context (code : code) =
+  let link context (code : code) ctx_arrays =
     let runner_label = get_name context.stream in
-    let ctx_arrays = context.ctx_arrays in
     let merge_buffer = context.stream.merge_buffer in
     match code with
     | Postponed { lowered; bindings; name } ->
@@ -184,28 +182,25 @@ module Add_device
         link_compiled ~merge_buffer ~runner_label ctx_arrays proc
     | Compiled { proc; _ } -> link_compiled ~merge_buffer ~runner_label ctx_arrays proc
 
-  let link_batch context (code_batch : code_batch) =
+  let link_batch context (code_batch : code_batch) ctx_arrays =
     let runner_label = get_name context.stream in
-    let ctx_arrays = context.ctx_arrays in
     let merge_buffer = context.stream.merge_buffer in
-    (* FIXME: why are we getting and ignoring opt_ctx_arrays here? *)
-    let _opt_ctx_arrays, procs =
+    let procs =
       match code_batch with
       | Postponed { lowereds; bindings; names } ->
           Backend.compile_batch ~names ~opt_ctx_arrays:(Some ctx_arrays) bindings lowereds
       | Compiled { procs; _ } -> procs
     in
-    let (ctx_arrays, bindings), schedules =
-      Array.fold_map procs ~init:(ctx_arrays, None) ~f:(fun (ctx_arrays, bindings) -> function
+    let bindings, schedules =
+      Array.fold_mapi procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
-            let ctx_arrays, bindings', schedule =
-              link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-            in
+            let ctx_arrays = Option.value_exn ctx_arrays.(i) in
+            let bindings', schedule = link_compiled ~merge_buffer ~runner_label ctx_arrays proc in
             Option.iter bindings ~f:(fun bindings -> assert (phys_equal bindings bindings'));
-            ((ctx_arrays, Some bindings'), Some (ctx_arrays, schedule))
-        | None -> ((ctx_arrays, bindings), None))
+            (Some bindings', Some schedule)
+        | None -> (bindings, None))
     in
-    (ctx_arrays, Option.value_exn ~here:[%here] bindings, schedules)
+    (Option.value_exn ~here:[%here] bindings, schedules)
 
   let from_host ~dst_ptr ~dst hosted =
     let work () = host_to_buffer hosted ~dst:dst_ptr in
@@ -271,10 +266,44 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
+  let%track3_sexp _alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
+    if Tnode.is_in_context_force ~unified_memory key 345 && not (Map.mem ctx_arrays key) then (
+      [%log2 Tn.debug_name key];
+      [%log3 (key : Tnode.t)];
+      let default () =
+        alloc_zero_init_array (Lazy.force key.prec) ~dims:(Lazy.force key.dims) stream
+      in
+      let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
+      let device = stream.device in
+      if node.Low_level.read_only then
+        if Tn.known_non_cross_stream key then add_new ()
+        else (
+          if Hashtbl.mem device.cross_stream_candidates key then
+            Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
+          let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
+          Map.add_exn ctx_arrays ~key ~data)
+      else if Tn.known_shared_cross_stream key then (
+        if Hashtbl.mem device.owner_streams key then
+          if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
+            raise
+            @@ Utils.User_error
+                 ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
+                ^ " assumed to be cross-stream-shared but then written to on multiple devices")
+          else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
+        let data = Hashtbl.find_exn device.cross_stream_candidates key in
+        Map.add_exn ctx_arrays ~key ~data)
+      else (
+        Tn.update_memory_sharing key Tn.Per_stream 41;
+        Hashtbl.remove device.cross_stream_candidates key;
+        add_new ()))
+    else ctx_arrays
+
   let compile ?shared ?name bindings comp : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     let code = compile ?shared ~name bindings lowered in
-    let from_prior_context = Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes in
+    let from_prior_context =
+      Set.diff (Assignments.context_nodes ~unified_memory comp.asgns) comp.embedded_nodes
+    in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
   let compile_batch ?shared ?names ?occupancy bindings comps =
@@ -284,7 +313,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let code_batch = compile_batch ?shared ~names bindings lowereds in
     let from_prior_context =
-      from_prior_context_batch
+      from_prior_context_batch ~unified_memory
       @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
     in
     {
@@ -299,9 +328,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   let link context (code : code) =
     verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
-      ~from_prior_context:code.from_prior_context [| code.lowered.traced_store |];
+      ~from_prior_context:code.from_prior_context;
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
-    let ctx_arrays, bindings, schedule = link context code.code in
+    let ctx_arrays = failwith "NOT IMPLEMENTED YET" in
+    let bindings, schedule = link context code.code ctx_arrays in
     let context = make_child ~ctx_arrays context in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
@@ -313,12 +343,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   let link_batch context code_batch =
     verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
-      ~from_prior_context:code_batch.from_prior_context
-    @@ Array.filter_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store));
-    let _ctx_arrays, bindings, schedules = link_batch context code_batch.code_batch in
+      ~from_prior_context:code_batch.from_prior_context;
+    let ctx_arrays = failwith "NOT IMPLEMENTED YET" in
+    let bindings, schedules = link_batch context code_batch.code_batch ctx_arrays in
     Array.fold_mapi schedules ~init:context ~f:(fun i context -> function
       | None -> (context, None)
-      | Some (ctx_arrays, schedule) ->
+      | Some schedule ->
+          let ctx_arrays = Option.value_exn ctx_arrays.(i) in
           let context = make_child ~ctx_arrays context in
           let expected_merge_node = code_batch.expected_merge_nodes.(i) in
           let inputs, outputs =

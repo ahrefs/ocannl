@@ -264,14 +264,12 @@ let%diagn2_sexp cuda_to_ptx ~name cu_src =
   ptx
 
 module C_syntax_config (Input : sig
-  val for_lowereds : Low_level.optimized array
+  val procs : (Low_level.optimized * ctx_arrays option) array
 end) =
 struct
-  let for_lowereds = Input.for_lowereds
-
   type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
 
-  let opt_ctx_arrays = None
+  let procs = Input.procs
   let hardcoded_context_ptr = None
   let unified_memory = unified_memory
   let host_ptrs_for_readonly = false
@@ -343,7 +341,7 @@ let compile ?shared:_ ~name bindings ({ Low_level.traced_store; _ } as lowered) 
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let for_lowereds = [| lowered |]
+    let procs = [| (lowered, None) |]
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
@@ -356,9 +354,8 @@ let compile ?shared:_ ~name bindings ({ Low_level.traced_store; _ } as lowered) 
   { traced_store; ptx; params; bindings; name }
 
 let compile_batch ?shared:_ ~names bindings lowereds =
-  let for_lowereds = Array.filter_map ~f:Fn.id lowereds in
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let for_lowereds = for_lowereds
+    let procs = Array.filter_map lowereds ~f:(Option.map ~f:(fun lowereds -> (lowereds, None)))
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
@@ -387,7 +384,7 @@ let get_global_run_id =
     !next_id
 
 let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
-    _traced_store lowered_bindings run_module =
+    lowered_bindings run_module =
   let module Cu = Cudajit in
   let func = Cu.Module.get_function run_module ~name in
   let stream = prior_context.stream in
@@ -451,42 +448,32 @@ let run_options () =
     Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
   else []
 
-let%track3_sexp link prior_context (code : code) =
+let%track3_sexp link prior_context (code : code) ctx_arrays =
   let ctx = ctx_of prior_context in
   set_ctx ctx;
-  let ctx_arrays =
-    Hashtbl.fold ~init:prior_context.ctx_arrays code.traced_store
-      ~f:(alloc_if_needed ctx prior_context.stream)
-  in
   let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
   let idx_params = Indexing.bound_symbols code.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let task =
-    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays code.traced_store
-      lowered_bindings run_module
+    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
+      run_module
   in
-  (ctx_arrays, lowered_bindings, task)
+  (lowered_bindings, task)
 
-let%track3_sexp link_batch prior_context (code_batch : code_batch) =
+let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
   let idx_params = Indexing.bound_symbols code_batch.bindings in
   let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
   let module Cu = Cudajit in
   let ctx = ctx_of prior_context in
   set_ctx ctx;
   let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
-  let ctx_arrays, procs =
-    Array.fold_mapi code_batch.params_and_names ~init:prior_context.ctx_arrays
-      ~f:(fun i ctx_arrays pns ->
-        Option.value ~default:(ctx_arrays, None)
-        @@ Option.map2 pns code_batch.traced_stores.(i) ~f:(fun (params, name) traced_store ->
-               let ctx_arrays =
-                 Hashtbl.fold ~init:ctx_arrays traced_store
-                   ~f:(alloc_if_needed ctx prior_context.stream)
-               in
+  let procs =
+    Array.mapi code_batch.params_and_names ~f:(fun i pns ->
+        Option.value ~default:None
+        @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
                let task =
-                 link_proc ~prior_context ~name ~params ~ctx_arrays traced_store lowered_bindings
-                   run_module
+                 link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
                in
-               (ctx_arrays, Some (ctx_arrays, task))))
+               Some task))
   in
-  (ctx_arrays, lowered_bindings, procs)
+  (lowered_bindings, procs)

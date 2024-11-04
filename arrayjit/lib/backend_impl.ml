@@ -205,21 +205,26 @@ module type Lowered_no_device_backend = sig
     Indexing.unit_bindings ->
     Low_level.optimized ->
     procedure
+  (** [opt_ctx_arrays], if any, already contain the arrays of the context that will result from
+      linking the code. *)
 
   val compile_batch :
     names:string option array ->
-    opt_ctx_arrays:ctx_arrays option ->
+    opt_ctx_arrays:ctx_arrays option array option ->
     Indexing.unit_bindings ->
     Low_level.optimized option array ->
-    ctx_arrays option * procedure option array
+    procedure option array
+  (** [opt_ctx_arrays], if any, already contain the arrays of the contexts that will result from
+      linking the code. *)
 
   val link_compiled :
     merge_buffer:(buffer_ptr * Tnode.t) option ref ->
     runner_label:string ->
     ctx_arrays ->
     procedure ->
-    ctx_arrays * Indexing.lowered_bindings * Task.t
-  (** [runner_label] will be [get_name stream] of the stream holding the resulting [ctx_arrays]. *)
+    Indexing.lowered_bindings * Task.t
+  (** The [ctx_arrays] already contain the arrays of the resulting context. [runner_label] will be
+      [get_name stream] of the stream holding the resulting [ctx_arrays]. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
@@ -278,18 +283,18 @@ module type Lowered_backend = sig
     Low_level.optimized option array ->
     code_batch
 
-  val link : context -> code -> ctx_arrays * Indexing.lowered_bindings * Task.t
-  (** The results correspond to the fields {!field-Backend_intf.ctx_arrays} of
-      {!field-Backend_intf.context}, {!field-Backend_intf.bindings} and
+  val link : context -> code -> ctx_arrays -> Indexing.lowered_bindings * Task.t
+  (** [context] is the prior context, while [ctx_arrays] are the arrays of the resulting context.
+      The results correspond to the fields {!field-Backend_intf.bindings} and
       {!field-Backend_intf.schedule} of {!Backend_intf.routine}. *)
 
   val link_batch :
     context ->
     code_batch ->
-    ctx_arrays * Indexing.lowered_bindings * (ctx_arrays * Task.t) option array
-  (** Returns the schedule tasks and their [ctx_arrays] for the procedures included in the code
-      batch. The returned [ctx_arrays] will be part of a context downstream of all the tasks and the
-      tasks' contexts are not independent (typically, they are cumulative). *)
+    ctx_arrays option array ->
+    Indexing.lowered_bindings * Task.t option array
+  (** [context] is the prior context, while the [ctx_arrays] are the arrays of the resulting
+      contexts. Returns the schedule tasks for the procedures included in the code batch. *)
 end
 
 module Alloc_buffer_ignore_stream
@@ -305,36 +310,3 @@ struct
   let alloc_zero_init_array prec ~dims _stream = Backend.alloc_zero_init_array prec ~dims ()
   let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
 end
-
-let%track3_sexp alloc_if_needed (type buffer_ptr) ~ ~unified_memory ctx stream ~key ~data:node ctx_arrays =
-  if Tnode.is_in_context ~unified_memory node && not (Map.mem ctx_arrays key) then (
-    [%log2 Tn.debug_name key, "read_only", (node.read_only : bool)];
-    [%log3 (key : Tn.t)];
-    let default () : buffer_ptr =
-      set_ctx ctx;
-      Cu.Deviceptr.mem_alloc ~size_in_bytes:(Tn.size_in_bytes key)
-    in
-    let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
-    let device = stream.device in
-    if node.read_only then
-      if Tn.known_non_cross_stream key then add_new ()
-      else (
-        if Hashtbl.mem device.cross_stream_candidates key then
-          Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
-        let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
-        Map.add_exn ctx_arrays ~key ~data)
-    else if Tn.known_shared_cross_stream key then (
-      if Hashtbl.mem device.owner_streams key then
-        if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
-          raise
-          @@ Utils.User_error
-               ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
-              ^ " assumed to be cross-stream-shared but then written to on multiple devices")
-        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
-      let data = Hashtbl.find_exn device.cross_stream_candidates key in
-      Map.add_exn ctx_arrays ~key ~data)
-    else (
-      Tn.update_memory_sharing key Tn.Per_stream 41;
-      Hashtbl.remove device.cross_stream_candidates key;
-      add_new ()))
-  else ctx_arrays
