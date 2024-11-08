@@ -266,7 +266,35 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
-  let%track3_sexp _alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
+  let compile ?shared ?name bindings comp : code =
+    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
+    let code = compile ?shared ~name bindings lowered in
+    let from_prior_context =
+      Set.diff (Assignments.context_nodes ~unified_memory comp.asgns) comp.embedded_nodes
+    in
+    { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
+
+  let compile_batch ?shared ?names ?occupancy bindings comps =
+    let names, lowereds =
+      lower_batch_assignments ?names ?occupancy bindings
+      @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
+    in
+    let code_batch = compile_batch ?shared ~names bindings lowereds in
+    let from_prior_context =
+      from_prior_context_batch ~unified_memory
+      @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
+    in
+    {
+      from_prior_context;
+      names;
+      lowereds;
+      code_batch;
+      expected_merge_nodes =
+        Array.map lowereds ~f:(fun lowered ->
+            Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
+    }
+
+  let%track3_sexp alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
     if Tnode.is_in_context_force ~unified_memory key 345 && not (Map.mem ctx_arrays key) then (
       [%log2 Tn.debug_name key];
       [%log3 (key : Tnode.t)];
@@ -298,39 +326,14 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         add_new ()))
     else ctx_arrays
 
-  let compile ?shared ?name bindings comp : code =
-    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
-    let code = compile ?shared ~name bindings lowered in
-    let from_prior_context =
-      Set.diff (Assignments.context_nodes ~unified_memory comp.asgns) comp.embedded_nodes
-    in
-    { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
-
-  let compile_batch ?shared ?names ?occupancy bindings comps =
-    let names, lowereds =
-      lower_batch_assignments ?names ?occupancy bindings
-      @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
-    in
-    let code_batch = compile_batch ?shared ~names bindings lowereds in
-    let from_prior_context =
-      from_prior_context_batch ~unified_memory
-      @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
-    in
-    {
-      from_prior_context;
-      names;
-      lowereds;
-      code_batch;
-      expected_merge_nodes =
-        Array.map lowereds ~f:(fun lowered ->
-            Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
-    }
-
   let link context (code : code) =
     verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context;
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
-    let ctx_arrays = failwith "NOT IMPLEMENTED YET" in
+    let ctx_arrays =
+      Hashtbl.fold code.lowered.traced_store ~init:context.ctx_arrays
+        ~f:(alloc_if_needed context.stream)
+    in
     let bindings, schedule = link context code.code ctx_arrays in
     let context = make_child ~ctx_arrays context in
     let schedule =
@@ -344,7 +347,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   let link_batch context code_batch =
     verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code_batch.from_prior_context;
-    let ctx_arrays = failwith "NOT IMPLEMENTED YET" in
+    let ctx_arrays =
+      Array.map code_batch.lowereds
+        ~f:
+          (Option.map ~f:(fun l ->
+               Hashtbl.fold l.Low_level.traced_store ~init:context.ctx_arrays
+                 ~f:(alloc_if_needed context.stream)))
+    in
     let bindings, schedules = link_batch context code_batch.code_batch ctx_arrays in
     Array.fold_mapi schedules ~init:context ~f:(fun i context -> function
       | None -> (context, None)

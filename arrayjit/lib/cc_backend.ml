@@ -138,7 +138,14 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
 
 let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
-  List.iter code.params ~f:(function _, Param_ptr tn -> assert (Map.mem ctx_arrays tn) | _ -> ());
+  List.iter code.params ~f:(function
+    | _, Param_ptr tn ->
+        if not (Map.mem ctx_arrays tn) then
+          invalid_arg
+            [%string
+              "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from context: \
+               %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
+    | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
