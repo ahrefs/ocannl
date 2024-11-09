@@ -24,7 +24,11 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 type sharing =
   | Unset
   | Per_stream  (** The tensor node has separate arrays for each stream. *)
-  | Shared_cross_stream  (** The tensor node has a single array per device. *)
+  | Shared_cross_stream
+      (** The tensor node has a single array per device that can appear in multiple contexts, except
+          for backends with [use_host_memory = true] and nodes with memory mode
+          [Hosted (Changed_on_devices Shared_cross_stream)], where it only has the on-host array and
+          does not appear in any contexts. *)
 [@@deriving sexp, compare, equal]
 
 type memory_type =
@@ -183,14 +187,32 @@ let is_materialized_force tn provenance =
   | Some ((On_device _ | Hosted _ | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
-let is_in_context_force ~use_host_memory tn provenance =
-  default_to_most_local tn provenance;
+(* Unlike the [known_] functions which can only change from [false] to [true], [is_in_context
+   ~use_host_memory tn] is more precise. Generally, it can only change away from [None], but there
+   is one exception. When [use_host_memory = true], it can change from [Some false] to [Some true]
+   if the memory mode changes from [Hosted (Changed_on_devices Shared_cross_stream)] to [Hosted
+   (Changed_on_devices Per_stream)]. *)
+let is_in_context ~use_host_memory tn =
+  match tn.memory_mode with
+  | Some (Hosted (Changed_on_devices Per_stream), _) -> Some true
+  | Some ((Materialized | Hosted Nonconstant), _) when not use_host_memory -> Some true
+  | Some (Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream), _)
+    when use_host_memory ->
+      Some false
+  | Some (Hosted Nonconstant, _) when use_host_memory -> None
+  | Some (Hosted _, _) -> Some true
+  | Some ((Virtual | Local), _) -> Some false
+  | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) -> None
+  | Some (On_device _, _) -> Some true
+
+(** The opposite of [is_in_context] for hosted tensor nodes. False if [use_host_memory = false] or
+    for non-hosted tensor nodes. *)
+let known_shared_with_host ~use_host_memory tn =
   match tn.memory_mode with
   | Some (Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream), _)
     when use_host_memory ->
-      false
-  | Some ((Virtual | Local), _) -> false
-  | _ -> true
+      true
+  | _ -> false
 
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false

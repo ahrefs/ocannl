@@ -32,7 +32,7 @@ struct
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun (l, _) -> l.llc)
 
-  let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 341)
+  let in_ctx tn = B.(Tn.is_in_context ~use_host_memory tn)
 
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
@@ -72,15 +72,16 @@ struct
             if not @@ Hash_set.mem is_global tn then
               let ctx_ptr = B.hardcoded_context_ptr in
               let mem : (Tn.memory_mode * int) option = tn.memory_mode in
-              match (in_ctx tn, ctx_ptr, ctx_arrays, B.use_host_memory, mem) with
-              | true, Some get_ptr, Some ctx_arrays, _, _ ->
+              match (in_ctx tn, ctx_ptr, ctx_arrays, mem) with
+              | Some true, Some get_ptr, Some ctx_arrays, _ ->
                   let ident = get_ident tn in
                   let ctx_array =
                     Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays tn
                   in
                   fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array (Lazy.force tn.prec);
                   Hash_set.add is_global tn
-              | false, _, _, true, Some (Hosted _, _) ->
+              | Some false, _, _, Some (Hosted _, _)
+                when B.(Tn.known_shared_with_host ~use_host_memory tn) ->
                   let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.array in
                   fprintf ppf "#define %s (%s)@," (get_ident tn) (Ndarray.c_ptr_to_string nd);
                   Hash_set.add is_global tn
@@ -294,14 +295,19 @@ struct
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
              let backend_info =
                Sexp.Atom
-                 (if in_ctx tn then "Ctx"
-                  else if Hash_set.mem is_global tn then "Host"
+                 (if Hash_set.mem is_global tn then "Host"
                   else if Tn.is_virtual_force tn 3331 then "Virt"
-                  else "Local")
+                  else
+                    match in_ctx tn with
+                    | Some true -> "Ctx"
+                    | Some false -> "Local"
+                    | None -> "Unk")
              in
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-             if in_ctx tn && not (Hash_set.mem is_global tn) then
+             (* We often don't know ahead of linking with relevant contexts what the stream sharing
+                mode of the node will become. Conservatively, use passing as argument. *)
+             if Option.value ~default:true (in_ctx tn) && not (Hash_set.mem is_global tn) then
                (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
@@ -367,7 +373,12 @@ struct
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if not (Tn.is_virtual_force tn 333 || in_ctx tn || Hash_set.mem is_global tn) then
+        if
+          not
+            (Tn.is_virtual_force tn 333
+            || Option.value ~default:true (in_ctx tn)
+            || Hash_set.mem is_global tn)
+        then
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)
             (get_ident tn) (Tn.num_elems tn)

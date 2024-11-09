@@ -86,7 +86,7 @@ type ('buffer_ptr, 'dev, 'event) device = {
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
-          shrink. See the explanation on top of this file. *)
+          shrink. *)
   owner_streams : int Hashtbl.M(Tnode).t;
       (** The streams owning the given nodes. This map can only grow. *)
   stream_working_on : (int * 'event) option Hashtbl.M(Tnode).t;

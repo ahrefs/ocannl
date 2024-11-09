@@ -77,12 +77,17 @@ let get_name_exn asgns =
 let is_total ~initialize_neutral ~projections =
   initialize_neutral && Indexing.is_bijective projections
 
-(** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it ideally should
-    be called after compilation. *)
+(** Returns materialized nodes in the sense of {!Tnode.is_in_context}. NOTE: it should be called
+    after compilation and ideally after linking with the relevant contexts; otherwise, it is an
+    under-estimate. *)
 let context_nodes ~use_host_memory asgns =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
-  let one tn = if Tnode.is_in_context_force ~use_host_memory tn 34 then Set.singleton (module Tn) tn else empty in
+  let one tn =
+    if Option.value ~default:false @@ Tnode.is_in_context ~use_host_memory tn then
+      Set.singleton (module Tn) tn
+    else empty
+  in
   let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
   let rec loop = function
     | Noop -> empty

@@ -113,16 +113,17 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~opt_ctx_arrays
   let num_typ = Type.(get ctx c_typ) in
   let ptr_typ = Type.pointer num_typ in
   let ident = get_ident tn in
-  let in_ctx = Tn.is_in_context_force ~use_host_memory tn 343 in
+  let hosted = Tn.is_hosted_force tn 344 in
+  let in_ctx = Tn.is_in_context ~use_host_memory tn in
   let ptr =
-    match (in_ctx, opt_ctx_arrays, Tn.is_hosted_force tn 344) with
-    | true, Some ctx_arrays, _ ->
+    match (in_ctx, opt_ctx_arrays, hosted) with
+    | Some true, Some ctx_arrays, _ ->
         Lazy.from_val @@ get_c_ptr ctx num_typ @@ Map.find_exn ctx_arrays tn
-    | true, None, _ ->
+    | (Some true | None), None, _ ->
         let p = Param.create ctx ptr_typ ident in
         param_ptrs := (p, Param_ptr tn) :: !param_ptrs;
         Lazy.from_val (RValue.param p)
-    | false, _, true -> (
+    | (Some false | None), _, true -> (
         let addr arr =
           Lazy.from_val @@ get_c_ptr ctx num_typ @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
         in
@@ -132,7 +133,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~opt_ctx_arrays
         | Some (Single_nd arr) -> addr arr
         | Some (Double_nd arr) -> addr arr
         | None -> assert false)
-    | false, _, false ->
+    | (Some false | None), _, false ->
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let v = ref None in
         let initialize _init_block func = v := Some (Function.local func arr_typ ident) in
@@ -645,7 +646,9 @@ let%diagn_sexp compile_batch ~(names : string option array) ~opt_ctx_arrays bind
 
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
-  List.iter code.params ~f:(function Param_ptr tn -> assert (Map.mem ctx_arrays tn) | _ -> ());
+  List.iter code.params ~f:(function
+    | Param_ptr tn when not (Tn.known_shared_cross_stream tn) -> assert (Map.mem ctx_arrays tn)
+    | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -666,7 +669,13 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let c_ptr = Map.find_exn ctx_arrays tn in
+            let c_ptr =
+              if Tn.known_shared_with_host ~use_host_memory tn then
+                Ndarray.get_voidptr_not_managed
+                @@ Option.value_exn ~here:[%here]
+                @@ Lazy.force tn.array
+              else Map.find_exn ctx_arrays tn
+            in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
             let get_ptr (ptr, _tn) = ptr in

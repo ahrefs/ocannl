@@ -118,7 +118,8 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
 let verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context =
   Set.iter from_prior_context ~f:(fun tn ->
       if
-        Tn.is_in_context_force ~use_host_memory tn 342
+        (* Err on the safe side. *)
+        Option.value ~default:false (Tn.is_in_context ~use_host_memory tn)
         && not (Option.is_some @@ Map.find ctx_arrays tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
@@ -295,9 +296,14 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let%track3_sexp alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
-    if Tnode.is_in_context_force ~use_host_memory key 345 && not (Map.mem ctx_arrays key) then (
-      [%log2 Tn.debug_name key];
-      [%log3 (key : Tnode.t)];
+    (* TODO: do we need this? *)
+    (* Tn.default_to_most_local key 345; *)
+    if
+      Option.value ~default:true (Tnode.is_in_context ~use_host_memory key)
+      && not (Map.mem ctx_arrays key)
+    then (
+      [%log Tn.debug_name key];
+      [%log (key : Tnode.t)];
       let default () =
         alloc_zero_init_array (Lazy.force key.prec) ~dims:(Lazy.force key.dims) stream
       in
@@ -311,13 +317,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
           Map.add_exn ctx_arrays ~key ~data)
       else if Tn.known_shared_cross_stream key then (
-        if Hashtbl.mem device.owner_streams key then
+        if Hashtbl.mem device.owner_streams key then (
           if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
             raise
             @@ Utils.User_error
                  ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
-                ^ " assumed to be cross-stream-shared but then written to on multiple devices")
-          else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
+                ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
+        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
         let data = Hashtbl.find_exn device.cross_stream_candidates key in
         Map.add_exn ctx_arrays ~key ~data)
       else (

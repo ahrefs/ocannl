@@ -138,7 +138,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
   List.iter code.params ~f:(function
-    | _, Param_ptr tn ->
+    | _, Param_ptr tn when not @@ Tn.known_shared_with_host ~use_host_memory tn ->
         if not (Map.mem ctx_arrays tn) then
           invalid_arg
             [%string
@@ -167,7 +167,13 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
             let get_ptr (ptr, _tn) = ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
-            let c_ptr = Map.find_exn ctx_arrays tn in
+            let c_ptr =
+              if Tn.known_shared_with_host ~use_host_memory tn then
+                Ndarray.get_voidptr_not_managed
+                @@ Option.value_exn ~here:[%here]
+                @@ Lazy.force tn.array
+              else Map.find_exn ctx_arrays tn
+            in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
