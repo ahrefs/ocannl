@@ -66,7 +66,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let unified_memory = true
+let use_host_memory = true
 
 let gcc_typ_of_prec =
   let open Gccjit in
@@ -113,7 +113,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~opt_ctx_arrays
   let num_typ = Type.(get ctx c_typ) in
   let ptr_typ = Type.pointer num_typ in
   let ident = get_ident tn in
-  let in_ctx = Tn.is_in_context_force ~unified_memory tn 343 in
+  let in_ctx = Tn.is_in_context_force ~use_host_memory tn 343 in
   let ptr =
     match (in_ctx, opt_ctx_arrays, Tn.is_hosted_force tn 344) with
     | true, Some ctx_arrays, _ ->

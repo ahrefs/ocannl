@@ -133,11 +133,10 @@ end
 module type Backend_impl_common = sig
   include Buffer
 
-  val unified_memory : bool
-  (** If true, the node is required to be in the contexts linked with code that uses it.
+  val use_host_memory : bool
+  (** If true, the backend will read from and write to the host memory directly whenever possible.
 
-      Should return false for nodes that are virtual, local, or which the backend prefers to access
-      directly from the host. *)
+      [use_host_memory] can only be true on unified memory devices, like CPU and Apple Metal. *)
 end
 
 (** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations. *)

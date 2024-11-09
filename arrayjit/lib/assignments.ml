@@ -79,10 +79,10 @@ let is_total ~initialize_neutral ~projections =
 
 (** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it ideally should
     be called after compilation. *)
-let context_nodes ~unified_memory asgns =
+let context_nodes ~use_host_memory asgns =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
-  let one tn = if Tnode.is_in_context_force ~unified_memory tn 34 then Set.singleton (module Tn) tn else empty in
+  let one tn = if Tnode.is_in_context_force ~use_host_memory tn 34 then Set.singleton (module Tn) tn else empty in
   let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
   let rec loop = function
     | Noop -> empty

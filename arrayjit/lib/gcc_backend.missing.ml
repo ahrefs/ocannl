@@ -5,7 +5,7 @@ include Backend_impl.No_device_buffer_and_copying ()
 let expected_merge_node Unimplemented_proc =
   failwith "gcc backend missing: install the optional dependency gccjit"
 
-let unified_memory = true
+let use_host_memory = true
 
 let to_buffer _tn ~dst:_ ~src:_ =
   failwith "gcc backend missing: install the optional dependency gccjit"

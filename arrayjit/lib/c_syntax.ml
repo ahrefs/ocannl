@@ -18,8 +18,7 @@ module C_syntax (B : sig
       shared and already known. *)
 
   val hardcoded_context_ptr : (buffer_ptr -> Ops.prec -> string) option
-  val unified_memory : bool
-  val host_ptrs_for_readonly : bool
+  val use_host_memory : bool
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
@@ -33,7 +32,7 @@ struct
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun (l, _) -> l.llc)
 
-  let in_ctx tn = B.(Tn.is_in_context_force ~unified_memory tn 341)
+  let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 341)
 
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
@@ -73,18 +72,15 @@ struct
             if not @@ Hash_set.mem is_global tn then
               let ctx_ptr = B.hardcoded_context_ptr in
               let mem : (Tn.memory_mode * int) option = tn.memory_mode in
-              match
-                (in_ctx tn, ctx_ptr, ctx_arrays, B.host_ptrs_for_readonly, mem, node.read_only)
-              with
-              | true, Some get_ptr, Some ctx_arrays, _, _, _ ->
+              match (in_ctx tn, ctx_ptr, ctx_arrays, B.use_host_memory, mem) with
+              | true, Some get_ptr, Some ctx_arrays, _, _ ->
                   let ident = get_ident tn in
                   let ctx_array =
                     Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays tn
                   in
                   fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array (Lazy.force tn.prec);
                   Hash_set.add is_global tn
-              | false, _, _, true, Some (Hosted _, _), true ->
-                  (* In-context nodes to read directly from host would be error prone. *)
+              | false, _, _, true, Some (Hosted _, _) ->
                   let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.array in
                   fprintf ppf "#define %s (%s)@," (get_ident tn) (Ndarray.c_ptr_to_string nd);
                   Hash_set.add is_global tn
@@ -288,7 +284,7 @@ struct
     in
     pp_ll ppf llc
 
-  let%diagn_sexp compile_proc ~name ppf idx_params ~is_global
+  let%track3_sexp compile_proc ~name ppf idx_params ~is_global
       Low_level.{ traced_store; llc; merge_node } =
     let open Stdlib.Format in
     let params : (string * param_source) list =

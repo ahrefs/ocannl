@@ -33,7 +33,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let unified_memory = true
+let use_host_memory = true
 
 let get_global_run_id =
   let next_id = ref 0 in
@@ -79,8 +79,7 @@ struct
 
   let procs = Input.procs
   let hardcoded_context_ptr = c_ptr_to_string
-  let unified_memory = unified_memory
-  let host_ptrs_for_readonly = true
+  let use_host_memory = use_host_memory
   let logs_to_stdout = false
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
@@ -136,7 +135,7 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
       Option.map names.(i) ~f:(fun name ->
           { result; params = Option.value_exn ~here:[%here] params; bindings; name }))
 
-let%diagn_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
+let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
   List.iter code.params ~f:(function
     | _, Param_ptr tn ->

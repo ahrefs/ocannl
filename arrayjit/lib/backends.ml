@@ -115,18 +115,18 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~unified_memory ~ctx_arrays ~from_prior_context =
+let verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context =
   Set.iter from_prior_context ~f:(fun tn ->
       if
-        Tn.is_in_context_force ~unified_memory tn 342
+        Tn.is_in_context_force ~use_host_memory tn 342
         && not (Option.is_some @@ Map.find ctx_arrays tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
-let from_prior_context_batch ~unified_memory comps =
+let from_prior_context_batch ~use_host_memory comps =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
           Set.diff
-            (Assignments.context_nodes ~unified_memory comp.Assignments.asgns)
+            (Assignments.context_nodes ~use_host_memory comp.Assignments.asgns)
             comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
@@ -270,7 +270,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     let code = compile ?shared ~name bindings lowered in
     let from_prior_context =
-      Set.diff (Assignments.context_nodes ~unified_memory comp.asgns) comp.embedded_nodes
+      Set.diff (Assignments.context_nodes ~use_host_memory comp.asgns) comp.embedded_nodes
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
@@ -281,7 +281,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let code_batch = compile_batch ?shared ~names bindings lowereds in
     let from_prior_context =
-      from_prior_context_batch ~unified_memory
+      from_prior_context_batch ~use_host_memory
       @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
     in
     {
@@ -295,7 +295,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let%track3_sexp alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
-    if Tnode.is_in_context_force ~unified_memory key 345 && not (Map.mem ctx_arrays key) then (
+    if Tnode.is_in_context_force ~use_host_memory key 345 && not (Map.mem ctx_arrays key) then (
       [%log2 Tn.debug_name key];
       [%log3 (key : Tnode.t)];
       let default () =
@@ -307,7 +307,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         if Tn.known_non_cross_stream key then add_new ()
         else (
           if Hashtbl.mem device.cross_stream_candidates key then
-            Tn.update_memory_sharing key Tn.Shared_cross_stream 40;
+            Tn.update_memory_sharing key Tn.Shared_cross_stream 39;
           let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
           Map.add_exn ctx_arrays ~key ~data)
       else if Tn.known_shared_cross_stream key then (
@@ -326,8 +326,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         add_new ()))
     else ctx_arrays
 
-  let link context (code : code) =
-    verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
+  let%debug3_sexp link context (code : code) =
+    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context;
     let inputs, outputs = Low_level.input_and_output_nodes code.lowered in
     let ctx_arrays =
@@ -344,8 +344,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     { context; schedule; bindings; name = code.name; inputs; outputs }
 
-  let link_batch context code_batch =
-    verify_prior_context ~unified_memory ~ctx_arrays:context.ctx_arrays
+  let%debug3_sexp link_batch context code_batch =
+    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code_batch.from_prior_context;
     let ctx_arrays =
       Array.map code_batch.lowereds

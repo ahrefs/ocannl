@@ -30,7 +30,7 @@ module Backend_buffer = struct
   end)
 end
 
-let unified_memory = false
+let use_host_memory = false
 
 module Device_config = struct
   include Backend_buffer
@@ -271,9 +271,7 @@ struct
 
   let procs = Input.procs
   let hardcoded_context_ptr = None
-  let unified_memory = unified_memory
-  let host_ptrs_for_readonly = false
-  (* GPUs cannot access host memory pointers directly. *)
+  let use_host_memory = use_host_memory
 
   let logs_to_stdout = true
   let main_kernel_prefix = "extern \"C\" __global__"
