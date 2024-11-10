@@ -13,13 +13,13 @@ let experiment ~seed ~backend_name ~config () =
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
-  (* let batch_size = 120 in *)
-  let batch_size = 60 in
+  let batch_size = 120 in
+  (* let batch_size = 60 in *)
   (* let batch_size = 20 in *)
   let len = batch_size * 20 in
   let init_lr = 0.1 in
-  (* let epochs = 10 in *)
-  let epochs = 40 in
+  let epochs = 10 in
+  (* let epochs = 20 in *)
   (* let epochs = 1 in *)
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
