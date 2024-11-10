@@ -101,6 +101,7 @@ struct
       dev;
       ordinal;
       shared_merge_buffer = None;
+      scheduled_shared_merge_node = None;
       latest_stream_id = -1;
       released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
@@ -113,6 +114,7 @@ struct
       device;
       runner;
       merge_buffer = ref None;
+      scheduled_merge_node = None;
       stream_id;
       allocated_buffer = None;
       queried_work_for = Hashtbl.create (module Tnode);
@@ -176,7 +178,7 @@ module type Lowered_no_device_backend = sig
       linking the code. *)
 
   val link_compiled :
-    merge_buffer:(buffer_ptr * Tnode.t) option ref ->
+    merge_buffer:buffer option ref ->
     runner_label:string ->
     ctx_arrays ->
     procedure ->

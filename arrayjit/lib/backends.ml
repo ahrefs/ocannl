@@ -9,16 +9,16 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let check_merge_buffer ~scheduled_node ~code_node =
+let check_merge_buffer stream ~code_node =
   let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
-  match (scheduled_node, code_node) with
+  match (stream.scheduled_merge_node, code_node) with
   | _, None -> ()
   | Some actual, Some expected when Tnode.equal actual expected -> ()
   | _ ->
       raise
       @@ Utils.User_error
-           ("Merge buffer mismatch, on stream: " ^ name scheduled_node ^ ", expected by code: "
-          ^ name code_node)
+           ("Merge buffer mismatch, on stream: " ^ name stream.scheduled_merge_node
+          ^ ", expected by code: " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let work_for context tn =
@@ -177,11 +177,17 @@ module Add_device
   let link context (code : code) ctx_arrays =
     let runner_label = get_name context.stream in
     let merge_buffer = context.stream.merge_buffer in
-    match code with
-    | Postponed { lowered; bindings; name } ->
-        let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
-        link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-    | Compiled { proc; _ } -> link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+    let bindings, to_schedule =
+      match code with
+      | Postponed { lowered; bindings; name } ->
+          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
+          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+      | Compiled { proc; _ } -> link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+    in
+    let schedule =
+      Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream to_schedule
+    in
+    (bindings, schedule)
 
   let link_batch context (code_batch : code_batch) ctx_arrays =
     let runner_label = get_name context.stream in
@@ -196,8 +202,13 @@ module Add_device
       Array.fold_mapi procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
             let ctx_arrays = Option.value_exn ctx_arrays.(i) in
-            let bindings', schedule = link_compiled ~merge_buffer ~runner_label ctx_arrays proc in
+            let bindings', to_schedule =
+              link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+            in
             Option.iter bindings ~f:(fun bindings -> assert (phys_equal bindings bindings'));
+            let schedule =
+              Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream to_schedule
+            in
             (Some bindings', Some schedule)
         | None -> (bindings, None))
     in
@@ -219,12 +230,13 @@ module Add_device
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream in
     let size_in_bytes = Tnode.size_in_bytes tn in
+    (* FIXME(#290): handle shared_merge_node. *)
     let work =
-      (* TODO: log the operation if [Utils.settings.with_log_level > 0]. *)
+      (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
       match (into_merge_buffer, dst_ptr) with
       | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_ptr"
       | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
-      | Streaming, _ -> fun () -> dev.merge_buffer := Some (src_ptr, tn)
+      | Streaming, _ -> fun () -> dev.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
       | Copy, _ ->
           fun () ->
             let size_in_bytes = Tnode.size_in_bytes tn in
@@ -235,13 +247,14 @@ module Add_device
               dev.allocated_buffer <-
                 Some (alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes dst.stream);
             let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
-            dev.merge_buffer := Some (merge_ptr, tn);
+            dev.merge_buffer := dev.allocated_buffer;
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
     in
     let description =
       "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
       ^ get_name src.stream
     in
+    (match into_merge_buffer with No -> () | _ -> dev.scheduled_merge_node <- Some tn);
     schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
@@ -344,9 +357,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let context = make_child ~ctx_arrays context in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
-          check_merge_buffer
-            ~scheduled_node:(scheduled_merge_node context.stream)
-            ~code_node:code.expected_merge_node)
+          check_merge_buffer context.stream ~code_node:code.expected_merge_node)
     in
     { context; schedule; bindings; name = code.name; inputs; outputs }
 
@@ -372,9 +383,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           in
           let schedule =
             Task.prepend schedule ~work:(fun () ->
-                check_merge_buffer
-                  ~scheduled_node:(scheduled_merge_node context.stream)
-                  ~code_node:expected_merge_node)
+                check_merge_buffer context.stream ~code_node:expected_merge_node)
           in
           (context, Some { context; schedule; bindings; name; inputs; outputs }))
 end

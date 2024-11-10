@@ -194,13 +194,13 @@ let to_host ~src_ptr ~src hosted =
 let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   let dev = dst.stream.device in
   let same_device = dev.ordinal = src.stream.device.ordinal in
+  let size_in_bytes = Tn.size_in_bytes tn in
   let memcpy ~dst_ptr =
     if same_device then
-      Cu.Stream.memcpy_D_to_D ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~src:src_ptr
-        dst.stream.runner
+      Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.stream.runner
     else
-      Cu.Stream.memcpy_peer ~size_in_bytes:(Tn.size_in_bytes tn) ~dst:dst_ptr ~dst_ctx:(ctx_of dst)
-        ~src:src_ptr ~src_ctx:(ctx_of src) dst.stream.runner
+      Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
+        ~src_ctx:(ctx_of src) dst.stream.runner
   in
   match (into_merge_buffer, dst_ptr) with
   | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
@@ -209,14 +209,16 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
       memcpy ~dst_ptr
   | Streaming, _ ->
       assert same_device;
-      dst.stream.merge_buffer := Some (src_ptr, tn)
+      dst.stream.scheduled_merge_node <- Some tn;
+      dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
   | Copy, _ ->
       set_ctx @@ ctx_of dst;
       let size_in_bytes = Tn.size_in_bytes tn in
       opt_alloc_merge_buffer ~size_in_bytes dev;
-      (* FIXME: why use the shared buffer? *)
+      (* FIXME(#290): why use the shared buffer? This should depend on the memory mode! *)
       Option.iter dev.shared_merge_buffer ~f:(fun buffer -> memcpy ~dst_ptr:buffer.ptr);
-      dst.stream.merge_buffer := Option.map dev.shared_merge_buffer ~f:(fun buf -> (buf.ptr, tn))
+      dst.stream.scheduled_merge_node <- Some tn;
+      dst.stream.merge_buffer := dev.shared_merge_buffer
 
 type code = {
   traced_store : Low_level.traced_store;
@@ -272,7 +274,6 @@ struct
   let procs = Input.procs
   let hardcoded_context_ptr = None
   let use_host_memory = use_host_memory
-
   let logs_to_stdout = true
   let main_kernel_prefix = "extern \"C\" __global__"
 
@@ -402,8 +403,8 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
             S.Tensor arr
         | _name, Log_file_name -> S.Int log_id
         | _name, Merge_buffer ->
-            let ptr = fst @@ Option.value_exn ~here:[%here] !(stream.merge_buffer) in
-            S.Tensor ptr
+            let buf = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
+            S.Tensor buf.ptr
         | _name, Static_idx s ->
             let i = Indexing.find_exn lowered_bindings s in
             if !i < 0 then

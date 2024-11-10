@@ -678,7 +678,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (ptr, _tn) = ptr in
+            let get_ptr buf = buf.Backend_intf.ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
       in
       (* Folding by [link] above reverses the input order. Important: [code.bindings] are traversed

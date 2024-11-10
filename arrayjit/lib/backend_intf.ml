@@ -82,6 +82,10 @@ type ('buffer_ptr, 'dev, 'event) device = {
   dev : 'dev;
   ordinal : int;
   mutable shared_merge_buffer : 'buffer_ptr buffer option;
+      (** Depending on backend implementations, either the currently used cross-stream merge buffer,
+          or the one most recently scheduled. *)
+  mutable scheduled_shared_merge_node : Tnode.t option;
+      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer. *)
   mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
@@ -99,7 +103,11 @@ type ('buffer_ptr, 'dev, 'event) device = {
 type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   device : ('buffer_ptr, 'dev, 'event) device;
   runner : 'runner;
-  merge_buffer : ('buffer_ptr * Tnode.t) option ref;
+  merge_buffer : 'buffer_ptr buffer option ref;
+      (** Depending on backend implementations, either the currently used merge buffer, or the one
+          most recently scheduled. *)
+  mutable scheduled_merge_node : Tnode.t option;
+      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. *)
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
   queried_work_for : 'event option Hashtbl.M(Tnode).t;
@@ -108,10 +116,6 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
          tensor node. *)
 }
 [@@deriving sexp_of]
-
-(** [scheduled_merge_node stream] is the tensor node that would be in the [stream]'s merge buffer
-    right after [await stream]. *)
-let scheduled_merge_node stream = Option.map ~f:snd !(stream.merge_buffer)
 
 type ('buffer_ptr, 'stream) context = {
   stream : 'stream;

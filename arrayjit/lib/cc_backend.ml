@@ -164,7 +164,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr (ptr, _tn) = ptr in
+            let get_ptr buf = buf.ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let c_ptr =
