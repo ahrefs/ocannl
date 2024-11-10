@@ -148,47 +148,6 @@ module type For_add_scheduler = sig
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
 
-module type With_buffer_retrieval_and_syncing = sig
-  type context
-  type event
-
-  val work_for : context -> Tnode.t -> event option
-  (** If the tensor node is in the context, returns the event indicating if currently running or
-      scheduled computations modifying that node on the context's stream have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
-      tracking for [tn] and return the [all_work] event for [ctx]'s stream. *)
-
-  val from_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      overwritten. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      read. *)
-
-  val device_to_device :
-    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
-      - If the node is absent from the [src] context and either it is present in the [dst] context
-        or [into_merge_buffer] is different from [No]: raises an error.
-      - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
-      - Executes [will_wait_for dst (work_for src tn)].
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst].
-      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
-        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
-        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
-        from [src] to the merge buffer of [dst]'s stream.
-
-      NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
-      buffer but before scheduling work on [src] that modifies [tn], execute
-      [will_wait_for src (all_work (get_ctx_stream dst))]. *)
-end
-
 (** Lowered-level stream agnostic backend interface: implementation-facing API for CPU backends. *)
 module type Lowered_no_device_backend = sig
   include Backend_impl_common
