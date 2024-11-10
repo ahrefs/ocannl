@@ -70,6 +70,5 @@ let get_stream_device Unimplemented_stream = Unimplemented_device
 let num_devices () = 0
 let suggested_num_streams Unimplemented_device = 0
 let get_ctx_stream Unimplemented_ctx = Unimplemented_stream
-let get_name Unimplemented_stream : string = failwith "CUDA missing: install cudajit"
 let to_ordinal _stream = 0
 let name = "cuda"

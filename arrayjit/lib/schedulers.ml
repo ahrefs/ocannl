@@ -75,8 +75,6 @@ module Multicore (Backend : For_add_scheduler) :
   let get_used_memory _device = get_used_memory ()
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
-  let name = "multicore_" ^ name
-  let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
 
   let%track3_l_sexp await stream =
     assert (Domain.is_main_domain ());
@@ -228,12 +226,10 @@ module Sync (Backend : For_add_scheduler) = struct
 
   let all_work _stream = ()
   let is_idle _stream = true
-  let name = "sync_" ^ Backend.name
   let await _stream = ()
   (* let global_run_no = ref 0 *)
 
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let get_name stream = [%string "%{name}:0:%{stream.stream_id#Int}"]
   let schedule_task _stream task = Task.run task
 end
