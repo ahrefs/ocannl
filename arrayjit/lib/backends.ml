@@ -34,7 +34,18 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
+        let s = ctx.stream in
+        (* Wait for readers of the array before copying, if any are recorded. FIXME: this is
+           invalid. *)
+        Hashtbl.find s.device.stream_working_on tn
+        |> Option.join
+        |> Option.iter ~f:(fun (_work_stream_id, e) -> Backend.will_wait_for ctx e);
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
+        (* Update the latest work event for the node. *)
+        if Hashtbl.mem s.queried_work_for tn then (
+          let e = Backend.all_work s in
+          Hashtbl.update s.device.stream_working_on tn ~f:(fun _ -> Some (s.stream_id, e));
+          Hashtbl.update s.queried_work_for tn ~f:(fun _ -> Some e));
         true
     | _ -> false
 
