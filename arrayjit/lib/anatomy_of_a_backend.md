@@ -104,7 +104,7 @@ type memory_mode =
           optional [array] of {!t}). *)
  ```
 
- `Tnode.update_memory_mode` verifies consistency of the updates of these modes. Currently, these properties are either set explicitly (directly or indirectly) by the user, or determined by the `Low_level` analysis and optimization process. Moreover, the `Tensor` module can influence whether the mode is constant (`Tensor.number`, `Tensor.ndarray`) or non-constant (`Tensor.param`).
+ `Tnode.update_memory_mode` verifies consistency of the updates of these modes. Currently, these properties are either set explicitly (directly or indirectly) by the user, or determined by the `Low_level` analysis and optimization process and refined regarding sharing by the context array allocation process (generic across backends). Moreover, the `Tensor` module can influence whether the mode is constant (`Tensor.number`, `Tensor.ndarray`) or non-constant (`Tensor.param`).
 
 A backend can make more refined distinctions, for example a `Local` node in CUDA could optionally be shared across threads of a block.
 

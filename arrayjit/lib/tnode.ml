@@ -188,10 +188,7 @@ let is_materialized_force tn provenance =
   | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
 
 (* Unlike the [known_] functions which can only change from [false] to [true], [is_in_context
-   ~use_host_memory tn] is more precise. Generally, it can only change away from [None], but there
-   is one exception. When [use_host_memory = true], it can change from [Some false] to [Some true]
-   if the memory mode changes from [Hosted (Changed_on_devices Shared_cross_stream)] to [Hosted
-   (Changed_on_devices Per_stream)]. *)
+   ~use_host_memory tn] is more precise. Generally, it can only change away from [None]. *)
 let is_in_context ~use_host_memory tn =
   match tn.memory_mode with
   | Some (Hosted (Changed_on_devices Per_stream), _) -> Some true
@@ -299,21 +296,11 @@ let update_memory_mode tn mode provenance =
 let update_memory_sharing tn sharing provenance =
   match (tn.memory_mode, sharing) with
   | None, _ -> tn.memory_mode <- Some (On_device sharing, provenance)
-  | Some (On_device Per_stream, prov2), Shared_cross_stream ->
-      raise
-      @@ Utils.User_error
-           [%string
-             "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for \
-              %{debug_name tn} -- change from non-shared to shared is currently not permitted"]
-  | Some ((On_device _ | Device_only | Materialized), _), _ ->
+  | Some (On_device Shared_cross_stream, _), Shared_cross_stream
+  | Some (On_device Per_stream, _), Per_stream ->
+      ()
+  | Some ((On_device Unset | Device_only | Materialized), _), _ ->
       tn.memory_mode <- Some (On_device sharing, provenance)
-  | Some (Hosted (Changed_on_devices Per_stream), prov2), Shared_cross_stream ->
-      raise
-      @@ Utils.User_error
-           [%string
-             "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for \
-              %{debug_name tn} (hosted) -- change from non-shared to shared is currently not \
-              permitted"]
   | Some (Hosted (Constant | Volatile), prov2), Per_stream ->
       raise
       @@ Utils.User_error
@@ -321,8 +308,11 @@ let update_memory_sharing tn sharing provenance =
              "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for \
               %{debug_name tn} (hosted) -- currently hosted nodes not changed on devices must be \
               shared cross-stream"]
+  | Some (Hosted (Changed_on_devices Shared_cross_stream), _), Shared_cross_stream
+  | Some (Hosted (Changed_on_devices Per_stream), _), Per_stream ->
+      ()
   | Some (Hosted (Constant | Volatile), _), Shared_cross_stream -> ()
-  | Some (Hosted (Nonconstant | Changed_on_devices _), _), _ ->
+  | Some (Hosted (Nonconstant | Changed_on_devices Unset), _), _ ->
       tn.memory_mode <- Some (Hosted (Changed_on_devices sharing), provenance)
   | Some (_, prov2), Unset ->
       invalid_arg
@@ -333,7 +323,8 @@ let update_memory_sharing tn sharing provenance =
       invalid_arg
         [%string
           "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
-           %{debug_name tn} -- not materialized on the devices: %{debug_memory_mode mem_mode}"]
+           %{debug_name tn}: old mode %{debug_memory_mode mem_mode}, new sharing \
+           %{Sexp.to_string_hum @@ sexp_of_sharing sharing}"]
 
 let update_prec ?only_if tn prec =
   let do_update =
