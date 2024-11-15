@@ -96,13 +96,12 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device = {
 
           Currently, if the memory mode of a node is inferred, only this stream will modify a
           cross-stream shared array. But memory modes can also be set manually. *)
-  writer_stream : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event option) Hashtbl.M(Tnode).t;
-      (** The stream that most recently has been updating (writing to) the node, and the associated
-          update completion event. *)
-  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event option) Hashtbl.M(Tnode).t;
+  writer_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been scheduled to update (write to) the node, and the
+          associated update completion event. The completed events are removed opportunistically. *)
+  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
       (** The streams that most recently have been reading from the node, and the associated use
-          completion events. An entry is only populated for cross-stream shared nodes, and an event
-          only populated when multiple streams worked with the node. *)
+          completion events. The completed events are removed opportunistically. *)
 }
 [@@deriving sexp_of]
 
@@ -116,11 +115,8 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream = {
       (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. *)
   stream_id : int;  (** An ID unique within the device. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
-  queried_work_for : 'event option Hashtbl.M(Tnode).t;
-      (* The completion event for updating (writing to) a node via this stream, if any. An entry
-         is populated when {!work_for} is called for the first time on the tensor node, or
-         {!field-writer_stream} needs to be updated with this stream. Otherwise, only existing
-         entries are udpated. *)
+  updating_for : 'event Hashtbl.M(Tnode).t;
+      (* The completion event for updating (writing to) a node via this stream, if any. *)
 }
 [@@deriving sexp_of]
 
@@ -247,24 +243,13 @@ module type With_buffer_retrieval_and_syncing = sig
   type context
   type event
 
-  val work_for : context -> Tnode.t -> event option
-  (** If the tensor node is in the context, returns the event indicating if currently running or
-      scheduled computations modifying that node on the context's stream have completed.
-
-      NOTE: [work_for ctx tn], if work tracking was not yet registered for [tn], will register work
-      tracking for [tn] and return the [all_work] event for [ctx]'s stream. *)
-
   val from_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      overwritten. *)
+      returns true, otherwise returns false. *)
 
   val to_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
-      returns true, otherwise returns false. NOTE: it's the caller's responsibility to synchronize
-      the stream (via [await ctx.stream] or [sync (work_for ctx tn)]) before the host's data is
-      read. *)
+      returns true, otherwise returns false. *)
 
   val device_to_device :
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
@@ -282,6 +267,7 @@ module type With_buffer_retrieval_and_syncing = sig
       NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute
       [will_wait_for src (all_work (get_ctx_stream dst))]. *)
+  (* FIXME: udpate the syncing comment. *)
 end
 
 module type Backend = sig
