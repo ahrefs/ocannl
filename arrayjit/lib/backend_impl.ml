@@ -106,9 +106,10 @@ struct
       latest_stream_id = -1;
       released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
-      owner_streams = Hashtbl.create (module Tnode);
-      writer_streams = Hashtbl.create (module Tnode);
-      reader_streams = Hashtbl.create (module Tnode);
+      owner_stream = Hashtbl.create (module Tnode);
+      shared_writer_streams = Hashtbl.create (module Tnode);
+      host_reading_streams = Hashtbl.create (module Tnode);
+      host_writing_streams = Hashtbl.create (module Tnode);
     }
 
   let make_stream device runner ~stream_id =
@@ -120,6 +121,7 @@ struct
       stream_id;
       allocated_buffer = None;
       updating_for = Hashtbl.create (module Tnode);
+      reader_streams = Hashtbl.create (module Tnode);
     }
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]

@@ -91,17 +91,23 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device = {
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
           shrink. *)
-  owner_streams : ('buffer_ptr, 'dev, 'runner, 'event) stream Hashtbl.M(Tnode).t;
-      (** The stream owning a given node. This map can only grow.
-
-          Currently, if the memory mode of a node is inferred, only this stream will modify a
-          cross-stream shared array. But memory modes can also be set manually. *)
-  writer_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been scheduled to update (write to) the node, and the
-          associated update completion event. The completed events are removed opportunistically. *)
-  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been reading from the node, and the associated use
-          completion events. The completed events are removed opportunistically. *)
+  owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream Hashtbl.M(Tnode).t;
+      (** The stream owning a given node. This map can only grow. Currently, if the memory mode of a
+          node is inferred, only this stream will modify a cross-stream shared array. But memory
+          modes can also be set manually. *)
+  shared_writer_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been scheduled to update (write to) a
+          cross-stream-shared node, and the associated update completion event. The completed events
+          are removed opportunistically. *)
+  host_reading_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been reading from a node's on-host array. The
+          completed events are removed opportunistically. *)
+  host_writing_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been writing to a node's on-host array. The completed
+          events are removed opportunistically. *)
 }
 [@@deriving sexp_of]
 
@@ -116,7 +122,11 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   stream_id : int;  (** An ID unique within the device. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
-      (* The completion event for updating (writing to) a node via this stream, if any. *)
+  (* The completion event for updating (writing to) a node via this stream, if any. *)
+  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams, other than this stream, that most recently have been reading from a node in
+          this stream's context, and the associated use completion events. The completed events are
+          removed opportunistically. *)
 }
 [@@deriving sexp_of]
 
@@ -214,8 +224,7 @@ module type Backend_device_common = sig
   (** Schedules waiting for the given event on the context's stream.
 
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
-      called internally when necessary. But there is one exception, see {!device_to_device} when
-      [into_merge_buffer=Streaming]. *)
+      called internally when necessary. *)
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
@@ -257,12 +266,15 @@ module type With_buffer_retrieval_and_syncing = sig
       - If the node is absent from the [src] context and either it is present in the [dst] context
         or [into_merge_buffer] is different from [No]: raises an error.
       - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
-      - Executes [will_wait_for dst (work_for src tn)].
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst].
+      - Schedules waiting for writing into the tensor node on [src] to finish, if any.
+      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst] and
+        updates the writer event for the node.
       - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
-        given node. If [into_merge_buffer=Streaming], remembers the buffer pointer of the source
-        node to use for streaming, without blocking. If [into_merge_buffer=Copy], schedules copying
-        from [src] to the merge buffer of [dst]'s stream.
+        given node.
+      - If [into_merge_buffer=Streaming], remembers the buffer pointer of the source node to use for
+        streaming.
+      - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
+        stream, and registers [dst.stream] with a reader event for the node.
 
       NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute

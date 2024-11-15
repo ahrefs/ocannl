@@ -30,32 +30,42 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> List.iter ~f:(fun (work_stream, e) ->
            if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
 
-  let update_writer_event s tn =
+  let update_writer_event ?(from_host = false) s tn =
     let e = Backend.all_work s in
-    Hashtbl.update s.device.writer_streams tn ~f:(fun l -> (s, e) :: Option.value ~default:[] l);
+    if from_host then
+      Hashtbl.update s.device.host_writing_streams tn ~f:(fun l ->
+          (s, e) :: Option.value ~default:[] l);
+    (* To be on the safe side, record events for potentially cross-stream nodes. *)
+    if Tn.potentially_cross_stream tn then
+      Hashtbl.update s.device.shared_writer_streams tn ~f:(fun l ->
+          (s, e) :: Option.value ~default:[] l);
     Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
 
-  let add_reader s tn =
+  let add_reader s tn from =
     let e = Backend.all_work s in
-    Hashtbl.update s.device.reader_streams tn ~f:(fun l -> (s, e) :: Option.value ~default:[] l)
+    let f l = (s, e) :: Option.value ~default:[] l in
+    match from with
+    | `Host -> Hashtbl.update s.device.host_reading_streams tn ~f
+    | `Src src -> Hashtbl.update src.reader_streams tn ~f
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
-        wait_for_all ctx ctx.stream.device.reader_streams tn;
+        wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
-        update_writer_event ctx.stream tn;
+        update_writer_event ~from_host:true ctx.stream tn;
+        add_reader ctx.stream tn @@ `Host;
         true
     | _ -> false
 
   let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
-        wait_for_all ctx ctx.stream.device.writer_streams tn;
+        if Tn.potentially_cross_stream tn then
+          wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
-        add_reader ctx.stream tn;
         true
     | _ -> false
 
@@ -343,13 +353,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
           Map.add_exn ctx_arrays ~key ~data)
       else if Tn.known_shared_cross_stream key then (
-        if Hashtbl.mem device.owner_streams key then (
-          if not (equal_stream stream (Hashtbl.find_exn device.owner_streams key)) then
+        if Hashtbl.mem device.owner_stream key then (
+          if not (equal_stream stream (Hashtbl.find_exn device.owner_stream key)) then
             raise
             @@ Utils.User_error
                  ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
                 ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
-        else Hashtbl.add_exn device.owner_streams ~key ~data:stream;
+        else Hashtbl.add_exn device.owner_stream ~key ~data:stream;
         let data = Hashtbl.find_exn device.cross_stream_candidates key in
         Map.add_exn ctx_arrays ~key ~data)
       else (

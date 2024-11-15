@@ -247,6 +247,8 @@ let known_non_cross_stream tn =
   | Some ((On_device Per_stream | Hosted (Changed_on_devices Per_stream)), _) -> true
   | _ -> false
 
+let potentially_cross_stream tn = not (known_not_materialized tn || known_non_cross_stream tn)
+
 let mode_is_unspecified tn =
   match tn.memory_mode with
   | None | Some ((Never_virtual | Effectively_constant), _) -> true
