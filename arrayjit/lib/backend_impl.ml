@@ -77,7 +77,8 @@ end
 module Device_types (Device_config : Device_config) = struct
   include Device_config
 
-  type nonrec device = (Device_config.buffer_ptr, Device_config.dev, Device_config.event) device
+  type nonrec device =
+    (Device_config.buffer_ptr, Device_config.dev, Device_config.runner, Device_config.event) device
   [@@deriving sexp_of]
 
   type nonrec stream =
@@ -106,7 +107,8 @@ struct
       released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
       owner_streams = Hashtbl.create (module Tnode);
-      stream_working_on = Hashtbl.create (module Tnode);
+      writer_stream = Hashtbl.create (module Tnode);
+      reader_streams = Hashtbl.create (module Tnode);
     }
 
   let make_stream device runner ~stream_id =

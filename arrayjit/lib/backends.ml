@@ -30,28 +30,49 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         | None | Some None -> default ()
         | Some (Some _ as event) -> event)
 
+  let wait_for_users ctx tn =
+    let s = ctx.stream in
+    let worked_multi_streams =
+      Hashtbl.find s.device.writer_stream tn
+      |> Option.map ~f:snd |> Option.join |> Option.is_some |> ref
+    in
+    Hashtbl.find s.device.writer_stream tn
+    |> Option.iter ~f:(fun (work_stream, e) ->
+           if not (equal_stream work_stream s) then (
+             worked_multi_streams := true;
+             Backend.will_wait_for ctx @@ Option.value e ~default:(Backend.all_work work_stream)));
+    !worked_multi_streams
+
+  let wait_for_writers ctx tn =
+    let s = ctx.stream in
+    Hashtbl.find s.device.writer_stream tn
+    |> Option.iter ~f:(fun (work_stream, e) ->
+           if not (equal_stream work_stream s) then
+             Backend.will_wait_for ctx @@ Option.value e ~default:(Backend.all_work work_stream))
+
+  let update_writer_event ~worked_multi_streams s tn =
+    if Hashtbl.mem s.queried_work_for tn || worked_multi_streams then (
+      let e = Backend.all_work s in
+      Hashtbl.update s.device.writer_stream tn ~f:(fun _ -> (s, Some e));
+      Hashtbl.update s.queried_work_for tn ~f:(Option.map ~f:(fun _ -> e)))
+    else Hashtbl.update s.device.writer_stream tn ~f:(fun _ -> (s, None))
+
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
-        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
-        let s = ctx.stream in
-        (* Wait for readers of the array before copying, if any are recorded. FIXME: this is
-           invalid. *)
-        Hashtbl.find s.device.stream_working_on tn
-        |> Option.join
-        |> Option.iter ~f:(fun (_work_stream_id, e) -> Backend.will_wait_for ctx e);
-        Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
-        (* Update the latest work event for the node. *)
-        if Hashtbl.mem s.queried_work_for tn then (
-          let e = Backend.all_work s in
-          Hashtbl.update s.device.stream_working_on tn ~f:(fun _ -> Some (s.stream_id, e));
-          Hashtbl.update s.queried_work_for tn ~f:(fun _ -> Some e));
+        ((* Wait for all users of the array before copying. *)
+         let worked_multi_streams = wait_for_users ctx tn in
+         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
+         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
+         update_writer_event ~worked_multi_streams ctx.stream tn);
         true
     | _ -> false
 
   let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
+        (* Only wait for writers of the array before copying. *)
+        wait_for_writers ctx tn;
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
         true
@@ -342,12 +363,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           Map.add_exn ctx_arrays ~key ~data)
       else if Tn.known_shared_cross_stream key then (
         if Hashtbl.mem device.owner_streams key then (
-          if not (stream.stream_id = Hashtbl.find_exn device.owner_streams key) then
+          if not (equal_stream stream (Hashtbl.find_exn device.owner_streams key)) then
             raise
             @@ Utils.User_error
                  ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
                 ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
-        else Hashtbl.add_exn device.owner_streams ~key ~data:stream.stream_id;
+        else Hashtbl.add_exn device.owner_streams ~key ~data:stream;
         let data = Hashtbl.find_exn device.cross_stream_candidates key in
         Map.add_exn ctx_arrays ~key ~data)
       else (

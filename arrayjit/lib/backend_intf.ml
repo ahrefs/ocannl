@@ -78,7 +78,7 @@ module type Device_config = sig
   val name : string
 end
 
-type ('buffer_ptr, 'dev, 'event) device = {
+type ('buffer_ptr, 'dev, 'runner, 'event) device = {
   dev : 'dev;
   ordinal : int;
   mutable shared_merge_buffer : 'buffer_ptr buffer option;
@@ -91,31 +91,40 @@ type ('buffer_ptr, 'dev, 'event) device = {
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
           shrink. *)
-  owner_streams : int Hashtbl.M(Tnode).t;
-      (** The streams owning the given nodes. This map can only grow. *)
-  stream_working_on : (int * 'event) option Hashtbl.M(Tnode).t;
-      (** The stream that most recently has been updating the node, and the associated update
-          completion event. An entry for a tensor node is only populated when
-          {!field-queried_work_for} is also populated. *)
+  owner_streams : ('buffer_ptr, 'dev, 'runner, 'event) stream Hashtbl.M(Tnode).t;
+      (** The stream owning a given node. This map can only grow.
+
+          Currently, if the memory mode of a node is inferred, only this stream will modify a
+          cross-stream shared array. But memory modes can also be set manually. *)
+  writer_stream : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event option) Hashtbl.M(Tnode).t;
+      (** The stream that most recently has been updating (writing to) the node, and the associated
+          update completion event. *)
+  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event option) Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been reading from the node, and the associated use
+          completion events. An entry is only populated for cross-stream shared nodes, and an event
+          only populated when multiple streams worked with the node. *)
 }
 [@@deriving sexp_of]
 
-type ('buffer_ptr, 'dev, 'runner, 'event) stream = {
-  device : ('buffer_ptr, 'dev, 'event) device;
+and ('buffer_ptr, 'dev, 'runner, 'event) stream = {
+  device : ('buffer_ptr, 'dev, 'runner, 'event) device;
   runner : 'runner;
   merge_buffer : 'buffer_ptr buffer option ref;
       (** Depending on backend implementations, either the currently used merge buffer, or the one
           most recently scheduled. *)
   mutable scheduled_merge_node : Tnode.t option;
       (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. *)
-  stream_id : int;
+  stream_id : int;  (** An ID unique within the device. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
   queried_work_for : 'event option Hashtbl.M(Tnode).t;
-      (* The completion event for updating the node via this stream, if any. Only existing entries
-         are updated, and an entry is populated when {!work_for} is called for the first time on the
-         tensor node. *)
+      (* The completion event for updating (writing to) a node via this stream, if any. An entry
+         is populated when {!work_for} is called for the first time on the tensor node, or
+         {!field-writer_stream} needs to be updated with this stream. Otherwise, only existing
+         entries are udpated. *)
 }
 [@@deriving sexp_of]
+
+let equal_stream s1 s2 = s1.stream_id = s2.stream_id && s1.device.ordinal = s2.device.ordinal
 
 type ('buffer_ptr, 'stream) context = {
   stream : 'stream;
@@ -130,7 +139,7 @@ type ('buffer_ptr, 'stream) context = {
 module type Device_types = sig
   include Device_config
 
-  type nonrec device = (buffer_ptr, dev, event) device [@@deriving sexp_of]
+  type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
   type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
   type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
 end
