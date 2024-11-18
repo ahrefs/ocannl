@@ -57,6 +57,7 @@ type 'context routine = {
   inputs : Set.M(Tnode).t;
       (** The materialized read-only and read-before-write (within the routine) non-constant nodes.
           They are inputs in a broad sense, as they could be recurrent nodes or parameters. *)
+  merge_buffer_input : bool;  (** Similar to {!field-inputs}, for the merge buffer. *)
   outputs : Set.M(Tnode).t;  (** All the materialized nodes written-to by the routine. *)
 }
 [@@deriving sexp_of]
@@ -123,6 +124,8 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
   (* The completion event for updating (writing to) a node via this stream, if any. *)
+  mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
+      (** Like {!field-updating_for}, but for the merge buffer. *)
   reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
       (** The streams, other than this stream, that most recently have been reading from a node in
           this stream's context, and the associated use completion events. The completed events are
@@ -274,7 +277,7 @@ module type With_buffer_retrieval_and_syncing = sig
       - If [into_merge_buffer=Streaming], remembers the buffer pointer of the source node to use for
         streaming.
       - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
-        stream, and registers [dst.stream] with a reader event for the node.
+        stream, and updates the writer event for the merge buffer.
 
       NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute

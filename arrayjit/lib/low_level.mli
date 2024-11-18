@@ -99,7 +99,7 @@ val optimize :
   t ->
   optimized
 
-val input_and_output_nodes : optimized -> Set.M(Tnode).t * Set.M(Tnode).t
+val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * bool
 (** Inputs are the materialized read-only and read-before-write (within the code) non-constant
     nodes. They are inputs in a broad sense, as they could be recurrent nodes or parameters.
 

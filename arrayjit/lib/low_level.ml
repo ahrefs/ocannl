@@ -738,22 +738,25 @@ type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t optio
 [@@deriving sexp_of]
 
 let input_and_output_nodes optimized =
-  Hashtbl.fold optimized.traced_store
-    ~init:(Set.empty (module Tn), Set.empty (module Tn))
-    ~f:(fun ~key ~data (inputs, outputs) ->
-      let materialized = Tn.is_materialized_force key 50 in
-      let inputs =
-        if
-          materialized && (not (Tn.known_constant key)) && (data.read_only || data.read_before_write)
-        then Set.add inputs key
-        else inputs
-      in
-      let outputs =
-        if materialized && (data.zeroed_out || not (Hash_set.is_empty data.assignments)) then
-          Set.add outputs key
-        else outputs
-      in
-      (inputs, outputs))
+  ( Hashtbl.fold optimized.traced_store
+      ~init:(Set.empty (module Tn), Set.empty (module Tn))
+      ~f:(fun ~key ~data (inputs, outputs) ->
+        let materialized = Tn.is_materialized_force key 50 in
+        let inputs =
+          if
+            materialized
+            && (not (Tn.known_constant key))
+            && (data.read_only || data.read_before_write)
+          then Set.add inputs key
+          else inputs
+        in
+        let outputs =
+          if materialized && (data.zeroed_out || not (Hash_set.is_empty data.assignments)) then
+            Set.add outputs key
+          else outputs
+        in
+        (inputs, outputs)),
+    Option.is_some optimized.merge_node )
 
 let%diagn2_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in

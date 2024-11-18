@@ -121,6 +121,7 @@ struct
       stream_id;
       allocated_buffer = None;
       updating_for = Hashtbl.create (module Tnode);
+      updating_for_merge_buffer = None;
       reader_streams = Hashtbl.create (module Tnode);
     }
 
