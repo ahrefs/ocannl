@@ -27,6 +27,16 @@ let prepend ~work (Task task) =
           task.work ());
     }
 
+let append ~work (Task task) =
+  Task
+    {
+      task with
+      work =
+        (fun () ->
+          task.work ();
+          work ());
+    }
+
 let%track3_l_sexp enschedule ~schedule_task ~get_stream_name stream
     (Task { description; _ } as task) =
   [%log_result "enschedule", description, "on", get_stream_name stream];

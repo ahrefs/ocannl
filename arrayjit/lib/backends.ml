@@ -33,12 +33,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
   let wait_for_ready ~dst ~src tn =
     let s = src.stream in
     let d = dst.stream in
+    (* TODO: maybe it's worthwhile to clean up s.updating_for every now and then. *)
     Hashtbl.find s.updating_for tn
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let update_writer_event ?from s tn =
-    let e = Backend.all_work s in
+  let update_writer_event ?e ?from s tn =
+    let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
     let f l = (s, e) :: Option.value ~default:[] l in
     (match (from, tn) with
     | None, _ -> ()
@@ -102,15 +103,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                     device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                       ~src);
                   update_writer_event ~from:(`Src src.stream) dst.stream @@ Node tn;
-                  [%log
-                    "copying",
-                      Tn.debug_name tn,
-                      "from",
-                      name_of src,
-                      "at",
-                      (s_arr : Backend.buffer_ptr),
-                      "to",
-                      (d_arr : Backend.buffer_ptr)];
+                  [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
                   true)
           | Streaming when same_device ->
               Backend.(
@@ -123,6 +116,26 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
               [%log "copying into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
+
+  let%track3_l_sexp sync_routine r =
+    let s = r.context.stream in
+    let pre () =
+      Hashtbl.iteri s.device.shared_writer_streams ~f:(fun ~key ~data ->
+          if Set.mem r.inputs key then
+            List.iter data ~f:(fun (work_stream, e) ->
+                if not (equal_stream work_stream s) then Backend.will_wait_for r.context e));
+      if r.merge_buffer_input then
+        Option.iter s.device.scheduled_shared_merge_node ~f:(fun (shared_tn, e) ->
+            match (s.scheduled_merge_node, e) with
+            | Some merge_tn, Some e ->
+                if Tn.equal shared_tn merge_tn then Backend.will_wait_for r.context e
+            | _ -> ())
+    in
+    let post () =
+      let e = Backend.all_work s in
+      Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e s @@ Node tn)
+    in
+    { r with schedule = Task.(prepend ~work:pre @@ append ~work:post r.schedule) }
 end
 
 let lower_assignments ?name bindings asgns =
@@ -397,7 +410,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer context.stream ~code_node:code.expected_merge_node)
     in
-    { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs }
+    sync_routine
+      { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs }
 
   let%debug3_sexp link_batch context code_batch =
     verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
@@ -423,7 +437,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             Task.prepend schedule ~work:(fun () ->
                 check_merge_buffer context.stream ~code_node:expected_merge_node)
           in
-          (context, Some { context; schedule; bindings; name; inputs; merge_buffer_input; outputs }))
+          let r =
+            sync_routine { context; schedule; bindings; name; inputs; merge_buffer_input; outputs }
+          in
+          (context, Some r))
 end
 
 module Cuda_backend : Backend = Raise_backend ((Cuda_backend : Lowered_backend))

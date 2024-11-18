@@ -85,8 +85,9 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device = {
   mutable shared_merge_buffer : 'buffer_ptr buffer option;
       (** Depending on backend implementations, either the currently used cross-stream merge buffer,
           or the one most recently scheduled. *)
-  mutable scheduled_shared_merge_node : Tnode.t option;
-      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer. *)
+  mutable scheduled_shared_merge_node : (Tnode.t * 'event option) option;
+      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer,
+          and its readiness event. *)
   mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
@@ -123,7 +124,7 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream = {
   stream_id : int;  (** An ID unique within the device. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
-  (* The completion event for updating (writing to) a node via this stream, if any. *)
+      (* The completion event for updating (writing to) a node via this stream, if any. *)
   mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
       (** Like {!field-updating_for}, but for the merge buffer. *)
   reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;

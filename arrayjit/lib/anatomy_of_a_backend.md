@@ -141,19 +141,38 @@ When using the default stream, CUDA would predictably write to the standard outp
 
 ## Synchronization and data transfers
 
-OCANNL expects backends to implement FIFO queue scheduling, and an event mechanism for synchronizing between streams (and ideally devices), matching the CUDA specification. On top of events, OCANNL implements per-tensor-node synchronization, using the fields `reader_streams` and `writer_streams` of the device record, and `updating_for` of the stream record.
+OCANNL expects backends to implement FIFO queue scheduling, and an event mechanism for synchronizing between streams (and ideally devices), matching the CUDA specification. On top of events, OCANNL implements per-tensor-node synchronization. 1/3rd of the `device` fields have to do with synchronization:
 
 ```ocaml
-...
-  writer_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been scheduled to update (write to) the node, and the
-          associated update completion event. The completed events are removed opportunistically. *)
-  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been reading from the node, and the associated use
-          completion events. The completed events are removed opportunistically. *)
-...
+  mutable scheduled_shared_merge_node : (Tnode.t * 'event option) option;
+      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer,
+          and its readiness event. *)
+  shared_writer_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been scheduled to update (write to) a
+          cross-stream-shared node, and the associated update completion event. The completed events
+          are removed opportunistically. *)
+  host_reading_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been reading from a node's on-host array. The
+          completed events are removed opportunistically. *)
+  host_writing_streams :
+    (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams that most recently have been writing to a node's on-host array. The completed
+          events are removed opportunistically. *)
+```
+
+and 1/3rd of the stream fields also:
+
+```ocaml
   updating_for : 'event Hashtbl.M(Tnode).t;
       (* The completion event for updating (writing to) a node via this stream, if any. *)
+  mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
+      (** Like {!field-updating_for}, but for the merge buffer. *)
+  reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
+      (** The streams, other than this stream, that most recently have been reading from a node in
+          this stream's context, and the associated use completion events. The completed events are
+          removed opportunistically. *)
 ```
 
 Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Both invoking a routine and calling these copying functions will perform the necessary event creations and synchronizations to ensure that when scheduling writing into an array precedes scheduling reading from it, the actual writing also precedes the actual reading.
