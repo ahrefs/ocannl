@@ -216,8 +216,8 @@ module type No_buffer_retrieval_or_syncing = sig
       [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
 end
 
-(** A compilation-agnostic backend API -- {!Lowered_backend} instantates it, but
-    {!Lowered_no_device_backend} backends are also converted to its instantations. *)
+(** An intermediate stage for converting {!Lowered_no_device_backend} backends into
+    {!Lowered_backend}. *)
 module type With_scheduler = sig
   include Backend_device_common
 

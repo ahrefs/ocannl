@@ -283,7 +283,6 @@ module type With_buffer_retrieval_and_syncing = sig
       NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
       buffer but before scheduling work on [src] that modifies [tn], execute
       [will_wait_for src (all_work (get_ctx_stream dst))]. *)
-  (* FIXME: udpate the syncing comment. *)
 end
 
 module type Backend = sig
