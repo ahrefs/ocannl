@@ -296,7 +296,7 @@ struct
              let backend_info =
                Sexp.Atom
                  (if Hash_set.mem is_global tn then "Host"
-                  else if Tn.is_virtual_force tn 3331 then "Virt"
+                  else if Tn.is_virtual_force tn 334 then "Virt"
                   else
                     match in_ctx tn with
                     | Some true -> "Ctx"
