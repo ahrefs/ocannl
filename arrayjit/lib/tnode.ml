@@ -76,6 +76,7 @@ type t = {
       (** Display information. It is better if the last element of the list is the most narrow or
           alphanumeric, e.g. an identifier. *)
   mutable delayed_prec_unsafe : delayed_prec;
+      (** Participates in the computation of {!field-prec}. *)
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
@@ -373,6 +374,23 @@ let update_prec ?only_if tn prec =
                 (let old = Lazy.force old_prec in
                  if cond old then prec else old))
       | _ -> tn.delayed_prec_unsafe <- Specified prec
+
+let exceeds_fp16_cutoff tn c =
+  match Utils.settings.check_half_prec_constants_cutoff with
+  | None -> false
+  | Some cutoff ->
+      (* Only force if needed. *)
+      Float.(abs c >= cutoff)
+      &&
+      let prec =
+        if Lazy.is_val tn.prec then Lazy.force tn.prec
+        else
+          match tn.delayed_prec_unsafe with
+          | Specified prec -> prec
+          | Default_spec prec -> Lazy.force prec
+          | Not_specified -> Lazy.force tn.prec
+      in
+      Ops.is_up_to_fp16 prec
 
 include Comparator.Make (struct
   type nonrec t = t

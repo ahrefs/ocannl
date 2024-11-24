@@ -28,7 +28,7 @@ let byte = Byte_prec Byte
 let half = Half_prec Half
 let single = Single_prec Single
 let double = Double_prec Double
-let is_fp16 = function Half_prec _ -> true | _ -> false
+let is_up_to_fp16 = function Half_prec _ | Byte_prec _ -> true | _ -> false
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"

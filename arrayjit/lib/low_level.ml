@@ -693,17 +693,13 @@ let simplify_llc llc =
         let result = Unop (op, v) in
         if equal_float_t llv v then result else loop_float result
   in
-  let check_constant =
-    match Utils.settings.check_half_prec_constants_cutoff with
-    | None -> fun _prec _c -> ()
-    | Some cutoff ->
-        fun tn c ->
-          if (Ops.is_fp16 @@ Lazy.force tn.Tn.prec) && Float.(abs c >= cutoff) then
-            raise
-            @@ Utils.User_error
-                 ("Constant " ^ Float.to_string c
-                ^ " is too big for FP16 aka. half precision, risk of overflow; increase precision \
-                   of tensor node " ^ Tn.debug_name tn)
+  let check_constant tn c =
+    if Tn.exceeds_fp16_cutoff tn c then
+      raise
+      @@ Utils.User_error
+           ("Constant " ^ Float.to_string c
+          ^ " is too big for FP16 aka. half precision, risk of overflow; increase precision of \
+             tensor node " ^ Tn.debug_name tn)
   in
   let rec check_proc llc =
     let loop = check_proc in

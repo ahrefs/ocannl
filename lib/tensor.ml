@@ -314,6 +314,9 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
     | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
+  Arrayjit.Ops.(
+    if Tn.exceeds_fp16_cutoff t.value c then
+      Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
@@ -356,6 +359,10 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
+  let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
+  Arrayjit.Ops.(
+    if Tn.exceeds_fp16_cutoff t.value max_abs then
+      Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced

@@ -487,7 +487,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     | None -> !.init_lr *. ((2 *. !..steps) - !@step_n) /. !..steps
     | Some schedule -> schedule ~batch_n ~step_n
   in
-  Tn.update_prec ~only_if:Ops.is_fp16 learning_rate.value Ops.single;
+  (* Note: constants at default half-prec are automatically upcasted when they exceed
+     Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
   let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
