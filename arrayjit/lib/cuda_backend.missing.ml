@@ -71,4 +71,6 @@ let num_devices () = 0
 let suggested_num_streams Unimplemented_device = 0
 let get_ctx_stream Unimplemented_ctx = Unimplemented_stream
 let to_ordinal _stream = 0
+let get_global_debug_info () = Sexp.message "global_debug" []
+let get_debug_info Unimplemented_stream = Sexp.message "stream_debug" []
 let name = "cuda"

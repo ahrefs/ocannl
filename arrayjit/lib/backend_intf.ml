@@ -79,7 +79,6 @@ module type Device_config = sig
   val name : string
 end
 
-
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
@@ -269,6 +268,12 @@ module type Backend_device_common = sig
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
+
+  val get_global_debug_info : unit -> Sexp.t
+  (** Global debug information; backend-specific and might evolve independently on the backends. *)
+
+  val get_debug_info : stream -> Sexp.t
+  (** Per-stream debug information; backend-specific and might evolve independently on the backends *)
 
   val await : stream -> unit
   (** Blocks till the stream becomes idle, i.e. synchronizes the stream. *)

@@ -456,7 +456,8 @@ type example_train_result = {
 
 let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
     ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
-    ~weight_decay ?per_batch_callback ?per_epoch_callback (module Backend : Backend) () =
+    ~weight_decay ?per_batch_callback ?per_epoch_callback ?(per_epoch_debug_streams = false)
+    (module Backend : Backend) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
   Rand.init seed;
@@ -528,7 +529,15 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     epoch_losses := !epoch_loss :: !epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
         f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0]
-          ~epoch_loss:!epoch_loss)
+          ~epoch_loss:!epoch_loss);
+    let debug_at pos =
+      Array.iter streams ~f:(fun s ->
+          Stdlib.Format.printf "Stream %d debug %s:@ %a\n%!" s.stream_id pos Sexp.pp_hum
+          @@ Backend.get_debug_info s)
+    in
+    if per_epoch_debug_streams then debug_at "before sync";
+    Array.iter streams ~f:Backend.await;
+    if per_epoch_debug_streams then debug_at "after sync"
   done;
   let%op model_result = model "infer" in
   let infer_fwd =

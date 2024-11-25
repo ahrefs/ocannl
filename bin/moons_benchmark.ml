@@ -80,13 +80,16 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let weight_decay = 0.0002 in
   Arrayjit.Schedulers.sync_suggested_num_streams := num_streams;
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name ()) in
+  Stdlib.Format.printf "Initial backend global debug info: %a\n%!" Sexp.pp_hum
+  @@ Backend.get_global_debug_info ();
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
-      epoch_loss
+      epoch_loss;
+
   in
   Backend.initialize Train.BT.Most_parallel_streams;
   let {
@@ -101,7 +104,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   } =
     Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_streams:num_streams ~data_len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
-      ~per_batch_callback ~per_epoch_callback
+      ~per_batch_callback ~per_epoch_callback ~per_epoch_debug_streams:true
       (module Backend)
       ()
   in
@@ -177,6 +180,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
       }
   in
   Stdio.printf "\n\n%!";
+  Stdlib.Format.printf "Final backend global debug info: %a\n%!" Sexp.pp_hum
+  @@ Backend.get_global_debug_info ();
   result
 
 let _suspend () =
@@ -248,4 +253,4 @@ let benchmark benchmarks =
   List.map benchmarks ~f:(fun bench -> bench ())
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let () = benchmark _mem_benchmarks
+let () = benchmark _cuda_benchmarks

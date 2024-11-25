@@ -476,3 +476,13 @@ let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
                Some task))
   in
   (lowered_bindings, procs)
+
+let get_global_debug_info () =
+  Sexp.message "cuda_global_debug"
+    [ ("live_streams", [%sexp_of: int] @@ Cudajit.Stream.get_total_live_streams ()) ]
+
+let get_debug_info (stream : stream) =
+  let tot, unr, unf = Cudajit.Stream.total_unreleased_unfinished_delimited_events stream.runner in
+  let i2s = [%sexp_of: int] in
+  Sexp.message "cuda_stream_debug"
+    [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]

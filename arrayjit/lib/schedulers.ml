@@ -206,6 +206,9 @@ module Multicore (Backend : For_add_scheduler) :
     let stream = spinup_stream ~stream_id:!latest_stream_id in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
+
+  let get_global_debug_info () = Sexp.message "global_debug" []
+  let get_debug_info (stream : stream) = sexp_of_runner stream.runner
 end
 
 (** For debugging, allow [Sync_scheduler(...).suggested_num_streams] calls to return >1 numbers. *)
@@ -263,4 +266,6 @@ module Sync (Backend : For_add_scheduler) = struct
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
   let schedule_task _stream task = Task.run task
+  let get_global_debug_info () = Sexp.message "global_debug" []
+  let get_debug_info (stream : stream) = sexp_of_runner stream.runner
 end
