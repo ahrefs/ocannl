@@ -144,9 +144,6 @@ When using the default stream, CUDA would predictably write to the standard outp
 OCANNL expects backends to implement FIFO queue scheduling, and an event mechanism for synchronizing between streams (and ideally devices), matching the CUDA specification. On top of events, OCANNL implements per-tensor-node synchronization. 1/3rd of the `device` fields have to do with synchronization:
 
 ```ocaml
-  mutable scheduled_shared_merge_node : (Tnode.t * 'event option) option;
-      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer,
-          and its readiness event. *)
   shared_writer_streams :
     (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
       (** The streams that most recently have been scheduled to update (write to) a
@@ -162,7 +159,7 @@ OCANNL expects backends to implement FIFO queue scheduling, and an event mechani
           events are removed opportunistically. *)
 ```
 
-and 1/3rd of the stream fields also:
+and some stream fields also:
 
 ```ocaml
   updating_for : 'event Hashtbl.M(Tnode).t;
@@ -174,6 +171,8 @@ and 1/3rd of the stream fields also:
           this stream's context, and the associated use completion events. The completed events are
           removed opportunistically. *)
 ```
+
+While we never share merge buffers across streams, there is always an event associated with an occupied merge buffer. Its primary use is for tracking the merge buffer's stream as a reader on the source stream.
 
 Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Both invoking a routine and calling these copying functions will perform the necessary event creations and synchronizations to ensure that when scheduling writing into an array precedes scheduling reading from it, the actual writing also precedes the actual reading.
 

@@ -101,8 +101,6 @@ struct
     {
       dev;
       ordinal;
-      shared_merge_buffer = None;
-      scheduled_shared_merge_node = None;
       latest_stream_id = -1;
       released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
@@ -117,7 +115,6 @@ struct
       device;
       runner;
       merge_buffer = ref None;
-      scheduled_merge_node = None;
       stream_id;
       allocated_buffer = None;
       updating_for = Hashtbl.create (module Tnode);
@@ -202,7 +199,7 @@ module type No_buffer_retrieval_or_syncing = sig
   (** Like {!Backend.from_host}, but without synchronization and buffer retrieval. *)
 
   val to_host : src_ptr:buffer_ptr -> src:context -> Ndarray.t -> unit
-  (** Like {!Backend.to_host}, but without synchronization and buffer retrieval. *)
+  (** Like {!Backend.to_host}, but without synchronization events and buffer retrieval. *)
 
   val device_to_device :
     Tnode.t ->
@@ -212,8 +209,8 @@ module type No_buffer_retrieval_or_syncing = sig
     src_ptr:buffer_ptr ->
     src:context ->
     unit
-  (** Like {!Backend.device_to_device}, but without synchronization and buffer retrieval. Raises
-      [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
+  (** Like {!Backend.device_to_device}, but without synchronization events and buffer retrieval.
+      Raises [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
 end
 
 (** An intermediate stage for converting {!Lowered_no_device_backend} backends into

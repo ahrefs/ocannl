@@ -57,7 +57,7 @@ type 'context routine = {
   inputs : Set.M(Tnode).t;
       (** The materialized read-only and read-before-write (within the routine) non-constant nodes.
           They are inputs in a broad sense, as they could be recurrent nodes or parameters. *)
-  merge_buffer_input : bool;  (** Similar to {!field-inputs}, for the merge buffer. *)
+  merge_buffer_input : Tnode.t option;  (** Similar to {!field-inputs}, for the merge buffer. *)
   outputs : Set.M(Tnode).t;  (** All the materialized nodes written-to by the routine. *)
 }
 [@@deriving sexp_of]
@@ -82,8 +82,6 @@ end
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  mutable shared_merge_buffer : 'buffer_ptr buffer option;
-  mutable scheduled_shared_merge_node : (Tnode.t * 'event option) option;
   mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
@@ -100,7 +98,6 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
   device : ('buffer_ptr, 'dev, 'runner, 'event) device_ref;
   runner : 'runner;
   merge_buffer : 'buffer_ptr buffer option ref;
-  mutable scheduled_merge_node : Tnode.t option;
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
@@ -117,11 +114,6 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
       ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  mutable shared_merge_buffer : 'buffer_ptr buffer option;
-      (** Depending on backend implementations, either the currently used cross-stream merge buffer,
-          or the one most recently scheduled. *)
-  mutable scheduled_shared_merge_node : (Tnode.t * 'event option) option;
-      (** The tensor node that was most recently scheduled to be in the cross-stream merge buffer. *)
   mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
@@ -153,15 +145,15 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream =
   runner : 'runner;
   merge_buffer : 'buffer_ptr buffer option ref;
       (** Depending on backend implementations, either the currently used merge buffer, or the one
-          most recently scheduled. *)
-  mutable scheduled_merge_node : Tnode.t option;
-      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. *)
+          most recently scheduled. Note that the pointer can be reused for nodes that fit in an
+          already allocated buffer. *)
   stream_id : int;  (** An ID unique within the device. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
-  (* The completion event for updating (writing to) a node via this stream, if any. *)
+  (* The completion event for the most recent updating (writing to) a node via this stream. *)
   mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
-      (** Like {!field-updating_for}, but for the merge buffer. *)
+      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer and
+          its updating completion event. See also {!field-updating_for}. *)
   reader_streams :
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
       (** The streams, other than this stream, that most recently have been reading from a node in

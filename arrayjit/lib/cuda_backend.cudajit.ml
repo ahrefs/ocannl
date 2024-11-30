@@ -101,22 +101,20 @@ let get_used_memory (device : device) =
   let free, total = Cudajit.Device.get_free_and_total_mem () in
   total - free
 
-let opt_alloc_merge_buffer ~size_in_bytes device : unit =
+let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
   if
-    Option.value_map ~default:true device.shared_merge_buffer ~f:(fun buffer ->
+    Option.value_map ~default:true !(stream.merge_buffer) ~f:(fun buffer ->
         buffer.size_in_bytes < size_in_bytes)
   then (
-    set_ctx device.dev.primary_context;
-    Option.iter device.shared_merge_buffer ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
-    device.shared_merge_buffer <-
-      Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
+    set_ctx dev.primary_context;
+    Option.iter !(stream.merge_buffer) ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
+    stream.merge_buffer := Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
 
 let%track3_sexp cleanup_device (device : device) =
   Cu.Context.set_current device.dev.primary_context;
   Cu.Context.synchronize ();
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
   (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-  Option.iter ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr) device.shared_merge_buffer;
   Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
       Cu.Deviceptr.mem_free buffer_ptr)
 
@@ -138,8 +136,6 @@ let%track3_sexp get_device ~(ordinal : int) : device =
     if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
       Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
     Hash_set.add initialized_devices ordinal;
-    (* let size_in_bytes = 8 in let shared_merge_buffer = { ptr = Cu.Deviceptr.mem_alloc
-       ~size_in_bytes; size_in_bytes } in *)
     let result = make_device dev ~ordinal in
     Stdlib.Gc.finalise finalize_device result;
     Stdlib.Weak.set !devices ordinal (Some result);
@@ -209,16 +205,13 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
       memcpy ~dst_ptr
   | Streaming, _ ->
       assert same_device;
-      dst.stream.scheduled_merge_node <- Some tn;
       dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
   | Copy, _ ->
       set_ctx @@ ctx_of dst;
       let size_in_bytes = Tn.size_in_bytes tn in
-      opt_alloc_merge_buffer ~size_in_bytes dev;
-      (* FIXME(#290): why use the shared buffer? This should depend on the memory mode! *)
-      Option.iter dev.shared_merge_buffer ~f:(fun buffer -> memcpy ~dst_ptr:buffer.ptr);
-      dst.stream.scheduled_merge_node <- Some tn;
-      dst.stream.merge_buffer := dev.shared_merge_buffer
+      opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
+      let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
+      memcpy ~dst_ptr:buffer.ptr
 
 type code = {
   traced_store : Low_level.traced_store;

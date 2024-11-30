@@ -99,11 +99,11 @@ val optimize :
   t ->
   optimized
 
-val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * bool
+val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tnode.t option
 (** Inputs are the materialized read-only and read-before-write (within the code) non-constant
-    nodes. They are inputs in a broad sense, as they could be recurrent nodes or parameters.
-
-    Outputs are all the materialized nodes written-to by the code. *)
+    non-merge nodes. They are inputs in a broad sense, as they could be recurrent nodes or
+    parameters. Outputs are all the materialized nodes written-to by the code. The last returned
+    component is the input merge node, if used in the code. *)
 
 (** {2 Printing} *)
 

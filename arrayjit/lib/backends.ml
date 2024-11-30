@@ -11,14 +11,15 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 
 let check_merge_buffer stream ~code_node =
   let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
-  match (stream.scheduled_merge_node, code_node) with
+  match (stream.updating_for_merge_buffer, code_node) with
   | _, None -> ()
-  | Some actual, Some expected when Tnode.equal actual expected -> ()
+  | Some (actual, _), Some expected when Tnode.equal actual expected -> ()
   | _ ->
       raise
       @@ Utils.User_error
-           ("Merge buffer mismatch, on stream: " ^ name stream.scheduled_merge_node
-          ^ ", expected by code: " ^ name code_node)
+           ("Merge buffer mismatch, on stream: "
+           ^ name (Option.map ~f:fst stream.updating_for_merge_buffer)
+           ^ ", expected by code: " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let wait_for_all ctx streams tn =
@@ -54,8 +55,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               (s, e) :: Option.value ~default:[] l);
         Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
     | Merge_buffer tn ->
-        Option.iter s.updating_for_merge_buffer ~f:(fun (_old_tn, old_e) ->
-            assert (Backend.is_done old_e));
+        (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, e)
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
@@ -105,31 +105,32 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   update_writer_event ~from:(`Src src.stream) dst.stream @@ Node tn;
                   [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
                   true)
-          | Streaming when same_device ->
-              Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
-              [%log "using merge buffer for", Tn.debug_name tn, "from", name_of src];
-              true
           | Copy | Streaming ->
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
-              [%log "copying into merge buffer", Tn.debug_name tn, "from", name_of src];
+              let use =
+                match into_merge_buffer with
+                | Copy -> "copying"
+                | Streaming -> "streaming"
+                | No -> assert false
+              in
+              [%log use, "into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
   let%track3_l_sexp sync_routine r =
     let s = r.context.stream in
     let pre () =
-      Hashtbl.iteri s.device.shared_writer_streams ~f:(fun ~key ~data ->
-          if Set.mem r.inputs key then
-            List.iter data ~f:(fun (work_stream, e) ->
-                if not (equal_stream work_stream s) then Backend.will_wait_for r.context e));
-      if r.merge_buffer_input then
-        Option.iter s.device.scheduled_shared_merge_node ~f:(fun (shared_tn, e) ->
-            match (s.scheduled_merge_node, e) with
-            | Some merge_tn, Some e ->
-                if Tn.equal shared_tn merge_tn then Backend.will_wait_for r.context e
-            | _ -> ())
+      Hashtbl.filter_mapi_inplace s.device.shared_writer_streams ~f:(fun ~key ~data ->
+          if Tn.potentially_cross_stream key then
+            if Set.mem r.inputs key then (
+              let data = List.filter data ~f:(fun (_, e) -> Backend.is_done e) in
+              List.iter data ~f:(fun (work_stream, e) ->
+                  if not (equal_stream work_stream s) then Backend.will_wait_for r.context e);
+              Some data)
+            else Some data
+          else None)
+      (* Since merge buffers are always per-stream, no need to check r.merge_buffer_input. *)
     in
     let post () =
       let e = Backend.all_work s in
@@ -281,7 +282,6 @@ module Add_device
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream in
     let size_in_bytes = Tnode.size_in_bytes tn in
-    (* FIXME(#290): handle shared_merge_node. *)
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
       match (into_merge_buffer, dst_ptr) with
@@ -305,7 +305,6 @@ module Add_device
       "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
       ^ get_name src.stream
     in
-    (match into_merge_buffer with No -> () | _ -> dev.scheduled_merge_node <- Some tn);
     schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
 end
 

@@ -199,7 +199,15 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
-    | Get_global (Ops.Merge_buffer { source_node_id }, _) -> merge_node_id := Some source_node_id
+    | Get_global (Ops.Merge_buffer { source_node_id }, _) ->
+        Option.iter !merge_node_id ~f:(fun merge_node_id ->
+            if merge_node_id <> source_node_id then
+              raise
+              @@ Utils.User_error
+                   [%string
+                     "Low_evel.optimize_proc: currently only one merge buffer per routine is \
+                      allowed, found node ids %{source_node_id#Int} and %{merge_node_id#Int}"]);
+        merge_node_id := Some source_node_id
     | Get_global _ -> ()
     | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
@@ -752,7 +760,7 @@ let input_and_output_nodes optimized =
           else outputs
         in
         (inputs, outputs)),
-    Option.is_some optimized.merge_node )
+    optimized.merge_node )
 
 let%diagn2_sexp optimize_proc static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in

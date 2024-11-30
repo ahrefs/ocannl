@@ -512,6 +512,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         assert (Backend.to_host sgd_update.context learning_rate.value);
         (* scalar_loss is not in the sgd_update context. *)
         assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
+        (* TODO: syncing callbacks should be integrated into Tensor. *)
+        Backend.await grad_updates.(0).context.stream;
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         batch_losses := batch_loss :: !batch_losses;
@@ -530,14 +532,16 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Option.iter per_epoch_callback ~f:(fun f ->
         f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0]
           ~epoch_loss:!epoch_loss);
-    let debug_at pos =
+    let _debug_at pos =
       Array.iter streams ~f:(fun s ->
           Stdlib.Format.printf "Stream %d debug %s:@ %a\n%!" s.stream_id pos Sexp.pp_hum
           @@ Backend.get_debug_info s)
     in
-    if per_epoch_debug_streams then debug_at "before sync";
-    Array.iter streams ~f:Backend.await;
-    if per_epoch_debug_streams then debug_at "after sync"
+    if per_epoch_debug_streams then _debug_at "before sync";
+    (* TODO: there should be nothing pending left to sync. *)
+    Array.iter streams ~f:Backend.await
+    (* This is now cleaned up by await. *)
+    (* if per_epoch_debug_streams then _debug_at "after sync" *)
   done;
   let%op model_result = model "infer" in
   let infer_fwd =
