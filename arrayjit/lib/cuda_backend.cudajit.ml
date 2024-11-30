@@ -19,6 +19,9 @@ let () =
             message;
             if not @@ Cu.is_success status then [%log (status : Cu.result)]]])
 
+let _suspended () =
+  Cu.cuda_call_hook := Some (fun ~message ~status:_ -> Stdlib.Printf.printf "CUDA %s\n" message)
+
 module Backend_buffer = struct
   type buffer_ptr = Cu.Deviceptr.t
 
@@ -203,7 +206,7 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   | No, Some dst_ptr ->
       set_ctx @@ ctx_of dst;
       memcpy ~dst_ptr
-  | Streaming, _ ->
+  | Streaming_for _, _ ->
       assert same_device;
       dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
   | Copy, _ ->

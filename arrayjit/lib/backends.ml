@@ -56,7 +56,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
     | Merge_buffer tn ->
         (* Note: the previous event does not need to be done! *)
-        s.updating_for_merge_buffer <- Some (tn, e)
+        s.updating_for_merge_buffer <- Some (tn, Some e)
 
   let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
@@ -105,17 +105,19 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   update_writer_event ~from:(`Src src.stream) dst.stream @@ Node tn;
                   [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
                   true)
-          | Copy | Streaming ->
+          | Copy ->
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
-              let use =
-                match into_merge_buffer with
-                | Copy -> "copying"
-                | Streaming -> "streaming"
-                | No -> assert false
-              in
-              [%log use, "into merge buffer", Tn.debug_name tn, "from", name_of src];
+              [%log "copy into merge buffer", Tn.debug_name tn, "from", name_of src];
+              true
+          | Streaming_for task ->
+              Backend.(
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
+              dst.stream.updating_for_merge_buffer <- Some (tn, None);
+              Task.run task;
+              update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
+              [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
   let%track3_l_sexp sync_routine r =
@@ -280,32 +282,32 @@ module Add_device
       (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-    let dev = dst.stream in
+    let s = dst.stream in
     let size_in_bytes = Tnode.size_in_bytes tn in
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
       match (into_merge_buffer, dst_ptr) with
       | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_ptr"
       | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
-      | Streaming, _ -> fun () -> dev.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
+      | Streaming_for _, _ -> fun () -> s.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
       | Copy, _ ->
           fun () ->
             let size_in_bytes = Tnode.size_in_bytes tn in
             let allocated_capacity =
-              match dev.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
+              match s.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
             in
             if allocated_capacity < size_in_bytes then
-              dev.allocated_buffer <-
-                Some (alloc_buffer ?old_buffer:dev.allocated_buffer ~size_in_bytes dst.stream);
-            let merge_ptr = (Option.value_exn dev.allocated_buffer).ptr in
-            dev.merge_buffer := dev.allocated_buffer;
+              s.allocated_buffer <-
+                Some (alloc_buffer ?old_buffer:s.allocated_buffer ~size_in_bytes dst.stream);
+            let merge_ptr = (Option.value_exn s.allocated_buffer).ptr in
+            s.merge_buffer := s.allocated_buffer;
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
     in
     let description =
-      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name dev ^ " src "
+      "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name s ^ " src "
       ^ get_name src.stream
     in
-    schedule_task dev (Task.Task { context_lifetime = (src, dst); description; work })
+    schedule_task s (Task.Task { context_lifetime = (src, dst); description; work })
 end
 
 module Raise_backend (Device : Lowered_backend) : Backend = struct

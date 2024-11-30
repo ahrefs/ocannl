@@ -164,8 +164,10 @@ and some stream fields also:
 ```ocaml
   updating_for : 'event Hashtbl.M(Tnode).t;
       (* The completion event for updating (writing to) a node via this stream, if any. *)
-  mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
-      (** Like {!field-updating_for}, but for the merge buffer. *)
+  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
+      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. The
+          event finishes after the [task] from a [Streaming_for task]. See also
+          {!field-updating_for}. *)
   reader_streams : (('buffer_ptr, 'dev, 'runner, 'event) stream * 'event) list Hashtbl.M(Tnode).t;
       (** The streams, other than this stream, that most recently have been reading from a node in
           this stream's context, and the associated use completion events. The completed events are
@@ -182,6 +184,6 @@ OCANNL supports asynchronous data transfers by embedding them in the scheduling 
 
 OCANNL provides explicit _merge buffers_ for performing those tensor node updates, where different versions of a tensor node from two streams feature in the same computation. The `%cd` syntax for using merge buffers is via the `.merge` pseudo-field. For example, the code for merging gradients might be: `[%cd p.grad =+ p.grad.merge]`. In the current design, there's at most one merge buffer per stream, and the memory is reused for merging different nodes. We keep track of the specific tensor node that was scheduled to occupy this buffer in the stream, and the merge node expected by the linked code, so that we can detect mismatches at scheduling time.
 
-The interface exposes two modes of utilizing merge buffers. The `Streaming` mode relies in some way on the array from the source context. Currently, this simply means using the source array (buffer) pointer, and the CUDA backend falls back to using `~into_merge_buffer:Copy` when the source and destination contexts live on different devices. The `Copy` mode uses physical arrays to back merge buffers. The merge buffer array (one per stream) is resized (grown) if needed to fit a node's array.
+The interface exposes two modes of utilizing merge buffers. The `Streaming_for` mode relies in some way on the array from the source context. Currently, this simply means using the source array (buffer) pointer, and the CUDA backend falls back to using `~into_merge_buffer:Copy` when the source and destination contexts live on different devices. The `Copy` mode uses physical arrays to back merge buffers. The merge buffer array (one per stream) is resized (grown) if needed to fit a node's array. To block the source stream from overwriting the array, `Streaming_for` is parameterized by the task (actually, routine) intended to make use of the merge buffer.
 
 Currently, OCANNL does not support merge buffers for `from_host` transfers. But it might in the future. Currently, combining `to_host` and `from_host` is the only way to make different backends cooperate, and that requires `from_host ~into_merge_buffer` to adapt single-backend design patterns.

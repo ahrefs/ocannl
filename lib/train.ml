@@ -375,22 +375,24 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
              ~~("merging" updaten.loss;
                 updaten.loss.value =+ updaten.loss.value.merge)])
   in
-  let into_merge_buffer = if copy_to_merge then BT.Copy else BT.Streaming in
+  let mbuf_use sched = if copy_to_merge then (BT.Copy, false) else (BT.Streaming_for sched, true) in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
   let merge_grads ~(from : int) ~(to_ : int) : unit =
     Array.iteri all_params ~f:(fun i p ->
         let grad_merge =
           Option.value_exn ~here:[%here] ~message:(Tn.debug_name p.value) grad_merges_to.(to_).(i)
         in
+        let into_merge_buffer, streaming = mbuf_use grad_merge.schedule in
         assert (
           Backend.device_to_device (Option.value_exn ~here:[%here] p.diff).grad ~into_merge_buffer
             ~dst:ctxs.(to_) ~src:ctxs.(from));
-        (Task.run grad_merge.schedule : unit))
+        if not streaming then Task.run grad_merge.schedule)
   in
   let merge_loss ~src =
+    let into_merge_buffer, streaming = mbuf_use loss_merge.schedule in
     assert (
       Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
-    Task.run loss_merge.schedule
+    if not streaming then Task.run loss_merge.schedule
   in
   (* FIXME: missing backcopy. *)
   let needed_on_host = ref @@ Set.empty (module Tn) in

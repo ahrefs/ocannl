@@ -46,8 +46,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   (* let data_len = 3 * 4 in *)
   let flat_len = data_len / 2 in
   (* Note: [minibatch_size = batch_size / num_streams] is the actual per-device batch used. *)
-  (* let epochs = 200 in *)
-  let epochs = 100 in
+  let epochs = 200 in
+  (* let epochs = 100 in *)
+  (* let epochs = 50 in *)
   (* TINY for debugging: *)
   (* let epochs = 2 in *)
   (* let epochs = 1 in *)
@@ -88,9 +89,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
     Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
-      epoch_loss;
-
+       epoch_loss
   in
+
   Backend.initialize Train.BT.Most_parallel_streams;
   let {
     Train.inputs;
@@ -104,7 +105,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   } =
     Train.example_train_loop ~seed ~batch_size ~init_lr ~max_num_streams:num_streams ~data_len
       ~epochs ~inputs:moons_flat ~outputs:moons_classes ~model:mlp ~loss_fn ~weight_decay
-      ~per_batch_callback ~per_epoch_callback ~per_epoch_debug_streams:true
+      ~per_batch_callback ~per_epoch_callback ~per_epoch_debug_streams:false
       (module Backend)
       ()
   in
@@ -195,10 +196,26 @@ let _cuda_benchmarks =
         [
           (* TINY for debugging: *)
           (* 3 * 2 *)
-          3 * 5 * 16 (* ; 3 * 5 * 32; 3 * 5 * 64 *);
+          3 * 5 * 16;
+          3 * 5 * 32 (*; 3 * 5 * 64 *);
         ]
         ~f:(fun batch_size ->
           List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+              List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
+                  List.concat_map [ (* "gccjit" ; "cc"; *) "cuda" ] ~f:(fun backend_name ->
+                      List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
+                        ~f:(fun value_prec ->
+                          [
+                            classify_moons ~seed ~on_device:true ~inlining_cutoff ~num_streams
+                              ~batch_size ~backend_name ~value_prec ~grad_prec:value_prec;
+                          ]))))))
+
+let _cuda_parallel_benchmarks =
+  List.concat_map [ (* 1; 2; *) (* 3; 4; 5; 6; 8; 10; 12; 16; *) 20 (* 32; 64 *) ] ~f:(fun num_streams ->
+      List.concat_map
+        [ 3 * 5 * 16 (* ; 3 * 5 * 32 *) ]
+        ~f:(fun batch_size ->
+          List.concat_map [ (* 1; *) (* 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
                   List.concat_map [ (* "gccjit" ; "cc"; *) "cuda" ] ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
@@ -253,4 +270,4 @@ let benchmark benchmarks =
   List.map benchmarks ~f:(fun bench -> bench ())
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let () = benchmark _cuda_benchmarks
+let () = benchmark _cuda_parallel_benchmarks

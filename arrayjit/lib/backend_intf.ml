@@ -40,7 +40,7 @@ end
 type config = Only_devices_parallel | For_parallel_copying | Most_parallel_streams
 [@@deriving equal, sexp, variants]
 
-type merge_buffer_use = No | Streaming | Copy [@@deriving equal, sexp]
+type merge_buffer_use = No | Streaming_for of Task.t | Copy [@@deriving sexp_of]
 
 type param_source =
   | Log_file_name
@@ -101,7 +101,7 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
-  mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
+  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
   reader_streams :
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
 }
@@ -151,9 +151,10 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream =
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
   (* The completion event for the most recent updating (writing to) a node via this stream. *)
-  mutable updating_for_merge_buffer : (Tnode.t * 'event) option;
-      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer and
-          its updating completion event. See also {!field-updating_for}. *)
+  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
+      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. The
+          event finishes after the [task] from a [Streaming_for task]. See also
+          {!field-updating_for}. *)
   reader_streams :
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
       (** The streams, other than this stream, that most recently have been reading from a node in
@@ -247,7 +248,10 @@ module type Backend_device_common = sig
   include Backend_any_common with type buffer_ptr := buffer_ptr
 
   val sync : event -> unit
-  (** Blocks till the event completes, if it's not done already. *)
+  (** Blocks till the event completes, if it's not done already.
+
+      FIXME: it should rarely be needed to call [sync] explicitly, because it should always be
+      called internally when necessary, in particular before extracting values from host. *)
 
   val is_done : event -> bool
   (** Whether the event completed. *)
@@ -255,8 +259,8 @@ module type Backend_device_common = sig
   val will_wait_for : context -> event -> unit
   (** Schedules waiting for the given event on the context's stream.
 
-      NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it is typically
-      called internally when necessary. *)
+      NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it should always
+      be called internally when necessary. *)
 
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
@@ -309,14 +313,11 @@ module type With_buffer_retrieval_and_syncing = sig
         updates the writer event for the node.
       - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
         given node.
-      - If [into_merge_buffer=Streaming], remembers the buffer pointer of the source node to use for
-        streaming.
+      - If [into_merge_buffer=Streaming_for task], remembers the buffer pointer of the source node
+        to use for streaming, runs [task] -- intended to be the routine making use of the merge
+        buffer, and initializes the merge buffer's streaming event.
       - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
-        stream, and updates the writer event for the merge buffer.
-
-      NOTE: If [into_merge_buffer=Streaming], after scheduling the work on [dst] using the merge
-      buffer but before scheduling work on [src] that modifies [tn], execute
-      [will_wait_for src (all_work (get_ctx_stream dst))]. *)
+        stream, and updates the writer event for the merge buffer. *)
 end
 
 module type Backend = sig
