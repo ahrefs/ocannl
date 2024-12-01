@@ -25,6 +25,7 @@ depends: [
   "sexplib"
   "num"
   "time_now"
+  "landmarks"
   "ppxlib"
   "ppx_compare"
   "ppx_fields_conv"
@@ -34,6 +35,7 @@ depends: [
   "ppx_string"
   "ppx_variants_conv"
   "ppx_expect"
+  "landmarks-ppx"
   "ppx_minidebug" {>= "2.0.0"}
   "patdiff" {>= "v0.15.0"}
   "odoc" {with-doc}
