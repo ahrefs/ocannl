@@ -4,7 +4,8 @@
 
 - Interface files for `Backends` and `Low_level`.
 - Fixed #245: tracking of used memory.
-- TODO: stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
+- Stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
+- TODO: Automatic blocking on access of a host array when a scheduled `to_host` transfer has not finished.
 
 ### Changed
 
@@ -19,7 +20,8 @@
 - Got rid of `subordinal`.
 - Removed dependency on `core`, broke up dependency on `ppx_jane`.
 - Huge refactoring of backend internal interfaces and API (not repeating same code).
-- TODO: Built per-tensor-node stream-to-stream synchronization into copying functions, removed obsolete blocking synchronizations.
+- Built per-tensor-node stream-to-stream synchronization into copying functions.
+- Re-introduced whole-device blocking synchronization, which now is just a slight optimization as it also cleans up event book-keeping.
 
 ### Fixed
 

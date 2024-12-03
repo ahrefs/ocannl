@@ -82,7 +82,6 @@ end
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
   owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
@@ -92,6 +91,7 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
   host_writing_streams :
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
+  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
 }
 
 and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
@@ -114,7 +114,6 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
       ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  mutable latest_stream_id : int;
   released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
@@ -136,6 +135,7 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
       (** The streams that most recently have been writing to a node's on-host array. The completed
           events are removed opportunistically. *)
+  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;  (** . *)
 }
 [@@deriving sexp_of]
 
@@ -147,7 +147,7 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream =
       (** Depending on backend implementations, either the currently used merge buffer, or the one
           most recently scheduled. Note that the pointer can be reused for nodes that fit in an
           already allocated buffer. *)
-  stream_id : int;  (** An ID unique within the device. *)
+  stream_id : int;  (** An ID unique within the device for the lifetime of the stream. *)
   mutable allocated_buffer : 'buffer_ptr buffer option;
   updating_for : 'event Hashtbl.M(Tnode).t;
   (* The completion event for the most recent updating (writing to) a node via this stream. *)
@@ -188,7 +188,7 @@ module type Device = sig
   include Alloc_buffer with type buffer_ptr := buffer_ptr and type stream := stream
 
   val make_device : dev -> ordinal:int -> device
-  val make_stream : device -> runner -> stream_id:int -> stream
+  val make_stream : device -> runner -> stream
 
   val make_context : ?ctx_arrays:ctx_arrays -> stream -> context
   (** Returns a context without a parent. *)
@@ -291,6 +291,7 @@ module type Backend_device_common = sig
 end
 
 module type With_buffer_retrieval_and_syncing = sig
+  type device
   type context
   type event
 
@@ -318,6 +319,9 @@ module type With_buffer_retrieval_and_syncing = sig
         buffer, and initializes the merge buffer's streaming event.
       - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
         stream, and updates the writer event for the merge buffer. *)
+
+  val sync_device : device -> unit
+  (** Synchronizes all the streams on a device, and cleans up (removes) all associated events. *)
 end
 
 module type Backend = sig
@@ -331,5 +335,9 @@ module type Backend = sig
   (** Returns the routines for the procedures included in the code batch. The returned context is
       downstream of all the returned routines. *)
 
-  include With_buffer_retrieval_and_syncing with type context := context and type event := event
+  include
+    With_buffer_retrieval_and_syncing
+      with type device := device
+       and type context := context
+       and type event := event
 end

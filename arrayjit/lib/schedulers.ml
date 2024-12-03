@@ -137,48 +137,62 @@ module Multicore (Backend : For_add_scheduler) :
     schedule_task stream @@ Task { context_lifetime = (); description = "clock tick"; work };
     { stream_state; target_clock = stream_state.schedule_clock }
 
-  let%track3_l_sexp spinup_stream ~stream_id : stream =
-    Int.incr global_run_no;
-    let state =
-      {
-        keep_spinning = true;
-        stream_error = None;
-        queue = Queue.create ~size_exponent:12;
-        mut = Mut.create ();
-        is_ready = false;
-        host_wait_for_idle = Stdlib.Condition.create ();
-        dev_wait_for_work = Stdlib.Condition.create ();
-        clock_tick = Stdlib.Condition.create ();
-        schedule_clock = 0;
-        run_clock = Atomic.make 0;
-        stream_id;
-      }
+  let%track3_l_sexp spinup_stream () : stream =
+    let create stream_id =
+      Int.incr global_run_no;
+      let state =
+        {
+          keep_spinning = true;
+          stream_error = None;
+          queue = Queue.create ~size_exponent:12;
+          mut = Mut.create ();
+          is_ready = false;
+          host_wait_for_idle = Stdlib.Condition.create ();
+          dev_wait_for_work = Stdlib.Condition.create ();
+          clock_tick = Stdlib.Condition.create ();
+          schedule_clock = 0;
+          run_clock = Atomic.make 0;
+          stream_id;
+        }
+      in
+      let%track3_l_sexp worker (() : unit) : unit =
+        assert (not @@ Domain.is_main_domain ());
+        try
+          while state.keep_spinning do
+            match Queue.pop_opt state.queue with
+            | None ->
+                Mut.lock state.mut;
+                state.is_ready <- true;
+                Stdlib.Condition.broadcast state.host_wait_for_idle;
+                while is_dev_queue_empty state && state.keep_spinning do
+                  Stdlib.Condition.wait state.dev_wait_for_work state.mut
+                done;
+                state.is_ready <- false;
+                Mut.unlock state.mut
+            | Some task -> Task.run task
+          done
+        with e ->
+          state.stream_error <- Some e;
+          state.keep_spinning <- false;
+          [%log1 "stream", (stream_id : int), "exception", Exn.to_string e];
+          (* TODO: we risk raising this error multiple times because await and schedule_task raise
+             stream_error. But this is fine if we assume all exceptions are fatal. *)
+          raise e
+      in
+      { state; domain = Domain.spawn worker }
     in
-    let%track3_l_sexp worker (() : unit) : unit =
-      assert (not @@ Domain.is_main_domain ());
-      try
-        while state.keep_spinning do
-          match Queue.pop_opt state.queue with
-          | None ->
-              Mut.lock state.mut;
-              state.is_ready <- true;
-              Stdlib.Condition.broadcast state.host_wait_for_idle;
-              while is_dev_queue_empty state && state.keep_spinning do
-                Stdlib.Condition.wait state.dev_wait_for_work state.mut
-              done;
-              state.is_ready <- false;
-              Mut.unlock state.mut
-          | Some task -> Task.run task
-        done
-      with e ->
-        state.stream_error <- Some e;
-        state.keep_spinning <- false;
-        [%log1 "stream", (stream_id : int), "exception", Exn.to_string e];
-        (* TODO: we risk raising this error multiple times because await and schedule_task raise
-           stream_error. But this is fine if we assume all exceptions are fatal. *)
-        raise e
-    in
-    make_stream device { state; domain = Domain.spawn worker } ~stream_id
+    Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
+        let runner = create stream_id in
+        {
+          device;
+          runner;
+          merge_buffer = ref None;
+          stream_id;
+          allocated_buffer = None;
+          updating_for = Hashtbl.create (module Tnode);
+          updating_for_merge_buffer = None;
+          reader_streams = Hashtbl.create (module Tnode);
+        })
 
   module Dynarr = Stdlib.Dynarray
 
@@ -198,12 +212,9 @@ module Multicore (Backend : For_add_scheduler) :
       invalid_arg [%string "Multicore_scheduler.get_device %{ordinal#Int}: only device 0 exists"];
     device
 
-  let latest_stream_id = ref (-1)
-
   let new_stream _device =
     assert (Domain.is_main_domain ());
-    Int.incr latest_stream_id;
-    let stream = spinup_stream ~stream_id:!latest_stream_id in
+    let stream = spinup_stream () in
     Stdlib.Gc.finalise cleanup_stream stream;
     stream
 
@@ -252,12 +263,7 @@ module Sync (Backend : For_add_scheduler) = struct
   let num_devices () = 1
   let suggested_num_streams _ = !sync_suggested_num_streams
   let get_used_memory _ = Backend.get_used_memory ()
-  let latest_stram_id = ref (-1)
-
-  let new_stream device =
-    Int.incr latest_stram_id;
-    make_stream device () ~stream_id:!latest_stram_id
-
+  let new_stream device = make_stream device ()
   let all_work _stream = ()
   let is_idle _stream = true
   let await _stream = ()

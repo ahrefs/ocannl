@@ -101,26 +101,27 @@ struct
     {
       dev;
       ordinal;
-      latest_stream_id = -1;
       released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
       owner_stream = Hashtbl.create (module Tnode);
       shared_writer_streams = Hashtbl.create (module Tnode);
       host_reading_streams = Hashtbl.create (module Tnode);
       host_writing_streams = Hashtbl.create (module Tnode);
+      streams = Utils.weak_create ();
     }
 
-  let make_stream device runner ~stream_id =
-    {
-      device;
-      runner;
-      merge_buffer = ref None;
-      stream_id;
-      allocated_buffer = None;
-      updating_for = Hashtbl.create (module Tnode);
-      updating_for_merge_buffer = None;
-      reader_streams = Hashtbl.create (module Tnode);
-    }
+  let make_stream device runner =
+    Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
+        {
+          device;
+          runner;
+          merge_buffer = ref None;
+          stream_id;
+          allocated_buffer = None;
+          updating_for = Hashtbl.create (module Tnode);
+          updating_for_merge_buffer = None;
+          reader_streams = Hashtbl.create (module Tnode);
+        })
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 

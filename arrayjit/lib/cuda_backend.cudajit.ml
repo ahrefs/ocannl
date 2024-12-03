@@ -13,11 +13,11 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 let () =
   Cu.cuda_call_hook :=
     Some
-      (fun ~message ~status ->
+      (fun ~message:_message ~status:_status ->
         [%debug_l_sexp
           [%log5_block
-            message;
-            if not @@ Cu.is_success status then [%log (status : Cu.result)]]])
+            _message;
+            if not @@ Cu.is_success _status then [%log (_status : Cu.result)]]])
 
 let _suspended () =
   Cu.cuda_call_hook := Some (fun ~message ~status:_ -> Stdlib.Printf.printf "CUDA %s\n" message)
@@ -149,11 +149,10 @@ let%track3_sexp get_device ~(ordinal : int) : device =
   if Atomic.get result.released then default () else result
 
 let%track3_sexp new_stream (device : device) : stream =
-  device.latest_stream_id <- device.latest_stream_id + 1;
   (* Strange that we need ctx_set_current even with a single device! *)
   set_ctx device.dev.primary_context;
   let cu_stream = Cu.Stream.create ~non_blocking:true () in
-  make_stream device cu_stream ~stream_id:device.latest_stream_id
+  make_stream device cu_stream
 
 let cuda_properties =
   let cache =
@@ -173,24 +172,24 @@ let suggested_num_streams device =
   | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
   | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
 
-let await stream : unit =
+let[@landmark] await stream : unit =
   set_ctx stream.device.dev.primary_context;
   Cu.Stream.synchronize stream.runner;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
 let is_idle stream = Cu.Stream.is_ready stream.runner
 
-let from_host ~dst_ptr ~dst hosted =
+let[@landmark] from_host ~dst_ptr ~dst hosted =
   set_ctx @@ ctx_of dst;
   let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
   Ndarray.map { f } hosted
 
-let to_host ~src_ptr ~src hosted =
+let[@landmark] to_host ~src_ptr ~src hosted =
   set_ctx @@ ctx_of src;
   let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
   Ndarray.map { f } hosted
 
-let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+let[@landmark] device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   let dev = dst.stream.device in
   let same_device = dev.ordinal = src.stream.device.ordinal in
   let size_in_bytes = Tn.size_in_bytes tn in
@@ -248,6 +247,8 @@ let%diagn2_sexp cuda_to_ptx ~name cu_src =
   let options =
     "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
   in
+  (* FIXME: every now and then the compilation crashes because the options are garbled. *)
+  (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
   let ptx = Cu.Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
   if Utils.settings.output_debug_files_in_build_directory then (
     let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in

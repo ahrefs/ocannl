@@ -540,8 +540,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
           @@ Backend.get_debug_info s)
     in
     if per_epoch_debug_streams then _debug_at "before sync";
-    (* TODO: there should be nothing pending left to sync. *)
-    Array.iter streams ~f:Backend.await
+    (* TODO: there should be nothing pending left to sync. And it offers only a slight speed up. *)
+    Array.iter devices ~f:Backend.(fun d -> sync_device d)
     (* This is now cleaned up by await. *)
     (* if per_epoch_debug_streams then _debug_at "after sync" *)
   done;

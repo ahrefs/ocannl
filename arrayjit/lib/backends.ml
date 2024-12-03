@@ -22,7 +22,7 @@ let check_merge_buffer stream ~code_node =
            ^ ", expected by code: " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
-  let wait_for_all ctx streams tn =
+  let[@landmark] wait_for_all ctx streams tn =
     let s = ctx.stream in
     Hashtbl.update_and_return streams tn
       ~f:
@@ -31,7 +31,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> List.iter ~f:(fun (work_stream, e) ->
            if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
 
-  let wait_for_ready ~dst ~src tn =
+  let[@landmark] wait_for_ready ~dst ~src tn =
     let s = src.stream in
     let d = dst.stream in
     (* TODO: maybe it's worthwhile to clean up s.updating_for every now and then. *)
@@ -39,7 +39,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let update_writer_event ?e ?from s tn =
+  let[@landmark] update_writer_event ?e ?from s tn =
     let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
     let f l = (s, e) :: Option.value ~default:[] l in
     (match (from, tn) with
@@ -52,13 +52,14 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | Node tn ->
         if Tn.potentially_cross_stream tn then
           Hashtbl.update s.device.shared_writer_streams tn ~f:(fun l ->
-              (s, e) :: Option.value ~default:[] l);
+              (s, e) :: Option.value ~default:[] l)
+        else Hashtbl.remove s.device.shared_writer_streams tn;
         Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
     | Merge_buffer tn ->
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%diagn2_l_sexp from_host (ctx : Backend.context) tn =
+  let%track2_l_sexp[@landmark] from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         wait_for_all ctx ctx.stream.reader_streams tn;
@@ -68,7 +69,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
-  let%diagn2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
+  let%track2_l_sexp[@landmark] to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
         if Tn.potentially_cross_stream tn then
@@ -82,8 +83,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
-  let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
-      ~(src : Backend.context) =
+  let%diagn2_l_sexp[@landmark] device_to_device (tn : Tn.t) ~into_merge_buffer
+      ~(dst : Backend.context) ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
     let same_device = ordinal_of dst = ordinal_of src in
@@ -115,30 +116,40 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               dst.stream.updating_for_merge_buffer <- Some (tn, None);
-              Task.run task;
+              let[@landmark] merge_task () = Task.run task in
+              merge_task ();
               update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
-  let%track3_l_sexp sync_routine r =
+  let%track2_l_sexp sync_routine r =
     let s = r.context.stream in
-    let pre () =
-      Hashtbl.filter_mapi_inplace s.device.shared_writer_streams ~f:(fun ~key ~data ->
-          if Tn.potentially_cross_stream key then
-            if Set.mem r.inputs key then (
-              let data = List.filter data ~f:(fun (_, e) -> Backend.is_done e) in
-              List.iter data ~f:(fun (work_stream, e) ->
-                  if not (equal_stream work_stream s) then Backend.will_wait_for r.context e);
-              Some data)
-            else Some data
-          else None)
+    let[@landmark] pre () =
+      Set.iter r.inputs ~f:(fun tn ->
+          if Tn.potentially_cross_stream tn then
+            Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->
+                let data = List.filter data ~f:(fun (_, e) -> not (Backend.is_done e)) in
+                Hashtbl.set s.device.shared_writer_streams ~key:tn ~data;
+                List.iter data ~f:(fun (work_stream, e) ->
+                    if not (equal_stream work_stream s) then Backend.will_wait_for r.context e))
+          else Hashtbl.remove s.device.shared_writer_streams tn)
       (* Since merge buffers are always per-stream, no need to check r.merge_buffer_input. *)
     in
-    let post () =
+    let[@landmark] post () =
       let e = Backend.all_work s in
       Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e s @@ Node tn)
     in
     { r with schedule = Task.(prepend ~work:pre @@ append ~work:post r.schedule) }
+
+  let[@landmark] sync_device device =
+    Utils.weak_iter device.streams ~f:Backend.await;
+    Hashtbl.clear device.host_writing_streams;
+    Hashtbl.clear device.host_reading_streams;
+    Hashtbl.clear device.shared_writer_streams;
+    Utils.weak_iter device.streams ~f:(fun s ->
+        Hashtbl.clear s.reader_streams;
+        s.updating_for_merge_buffer <- None;
+        Hashtbl.clear s.updating_for)
 end
 
 let lower_assignments ?name bindings asgns =
@@ -268,20 +279,20 @@ module Add_device
     in
     (Option.value_exn ~here:[%here] bindings, schedules)
 
-  let from_host ~dst_ptr ~dst hosted =
+  let[@landmark] from_host ~dst_ptr ~dst hosted =
     let work () = host_to_buffer hosted ~dst:dst_ptr in
     (* TODO: pass description to from_host. *)
     schedule_task dst.stream
       (Task.Task
          { context_lifetime = dst; description = "from_host on " ^ get_name dst.stream; work })
 
-  let to_host ~src_ptr ~src hosted =
+  let[@landmark] to_host ~src_ptr ~src hosted =
     let work () = buffer_to_host hosted ~src:src_ptr in
     (* TODO: pass description to to_host. *)
     schedule_task src.stream
       (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  let[@landmark] device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let s = dst.stream in
     let size_in_bytes = Tnode.size_in_bytes tn in
     let work =
@@ -468,7 +479,7 @@ let reinitialize (module Backend : Backend) config =
     Stdlib.Gc.full_major ();
     Backend.initialize config)
 
-let%track3_sexp finalize (type buffer_ptr dev runner event)
+let[@landmark] finalize (type buffer_ptr dev runner event)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev

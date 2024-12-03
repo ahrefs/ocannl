@@ -4,3 +4,4 @@
 (A) cuda backend crashes in bin/moons_benchmark {cm:2024-11-22}
 (B) figure out why cuda backend parallelism slows down in later epochs {cm:2024-11-25}
 (A) Ensure that reading from host on CPU performs required synchronization
+clean up event hashtables when a stream or device gets synchronized {cm:2024-12-03}

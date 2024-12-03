@@ -634,3 +634,30 @@ let capture_stdout_logs ?(never_skip = false) arg =
         advance_captured_logs := None;
         captured_log_processors := []);
     result)
+
+type 'a weak_dynarray = 'a Stdlib.Weak.t ref
+
+let weak_create () : 'a weak_dynarray = ref @@ Stdlib.Weak.create 0
+
+let sexp_of_weak_dynarray sexp_of_elem arr =
+  sexp_of_array (sexp_of_option sexp_of_elem) Stdlib.Weak.(Array.init (length !arr) ~f:(get !arr))
+
+let register_new (arr : 'a weak_dynarray) ?(grow_by = 1) create =
+  let module W = Stdlib.Weak in
+  let old = !arr in
+  let pos = ref 0 in
+  while !pos < W.length old && W.check old !pos do
+    Int.incr pos
+  done;
+  if !pos >= W.length old then (
+    arr := Stdlib.Weak.create (W.length old + grow_by);
+    Stdlib.Weak.blit old 0 !arr 0 (Stdlib.Weak.length old));
+  let v = create !pos in
+  W.set !arr !pos (Some v);
+  v
+
+let weak_iter (arr : 'a weak_dynarray) ~f =
+  let module W = Stdlib.Weak in
+  for i = 0 to W.length !arr - 1 do
+    Option.iter (W.get !arr i) ~f
+  done

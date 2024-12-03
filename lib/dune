@@ -11,6 +11,7 @@
   sexplib
   num
   str
+  landmarks
   ; mem_usage
   ppx_minidebug.runtime
   arrayjit)
@@ -24,6 +25,7 @@
    ppx_string
    ppx_variants_conv
    ppx_ocannl
+   landmarks-ppx
    ppx_minidebug))
  (modules PrintBox_utils row shape tensor operation train nn_blocks)
  (modes byte native)
