@@ -50,6 +50,8 @@
   cc_backend
   gcc_backend
   cuda_backend
+  lowered_backend_missing
+  no_device_backend_missing
   schedulers
   backends)
  (modes byte native))

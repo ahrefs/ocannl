@@ -77,14 +77,8 @@ end
 module Device_types (Device_config : Device_config) = struct
   include Device_config
 
-  type nonrec device =
-    (Device_config.buffer_ptr, Device_config.dev, Device_config.runner, Device_config.event) device
-  [@@deriving sexp_of]
-
-  type nonrec stream =
-    (Device_config.buffer_ptr, Device_config.dev, Device_config.runner, Device_config.event) stream
-  [@@deriving sexp_of]
-
+  type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
   type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
 end
 
