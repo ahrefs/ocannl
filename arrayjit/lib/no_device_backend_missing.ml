@@ -9,10 +9,10 @@ type procedure
 
 let sexp_of_procedure _procedure = failwith "Backend missing -- install the corresponding library"
 
-let compile ~name:_ ~opt_ctx_arrays:_ _unit_bindings _optimized =
+let compile ~name:_ _unit_bindings _optimized =
   failwith "Backend missing -- install the corresponding library"
 
-let compile_batch ~names:_ ~opt_ctx_arrays:_ _unit_bindings _optimizeds =
+let compile_batch ~names:_ _unit_bindings _optimizeds =
   failwith "Backend missing -- install the corresponding library"
 
 let link_compiled ~merge_buffer:_ ~runner_label:_ _ctx_arrays _procedure =

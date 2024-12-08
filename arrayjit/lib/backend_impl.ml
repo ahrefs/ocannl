@@ -158,23 +158,13 @@ module type Lowered_no_device_backend = sig
 
   type procedure [@@deriving sexp_of]
 
-  val compile :
-    name:string ->
-    opt_ctx_arrays:ctx_arrays option ->
-    Indexing.unit_bindings ->
-    Low_level.optimized ->
-    procedure
-  (** [opt_ctx_arrays], if any, already contain the arrays of the context that will result from
-      linking the code. *)
+  val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> procedure
 
   val compile_batch :
     names:string option array ->
-    opt_ctx_arrays:ctx_arrays option array option ->
     Indexing.unit_bindings ->
     Low_level.optimized option array ->
     procedure option array
-  (** [opt_ctx_arrays], if any, already contain the arrays of the contexts that will result from
-      linking the code. *)
 
   val link_compiled :
     merge_buffer:buffer option ref ->

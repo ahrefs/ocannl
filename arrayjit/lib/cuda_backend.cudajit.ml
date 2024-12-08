@@ -267,13 +267,12 @@ let%diagn2_sexp cuda_to_ptx ~name cu_src =
   ptx
 
 module C_syntax_config (Input : sig
-  val procs : (Low_level.optimized * ctx_arrays option) array
+  val procs : Low_level.optimized array
 end) =
 struct
   type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
 
   let procs = Input.procs
-  let hardcoded_context_ptr = None
   let use_host_memory = use_host_memory
   let logs_to_stdout = true
   let main_kernel_prefix = "extern \"C\" __global__"
@@ -281,7 +280,7 @@ struct
   let kernel_prep_line =
     "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
 
-  let include_lines = [ "#include <cuda_fp16.h>" ]
+  let includes = [ "<cuda_fp16.h>" ]
 
   let typ_of_prec = function
     | Ops.Byte_prec _ -> "unsigned char"
@@ -341,31 +340,31 @@ let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs = [| (lowered, None) |]
+    let procs = [| lowered |]
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
   if Utils.debug_log_from_routines () then
     Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-  let is_global = Syntax.compile_globals ppf in
-  let params = Syntax.compile_proc ~name ~is_global ppf idx_params lowered in
+  Syntax.print_includes ppf;
+  let params = Syntax.compile_proc ~name ppf idx_params lowered in
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { traced_store; ptx; params; bindings; name }
 
 let compile_batch ~names bindings lowereds =
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs = Array.filter_map lowereds ~f:(Option.map ~f:(fun lowereds -> (lowereds, None)))
+    let procs = Array.filter_opt lowereds
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let b = Buffer.create 4096 in
   let ppf = Stdlib.Format.formatter_of_buffer b in
-  let is_global = Syntax.compile_globals ppf in
+  Syntax.print_includes ppf;
   let params_and_names =
     Array.map2_exn names lowereds
       ~f:
         (Option.map2 ~f:(fun name lowered ->
-             (Syntax.compile_proc ~name ~is_global ppf idx_params lowered, name)))
+             (Syntax.compile_proc ~name ppf idx_params lowered, name)))
   in
   let name : string =
     String.(

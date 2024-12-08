@@ -218,11 +218,11 @@ module Add_device
   [@@deriving sexp_of]
 
   let compile ~name bindings lowered : code =
-    let proc = compile ~name ~opt_ctx_arrays:None bindings lowered in
+    let proc = compile ~name bindings lowered in
     { lowered; proc }
 
   let compile_batch ~names bindings lowereds : code_batch =
-    let procs = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
+    let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
 
   include Add_scheduler (Backend)

@@ -72,47 +72,37 @@ let c_compile_and_load ~f_name =
   result
 
 module C_syntax_config (Input : sig
-  val procs : (Low_level.optimized * buffer_ptr ctx_arrays option) array
+  val procs : Low_level.optimized array
 end) =
 struct
-  type nonrec buffer_ptr = buffer_ptr
-
   let procs = Input.procs
-  let hardcoded_context_ptr = c_ptr_to_string
   let use_host_memory = use_host_memory
   let logs_to_stdout = false
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
-
-  let include_lines =
-    [ "#include <stdio.h>"; "#include <stdlib.h>"; "#include <string.h>"; "#include <math.h>" ]
-
+  let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let typ_of_prec = Ops.c_typ_of_prec
   let binop_syntax = Ops.binop_c_syntax
   let unop_syntax = Ops.unop_c_syntax
   let convert_precision = Ops.c_convert_precision
 end
 
-let%diagn_sexp compile ~(name : string) ~opt_ctx_arrays bindings (lowered : Low_level.optimized) =
+let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) =
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs = [| (lowered, opt_ctx_arrays) |]
+    let procs = [| lowered |]
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
-  let is_global = Syntax.compile_globals pp_file.ppf in
-  let params = Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered in
+  Syntax.print_includes pp_file.ppf;
+  let params = Syntax.compile_proc ~name pp_file.ppf idx_params lowered in
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in
   { result; params; bindings; name }
 
-let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
-    (lowereds : Low_level.optimized option array) =
+let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) =
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs =
-      Array.filter_mapi lowereds ~f:(fun i ->
-          Option.map ~f:(fun lowereds ->
-              (lowereds, Option.(map opt_ctx_arrays ~f:(fun ctx_arrays -> value_exn ctx_arrays.(i))))))
+    let procs = Array.filter_opt lowereds
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -122,11 +112,11 @@ let%diagn_sexp compile_batch ~names ~opt_ctx_arrays bindings
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
   let pp_file = Utils.pp_file ~base_name ~extension:".c" in
-  let is_global = Syntax.compile_globals pp_file.ppf in
+  Syntax.print_includes pp_file.ppf;
   let params =
     Array.mapi lowereds ~f:(fun i lowered ->
         Option.map2 names.(i) lowered ~f:(fun name lowered ->
-            Syntax.compile_proc ~name pp_file.ppf idx_params ~is_global lowered))
+            Syntax.compile_proc ~name pp_file.ppf idx_params lowered))
   in
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in

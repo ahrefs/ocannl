@@ -11,18 +11,15 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
 module Tn = Tnode
 
 module C_syntax (B : sig
-  type buffer_ptr
-
-  val procs : (Low_level.optimized * buffer_ptr ctx_arrays option) array
+  val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
       shared and already known. *)
 
-  val hardcoded_context_ptr : (buffer_ptr -> Ops.prec -> string) option
   val use_host_memory : bool
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
-  val include_lines : string list
+  val includes : string list
   val typ_of_prec : Ops.prec -> string
   val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
   val unop_syntax : Ops.prec -> Ops.unop -> string * string
@@ -30,12 +27,14 @@ module C_syntax (B : sig
 end) =
 struct
   let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun (l, _) -> l.llc)
+    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context ~use_host_memory tn)
 
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
+
+  let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
 
   open Indexing.Pp_helpers
 
@@ -61,33 +60,8 @@ struct
 
   (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
      -> idx + (offset * dim)) *)
-  let%debug3_sexp compile_globals ppf : Tn.t Hash_set.t =
-    let open Stdlib.Format in
-    let is_global = Hash_set.create (module Tn) in
-    fprintf ppf {|@[<v 0>%a@,/* Global declarations. */@,|} (pp_print_list pp_print_string)
-      B.include_lines;
-    Array.iter B.procs ~f:(fun (l, ctx_arrays) ->
-        Hashtbl.iter l.Low_level.traced_store ~f:(fun (node : Low_level.traced_array) ->
-            let tn = node.tn in
-            if not @@ Hash_set.mem is_global tn then
-              let ctx_ptr = B.hardcoded_context_ptr in
-              let mem : (Tn.memory_mode * int) option = tn.memory_mode in
-              match (in_ctx tn, ctx_ptr, ctx_arrays, mem) with
-              | Some true, Some get_ptr, Some ctx_arrays, _ ->
-                  let ident = get_ident tn in
-                  let ctx_array =
-                    Option.value_exn ~here:[%here] ~message:ident @@ Map.find ctx_arrays tn
-                  in
-                  fprintf ppf "#define %s (%s)@," ident @@ get_ptr ctx_array (Lazy.force tn.prec);
-                  Hash_set.add is_global tn
-              | Some false, _, _, Some (Hosted _, _)
-                when B.(Tn.known_shared_with_host ~use_host_memory tn) ->
-                  let nd = Option.value_exn ~here:[%here] @@ Lazy.force tn.array in
-                  fprintf ppf "#define %s (%s)@," (get_ident tn) (Ndarray.c_ptr_to_string nd);
-                  Hash_set.add is_global tn
-              | _ -> ()));
-    fprintf ppf "@,@]";
-    is_global
+  let print_includes ppf =
+    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,|} (pp_print_list pp_include) B.includes)
 
   let compile_main ~traced_store ppf llc : unit =
     let open Stdlib.Format in
@@ -285,18 +259,16 @@ struct
     in
     pp_ll ppf llc
 
-  let%track3_sexp compile_proc ~name ppf idx_params ~is_global
-      Low_level.{ traced_store; llc; merge_node } =
+  let%track3_sexp compile_proc ~name ppf idx_params Low_level.{ traced_store; llc; merge_node } =
     let open Stdlib.Format in
     let params : (string * param_source) list =
-      (* Preserve the order in the hashtable, so it's the same as e.g. in compile_globals. *)
+      (* Preserve the order in the hashtable. *)
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
              let backend_info =
                Sexp.Atom
-                 (if Hash_set.mem is_global tn then "Host"
-                  else if Tn.is_virtual_force tn 334 then "Virt"
+                 (if Tn.is_virtual_force tn 334 then "Virt"
                   else
                     match in_ctx tn with
                     | Some true -> "Ctx"
@@ -307,7 +279,7 @@ struct
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              (* We often don't know ahead of linking with relevant contexts what the stream sharing
                 mode of the node will become. Conservatively, use passing as argument. *)
-             if Option.value ~default:true (in_ctx tn) && not (Hash_set.mem is_global tn) then
+             if Option.value ~default:true (in_ctx tn) then
                (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
@@ -373,12 +345,7 @@ struct
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if
-          not
-            (Tn.is_virtual_force tn 333
-            || Option.value ~default:true (in_ctx tn)
-            || Hash_set.mem is_global tn)
-        then
+        if not (Tn.is_virtual_force tn 333 || Option.value ~default:true (in_ctx tn)) then
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)
             (get_ident tn) (Tn.num_elems tn)

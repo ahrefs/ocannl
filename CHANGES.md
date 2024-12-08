@@ -22,6 +22,7 @@
 - Huge refactoring of backend internal interfaces and API (not repeating same code).
 - Built per-tensor-node stream-to-stream synchronization into copying functions.
 - Re-introduced whole-device blocking synchronization, which now is just a slight optimization as it also cleans up event book-keeping.
+- Simplifications: no more explicit compilation postponing; no more hard-coded pointers (all non-local arrays are passed by parameter).
 
 ### Fixed
 
