@@ -29,7 +29,8 @@ type row_var [@@deriving sexp, compare, equal, hash]
 
 val get_row_var : unit -> row_var
 
-(** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes. *)
+(** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes.
+*)
 type bcast =
   | Row_var of { v : row_var; beg_dims : dim list }
       (** The row can be inferred to have more axes. *)
@@ -58,7 +59,8 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 type row_constraint =
   | Unconstrained
   | Total_elems of { nominator : int; divided_by : dim_var_set }
-      (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
+      (** The row or remainder of a row, inclusive of the further row spec, has this many elements.
+      *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and

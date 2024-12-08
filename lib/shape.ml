@@ -18,7 +18,8 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 
     Note the following inconsistency due to differing conventions in function notation and matrix
     notation: for label specifications and einsum notation, we write "batch|inputs->outputs", but
-    when we convert a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]]. *)
+    when we convert a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs]].
+*)
 module AxisKey = struct
   module T = struct
     type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash]

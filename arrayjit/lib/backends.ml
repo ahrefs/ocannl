@@ -356,8 +356,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let%debug3_sexp compile_batch ?shared ?names ?occupancy bindings (comps : Assignments.comp array) :
-      code_batch =
+  let%debug3_sexp compile_batch ?shared ?names ?occupancy bindings (comps : Assignments.comp array)
+      : code_batch =
     let names, lowereds =
       lower_batch_assignments ?names ?occupancy bindings
       @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)

@@ -269,7 +269,8 @@ module type Backend_device_common = sig
   (** Global debug information; backend-specific and might evolve independently on the backends. *)
 
   val get_debug_info : stream -> Sexp.t
-  (** Per-stream debug information; backend-specific and might evolve independently on the backends *)
+  (** Per-stream debug information; backend-specific and might evolve independently on the backends
+  *)
 
   val await : stream -> unit
   (** Blocks till the stream becomes idle, i.e. synchronizes the stream. *)
@@ -329,7 +330,8 @@ module type Backend = sig
   include Backend_device_common with type buffer_ptr := buffer_ptr
 
   val link : context -> code -> context routine
-  (** Returns the routine for the code's procedure, in a new context derived from the given context. *)
+  (** Returns the routine for the code's procedure, in a new context derived from the given context.
+  *)
 
   val link_batch : context -> code_batch -> context * context routine option array
   (** Returns the routines for the procedures included in the code batch. The returned context is

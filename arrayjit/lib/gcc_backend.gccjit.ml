@@ -654,11 +654,11 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
     [%log_level
       0;
       let rec link :
-            'a 'b 'idcs.
-            'idcs Indexing.bindings ->
-            param_source list ->
-            ('a -> 'b) Ctypes.fn ->
-            ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
+          'a 'b 'idcs.
+          'idcs Indexing.bindings ->
+          param_source list ->
+          ('a -> 'b) Ctypes.fn ->
+          ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
        fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
         match (binds, params) with
         | Empty, [] -> Indexing.Result (Gccjit.Result.code code.result name cs)

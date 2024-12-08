@@ -84,9 +84,10 @@ end
 
 module Device
     (Device_types : Device_types)
-    (Alloc_buffer : Alloc_buffer
-                      with type buffer_ptr := Device_types.buffer_ptr
-                       and type stream := Device_types.stream) =
+    (Alloc_buffer :
+      Alloc_buffer
+        with type buffer_ptr := Device_types.buffer_ptr
+         and type stream := Device_types.stream) =
 struct
   include Device_types
   include Alloc_buffer
@@ -138,7 +139,8 @@ module type Backend_impl_common = sig
       [use_host_memory] can only be true on unified memory devices, like CPU and Apple Metal. *)
 end
 
-(** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations. *)
+(** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations.
+*)
 module type For_add_scheduler = sig
   include Backend_any_common
 

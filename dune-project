@@ -58,7 +58,7 @@
    (>= 0.23))
   ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
   ; (ocamlformat
-  ;  (>= 0.26.2)
+  ;  (>= 0.27.0)
   ;  :with-dev-setup)
   printbox
   printbox-text

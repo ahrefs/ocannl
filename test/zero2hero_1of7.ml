@@ -14,11 +14,13 @@ let%expect_test "Graph drawing recompile" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -139,11 +141,13 @@ let%expect_test "Graph drawing fetch" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -245,11 +249,13 @@ let%expect_test "Simple gradients hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -361,11 +367,13 @@ let%expect_test "Simple gradients virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -502,11 +510,13 @@ let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -535,11 +545,13 @@ let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in

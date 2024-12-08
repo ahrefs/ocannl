@@ -108,7 +108,8 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 type row_constraint =
   | Unconstrained
   | Total_elems of { nominator : int; divided_by : Set.M(Dim_var).t }
-      (** The row or remainder of a row, inclusive of the further row spec, has this many elements. *)
+      (** The row or remainder of a row, inclusive of the further row spec, has this many elements.
+      *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and

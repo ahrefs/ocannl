@@ -12,11 +12,13 @@ module type Backend = Arrayjit.Backend_intf.Backend
 let%expect_test "einsum1 permute axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -269,11 +271,13 @@ let%expect_test "einsum1 permute axes" =
 let%expect_test "einsum1 sum out axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -337,11 +341,13 @@ let%expect_test "einsum1 sum out axes" =
 let%expect_test "einsum outer product" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -579,11 +585,13 @@ let%expect_test "einsum outer product" =
 let%expect_test "einsum matrix/inner+outer products" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -691,11 +699,13 @@ let%expect_test "einsum matrix/inner+outer products" =
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -1103,11 +1113,13 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 let%expect_test "einsum broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -1215,11 +1227,13 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 let%expect_test "einsum1 fixed dim axis" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -1337,11 +1351,13 @@ let%expect_test "einsum1 fixed dim axis" =
 let%expect_test "einsum with fixed dim axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -1397,11 +1413,13 @@ let%expect_test "einsum with fixed dim axes" =
 let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
@@ -1593,11 +1611,13 @@ let%expect_test "outer_sum simulating axis concatenation" =
 let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let a =
@@ -1678,11 +1698,13 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
 let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend = (module Backend : Backend
+  let backend =
+    (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event) in
+       and type event = Backend.event)
+  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in

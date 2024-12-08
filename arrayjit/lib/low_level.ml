@@ -291,8 +291,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
                 if not @@ Set.mem env_dom s then
                   [%log2
                     "INFO: Inlining candidate has an escaping variable",
-                      (_idx : Indexing.axis_index),
-                      (top_llc : t)];
+                    (_idx : Indexing.axis_index),
+                    (top_llc : t)];
                 raise @@ Non_virtual 7
             | _ -> ());
         loop_float ~env_dom llv
@@ -311,8 +311,8 @@ let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
                 if not @@ Set.mem env_dom s then (
                   [%log2
                     "Inlining candidate has an escaping variable",
-                      (s : Indexing.symbol),
-                      (top_llc : t)];
+                    (s : Indexing.symbol),
+                    (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body

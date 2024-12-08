@@ -193,7 +193,7 @@ let to_host ~src_ptr ~src hosted =
 
 let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
   (* Stdio.printf "run: device_to_device %s dst backend:0:%d src backend:0:%d\n" (Tn.debug_name tn)
-    dst.stream.stream_id src.stream.stream_id; *)
+     dst.stream.stream_id src.stream.stream_id; *)
   let dev = dst.stream.device in
   let same_device = dev.ordinal = src.stream.device.ordinal in
   let size_in_bytes = Tn.size_in_bytes tn in

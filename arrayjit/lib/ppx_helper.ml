@@ -99,8 +99,8 @@ let ndarray_constant expr =
   let result = loop_values 0 [] expr in
   let values = { expr with pexp_desc = Pexp_array (List.rev result) } in
   let batch_dims, output_dims, input_dims =
-    Array.fold dims_spec ~init:([], [], []) ~f:(fun (batch_dims, output_dims, input_dims) ->
-      function
+    Array.fold dims_spec ~init:([], [], [])
+      ~f:(fun (batch_dims, output_dims, input_dims) -> function
       | `Input_dims dim -> (batch_dims, output_dims, eint ~loc dim :: input_dims)
       | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))

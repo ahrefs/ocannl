@@ -426,21 +426,22 @@ let log_debug_info ~from_log_level:_level _nd =
         "Ndarray " ^ Sexp.to_string_hum (sexp_of_t _nd);
         [%log
           "value-at-0:",
-            (get_as_float _nd (Array.map (dims _nd) ~f:(fun _ -> 0)) : float),
-            "has nan:",
-            (fold_as_float _nd ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) : bool),
-            "has +inf:",
-            (fold_as_float _nd ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity))
-              : bool),
-            "has -inf:",
-            (fold_as_float _nd ~init:false ~f:(fun has_neg_inf _ v ->
-                 has_neg_inf || Float.(v = neg_infinity))
-              : bool)]]]]
+          (get_as_float _nd (Array.map (dims _nd) ~f:(fun _ -> 0)) : float),
+          "has nan:",
+          (fold_as_float _nd ~init:false ~f:(fun has_nan _ v -> has_nan || Float.is_nan v) : bool),
+          "has +inf:",
+          (fold_as_float _nd ~init:false ~f:(fun has_inf _ v -> has_inf || Float.(v = infinity))
+            : bool),
+          "has -inf:",
+          (fold_as_float _nd ~init:false ~f:(fun has_neg_inf _ v ->
+               has_neg_inf || Float.(v = neg_infinity))
+            : bool)]]]]
 
 let concise_float ~prec v =
   Printf.sprintf "%.*e" prec v
-  |> (* The C99 standard requires at least two digits for the exponent, but the leading zero is a
-        waste of space. *)
+  |>
+  (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste
+     of space. *)
   String.substr_replace_first ~pattern:"e+0" ~with_:"e+"
   |> String.substr_replace_first ~pattern:"e-0" ~with_:"e-"
 
