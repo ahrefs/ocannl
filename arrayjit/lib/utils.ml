@@ -331,7 +331,7 @@ let _get_local_debug_runtime =
   let debug_runtime_key = DLS.new_key get_runtime in
   fun () ->
     let module Debug_runtime = (val DLS.get debug_runtime_key) in
-    Debug_runtime.log_level := settings.log_level;
+    if not (is_main_domain ()) then Debug_runtime.log_level := settings.log_level;
     (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
 module Debug_runtime = (val _get_local_debug_runtime ())
