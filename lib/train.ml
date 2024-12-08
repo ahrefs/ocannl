@@ -469,6 +469,12 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let init_mem = Array.fold devices ~init:0 ~f:(fun acc dev -> acc + Backend.get_used_memory dev) in
   let minibatch_size = batch_size / num_streams in
   let n_minibatches = data_len / minibatch_size in
+  if n_minibatches <= 0 then
+    invalid_arg
+      [%string
+        "Train.example_train_loop: too little data: %{data_len#Int} for minibatch size: \
+         %{minibatch_size#Int} = %{batch_size#Int} / %{num_streams#Int} streams"];
+  assert (epochs > 0);
   let inputs = inputs ~b:[ n_minibatches; minibatch_size ] in
   let outputs = outputs ~b:[ n_minibatches; minibatch_size ] in
   (* This is the joint number of steps done by the round-robin scheduler across devices. *)
