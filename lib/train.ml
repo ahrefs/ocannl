@@ -363,7 +363,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
           snd
-          @@ Backend.(link_batch ctx @@ compile_batch ~shared:true ~occupancy Idx.Empty grad_merges)
+          @@ Backend.(link_batch ctx @@ compile_batch ~occupancy Idx.Empty grad_merges)
         else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
@@ -441,8 +441,8 @@ let to_routine (type buffer_ptr dev runner event)
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
-       and type event = event) (context : Backend.context) ?shared ?name bindings comp =
-  Backend.link context @@ Backend.compile ?shared ?name bindings comp
+       and type event = event) (context : Backend.context) ?name bindings comp =
+  Backend.link context @@ Backend.compile ?name bindings comp
 
 type example_train_result = {
   inputs : Tensor.t;
@@ -500,7 +500,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
      Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay update in
-  let grad_update = Backend.compile ~shared:true bindings update.fwd_bprop in
+  let grad_update = Backend.compile bindings update.fwd_bprop in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;

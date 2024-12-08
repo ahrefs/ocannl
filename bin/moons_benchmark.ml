@@ -34,22 +34,25 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Tensor.default_grad_prec := grad_prec;
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* This will only log from routines if log-level is high enough. *)
-  Utils.settings.debug_log_from_routines <- true;
+  (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init (* seed *) 0;
   let hid_dim_1 = 16 in
   let hid_dim_2 = 8 in
   let hid_dim_3 = 4 in
   (* TINY for debugging: *)
   (* let hid_dim = 2 in *)
+  (* let hid_dim = 4 in *)
   let data_len = 3 * 5 * 1024 in
   (* TINY for debugging: *)
   (* let data_len = 3 * 4 in *)
+  (* let data_len = 3 * 16 in *)
   let flat_len = data_len / 2 in
   (* Note: [minibatch_size = batch_size / num_streams] is the actual per-device batch used. *)
-  let epochs = 200 in
+  (* let epochs = 400 in *)
   (* let epochs = 100 in *)
   (* let epochs = 50 in *)
   (* TINY for debugging: *)
+  let epochs = 3 in
   (* let epochs = 2 in *)
   (* let epochs = 1 in *)
   (* let init_lr = 0.1 in *)
@@ -84,12 +87,15 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Stdlib.Format.printf "Initial backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
+    (* Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
+       learning_rate batch_loss epoch_loss; *)
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
-    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
-       epoch_loss
+    if at_epoch % 10 = 9 then
+      Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
+        epoch_loss
   in
 
   Backend.initialize Train.BT.Most_parallel_streams;
@@ -115,22 +121,25 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;
   Stdio.printf "\n********\n%!";
+  Arrayjit.Tnode.print_accessible_headers ();
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
-  let plot_moons =
-    let open PrintBox_utils in
-    plot
-      ~size:(120, 40)
-        (* TINY for debugging: *)
-        (* ~size:(20, 10) *)
-      ~x_label:"ixes" ~y_label:"ygreks"
-      [
-        Scatterplot { points = points1; pixel = "#" };
-        Scatterplot { points = points2; pixel = "%" };
-        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
-      ]
+  let%track3_sexp plot_moons () =
+    [%log_level
+      0;
+      let open PrintBox_utils in
+      plot
+        ~size:(120, 40)
+          (* TINY for debugging: *)
+          (* ~size:(20, 10) *)
+        ~x_label:"ixes" ~y_label:"ygreks"
+        [
+          Scatterplot { points = points1; pixel = "#" };
+          Scatterplot { points = points2; pixel = "%" };
+          Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+        ]]
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
+  PrintBox_text.output Stdio.stdout @@ plot_moons ();
   Stdio.printf "\nBatch Log-loss:\n%!";
   let plot_loss =
     let open PrintBox_utils in
@@ -181,6 +190,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
       }
   in
   Stdio.printf "\n\n%!";
+  Arrayjit.Tnode.print_accessible_headers ();
   Stdlib.Format.printf "Final backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   result
@@ -211,13 +221,24 @@ let _cuda_benchmarks =
                           ]))))))
 
 let _cuda_parallel_benchmarks =
-  List.concat_map [ (* 1; 2; *) (* 3; 4; 5; 6; 8; 10; 12; 16; *) 20 (* 32; 64 *) ] ~f:(fun num_streams ->
+  List.concat_map
+    [
+      (* 1; 2; *)
+      3;
+      (* 4; 5; 6; 8; 10; 12; 16; 20 *)
+      (* 32; 64 *)
+    ] ~f:(fun num_streams ->
       List.concat_map
-        [ 3 * 5 * 16 (* ; 3 * 5 * 32 *) ]
+        [
+          (* TINY for debugging: *)
+          (* 3 * 4 *)
+          3 * 5 * 16 (* ; 3 * 5 * 32 *);
+        ]
         ~f:(fun batch_size ->
-          List.concat_map [ (* 1; *) (* 2; *) 3 ] ~f:(fun inlining_cutoff ->
+          List.concat_map [ (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; "cc"; *) "cuda" ] ~f:(fun backend_name ->
+                  List.concat_map [ (* "gccjit"; "cuda" ;"cc"; *) "sync_cc" ]
+                    ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
                           [

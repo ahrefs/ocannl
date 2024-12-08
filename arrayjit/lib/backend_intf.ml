@@ -220,22 +220,21 @@ module type Backend_common = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
 
-  val compile : ?shared:bool -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
-  (** If [~shared:true] (default [false]), the backend should prefer to do more compile work in a
-      device-and-stream-agnostic way. If [~shared:false], the backend can opt to postpone compiling
-      altogether until [link] is called, to benefit from more optimizations. *)
+  val compile : ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
+  (** [name] is used to derive names for compilation artifacts. If omitted, it's derived via
+      {!Assignments.get_name_exn}. *)
 
   val compile_batch :
-    ?shared:bool ->
     ?names:string array ->
     ?occupancy:(name:string -> src_n:int -> bool) ->
     Indexing.unit_bindings ->
     Assignments.comp array ->
     code_batch
-  (** Unlike the [~shared] parameter, [compile_batch] vs. [compile] is mostly about improving the
-      compile time and debugging convenience by generating fewer files -- ideally does not affect
-      execution, but there can be backend-specific differences. Only array entries for which
-      [occupancy] returns true are included. *)
+  (** [compile_batch] vs. [compile] is mostly about improving the compile time and debugging
+      convenience by generating fewer files -- ideally does not affect execution, but there can be
+      backend-specific differences. Only array entries for which [occupancy] returns true are
+      included. [names] are used to derive names for compilation artifacts. If omitted, they're
+      derived via {!Assignments.get_name_exn}. *)
 end
 
 (** Parts shared by both assignments-level and lowered-level backend interfaces providing streams

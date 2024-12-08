@@ -233,10 +233,9 @@ module type Lowered_backend = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
 
-  val compile : ?shared:bool -> name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
+  val compile : name:string -> Indexing.unit_bindings -> Low_level.optimized -> code
 
   val compile_batch :
-    ?shared:bool ->
     names:string option array ->
     Indexing.unit_bindings ->
     Low_level.optimized option array ->

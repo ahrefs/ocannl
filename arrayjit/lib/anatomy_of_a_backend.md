@@ -46,11 +46,11 @@ The modules and files of `arrayjit` can loosely be divided into three parts.
         - `reinitialize` a backend,
         - `finalize` a context (freeing all of its arrays that don't come from its parent context).
 
-### Shared (relocatable) compilation, batch compilation
+### Batch compilation; in the future: lazy and cached compilation artifacts
 
-Shared (relocatable) compilation, with `~shared:true`, improves compilation efficiency, because code can be compiled once for use on multiple devices (in multiple contexts). It also improves debugging convenience, by generating fewer debugging artifacts. A potential downside is slightly less efficient computations.
+Batched compilation produces fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. Batched compilation and linking process _many routines for one device/stream_ at once.
 
-Batched compilation has similar benefits, especially in producing fewer debugging artifacts. The compilation might also be slightly more efficient since the compiler needs to be invoked fewer times. While `~shared:true` compiles _one routine for many devices_, batched compilation and linking process _many routines for one device_ at once.
+In the future, when we introduce program search, `compile` functions will return compilation artifact objects. They will manage compilation lazily, caching compilation keyed by (a configuration of) device.
 
 ## Tensor nodes, arrays, memory properties
 
@@ -112,7 +112,7 @@ Contexts track (or store) the on-device arrays corresponding to tensor nodes. Co
 
 ## Typical details of a backend implementation
 
-During the compilation process, the old context cannot be available if the backend supports shared compilation. A backend may for simplicity not suport shared compilation, i.e. ignore `~shared:true` and postpone compilation to the linking phase. Currently, the CUDA backend ignores `~shared:false` and always generates context-and-device-independent kernels, that refer to context (i.e. global) arrays via parameters.
+During the compilation process, the old context cannot be available when `compile` is handled. Currently, all backends generate context-and-device-independent kernels, that refer to context arrays via parameters.
 
 We use keys of the `Low_level.traced_store` containers assuming that they are precisely the tensor nodes used in the compiled code -- and the `Virtual` nodes are the ones optimized-away. The context can contain nodes from the parent context corresponding to tensors only needed by parent or ancestor context's computations. The `get_ident` function (e.g. provided by `C_syntax`) returns a human-readable identifier that's un-ambiguous in the context of the compiled code (shared within `compile_batch`).
 

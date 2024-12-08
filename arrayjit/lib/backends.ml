@@ -209,51 +209,28 @@ module Add_device
     (Backend : Lowered_no_device_backend) : Lowered_backend = struct
   include Backend
 
-  type code =
-    | Postponed of {
-        lowered : Low_level.optimized;
-        bindings : Indexing.unit_bindings;
-        name : string;
-      }
-    | Compiled of { lowered : Low_level.optimized; proc : Backend.procedure }
+  type code = { lowered : Low_level.optimized; proc : Backend.procedure } [@@deriving sexp_of]
+
+  type code_batch = {
+    lowereds : Low_level.optimized option array;
+    procs : Backend.procedure option array;
+  }
   [@@deriving sexp_of]
 
-  type code_batch =
-    | Postponed of {
-        lowereds : Low_level.optimized option array;
-        bindings : Indexing.unit_bindings;
-        names : string option array;
-      }
-    | Compiled of {
-        lowereds : Low_level.optimized option array;
-        procs : Backend.procedure option array;
-      }
-  [@@deriving sexp_of]
+  let compile ~name bindings lowered : code =
+    let proc = compile ~name ~opt_ctx_arrays:None bindings lowered in
+    { lowered; proc }
 
-  let compile ?(shared = false) ~name bindings lowered : code =
-    if shared then
-      let proc = compile ~name ~opt_ctx_arrays:None bindings lowered in
-      Compiled { lowered; proc }
-    else Postponed { lowered; bindings; name }
-
-  let compile_batch ?(shared = false) ~names bindings lowereds : code_batch =
-    if shared then
-      let procs = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
-      Compiled { lowereds; procs }
-    else Postponed { lowereds; bindings; names }
+  let compile_batch ~names bindings lowereds : code_batch =
+    let procs = compile_batch ~names ~opt_ctx_arrays:None bindings lowereds in
+    { lowereds; procs }
 
   include Add_scheduler (Backend)
 
   let link context (code : code) ctx_arrays =
     let runner_label = get_name context.stream in
     let merge_buffer = context.stream.merge_buffer in
-    let bindings, to_schedule =
-      match code with
-      | Postponed { lowered; bindings; name } ->
-          let proc = Backend.compile ~name ~opt_ctx_arrays:(Some ctx_arrays) bindings lowered in
-          link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-      | Compiled { proc; _ } -> link_compiled ~merge_buffer ~runner_label ctx_arrays proc
-    in
+    let bindings, to_schedule = link_compiled ~merge_buffer ~runner_label ctx_arrays code.proc in
     let schedule =
       Task.enschedule ~schedule_task ~get_stream_name:get_name context.stream to_schedule
     in
@@ -262,14 +239,8 @@ module Add_device
   let link_batch context (code_batch : code_batch) ctx_arrays =
     let runner_label = get_name context.stream in
     let merge_buffer = context.stream.merge_buffer in
-    let procs =
-      match code_batch with
-      | Postponed { lowereds; bindings; names } ->
-          Backend.compile_batch ~names ~opt_ctx_arrays:(Some ctx_arrays) bindings lowereds
-      | Compiled { procs; _ } -> procs
-    in
     let bindings, schedules =
-      Array.fold_mapi procs ~init:None ~f:(fun i bindings -> function
+      Array.fold_mapi code_batch.procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
             let ctx_arrays = Option.value_exn ctx_arrays.(i) in
             let bindings', to_schedule =
@@ -348,21 +319,21 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
-  let%debug3_sexp compile ?shared ?name bindings (comp : Assignments.comp) : code =
+  let%debug3_sexp compile ?name bindings (comp : Assignments.comp) : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
-    let code = compile ?shared ~name bindings lowered in
+    let code = compile ~name bindings lowered in
     let from_prior_context =
       Set.diff (Assignments.context_nodes ~use_host_memory comp.asgns) comp.embedded_nodes
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let%debug3_sexp compile_batch ?shared ?names ?occupancy bindings (comps : Assignments.comp array)
-      : code_batch =
+  let%debug3_sexp compile_batch ?names ?occupancy bindings (comps : Assignments.comp array) :
+      code_batch =
     let names, lowereds =
       lower_batch_assignments ?names ?occupancy bindings
       @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
     in
-    let code_batch = compile_batch ?shared ~names bindings lowereds in
+    let code_batch = compile_batch ~names bindings lowereds in
     let from_prior_context =
       from_prior_context_batch ~use_host_memory
       @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))

@@ -337,7 +337,7 @@ struct
     | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 end
 
-let compile ?shared:_ ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
   (* TODO: The following link seems to claim it's better to expand into loops than use memset.
      https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
@@ -353,7 +353,7 @@ let compile ?shared:_ ~name bindings ({ Low_level.traced_store; _ } as lowered) 
   let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
   { traced_store; ptx; params; bindings; name }
 
-let compile_batch ?shared:_ ~names bindings lowereds =
+let compile_batch ~names bindings lowereds =
   let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
     let procs = Array.filter_map lowereds ~f:(Option.map ~f:(fun lowereds -> (lowereds, None)))
   end)) in

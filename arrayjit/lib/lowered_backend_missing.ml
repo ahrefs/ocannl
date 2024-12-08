@@ -78,10 +78,10 @@ type code_batch
 
 let sexp_of_code_batch _code_batch = failwith "Backend missing -- install the corresponding library"
 
-let compile ?shared:_ ~name:_ _unit_bindings _optimized =
+let compile ~name:_ _unit_bindings _optimized =
   failwith "Backend missing -- install the corresponding library"
 
-let compile_batch ?shared:_ ~names:_ _unit_bindings _optimizeds =
+let compile_batch ~names:_ _unit_bindings _optimizeds =
   failwith "Backend missing -- install the corresponding library"
 
 let link _context _code = failwith "Backend missing -- install the corresponding library"
