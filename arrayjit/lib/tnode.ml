@@ -145,13 +145,13 @@ let log_debug_info ~from_log_level tn =
       from_log_level (debug_name tn);
       [%log
         "id:",
-          (tn.id : int),
-          "label:",
-          (tn.label : string list),
-          "mem:",
-          debug_memory_mode tn.memory_mode,
-          "backends:",
-          (tn.backend_info : Sexp.t)];
+        (tn.id : int),
+        "label:",
+        (tn.label : string list),
+        "mem:",
+        debug_memory_mode tn.memory_mode,
+        "backends:",
+        (tn.backend_info : Sexp.t)];
       if Lazy.is_val tn.array then
         match tn.array with
         | (lazy None) -> [%log "<not-on-host>"]
@@ -190,7 +190,7 @@ let is_materialized_force tn provenance =
 
 (* Unlike the [known_] functions which can only change from [false] to [true], [is_in_context
    ~use_host_memory tn] is more precise. Generally, it can only change away from [None]. *)
-let is_in_context ~use_host_memory tn =
+let%debug3_sexp is_in_context ~(use_host_memory : bool) (tn : t) : bool option =
   match tn.memory_mode with
   | Some (Hosted (Changed_on_devices Per_stream), _) -> Some true
   | Some ((Materialized | Hosted Nonconstant), _) when not use_host_memory -> Some true
@@ -403,6 +403,15 @@ let equal a1 a2 = equal_int a1.id a2.id
 let hash nd = Int.hash nd.id
 let hash_fold_t acc nd = hash_fold_int acc nd.id
 let hash_t = hash
+
+module Comp = struct
+  type nonrec t = t
+  type nonrec comparator_witness = comparator_witness
+end
+
+type t_set = Set.M(Comp).t
+
+let sexp_of_t_set s = [%sexp_of: t Sequence.t] @@ Set.to_sequence s
 
 let get_exn a =
   match a.array with

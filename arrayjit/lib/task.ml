@@ -13,7 +13,7 @@ type t =
 
 let describe (Task task) = task.description
 
-let%diagn_l_sexp run (Task task) =
+let%debug3_l_sexp run (Task task) : unit =
   [%log_result "run", task.description];
   task.work ()
 

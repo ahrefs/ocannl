@@ -22,7 +22,7 @@ let check_merge_buffer stream ~code_node =
            ^ ", expected by code: " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
-  let[@landmark] wait_for_all ctx streams tn =
+  let wait_for_all ctx streams tn =
     let s = ctx.stream in
     Hashtbl.update_and_return streams tn
       ~f:
@@ -31,7 +31,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> List.iter ~f:(fun (work_stream, e) ->
            if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
 
-  let[@landmark] wait_for_ready ~dst ~src tn =
+  let wait_for_ready ~dst ~src tn =
     let s = src.stream in
     let d = dst.stream in
     (* TODO: maybe it's worthwhile to clean up s.updating_for every now and then. *)
@@ -39,7 +39,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let[@landmark] update_writer_event ?e ?from s tn =
+  let update_writer_event ?e ?from s tn =
     let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
     let f l = (s, e) :: Option.value ~default:[] l in
     (match (from, tn) with
@@ -59,22 +59,24 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%track2_l_sexp[@landmark] from_host (ctx : Backend.context) tn =
+  let%track2_l_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
+        (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ~from:`Host ctx.stream @@ Node tn;
         true
     | _ -> false
 
-  let%track2_l_sexp[@landmark] to_host (ctx : Backend.context) (tn : Tn.t) =
+  let%track2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
         if Tn.potentially_cross_stream tn then
           wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
+        (* Stdio.printf "copying: %s to_host\n" (Tn.debug_name tn); *)
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
         let s = ctx.stream in
         let e = Backend.all_work s in
@@ -83,8 +85,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
-  let%diagn2_l_sexp[@landmark] device_to_device (tn : Tn.t) ~into_merge_buffer
-      ~(dst : Backend.context) ~(src : Backend.context) =
+  let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
+      ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
     let same_device = ordinal_of dst = ordinal_of src in
@@ -116,15 +118,17 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               dst.stream.updating_for_merge_buffer <- Some (tn, None);
-              let[@landmark] merge_task () = Task.run task in
+              let merge_task () = Task.run task in
               merge_task ();
               update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
-  let%track2_l_sexp sync_routine r =
+  type r = Backend.context routine [@@deriving sexp_of]
+
+  let%track2_l_sexp sync_routine (r : r) : r =
     let s = r.context.stream in
-    let[@landmark] pre () =
+    let pre () =
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
             Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->
@@ -135,13 +139,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
           else Hashtbl.remove s.device.shared_writer_streams tn)
       (* Since merge buffers are always per-stream, no need to check r.merge_buffer_input. *)
     in
-    let[@landmark] post () =
+    let post () =
       let e = Backend.all_work s in
       Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e s @@ Node tn)
     in
     { r with schedule = Task.(prepend ~work:pre @@ append ~work:post r.schedule) }
 
-  let[@landmark] sync_device device =
+  let sync_device device =
     Utils.weak_iter device.streams ~f:Backend.await;
     Hashtbl.clear device.host_writing_streams;
     Hashtbl.clear device.host_reading_streams;
@@ -180,7 +184,7 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
              Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
-let verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context =
+let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
   Set.iter from_prior_context ~f:(fun tn ->
       if
         (* Err on the safe side. *)
@@ -188,7 +192,8 @@ let verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context =
         && not (Option.is_some @@ Map.find ctx_arrays tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
-let from_prior_context_batch ~use_host_memory comps =
+let%debug3_sexp from_prior_context_batch ~use_host_memory (comps : Assignments.comp option array) :
+    Tn.t_set =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
           Set.diff
@@ -279,20 +284,20 @@ module Add_device
     in
     (Option.value_exn ~here:[%here] bindings, schedules)
 
-  let[@landmark] from_host ~dst_ptr ~dst hosted =
+  let from_host ~dst_ptr ~dst hosted =
     let work () = host_to_buffer hosted ~dst:dst_ptr in
     (* TODO: pass description to from_host. *)
     schedule_task dst.stream
       (Task.Task
          { context_lifetime = dst; description = "from_host on " ^ get_name dst.stream; work })
 
-  let[@landmark] to_host ~src_ptr ~src hosted =
+  let to_host ~src_ptr ~src hosted =
     let work () = buffer_to_host hosted ~src:src_ptr in
     (* TODO: pass description to to_host. *)
     schedule_task src.stream
       (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.stream; work })
 
-  let[@landmark] device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let s = dst.stream in
     let size_in_bytes = Tnode.size_in_bytes tn in
     let work =
@@ -343,7 +348,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
-  let compile ?shared ?name bindings comp : code =
+  let%debug3_sexp compile ?shared ?name bindings (comp : Assignments.comp) : code =
     let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
     let code = compile ?shared ~name bindings lowered in
     let from_prior_context =
@@ -351,7 +356,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let compile_batch ?shared ?names ?occupancy bindings comps =
+  let%debug3_sexp compile_batch ?shared ?names ?occupancy bindings (comps : Assignments.comp array) :
+      code_batch =
     let names, lowereds =
       lower_batch_assignments ?names ?occupancy bindings
       @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
@@ -479,7 +485,7 @@ let reinitialize (module Backend : Backend) config =
     Stdlib.Gc.full_major ();
     Backend.initialize config)
 
-let[@landmark] finalize (type buffer_ptr dev runner event)
+let finalize (type buffer_ptr dev runner event)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev

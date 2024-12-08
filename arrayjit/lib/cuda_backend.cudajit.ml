@@ -172,24 +172,28 @@ let suggested_num_streams device =
   | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
   | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
 
-let[@landmark] await stream : unit =
+let await stream : unit =
   set_ctx stream.device.dev.primary_context;
   Cu.Stream.synchronize stream.runner;
   Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
 
 let is_idle stream = Cu.Stream.is_ready stream.runner
 
-let[@landmark] from_host ~dst_ptr ~dst hosted =
+let from_host ~dst_ptr ~dst hosted =
+  (* Stdio.printf "run: from_host on backend:0:%d\n" dst.stream.stream_id; *)
   set_ctx @@ ctx_of dst;
   let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
   Ndarray.map { f } hosted
 
-let[@landmark] to_host ~src_ptr ~src hosted =
+let to_host ~src_ptr ~src hosted =
+  (* Stdio.printf "run: to_host on backend:0:%d\n" src.stream.stream_id; *)
   set_ctx @@ ctx_of src;
   let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
   Ndarray.map { f } hosted
 
-let[@landmark] device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  (* Stdio.printf "run: device_to_device %s dst backend:0:%d src backend:0:%d\n" (Tn.debug_name tn)
+    dst.stream.stream_id src.stream.stream_id; *)
   let dev = dst.stream.device in
   let same_device = dev.ordinal = src.stream.device.ordinal in
   let size_in_bytes = Tn.size_in_bytes tn in

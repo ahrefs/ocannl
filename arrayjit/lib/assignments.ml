@@ -80,7 +80,7 @@ let is_total ~initialize_neutral ~projections =
 (** Returns materialized nodes in the sense of {!Tnode.is_in_context}. NOTE: it should be called
     after compilation and ideally after linking with the relevant contexts; otherwise, it is an
     under-estimate. *)
-let context_nodes ~use_host_memory asgns =
+let%debug3_sexp context_nodes ~(use_host_memory : bool) (asgns : t) : Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
   let one tn =
@@ -117,12 +117,12 @@ let%diagn1_sexp to_low_level code =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "get",
-          "a=",
-          (tn : Tn.t),
-          ":",
-          Tn.label tn,
-          (idcs : Indexing.axis_index array),
-          (Lazy.force tn.dims : int array)];
+        "a=",
+        (tn : Tn.t),
+        ":",
+        Tn.label tn,
+        (idcs : Indexing.axis_index array),
+        (Lazy.force tn.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
@@ -133,12 +133,12 @@ let%diagn1_sexp to_low_level code =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "set",
-          "a=",
-          (tn : Tn.t),
-          ":",
-          Tn.label tn,
-          (idcs : Indexing.axis_index array),
-          (Lazy.force tn.dims : int array)];
+        "a=",
+        (tn : Tn.t),
+        ":",
+        Tn.label tn,
+        (idcs : Indexing.axis_index array),
+        (Lazy.force tn.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     Low_level.Set { tn; idcs; llv; debug = "" }
   in
