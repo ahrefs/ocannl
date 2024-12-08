@@ -45,10 +45,9 @@ module Multicore (Backend : For_add_scheduler) :
       mut : (Mut.t[@sexp.opaque]);
       host_wait_for_idle : (Stdlib.Condition.t[@sexp.opaque]);
       dev_wait_for_work : (Stdlib.Condition.t[@sexp.opaque]);
+      clock_mut : (Mut.t[@sexp.opaque]);
       clock_tick : (Stdlib.Condition.t[@sexp.opaque]);
       mutable is_ready : bool;
-      mutable schedule_clock : int;
-      run_clock : Utils.atomic_int;
       stream_id : int;
     }
     [@@deriving sexp_of]
@@ -58,7 +57,7 @@ module Multicore (Backend : For_add_scheduler) :
     let sexp_of_domain (d : domain) = Sexp.Atom ("domain-" ^ Int.to_string (Domain.get_id d :> int))
 
     type runner = { state : stream_state; domain : domain } [@@deriving sexp_of]
-    type event = { stream_state : stream_state; target_clock : int } [@@deriving sexp_of]
+    type event = { stream_state : stream_state; is_done : Utils.atomic_bool } [@@deriving sexp_of]
 
     let name = "multicore_" ^ Backend.name
   end
@@ -67,14 +66,15 @@ module Multicore (Backend : For_add_scheduler) :
   include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
   open Device_config
 
-  let sync { stream_state; target_clock } =
-    Mut.lock stream_state.mut;
-    while Atomic.get stream_state.run_clock < target_clock do
-      Condition.wait stream_state.clock_tick stream_state.mut
-    done;
-    Mut.unlock stream_state.mut
+  let sync { stream_state; is_done } =
+    while stream_state.keep_spinning && not (Atomic.get is_done) do
+      Mut.lock stream_state.clock_mut;
+      if stream_state.keep_spinning && not (Atomic.get is_done) then
+        Condition.wait stream_state.clock_tick stream_state.clock_mut;
+      Mut.unlock stream_state.clock_mut
+    done
 
-  let is_done { stream_state; target_clock } = Atomic.get stream_state.run_clock >= target_clock
+  let is_done { stream_state = _; is_done } = Atomic.get is_done
   let get_used_memory _device = get_used_memory ()
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
@@ -109,16 +109,14 @@ module Multicore (Backend : For_add_scheduler) :
   let global_run_no = ref 0
   let device : device = make_device CPU ~ordinal:0
 
-  let will_wait_for ctx ({ stream_state; target_clock } as event) =
+  let will_wait_for ctx ({ stream_state; is_done = _ } as event) =
     let work () = sync event in
     let task =
       Task.Task
         {
           context_lifetime = ();
           description =
-            [%string
-              "wait on %{get_name ctx.stream} till clock %{target_clock#Int} on \
-               0:%{stream_state.stream_id#Int}"];
+            [%string "wait on %{get_name ctx.stream} for 0:%{stream_state.stream_id#Int}"];
           work;
         }
     in
@@ -127,15 +125,15 @@ module Multicore (Backend : For_add_scheduler) :
   let all_work stream =
     assert (Domain.is_main_domain ());
     let stream_state = stream.runner.state in
-    stream_state.schedule_clock <- stream_state.schedule_clock + 1;
+    let is_done = Atomic.make false in
     let work () =
-      Atomic.incr stream_state.run_clock;
-      Mut.lock stream_state.mut;
+      assert (Atomic.compare_and_set is_done false true);
+      Mut.lock stream_state.clock_mut;
       Stdlib.Condition.broadcast stream_state.clock_tick;
-      Mut.unlock stream_state.mut
+      Mut.unlock stream_state.clock_mut
     in
     schedule_task stream @@ Task { context_lifetime = (); description = "clock tick"; work };
-    { stream_state; target_clock = stream_state.schedule_clock }
+    { stream_state; is_done }
 
   let%track3_l_sexp spinup_stream () : stream =
     let create stream_id =
@@ -149,9 +147,8 @@ module Multicore (Backend : For_add_scheduler) :
           is_ready = false;
           host_wait_for_idle = Stdlib.Condition.create ();
           dev_wait_for_work = Stdlib.Condition.create ();
+          clock_mut = Mut.create ();
           clock_tick = Stdlib.Condition.create ();
-          schedule_clock = 0;
-          run_clock = Atomic.make 0;
           stream_id;
         }
       in
