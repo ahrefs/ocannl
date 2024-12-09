@@ -61,7 +61,7 @@ struct
   (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
      -> idx + (offset * dim)) *)
   let print_includes ppf =
-    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,|} (pp_print_list pp_include) B.includes)
+    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_include) B.includes)
 
   let compile_main ~traced_store ppf llc : unit =
     let open Stdlib.Format in
@@ -266,20 +266,19 @@ struct
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
-             let backend_info =
-               Sexp.Atom
-                 (if Tn.is_virtual_force tn 334 then "Virt"
-                  else
-                    match in_ctx tn with
-                    | Some true -> "Ctx"
-                    | Some false -> "Local"
-                    | None -> "Unk")
+             let backend_info, is_param =
+               if Tn.is_virtual_force tn 334 then ("Virt", false)
+               else if Option.value ~default:false @@ in_ctx tn then ("Ctx", true)
+               else if Tn.is_materialized_force tn 335 then ("Global or ctx", true)
+               else if Tn.known_not_materialized tn then ("Local", false)
+               else assert false
              in
+             let backend_info = Sexp.Atom backend_info in
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              (* We often don't know ahead of linking with relevant contexts what the stream sharing
                 mode of the node will become. Conservatively, use passing as argument. *)
-             if Option.value ~default:true (in_ctx tn) then
+             if is_param then
                (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
@@ -345,7 +344,7 @@ struct
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
     Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if not (Tn.is_virtual_force tn 333 || Option.value ~default:true (in_ctx tn)) then
+        if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)
             (get_ident tn) (Tn.num_elems tn)

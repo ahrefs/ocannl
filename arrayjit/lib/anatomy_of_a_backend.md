@@ -4,7 +4,7 @@
 
 - [The Anatomy of an OCANNL Backend](#the-anatomy-of-an-ocannl-backend)
   - [Design around compiling and running code, backend interfaces](#design-around-compiling-and-running-code-backend-interfaces)
-    - [Shared relocatable compilation, batch compilation](#shared-relocatable-compilation-batch-compilation)
+    - [Batch compilation; in the future: lazy and cached compilation artifacts](#batch-compilation-in-the-future-lazy-and-cached-compilation-artifacts)
   - [Tensor nodes, arrays, memory properties](#tensor-nodes-arrays-memory-properties)
   - [Typical details of a backend implementation](#typical-details-of-a-backend-implementation)
     - [Conditionally emitting the tracing debugger code](#conditionally-emitting-the-tracing-debugger-code)
@@ -125,7 +125,7 @@ Conventionally, the compilation implementation is split into three functions / l
   - On GPU-like backends, we cannot load the code at compile time. For example, the CUDA driver API function `cuModuleLoadDataEx` loads the module into _the current context_, which is device-specific, so it must be called from within `link` or `link_batch`.
     - GPU-like backends necessitate distinguishing between `link` and `link_batch`, to prevent the same code from being loaded as multiple modules.
 
-The `C_syntax` functor returns the `compile_proc` function for use by `compile` and `compile_batch` of the backends.
+The `C_syntax` functor returns the `compile_proc` function for use by `compile` and `compile_batch` of the backends. For simplicity, `C_syntax` passes all materialized nodes by parameters even for backends that use some nodes directly from the host rather than from the device / from context.
 
 ### Conditionally emitting the tracing debugger code
 

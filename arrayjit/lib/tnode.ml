@@ -478,13 +478,14 @@ let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
       invalid_arg @@ "Wrong " ^ arg_name ^ ", must be one of: heuristic, name_and_label, name_only"
 
 let header tn =
+  let debug = Utils.settings.log_level > 0 in
   let mem_size =
     if Lazy.is_val tn.array then
       match tn.array with
       | (lazy None) -> "<not-hosted>"
       | (lazy (Some nd)) ->
           let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
-          if Utils.settings.log_level > 0 then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
+          if debug then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
     else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
@@ -492,7 +493,8 @@ let header tn =
   [%string
     {|%{id tn} %{label tn} as %{
       styled_ident ~repeating_nograd_idents ~repeating_grad_idents (`Heuristic_ocannl `Dot_grad) tn
-    }: %{debug_memory_mode tn.memory_mode}; %{dims_to_string tn}; mem in bytes: %{mem_size}|}]
+    }: %{debug_memory_mode tn.memory_mode}; %{dims_to_string tn}; mem in bytes: %{mem_size}%{
+    if debug then "; debug: " ^ Sexp.to_string_hum tn.backend_info else ""}|}]
 
 module Registry = Stdlib.Weak.Make (struct
   type nonrec t = t

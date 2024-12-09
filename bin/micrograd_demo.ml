@@ -12,7 +12,7 @@ module Debug_runtime = Utils.Debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Rand.init 0;
-  Utils.enable_runtime_debug ();
+  (* Utils.enable_runtime_debug (); *)
   (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in
@@ -183,7 +183,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   PrintBox_text.output Stdio.stdout plot_lr
 
 let () = experiment 4 ~no_batch_shape_inference:true ~use_builtin_weight_decay:true ()
-let () = experiment 4 ~no_batch_shape_inference:false ~use_builtin_weight_decay:false ()
+let _suspended () = experiment 4 ~no_batch_shape_inference:false ~use_builtin_weight_decay:false ()
 
 let _suspended () =
   for seed = 0 to 19 do
