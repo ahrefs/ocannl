@@ -18,8 +18,6 @@ end
 module type Buffer = sig
   type buffer_ptr [@@deriving sexp_of]
 
-  val c_ptr_to_string : (buffer_ptr -> Ops.prec -> string) option
-
   include module type of Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)

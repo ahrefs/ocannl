@@ -310,7 +310,7 @@ let get_debug name =
         Minidebug_runtime.forget_printbox
         @@ Minidebug_runtime.debug ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
              ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
-             ~highlight_terms:Re.(alt [ str "await" ])
+             ~highlight_terms:Re.(alt [ str "float *w2" ])
              ~exclude_on_path:Re.(str "env")
              ~log_level ?snapshot_every_sec ()
     | Some filename ->
@@ -319,7 +319,7 @@ let get_debug name =
              ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true
              ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
              ~hyperlink ~toc_specific_hyperlink:""
-             ~highlight_terms:Re.(alt [ str "await" ])
+             ~highlight_terms:Re.(alt [ str "float *w2" ])
              ~exclude_on_path:Re.(str "env")
              ~backend ~log_level ?snapshot_every_sec filename
 

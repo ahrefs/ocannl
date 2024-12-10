@@ -66,7 +66,7 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let use_host_memory = true
+(* let use_host_memory = true *)
 
 let gcc_typ_of_prec =
   let open Gccjit in
@@ -114,14 +114,14 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~param_ptrs ini
   let ptr_typ = Type.pointer num_typ in
   let ident = get_ident tn in
   let hosted = Tn.is_hosted_force tn 344 in
-  let in_ctx = Tn.is_in_context ~use_host_memory tn in
+  let in_ctx = Tn.is_in_context_force ~use_host_memory tn 45 in
   let ptr =
     match (in_ctx, hosted) with
-    | Some true, _ ->
+    | true, _ ->
         let p = Param.create ctx ptr_typ ident in
         param_ptrs := (p, Param_ptr tn) :: !param_ptrs;
         Lazy.from_val (RValue.param p)
-    | (Some false | None), true -> (
+    | false, true -> (
         let addr arr =
           Lazy.from_val @@ get_c_ptr ctx num_typ @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
         in
@@ -131,7 +131,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~param_ptrs ini
         | Some (Single_nd arr) -> addr arr
         | Some (Double_nd arr) -> addr arr
         | None -> assert false)
-    | (Some false | None), false ->
+    | false, false ->
         let arr_typ = Type.array ctx num_typ size_in_elems in
         let v = ref None in
         let initialize _init_block func = v := Some (Function.local func arr_typ ident) in
@@ -644,7 +644,8 @@ let%diagn_sexp compile_batch ~(names : string option array) bindings
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
   List.iter code.params ~f:(function
-    | Param_ptr tn when not (Tn.known_shared_cross_stream tn) -> assert (Map.mem ctx_arrays tn)
+    (* FIXME: see cc_backend.ml *)
+    | Param_ptr tn when not (Tn.known_shared_cross_streams tn) -> assert (Map.mem ctx_arrays tn)
     | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
@@ -667,11 +668,16 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Param_ptr tn :: ps ->
             let c_ptr =
-              if Tn.known_shared_with_host ~use_host_memory tn then
-                Ndarray.get_voidptr_not_managed
-                @@ Option.value_exn ~here:[%here]
-                @@ Lazy.force tn.array
-              else Map.find_exn ctx_arrays tn
+              match Map.find ctx_arrays tn with
+              | None ->
+                  Ndarray.get_voidptr_not_managed
+                  @@ Option.value_exn ~here:[%here]
+                       ~message:
+                         [%string
+                           "Gcc_backend.link_compiled: node %{Tn.debug_name tn} missing from \
+                            context: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
+                  @@ Lazy.force tn.array
+              | Some arr -> arr
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
         | bs, Merge_buffer :: ps ->

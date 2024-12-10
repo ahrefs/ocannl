@@ -3,7 +3,7 @@ type dev
 type runner
 type event
 
-let use_host_memory = false
+let use_host_memory = None
 let sexp_of_dev _dev = failwith "Backend missing -- install the corresponding library"
 let sexp_of_runner _runner = failwith "Backend missing -- install the corresponding library"
 let sexp_of_event _event = failwith "Backend missing -- install the corresponding library"
@@ -39,7 +39,6 @@ let make_child ?ctx_arrays:_ _context =
 
 let get_name _stream = failwith "Backend missing -- install the corresponding library"
 let sexp_of_buffer_ptr _buffer_ptr = failwith "Backend missing -- install the corresponding library"
-let c_ptr_to_string = None
 
 type nonrec buffer = buffer_ptr Backend_intf.buffer
 

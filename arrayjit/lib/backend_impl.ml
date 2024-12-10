@@ -16,6 +16,8 @@ open Backend_intf
 module type No_device_buffer_and_copying = sig
   include Alloc_buffer with type stream := unit
 
+  val use_host_memory : (unit Ctypes.ptr -> buffer_ptr) option
+
   val get_used_memory : unit -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
@@ -28,6 +30,7 @@ module No_device_buffer_and_copying () :
   No_device_buffer_and_copying with type buffer_ptr = unit Ctypes.ptr = struct
   type buffer_ptr = unit Ctypes.ptr
 
+  let use_host_memory = Some Fn.id
   let sexp_of_buffer_ptr = Ops.sexp_of_voidptr
 
   include Buffer_types (struct
@@ -70,8 +73,6 @@ module No_device_buffer_and_copying () :
     Ctypes_memory_stubs.memcpy
       ~dst:(Ndarray.get_fatptr_not_managed dst)
       ~src ~size:(Ndarray.size_in_bytes dst)
-
-  let c_ptr_to_string = Some Ops.c_ptr_to_string
 end
 
 module Device_types (Device_config : Device_config) = struct
@@ -133,10 +134,11 @@ end
 module type Backend_impl_common = sig
   include Buffer
 
-  val use_host_memory : bool
-  (** If true, the backend will read from and write to the host memory directly whenever possible.
+  val use_host_memory : (unit Ctypes.ptr -> buffer_ptr) option
+  (** If not [None], the backend will read from and write to the host memory directly whenever
+      reasonable.
 
-      [use_host_memory] can only be true on unified memory devices, like CPU and Apple Metal. *)
+      [use_host_memory] can only be [Some] on unified memory devices, like CPU and Apple Metal. *)
 end
 
 (** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations.

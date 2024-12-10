@@ -15,7 +15,9 @@ module C_syntax (B : sig
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
       shared and already known. *)
 
-  val use_host_memory : bool
+  type buffer_ptr
+
+  val use_host_memory : (unit Ctypes.ptr -> buffer_ptr) option
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
@@ -29,7 +31,7 @@ struct
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun l -> l.llc)
 
-  let in_ctx tn = B.(Tn.is_in_context ~use_host_memory tn)
+  let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
 
   let pp_zero_out ppf tn =
     Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
@@ -268,8 +270,8 @@ struct
              (* A rough approximation to the type Gccjit_backend.mem_properties. *)
              let backend_info, is_param =
                if Tn.is_virtual_force tn 334 then ("Virt", false)
-               else if Option.value ~default:false @@ in_ctx tn then ("Ctx", true)
-               else if Tn.is_materialized_force tn 335 then ("Global or ctx", true)
+               else if in_ctx tn then ("Ctx", true)
+               else if Tn.is_materialized_force tn 335 then ("Global", true)
                else if Tn.known_not_materialized tn then ("Local", false)
                else assert false
              in

@@ -34,7 +34,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Tensor.default_grad_prec := grad_prec;
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* This will only log from routines if log-level is high enough. *)
-  (* Utils.settings.debug_log_from_routines <- true; *)
+  Utils.settings.debug_log_from_routines <- true;
   Rand.init (* seed *) 0;
   let hid_dim_1 = 16 in
   let hid_dim_2 = 8 in
@@ -45,14 +45,14 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let data_len = 3 * 5 * 1024 in
   (* TINY for debugging: *)
   (* let data_len = 3 * 4 in *)
-  (* let data_len = 3 * 16 in *)
+  (* let data_len = 3 * 8 in *)
   let flat_len = data_len / 2 in
   (* Note: [minibatch_size = batch_size / num_streams] is the actual per-device batch used. *)
   (* let epochs = 400 in *)
-  (* let epochs = 100 in *)
+  let epochs = 100 in
   (* let epochs = 50 in *)
   (* TINY for debugging: *)
-  let epochs = 3 in
+  (* let epochs = 3 in *)
   (* let epochs = 2 in *)
   (* let epochs = 1 in *)
   (* let init_lr = 0.1 in *)
@@ -121,22 +121,22 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;
   Stdio.printf "\n********\n%!";
-  Arrayjit.Tnode.print_accessible_headers ();
+  (* Arrayjit.Tnode.print_accessible_headers (); *)
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let%track3_sexp plot_moons () =
-    [%log_level
-      0;
-      let open PrintBox_utils in
-      plot
-        ~size:(120, 40)
-          (* TINY for debugging: *)
-          (* ~size:(20, 10) *)
-        ~x_label:"ixes" ~y_label:"ygreks"
-        [
-          Scatterplot { points = points1; pixel = "#" };
-          Scatterplot { points = points2; pixel = "%" };
-          Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
-        ]]
+    (* [%log_level 0; *)
+    let open PrintBox_utils in
+    plot
+      ~size:(120, 40)
+        (* TINY for debugging: *)
+        (* ~size:(20, 10) *)
+      ~x_label:"ixes" ~y_label:"ygreks"
+      [
+        Scatterplot { points = points1; pixel = "#" };
+        Scatterplot { points = points2; pixel = "%" };
+        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+      ]
+    (* ] *)
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout @@ plot_moons ();
@@ -190,7 +190,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
       }
   in
   Stdio.printf "\n\n%!";
-  Arrayjit.Tnode.print_accessible_headers ();
+  (* Arrayjit.Tnode.print_accessible_headers (); *)
   Stdlib.Format.printf "Final backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   result
@@ -206,13 +206,13 @@ let _cuda_benchmarks =
         [
           (* TINY for debugging: *)
           (* 3 * 2 *)
-          3 * 5 * 16;
-          3 * 5 * 32 (*; 3 * 5 * 64 *);
+          3 * 5 * 16 (* ; 3 * 5 * 32; 3 * 5 * 64 *);
         ]
         ~f:(fun batch_size ->
-          List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+          List.concat_map [ (* 0; 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; "cc"; *) "cuda" ] ~f:(fun backend_name ->
+                  List.concat_map [ (* "gccjit" ; "cuda";"sync_cc" ; *)  "cc"]
+                    ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
                           [
@@ -223,19 +223,20 @@ let _cuda_benchmarks =
 let _cuda_parallel_benchmarks =
   List.concat_map
     [
-      (* 1; 2; *)
-      3;
-      (* 4; 5; 6; 8; 10; 12; 16; 20 *)
+      (* 1; *)
+      2;
+      (* 3; 4; 5; 6; 8; 10; 12; 16; 20 *)
       (* 32; 64 *)
     ] ~f:(fun num_streams ->
       List.concat_map
         [
           (* TINY for debugging: *)
-          (* 3 * 4 *)
-          3 * 5 * 16 (* ; 3 * 5 * 32 *);
+          3 * 4
+          (* 3 * 5 * 16 *)
+          (* ; 3 * 5 * 32 *);
         ]
         ~f:(fun batch_size ->
-          List.concat_map [ (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
+          List.concat_map [ 0 (* 1; 2; 3 *) ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
                   List.concat_map [ (* "gccjit"; "cuda" ;"cc"; *) "sync_cc" ]
                     ~f:(fun backend_name ->
@@ -291,4 +292,5 @@ let benchmark benchmarks =
   List.map benchmarks ~f:(fun bench -> bench ())
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 
-let () = benchmark _cuda_parallel_benchmarks
+let _suspended () = benchmark _cuda_parallel_benchmarks
+let () = benchmark _cuda_benchmarks

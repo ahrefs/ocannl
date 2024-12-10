@@ -57,7 +57,7 @@ In the future, when we introduce program search, `compile` functions will return
 OCANNL classifies tensor nodes according to their memory properties:
 
  ```ocaml
-(** A possible algorithm for deciding sharing within a single device:
+ (** A possible algorithm for deciding sharing within a single device:
     - If a tensor node is read-only for a context, and not otherwise recorded, it is stored as a
       cross-stream sharing candidate.
     - If a cross-stream sharing candidate is read-only for another context, whose parent does not
@@ -71,9 +71,14 @@ OCANNL classifies tensor nodes according to their memory properties:
     If a tensor node is shared cross-stream, within-device copying is a NOOP as source and
     destination pointers are in that case identical. *)
 type sharing =
-  | Unset
+  | Unset  (** One of: [Per_stream], [Shared_cross_streams]. *)
   | Per_stream  (** The tensor node has separate arrays for each stream. *)
-  | Shared_cross_stream  (** The tensor node has a single array per device. *)
+  | Shared_cross_streams
+      (** The tensor node has a single array per device that can appear in multiple contexts, except
+          for backends with [Option.is_some use_host_memory] and nodes with memory mode already
+          [Hosted (Changed_on_devices Shared_cross_streams)] before first linking on a device, where
+          it only has the on-host array. In that case the on-host array is registered in the
+          context, to avoid misleading behavior from `device_to_device`. *)
 
 type memory_type =
   | Constant  (** The tensor node does not change after initialization. *)
@@ -109,6 +114,8 @@ type memory_mode =
 A backend can make more refined distinctions, for example a `Local` node in CUDA could optionally be shared across threads of a block.
 
 Contexts track (or store) the on-device arrays corresponding to tensor nodes. Contexts form a hierarchy: linking takes a parent context and outputs a child context. Related contexts that use a tensor node must use the same on-device array for the tensor node. If two unrelated contexts are on the same device, i.e. have a common ancestor, and use the same tensor node that is not part of the most recent common ancestor, the behavior is undefined.
+
+To avoid misleading behavior of `device_to_device` data movement, non-constant materialized tensor nodes are represented in contexts making use of them, even when the underlying array is on host. This way the logic remains the same regardless of whether a backend shares memory with the host. We are careful to not accidentally call `free_buffer` on hosted arrays.
 
 ## Typical details of a backend implementation
 

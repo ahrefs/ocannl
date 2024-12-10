@@ -22,13 +22,14 @@ let _get_local_debug_runtime = Utils._get_local_debug_runtime
     If a tensor node is shared cross-stream, within-device copying is a NOOP as source and
     destination pointers are in that case identical. *)
 type sharing =
-  | Unset
+  | Unset  (** One of: [Per_stream], [Shared_cross_streams]. *)
   | Per_stream  (** The tensor node has separate arrays for each stream. *)
-  | Shared_cross_stream
+  | Shared_cross_streams
       (** The tensor node has a single array per device that can appear in multiple contexts, except
-          for backends with [use_host_memory = true] and nodes with memory mode
-          [Hosted (Changed_on_devices Shared_cross_stream)], where it only has the on-host array and
-          does not appear in any contexts. *)
+          for backends with [Option.is_some use_host_memory] and nodes with memory mode already
+          [Hosted (Changed_on_devices Shared_cross_streams)] before first linking on a device, where
+          it only has the on-host array. In that case the on-host array is registered in the
+          context, to avoid misleading behavior from `device_to_device`. *)
 [@@deriving sexp, compare, equal]
 
 type memory_type =
@@ -129,14 +130,14 @@ let debug_memory_mode = function
       | Device_only -> "Dev"
       | Materialized -> "Material"
       | On_device Unset -> "On-dev"
-      | On_device Shared_cross_stream -> "Dev-shared"
+      | On_device Shared_cross_streams -> "Dev-shared"
       | On_device Per_stream -> "Dev-stream"
       | Hosted Constant -> "Host-const"
       | Hosted Nonconstant -> "Host-non-const"
       | Hosted Volatile -> "Hosted"
       | Hosted (Changed_on_devices Unset) -> "Host&dev"
       | Hosted (Changed_on_devices Per_stream) -> "Host&stream"
-      | Hosted (Changed_on_devices Shared_cross_stream) -> "Host&shared")
+      | Hosted (Changed_on_devices Shared_cross_streams) -> "Host&shared")
       ^ "/" ^ Int.to_string prov
 
 let log_debug_info ~from_log_level tn =
@@ -168,49 +169,42 @@ let default_to_most_local tn provenance =
   | Some ((Virtual | Local | On_device _ | Hosted _), _) -> ()
 
 let is_virtual_force tn provenance =
-  default_to_most_local tn provenance;
-  match tn.memory_mode with Some (Virtual, _) -> true | _ -> false
+  match tn.memory_mode with
+  | Some (Virtual, _) -> true
+  | None | Some (Effectively_constant, _) ->
+      tn.memory_mode <- Some (Virtual, provenance);
+      true
+  | _ -> false
 
-let is_hosted_force ?specifically tn provenance =
-  default_to_most_local tn provenance;
-  match (tn.memory_mode, specifically) with
-  | None, _ -> assert false
-  | Some ((Virtual | Local | Device_only | On_device _), _), _ -> false
-  | Some (Hosted _, _), None -> true
-  | Some (Hosted memtyp, _), Some query -> equal_memory_type memtyp query
-  | Some ((Never_virtual | Materialized | Effectively_constant), _), _ -> assert false
+let rec is_hosted_force tn provenance =
+  match tn.memory_mode with
+  | Some ((Virtual | Local | Device_only | On_device _), _) -> false
+  | Some (Hosted _, _) -> true
+  | None | Some ((Never_virtual | Materialized | Effectively_constant), _) ->
+      default_to_most_local tn provenance;
+      is_hosted_force tn provenance
 
-let is_materialized_force tn provenance =
-  default_to_most_local tn provenance;
+let rec is_materialized_force tn provenance =
   match tn.memory_mode with
   | None -> assert false
   | Some ((Virtual | Local), _) -> false
   | Some ((On_device _ | Hosted _ | Materialized), _) -> true
-  | Some ((Never_virtual | Device_only | Effectively_constant), _) -> assert false
+  | Some ((Never_virtual | Device_only | Effectively_constant), _) ->
+      default_to_most_local tn provenance;
+      is_materialized_force tn provenance
 
-(* Unlike the [known_] functions which can only change from [false] to [true], [is_in_context
-   ~use_host_memory tn] is more precise. Generally, it can only change away from [None]. *)
-let%debug3_sexp is_in_context ~(use_host_memory : bool) (tn : t) : bool option =
+let%debug3_sexp rec is_in_context_force ~(use_host_memory : 'a option) (tn : t) (provenance : int) :
+    bool =
   match tn.memory_mode with
-  | Some (Hosted (Changed_on_devices Per_stream), _) -> Some true
-  | Some ((Materialized | Hosted Nonconstant), _) when not use_host_memory -> Some true
-  | Some (Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream), _)
-    when use_host_memory ->
-      Some false
-  | Some (Hosted Nonconstant, _) when use_host_memory -> None
-  | Some (Hosted _, _) -> Some true
-  | Some ((Virtual | Local), _) -> Some false
-  | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) -> None
-  | Some (On_device _, _) -> Some true
-
-(** The opposite of [is_in_context] for hosted tensor nodes. False if [use_host_memory = false] or
-    for non-hosted tensor nodes. *)
-let known_shared_with_host ~use_host_memory tn =
-  match tn.memory_mode with
-  | Some (Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream), _)
-    when use_host_memory ->
-      true
-  | _ -> false
+  | Some (Hosted (Changed_on_devices Per_stream), _) -> true
+  | Some ((Materialized | Hosted Nonconstant), _) when Option.is_none use_host_memory -> true
+  | Some (Hosted (Constant | Volatile), _) when Option.is_some use_host_memory -> false
+  | Some (Hosted _, _) -> true
+  | Some ((Virtual | Local), _) -> false
+  | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
+      default_to_most_local tn provenance;
+      is_in_context_force ~use_host_memory tn provenance
+  | Some (On_device _, _) -> true
 
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
@@ -234,11 +228,11 @@ let known_not_param tn =
       true
   | _ -> false
 
-let known_shared_cross_stream tn =
+let known_shared_cross_streams tn =
   match tn.memory_mode with
   | Some
-      ( ( On_device Shared_cross_stream
-        | Hosted (Constant | Volatile | Changed_on_devices Shared_cross_stream) ),
+      ( ( On_device Shared_cross_streams
+        | Hosted (Constant | Volatile | Changed_on_devices Shared_cross_streams) ),
         _ ) ->
       true
   | _ -> false
@@ -299,7 +293,7 @@ let update_memory_mode tn mode provenance =
 let update_memory_sharing tn sharing provenance =
   match (tn.memory_mode, sharing) with
   | None, _ -> tn.memory_mode <- Some (On_device sharing, provenance)
-  | Some (On_device Shared_cross_stream, _), Shared_cross_stream
+  | Some (On_device Shared_cross_streams, _), Shared_cross_streams
   | Some (On_device Per_stream, _), Per_stream ->
       ()
   | Some ((On_device Unset | Device_only | Materialized), _), _ ->
@@ -311,10 +305,10 @@ let update_memory_sharing tn sharing provenance =
              "Tnode.update_memory_sharing: update %{prov2#Int} -> %{provenance#Int} for \
               %{debug_name tn} (hosted) -- currently hosted nodes not changed on devices must be \
               shared cross-stream"]
-  | Some (Hosted (Changed_on_devices Shared_cross_stream), _), Shared_cross_stream
+  | Some (Hosted (Changed_on_devices Shared_cross_streams), _), Shared_cross_streams
   | Some (Hosted (Changed_on_devices Per_stream), _), Per_stream ->
       ()
-  | Some (Hosted (Constant | Volatile), _), Shared_cross_stream -> ()
+  | Some (Hosted (Constant | Volatile), _), Shared_cross_streams -> ()
   | Some (Hosted (Nonconstant | Changed_on_devices Unset), _), _ ->
       tn.memory_mode <- Some (Hosted (Changed_on_devices sharing), provenance)
   | Some (_, prov2), Unset ->

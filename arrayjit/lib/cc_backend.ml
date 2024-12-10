@@ -33,8 +33,6 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let use_host_memory = true
-
 let get_global_run_id =
   let next_id = ref 0 in
   fun () ->
@@ -76,6 +74,9 @@ module C_syntax_config (Input : sig
 end) =
 struct
   let procs = Input.procs
+
+  type nonrec buffer_ptr = buffer_ptr
+
   let use_host_memory = use_host_memory
   let logs_to_stdout = false
   let main_kernel_prefix = ""
@@ -127,14 +128,6 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
 
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
-  List.iter code.params ~f:(function
-    | _, Param_ptr tn when not @@ Tn.known_shared_with_host ~use_host_memory tn ->
-        if not (Map.mem ctx_arrays tn) then
-          invalid_arg
-            [%string
-              "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from context: \
-               %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
-    | _ -> ());
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
     [%log_level
@@ -158,11 +151,16 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Param_ptr tn :: ps ->
             let c_ptr =
-              if Tn.known_shared_with_host ~use_host_memory tn then
-                Ndarray.get_voidptr_not_managed
-                @@ Option.value_exn ~here:[%here]
-                @@ Lazy.force tn.array
-              else Map.find_exn ctx_arrays tn
+              match Map.find ctx_arrays tn with
+              | None ->
+                  Ndarray.get_voidptr_not_managed
+                  @@ Option.value_exn ~here:[%here]
+                       ~message:
+                         [%string
+                           "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from \
+                            context: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
+                  @@ Lazy.force tn.array
+              | Some arr -> arr
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in
@@ -174,6 +172,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
   in
   let%diagn_l_sexp work () : unit =
     [%log_result name];
+    (* Stdio.printf "launching %s\n" name; *)
     Indexing.apply run_variadic ();
     if Utils.debug_log_from_routines () then (
       Utils.log_trace_tree (Stdio.In_channel.read_lines log_file_name);

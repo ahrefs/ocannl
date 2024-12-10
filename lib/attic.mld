@@ -242,6 +242,15 @@ let get_ptr ~(traced_store : Low_level.traced_store) ~ctx_nodes ~get_ident =
         | Local_only, _ -> ident)
 
 
+let is_hosted_force ?specifically tn provenance =
+  default_to_most_local tn provenance;
+  match (tn.memory_mode, specifically) with
+  | None, _ -> assert false
+  | Some ((Virtual | Local | Device_only | On_device _), _), _ -> false
+  | Some (Hosted _, _), None -> true
+  | Some (Hosted memtyp, _), Some query -> equal_memory_type memtyp query
+  | Some ((Never_virtual | Materialized | Effectively_constant), _), _ -> assert false
+
 let mem_properties (traced_store : Low_level.traced_store) =
   let cache = Hashtbl.create (module Tn) in
   fun tn ->

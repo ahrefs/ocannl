@@ -90,7 +90,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
     let same_device = ordinal_of dst = ordinal_of src in
-    if same_device && (Tn.known_shared_cross_stream tn || String.equal (name_of src) (name_of dst))
+    if same_device && (Tn.known_shared_cross_streams tn || String.equal (name_of src) (name_of dst))
     then false
     else
       match Map.find src.ctx_arrays tn with
@@ -187,8 +187,7 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
 let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
   Set.iter from_prior_context ~f:(fun tn ->
       if
-        (* Err on the safe side. *)
-        Option.value ~default:false (Tn.is_in_context ~use_host_memory tn)
+        Tn.is_in_context_force ~use_host_memory tn 42
         && not (Option.is_some @@ Map.find ctx_arrays tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
@@ -349,12 +348,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let%track3_sexp alloc_if_needed (stream : stream) ~key ~data:node ctx_arrays =
-    (* TODO: do we need this? *)
-    (* Tn.default_to_most_local key 345; *)
-    if
-      Option.value ~default:true (Tnode.is_in_context ~use_host_memory key)
-      && not (Map.mem ctx_arrays key)
-    then (
+    if Tnode.is_in_context_force ~use_host_memory key 43 && not (Map.mem ctx_arrays key) then (
       [%log Tn.debug_name key];
       [%log (key : Tnode.t)];
       let default () =
@@ -362,14 +356,27 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       in
       let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
       let device = stream.device in
-      if node.Low_level.read_only then
+      if node.Low_level.read_only then (
         if Tn.known_non_cross_stream key then add_new ()
-        else (
+        else
+          let data =
+            match use_host_memory with
+            | None -> Hashtbl.find_or_add device.cross_stream_candidates key ~default
+            | Some get_buffer_ptr ->
+                if
+                  (not (Hashtbl.mem device.cross_stream_candidates key))
+                  && Tn.known_shared_cross_streams key && Tn.is_hosted_force key 44
+                then
+                  Hashtbl.update_and_return device.cross_stream_candidates key ~f:(fun _ ->
+                      get_buffer_ptr @@ Ndarray.get_voidptr_not_managed
+                      @@ Option.value_exn ~here:[%here]
+                      @@ Lazy.force key.array)
+                else Hashtbl.find_or_add device.cross_stream_candidates key ~default
+          in
           if Hashtbl.mem device.cross_stream_candidates key then
-            Tn.update_memory_sharing key Tn.Shared_cross_stream 39;
-          let data = Hashtbl.find_or_add device.cross_stream_candidates key ~default in
+            Tn.update_memory_sharing key Tn.Shared_cross_streams 39;
           Map.add_exn ctx_arrays ~key ~data)
-      else if Tn.known_shared_cross_stream key then (
+      else if Tn.known_shared_cross_streams key then (
         if Hashtbl.mem device.owner_stream key then (
           if not (equal_stream stream (Hashtbl.find_exn device.owner_stream key)) then
             raise

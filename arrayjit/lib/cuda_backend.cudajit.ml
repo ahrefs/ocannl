@@ -26,14 +26,13 @@ module Backend_buffer = struct
   type buffer_ptr = Cu.Deviceptr.t
 
   let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
-  let c_ptr_to_string = None
 
   include Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 end
 
-let use_host_memory = false
+let use_host_memory = None
 
 module Device_config = struct
   include Backend_buffer
@@ -156,15 +155,18 @@ let%track3_sexp new_stream (device : device) : stream =
 
 let cuda_properties =
   let cache =
-    lazy
-      (Array.init (num_devices ()) ~f:(fun ordinal ->
-           let dev = get_device ~ordinal in
-           lazy (Cu.Device.get_attributes dev.dev.dev)))
+    let%debug2_sexp f (ordinal : int) =
+      let dev = get_device ~ordinal in
+      lazy (Cu.Device.get_attributes dev.dev.dev)
+    in
+    lazy (Array.init (num_devices ()) ~f)
   in
-  fun device ->
+  let%debug2_sexp get_props (device : device) : Cu.Device.attributes =
     if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
     let cache = Lazy.force cache in
     Lazy.force cache.(device.ordinal)
+  in
+  get_props
 
 let suggested_num_streams device =
   match !global_config with
@@ -427,6 +429,7 @@ let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx
     (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
     [%log "launching the kernel"];
+    (* Stdio.printf "launching %s\n" name; *)
     (if Utils.debug_log_from_routines () then
        Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
        [%log_block

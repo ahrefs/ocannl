@@ -1,6 +1,6 @@
 type buffer_ptr
 
-let use_host_memory = false
+let use_host_memory = None
 let initialize _config = failwith "Backend missing -- install the corresponding library"
 let is_initialized () = failwith "Backend missing -- install the corresponding library"
 let name = "Backend missing"
@@ -19,7 +19,6 @@ let link_compiled ~merge_buffer:_ ~runner_label:_ _ctx_arrays _procedure =
   failwith "Backend missing -- install the corresponding library"
 
 let sexp_of_buffer_ptr _buffer_ptr = failwith "Backend missing -- install the corresponding library"
-let c_ptr_to_string = None
 
 type nonrec buffer = buffer_ptr Backend_intf.buffer
 

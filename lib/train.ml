@@ -221,14 +221,14 @@ let%track3_sexp sequential_loop ~f lowered_bindings =
     remain at their initial values. [sync] is called after each round of calling all workers, and at
     the end if needed, with the number of workers called during the round. *)
 let%track3_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
-  let num_devices : int = Array.length fs in
-  assert (Array.length parallel_jitbs = num_devices);
+  let num_streams : int = Array.length fs in
+  assert (Array.length parallel_jitbs = num_streams);
   let pos = ref 0 in
   let rec loop = function
     | [] ->
-        fs.(!pos % num_devices) ();
+        fs.(!pos % num_streams) ();
         Int.incr pos;
-        if !pos % num_devices = 0 then sync num_devices
+        if !pos % num_streams = 0 then sync num_streams
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
     | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx)
       :: ({ Idx.static_range = None; static_symbol = _ }, _)
@@ -236,20 +236,20 @@ let%track3_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
     | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx) :: more ->
         for i = 0 to range - 1 do
           idx := i;
-          if List.is_empty more then Idx.find_exn parallel_jitbs.(!pos % num_devices) s := i
+          if List.is_empty more then Idx.find_exn parallel_jitbs.(!pos % num_streams) s := i
           else Array.iter parallel_jitbs ~f:(fun jb -> Idx.find_exn jb s := i);
           loop more
         done
   in
   loop jitbs;
-  if !pos % num_devices <> 0 then sync (!pos % num_devices)
+  if !pos % num_streams <> 0 then sync (!pos % num_streams)
 
-let%track3_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
+let%track3_sexp round_robin_dry_run ~num_streams jitbs ~dry_sync : unit =
   let pos = ref 0 in
   let rec loop = function
     | [] ->
         Int.incr pos;
-        if !pos % num_devices = 0 then dry_sync num_devices
+        if !pos % num_streams = 0 then dry_sync num_streams
     | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
     | ({ Idx.static_range = Some range; static_symbol = _ }, idx)
       :: ({ Idx.static_range = None; static_symbol = _ }, _)
@@ -261,7 +261,7 @@ let%track3_sexp round_robin_dry_run ~num_devices jitbs ~dry_sync : unit =
         done
   in
   loop jitbs;
-  if !pos % num_devices <> 0 then dry_sync (!pos % num_devices)
+  if !pos % num_streams <> 0 then dry_sync (!pos % num_streams)
 
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
@@ -333,16 +333,16 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
        and type event = event) ~(grad_updates : Backend.context BT.routine array)
     ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync updaten : unit -> unit =
   assert (not @@ Array.is_empty grad_updates);
-  let num_devices : int = Array.length grad_updates in
+  let num_streams : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
   let occupancies_dst_src =
-    Array.init num_devices ~f:(fun _ -> Array.create ~len:num_devices false)
+    Array.init num_streams ~f:(fun _ -> Array.create ~len:num_streams false)
   in
   (* to_, from positions correspond to the contexts (and devices) of grad_updates at the
      position. *)
   let dry_merge ~from ~to_ = occupancies_dst_src.(to_).(from) <- true in
   let dry_sync devices_to_sync = Arrayjit.Utils.parallel_merge dry_merge devices_to_sync in
-  round_robin_dry_run ~num_devices sgd_update.bindings ~dry_sync;
+  round_robin_dry_run ~num_streams sgd_update.bindings ~dry_sync;
   [%debug_notrace
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
@@ -402,7 +402,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
-    for to_ = 1 to num_devices - 1 do
+    for to_ = 1 to num_streams - 1 do
       Array.iter all_params ~f:(fun p ->
           (* Allow the params to be shared across streams. *)
           ignore
@@ -534,7 +534,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tn.log_accessible_headers ());
   for epoch = 0 to epochs - 1 do
     epoch_loss := 0.;
-    Utils.capture_stdout_logs update;
+    (* DEBUG: *)
+    (* Utils.capture_stdout_logs *)
+     update ();
     learning_rates := learning_rate.@[0] :: !learning_rates;
     epoch_losses := !epoch_loss :: !epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
@@ -571,7 +573,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tensor.set_values infer values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
-    Utils.capture_stdout_logs @@ fun () ->
+       (* DEBUG: *)
+    (* Utils.capture_stdout_logs @@ fun () -> *)
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
