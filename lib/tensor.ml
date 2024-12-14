@@ -72,7 +72,7 @@ type session_state = {
 let session_state =
   { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
-let unsafe_reinitialize () =
+let%track5_sexp unsafe_reinitialize () =
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);

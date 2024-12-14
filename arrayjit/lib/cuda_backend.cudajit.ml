@@ -120,7 +120,7 @@ let%track3_sexp cleanup_device (device : device) =
   Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
       Cu.Deviceptr.mem_free buffer_ptr)
 
-let%track5_sexp finalize_device device =
+let%track5_l_sexp finalize_device (device : device) =
   if Atomic.compare_and_set device.released false true then cleanup_device device
 
 let%track3_sexp get_device ~(ordinal : int) : device =

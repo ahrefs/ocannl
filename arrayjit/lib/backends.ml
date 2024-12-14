@@ -156,8 +156,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Hashtbl.clear s.updating_for)
 end
 
-let lower_assignments ?name bindings asgns =
-  let name = Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns) in
+let%track6_sexp lower_assignments ?name bindings asgns =
+  let name : string =
+    Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns)
+  in
   let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
   let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
   let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
@@ -319,9 +321,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   [@@deriving sexp_of]
 
   let%debug3_sexp compile ?name bindings (comp : Assignments.comp) : code =
-    let name, lowered = lower_assignments ?name bindings comp.Assignments.asgns in
-    let code = compile ~name bindings lowered in
-    let from_prior_context =
+    let (name : string), (lowered : Low_level.optimized) =
+      lower_assignments ?name bindings comp.Assignments.asgns
+    in
+    let code : Device.code = compile ~name bindings lowered in
+    let from_prior_context : Tn.t_set =
       Set.diff (Assignments.context_nodes ~use_host_memory comp.asgns) comp.embedded_nodes
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
@@ -500,7 +504,7 @@ let finalize (type buffer_ptr dev runner event)
               && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
             then mem_free ctx.stream data)))
 
-let fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
+let%track5_sexp fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
   let backend =
     match
       Option.value_or_thunk backend_name ~default:(fun () ->

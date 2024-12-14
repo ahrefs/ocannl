@@ -601,8 +601,9 @@ let compile ~(name : string) bindings (lowered : Low_level.optimized) =
   (if Utils.settings.output_debug_files_in_build_directory then
      let f_name = Utils.build_file @@ name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
+  let%track7_l_sexp finalize result = Result.release result in
   let result = Context.compile ctx in
-  Stdlib.Gc.finalise Result.release result;
+  Stdlib.Gc.finalise finalize result;
   Context.release ctx;
   { info; result; bindings; name; params = List.map ~f:snd params }
 

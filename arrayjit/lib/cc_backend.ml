@@ -66,7 +66,8 @@ let c_compile_and_load ~f_name =
     invalid_arg errors);
   (* Note: RTLD_DEEPBIND not available on MacOS. *)
   let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
-  Stdlib.Gc.finalise (fun lib -> Dl.dlclose ~handle:lib.lib) result;
+  let%track7_l_sexp finalize (lib : library) : unit = Dl.dlclose ~handle:lib.lib in
+  Stdlib.Gc.finalise finalize result;
   result
 
 module C_syntax_config (Input : sig

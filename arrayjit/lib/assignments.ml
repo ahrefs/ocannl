@@ -107,7 +107,7 @@ let sequence l =
            { asgns = sts; embedded_nodes = embs } { asgns = another_st; embedded_nodes = emb } ->
          { asgns = Seq (sts, another_st); embedded_nodes = Set.union embs emb })
 
-let%diagn1_sexp to_low_level code =
+let%diagn2_sexp to_low_level code =
   let open Indexing in
   let get buffer idcs =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
@@ -362,9 +362,9 @@ let fprint_hum ?name ?static_indices () ppf c =
   loop c;
   fprintf ppf "@]"
 
-let lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
+let%track6_sexp lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
     Low_level.optimized =
-  let llc = to_low_level proc in
+  let llc: Low_level.t = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with
   | None -> ()

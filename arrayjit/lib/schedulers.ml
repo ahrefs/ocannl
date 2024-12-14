@@ -191,17 +191,19 @@ module Multicore (Backend : For_add_scheduler) :
           reader_streams = Hashtbl.create (module Tnode);
         })
 
-  module Dynarr = Stdlib.Dynarray
-
   let num_devices () = 1
   let suggested_num_streams _device = Domain.recommended_domain_count () - 1
 
-  let cleanup_stream (stream : stream) =
-    assert (Domain.is_main_domain ());
+  let%track7_l_sexp cleanup_stream (stream : stream) : unit =
+    (* Allow running in parallel. *)
+    (* assert (Domain.is_main_domain ()); *)
+    [%log "cleanup_stream: await stream"];
     await stream;
-    let r = stream.runner in
+    let r : runner = stream.runner in
     r.state.keep_spinning <- false;
+    [%log "cleanup_stream: broadcasting r.state.dev_wait_for_work to wake up the worker"];
     Stdlib.Condition.broadcast r.state.dev_wait_for_work;
+    [%log "cleanup_stream: joining the domain"];
     Domain.join r.domain
 
   let get_device ~ordinal =
@@ -209,7 +211,7 @@ module Multicore (Backend : For_add_scheduler) :
       invalid_arg [%string "Multicore_scheduler.get_device %{ordinal#Int}: only device 0 exists"];
     device
 
-  let new_stream _device =
+  let%track5_sexp new_stream _device =
     assert (Domain.is_main_domain ());
     let stream = spinup_stream () in
     Stdlib.Gc.finalise cleanup_stream stream;

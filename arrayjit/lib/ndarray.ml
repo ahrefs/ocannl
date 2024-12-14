@@ -386,15 +386,15 @@ let create_array ~debug:_debug prec ~dims init_op =
   let size_in_bytes =
     (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
   in
-  let%diagn2_sexp finalizer _result =
+  let%track7_l_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
-    [%log "Deleting", _debug, ptr_to_string_hum _result]
+    [%log3 "Deleting", _debug, ptr_to_string_hum _result]
   in
   let f prec = as_array prec @@ create_bigarray prec ~dims init_op in
   let result = Ops.map_prec { f } prec in
   Stdlib.Gc.finalise finalizer result;
   let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
-  [%debug2_sexp
+  [%debug3_l_sexp
     [%log_block
       "create_array";
       [%log _debug, ptr_to_string_hum result]]];

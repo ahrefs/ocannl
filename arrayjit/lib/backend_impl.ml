@@ -41,7 +41,9 @@ module No_device_buffer_and_copying () :
   let get_used_memory () = Atomic.get used_memory
 
   let alloc_impl ~size_in_bytes =
-    let finalize _ptr = ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int) in
+    let%track7_l_sexp finalize (_ptr : buffer_ptr) : unit =
+      ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int)
+    in
     let ptr = Ctypes.(to_voidp @@ allocate_n int8_t ~count:size_in_bytes) in
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     Stdlib.Gc.finalise finalize ptr;

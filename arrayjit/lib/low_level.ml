@@ -239,7 +239,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           Tn.update_memory_mode tn (Hosted (Changed_on_devices Unset)) 38
         else Tn.update_memory_mode tn Materialized 36))
 
-let%diagn_sexp check_and_store_virtual traced static_indices top_llc =
+let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
