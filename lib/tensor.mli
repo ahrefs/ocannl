@@ -193,7 +193,7 @@ val consume_backprop_code : t -> asgns * comp
     checks that there are no other backprop roots for tensors with children. *)
 
 val iter_embedded : f:(tn -> unit) -> t -> unit
-(** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are not members of
+(** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are members of
     [t.forward.embedded_nodes] or '[t.diff.backprop.embedded_nodes]' (if any). Note: [iter_embedded]
     should only be called after shape inference finishes. *)
 

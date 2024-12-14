@@ -326,6 +326,8 @@ let get_debug name =
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
   let get_runtime () =
+    (* IMPORTANT: Domain.self() returns unique_id that is never reused, spinning up a new stream
+       will create a new log file. *)
     get_debug @@ if is_main_domain () then "" else "Domain-" ^ Int.to_string (self () :> int)
   in
   let debug_runtime_key = DLS.new_key get_runtime in
