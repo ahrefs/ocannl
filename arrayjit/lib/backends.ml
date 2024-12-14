@@ -457,10 +457,29 @@ module Gcc_multicore = Make_device_backend_from_lowered (Schedulers.Multicore) (
 module Cc_sync = Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend)
 module Gcc_sync = Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend)
 
-let reinitialize (module Backend : Backend) config =
+let%track5_sexp reinitialize (module Backend : Backend) config =
   if not @@ Backend.is_initialized () then Backend.initialize config
   else (
+    [%log "reinitialize: cleanup devices"];
+    for ordinal = 0 to Backend.num_devices () - 1 do
+      Backend.(sync_device @@ get_device ~ordinal)
+    done;
+    [%log "reinitialize: efore full_major"];
     Stdlib.Gc.full_major ();
+    [%log "reinitialize: cleanup devices 2"];
+    (* TODO: does this do anything? *)
+    for ordinal = 0 to Backend.num_devices () - 1 do
+      Backend.(sync_device @@ get_device ~ordinal)
+    done;
+    [%log "reinitialize: after cleanup 2"];
+    (* This ensures cleanliness of the streams weak arrays. *)
+    Stdlib.Gc.full_major ();
+    [%log "reinitialize: after full_major 2"];
+    for ordinal = 0 to Backend.num_devices () - 1 do
+      let device = Backend.get_device ~ordinal in
+      Utils.weak_iter device.streams ~f:(fun _stream -> assert false)
+    done;
+    [%log "reinitialize: after checking devices"];
     Backend.initialize config)
 
 let finalize (type buffer_ptr dev runner event)
