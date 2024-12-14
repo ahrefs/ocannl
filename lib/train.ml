@@ -450,8 +450,8 @@ type example_train_result = {
   model_result : Tensor.t;
   infer_callback : float array -> float array;
       (** Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
-  batch_losses : float list;
-  epoch_losses : float list;
+  rev_batch_losses : float list;
+  rev_epoch_losses : float list;
   learning_rates : float list;
   used_memory : int;
 }
@@ -484,8 +484,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op input = inputs @| batch_n in
   let%op expectation = outputs @| batch_n in
-  let batch_losses = ref [] in
-  let epoch_losses = ref [] in
+  let rev_batch_losses = ref [] in
+  let rev_epoch_losses = ref [] in
   let learning_rates = ref [] in
   let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
@@ -524,7 +524,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         Backend.await grad_updates.(0).context.stream;
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
-        batch_losses := batch_loss :: !batch_losses;
+        rev_batch_losses := batch_loss :: !rev_batch_losses;
         Option.iter per_batch_callback ~f:(fun f ->
             f ~at_batch:!batch_ref ~at_step:!step_ref ~learning_rate:learning_rate.@[0] ~batch_loss
               ~epoch_loss:!epoch_loss))
@@ -538,7 +538,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (* Utils.capture_stdout_logs *)
      update ();
     learning_rates := learning_rate.@[0] :: !learning_rates;
-    epoch_losses := !epoch_loss :: !epoch_losses;
+    rev_epoch_losses := !epoch_loss :: !rev_epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
         f ~at_step:!step_ref ~at_epoch:epoch ~learning_rate:learning_rate.@[0]
           ~epoch_loss:!epoch_loss);
@@ -590,8 +590,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     outputs;
     model_result;
     infer_callback;
-    batch_losses = !batch_losses;
-    epoch_losses = !epoch_losses;
+    rev_batch_losses = !rev_batch_losses;
+    rev_epoch_losses = !rev_epoch_losses;
     learning_rates = !learning_rates;
     used_memory;
   }

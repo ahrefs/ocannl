@@ -58,8 +58,8 @@ let experiment ~seed ~backend_name ~config () =
     outputs;
     model_result;
     infer_callback;
-    batch_losses;
-    epoch_losses;
+    rev_batch_losses;
+    rev_epoch_losses;
     learning_rates;
     used_memory;
   } =
@@ -91,14 +91,14 @@ let experiment ~seed ~backend_name ~config () =
   let plot_loss =
     let open PrintBox_utils in
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch loss"
-      [ Line_plot { points = Array.of_list_rev batch_losses; pixel = "-" } ]
+      [ Line_plot { points = Array.of_list_rev rev_batch_losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nEpoch Loss:\n%!";
   let plot_loss =
     let open PrintBox_utils in
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch loss"
-      [ Line_plot { points = Array.of_list_rev epoch_losses; pixel = "-" } ]
+      [ Line_plot { points = Array.of_list_rev rev_epoch_losses; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nBatch Log-loss:\n%!";
@@ -109,7 +109,7 @@ let experiment ~seed ~backend_name ~config () =
         Line_plot
           {
             points =
-              Array.of_list_rev_map batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
+              Array.of_list_rev_map rev_batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
             pixel = "-";
           };
       ]
@@ -119,7 +119,7 @@ let experiment ~seed ~backend_name ~config () =
   let plot_loss =
     let open PrintBox_utils in
     plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch log loss"
-      [ Line_plot { points = Array.of_list_rev_map epoch_losses ~f:Float.log; pixel = "-" } ]
+      [ Line_plot { points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log; pixel = "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nLearning rate:\n%!";

@@ -57,8 +57,8 @@ let main () =
     outputs;
     model_result = _;
     infer_callback;
-    batch_losses = _;
-    epoch_losses = _;
+    rev_batch_losses = _;
+    rev_epoch_losses = _;
     learning_rates = _;
     used_memory = _;
   } =
