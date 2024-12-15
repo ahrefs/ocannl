@@ -385,7 +385,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           if not (equal_stream stream (Hashtbl.find_exn device.owner_stream key)) then
             raise
             @@ Utils.User_error
-                 ("Cuda_backend.alloc_if_needed: node " ^ Tn.debug_name key
+                 ("Backends.alloc_if_needed: node " ^ Tn.debug_name key
                 ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
         else Hashtbl.add_exn device.owner_stream ~key ~data:stream;
         let data = Hashtbl.find_exn device.cross_stream_candidates key in

@@ -188,12 +188,12 @@ let%track2_sexp _Big_matrix () =
   (* Hey is inferred to be a matrix. *)
   let hey = Tensor.param ~values:[| 0.5 |] "hey" in
   let zero_to_twenty = TDSL.range 20 in
-  let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
-  Train.forward_and_forget backend ctx y;
+  let%op yb = (hey * zero_to_twenty) + zero_to_twenty in
+  Train.forward_and_forget backend ctx yb;
   Tensor.print ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:false ~with_grad:false `Default zero_to_twenty;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default y
+  Tensor.print ~with_code:false ~with_grad:false `Default yb
 
 let%track2_sexp _Very_big_tensor () =
   Tensor.unsafe_reinitialize ();
@@ -215,6 +215,11 @@ let%track2_sexp _Very_big_tensor () =
   Train.forward_and_forget backend ctx hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
   Tensor.print ~with_code:false ~with_grad:false `Default hoo
+
+let _suspended () =
+  setup ();
+  _Matrix_multiplication_dims_2x3 ();
+  _Big_matrix ()
 
 let () =
   setup ();

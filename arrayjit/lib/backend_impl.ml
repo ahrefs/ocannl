@@ -37,9 +37,17 @@ module No_device_buffer_and_copying () :
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 
-  let used_memory = Atomic.make 0
-  let get_used_memory () = Atomic.get used_memory
+  (* let used_memory = Atomic.make 0 *)
 
+  let get_used_memory () =
+    (* FIXME(295): alloc_zero_init_array is now using Ndarray. *)
+    (* Atomic.get used_memory *)
+    Atomic.get Ndarray.used_memory
+
+  let global_arena = Hash_set.create (module Ndarray)
+
+  (* FIXME(295): in rare cases, this causes crashes. *)
+  (* {[
   let alloc_impl ~size_in_bytes =
     let%track7_l_sexp finalize (_ptr : buffer_ptr) : unit =
       ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int)
@@ -48,17 +56,36 @@ module No_device_buffer_and_copying () :
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     Stdlib.Gc.finalise finalize ptr;
     ptr
+  ]} *)
 
   let alloc_zero_init_array prec ~dims () =
+    (* FIXME(295): in rare cases, this causes crashes. *)
+    (* {[
     let size_in_bytes =
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
     alloc_impl ~size_in_bytes
+    ]} *)
+    (* Alternative: *)
+    (* let%track7_l_sexp finalize (nd : Ndarray.t) = Hash_set.remove global_arena nd in *)
+    let nd =
+      Ndarray.create_array ~debug:[%string "array_%{Hash_set.length global_arena#Int}"] prec ~dims
+        Ops.(Constant_fill { values = [| 0.0 |]; strict = false })
+    in
+    Hash_set.add global_arena nd;
+    (* Stdlib.Gc.finalise finalize nd; *)
+    Ndarray.get_voidptr_not_managed nd
 
   let alloc_buffer ?old_buffer ~size_in_bytes () =
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
-    | _ -> { ptr = alloc_impl ~size_in_bytes; size_in_bytes }
+    | _ ->
+        (* FIXME(295): in rare cases, this causes crashes. *)
+        (* { ptr = alloc_impl ~size_in_bytes; size_in_bytes } *)
+        (* Alternative: *)
+        (* FIXME: This is not helping. *)
+        let ptr = alloc_zero_init_array Ops.byte ~dims:[| size_in_bytes |] () in
+        { ptr; size_in_bytes }
 
   let free_buffer = None
 
