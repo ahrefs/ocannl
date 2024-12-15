@@ -378,6 +378,13 @@ let ptr_to_string_hum nd =
   let f arr = Ops.rawptr_to_string_hum (bigarray_start_not_managed arr) prec in
   map { f } nd
 
+let to_native = map { f = bigarray_start_not_managed }
+let equal a1 a2 = equal_nativeint (to_native a1) (to_native a2)
+let compare a1 a2 = compare_nativeint (to_native a1) (to_native a2)
+let hash nd = Nativeint.hash (to_native nd)
+let hash_fold_t acc nd = hash_fold_nativeint acc (to_native nd)
+let hash_t nd = Nativeint.hash @@ to_native nd
+
 (** {2 *** Creating ***} *)
 
 let used_memory = Atomic.make 0
