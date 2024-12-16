@@ -62,16 +62,14 @@ type memory_mode =
           optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
-type delayed_prec =
-  | Not_specified
-  | Default_spec of (Ops.prec Lazy.t[@sexp.opaque])
-  | Specified of Ops.prec
+type delayed_prec = Not_specified | Default_spec of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
 
 type t = {
-  array : (Nd.t option Lazy.t[@sexp.opaque]);
-  prec : (Ops.prec Lazy.t[@sexp.opaque]);
-  dims : (int array Lazy.t[@sexp.opaque]);
+  array : Nd.t option Lazy.t;
+  prec : Ops.prec Lazy.t;
+  dims : int array Lazy.t;
+  size_in_bytes : int Lazy.t;
   id : int;
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow or
@@ -90,7 +88,6 @@ let num_elems tn =
   let dims = Lazy.force tn.dims in
   if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
 
-let size_in_bytes tn = num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec)
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
@@ -512,6 +509,7 @@ let create ?default_prec ~id ~label ~dims init_op =
       | Specified prec | Default_spec (lazy prec) -> prec
       | Not_specified ->
           raise @@ Utils.User_error "Tnode.update_prec: precision is not specified yet")
+  and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
     let delayed_prec_unsafe =
       match default_prec with None -> Not_specified | Some prec -> Default_spec prec
@@ -521,6 +519,7 @@ let create ?default_prec ~id ~label ~dims init_op =
       delayed_prec_unsafe;
       prec;
       dims;
+      size_in_bytes;
       id;
       label;
       memory_mode = None;
@@ -541,6 +540,7 @@ let find =
       prec = lazy Ops.single;
       delayed_prec_unsafe = Specified Ops.single;
       dims = lazy [||];
+      size_in_bytes = lazy 0;
       id = -1;
       label = [];
       memory_mode = None;

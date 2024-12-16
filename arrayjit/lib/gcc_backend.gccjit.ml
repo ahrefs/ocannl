@@ -93,7 +93,7 @@ let zero_out ctx block node =
        [
          Lazy.force node.ptr;
          RValue.zero ctx c_int;
-         RValue.int ctx c_index @@ Tn.size_in_bytes node.tn;
+         RValue.int ctx c_index @@ Lazy.force node.tn.size_in_bytes;
        ]
 
 let get_c_ptr ctx num_typ ptr = Gccjit.(RValue.ptr ctx (Type.pointer num_typ) ptr)

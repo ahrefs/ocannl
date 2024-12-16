@@ -271,7 +271,7 @@ module Add_device
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let s = dst.stream in
-    let size_in_bytes = Tnode.size_in_bytes tn in
+    let size_in_bytes = Lazy.force tn.Tnode.size_in_bytes in
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
       match (into_merge_buffer, dst_ptr) with
@@ -280,7 +280,6 @@ module Add_device
       | Streaming_for _, _ -> fun () -> s.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
       | Copy, _ ->
           fun () ->
-            let size_in_bytes = Tnode.size_in_bytes tn in
             let allocated_capacity =
               match s.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
             in

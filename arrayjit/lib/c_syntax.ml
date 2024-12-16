@@ -34,7 +34,8 @@ struct
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
 
   let pp_zero_out ppf tn =
-    Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn) @@ Tn.size_in_bytes tn
+    Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn)
+    @@ Lazy.force tn.size_in_bytes
 
   let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
 

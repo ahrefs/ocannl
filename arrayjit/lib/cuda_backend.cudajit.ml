@@ -198,7 +198,7 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
      dst.stream.stream_id src.stream.stream_id; *)
   let dev = dst.stream.device in
   let same_device = dev.ordinal = src.stream.device.ordinal in
-  let size_in_bytes = Tn.size_in_bytes tn in
+  let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
   let memcpy ~dst_ptr =
     if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then ()
     else if same_device then
@@ -217,7 +217,6 @@ let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
       dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
   | Copy, _ ->
       set_ctx @@ ctx_of dst;
-      let size_in_bytes = Tn.size_in_bytes tn in
       opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
       let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
       memcpy ~dst_ptr:buffer.ptr
