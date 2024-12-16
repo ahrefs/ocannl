@@ -20,9 +20,9 @@
 (executable
  (name hello_world_op)
  (modules hello_world_op)
- (libraries ocannl base stdio)
+ (libraries ocannl base stdio ppx_minidebug.runtime)
  (preprocess
-  (pps ppx_minidebug ppx_ocannl))
+  (pps ppx_minidebug ppx_ocannl ppx_sexp_conv))
  (modes exe))
 
 (executable

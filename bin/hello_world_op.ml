@@ -15,11 +15,11 @@ let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let setup () =
+let setup (() : unit) : unit =
   Arrayjit.Utils.settings.output_debug_files_in_build_directory <- true;
   Arrayjit.Utils.settings.debug_log_from_routines <- true
 
-let%track2_sexp _Pointwise_multiplication_dims_1 () =
+let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -33,11 +33,11 @@ let%track2_sexp _Pointwise_multiplication_dims_1 () =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
-  let%op y = 2 *. "hey" 7.0 in
-  Train.forward_and_forget backend ctx y;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+  let%op ya = 2 *. "hey" 7.0 in
+  Train.forward_and_forget backend ctx ya;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ ya
 
-let%track2_sexp _Matrix_multiplication_dims_1x1 () =
+let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -51,13 +51,13 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 () =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%op y = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
-  Train.forward_and_forget backend ctx y;
+  let%op yb = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
+  Train.forward_and_forget backend ctx yb;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ yb
 
-let%track2_sexp _Print_constant_tensor () =
+let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -153,7 +153,7 @@ let%track2_sexp _Print_constant_tensor () =
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo4
 
-let%track2_sexp _Matrix_multiplication_dims_2x3 () =
+let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -167,12 +167,12 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 () =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
-  let%op y = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  Train.forward_and_forget backend ctx y;
+  let%op yc = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  Train.forward_and_forget backend ctx yc;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ yc
 
-let%track2_sexp _Big_matrix () =
+let%track2_sexp _Big_matrix (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -188,14 +188,14 @@ let%track2_sexp _Big_matrix () =
   (* Hey is inferred to be a matrix. *)
   let hey = Tensor.param ~values:[| 0.5 |] "hey" in
   let zero_to_twenty = TDSL.range 20 in
-  let%op yb = (hey * zero_to_twenty) + zero_to_twenty in
-  Train.forward_and_forget backend ctx yb;
+  let%op yd = (hey * zero_to_twenty) + zero_to_twenty in
+  Train.forward_and_forget backend ctx yd;
   Tensor.print ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:false ~with_grad:false `Default zero_to_twenty;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default yb
+  Tensor.print ~with_code:false ~with_grad:false `Default yd
 
-let%track2_sexp _Very_big_tensor () =
+let%track2_sexp _Very_big_tensor (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
   let backend =
@@ -209,23 +209,29 @@ let%track2_sexp _Very_big_tensor () =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   let hey =
-    TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()
+    TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] ()
   in
-  let%op hoo = (hey * (1 + 1)) - 10 in
-  Train.forward_and_forget backend ctx hoo;
+  let%op ye = (hey * (1 + 1)) - 10 in
+  Train.forward_and_forget backend ctx ye;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default hoo
+  Tensor.print ~with_code:false ~with_grad:false `Default ye
 
-let _suspended () =
+let _suspended (() : unit) : unit =
   setup ();
   _Matrix_multiplication_dims_2x3 ();
   _Big_matrix ()
 
-let () =
+let _suspended (() : unit) : unit =
   setup ();
   _Pointwise_multiplication_dims_1 ();
   _Matrix_multiplication_dims_1x1 ();
   _Print_constant_tensor ();
+  _Matrix_multiplication_dims_2x3 ();
+  _Big_matrix ();
+  _Very_big_tensor ()
+
+let (() : unit) : unit =
+  setup ();
   _Matrix_multiplication_dims_2x3 ();
   _Big_matrix ();
   _Very_big_tensor ()

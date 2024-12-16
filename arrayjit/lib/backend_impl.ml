@@ -37,18 +37,10 @@ module No_device_buffer_and_copying () :
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 
-  (* let used_memory = Atomic.make 0 *)
+  let used_memory = Atomic.make 0
+  let get_used_memory () = Atomic.get used_memory
 
-  let get_used_memory () =
-    (* FIXME(295): alloc_zero_init_array is now using Ndarray. *)
-    (* Atomic.get used_memory *)
-    Atomic.get Ndarray.used_memory
-
-  let global_arena = Hash_set.create (module Ndarray)
-
-  (* FIXME(295): in rare cases, this causes crashes. *)
-  (* {[
-  let alloc_impl ~size_in_bytes =
+  let%track7_l_sexp alloc_impl ~(size_in_bytes : int) : buffer_ptr =
     let%track7_l_sexp finalize (_ptr : buffer_ptr) : unit =
       ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int)
     in
@@ -56,52 +48,41 @@ module No_device_buffer_and_copying () :
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     Stdlib.Gc.finalise finalize ptr;
     ptr
-  ]} *)
 
-  let alloc_zero_init_array prec ~dims () =
-    (* FIXME(295): in rare cases, this causes crashes. *)
-    (* {[
+  let%track7_l_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
+      buffer_ptr =
     let size_in_bytes =
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
     alloc_impl ~size_in_bytes
-    ]} *)
-    (* Alternative: *)
-    (* let%track7_l_sexp finalize (nd : Ndarray.t) = Hash_set.remove global_arena nd in *)
-    let nd =
-      Ndarray.create_array ~debug:[%string "array_%{Hash_set.length global_arena#Int}"] prec ~dims
-        Ops.(Constant_fill { values = [| 0.0 |]; strict = false })
-    in
-    Hash_set.add global_arena nd;
-    (* Stdlib.Gc.finalise finalize nd; *)
-    Ndarray.get_voidptr_not_managed nd
 
-  let alloc_buffer ?old_buffer ~size_in_bytes () =
+  let%track7_l_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)
+      ~(size_in_bytes : int) (() : unit) : buffer =
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
-    | _ ->
-        (* FIXME(295): in rare cases, this causes crashes. *)
-        (* { ptr = alloc_impl ~size_in_bytes; size_in_bytes } *)
-        (* Alternative: *)
-        (* FIXME: This is not helping. *)
-        let ptr = alloc_zero_init_array Ops.byte ~dims:[| size_in_bytes |] () in
-        { ptr; size_in_bytes }
+    | _ -> { ptr = alloc_impl ~size_in_bytes; size_in_bytes }
 
   let free_buffer = None
 
+  type void_buffer_ptr = (Stdlib.Obj.t option, unit Ctypes_static.typ) Ctypes_ptr.Fat.t
+
+  let sexp_of_void_buffer_ptr (p : void_buffer_ptr) =
+    Sexp.Atom (Ctypes_value_printing_stubs.string_of_pointer p)
+
+  let%track7_l_sexp memcpy ~(dst : void_buffer_ptr) ~(src : void_buffer_ptr) ~(size_in_bytes : int)
+      : unit =
+    if Ctypes_ptr.Fat.compare dst src <> 0 then
+      Ctypes_memory_stubs.memcpy ~dst ~src ~size:size_in_bytes
+
   let buffer_to_buffer ~dst:Ctypes_static.(CPointer dst) ~src:Ctypes_static.(CPointer src)
       ~size_in_bytes =
-    Ctypes_memory_stubs.memcpy ~dst ~src ~size:size_in_bytes
+    memcpy ~dst ~src ~size_in_bytes
 
   let host_to_buffer src ~dst:Ctypes_static.(CPointer dst) =
-    Ctypes_memory_stubs.memcpy ~dst
-      ~src:(Ndarray.get_fatptr_not_managed src)
-      ~size:(Ndarray.size_in_bytes src)
+    memcpy ~dst ~src:(Ndarray.get_fatptr_not_managed src) ~size_in_bytes:(Ndarray.size_in_bytes src)
 
   let buffer_to_host dst ~src:Ctypes_static.(CPointer src) =
-    Ctypes_memory_stubs.memcpy
-      ~dst:(Ndarray.get_fatptr_not_managed dst)
-      ~src ~size:(Ndarray.size_in_bytes dst)
+    memcpy ~dst:(Ndarray.get_fatptr_not_managed dst) ~src ~size_in_bytes:(Ndarray.size_in_bytes dst)
 end
 
 module Device_types (Device_config : Device_config) = struct

@@ -321,20 +321,24 @@ struct
           | p_name, Merge_buffer ->
               if B.logs_to_stdout then
                 fprintf ppf
-                  {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
+                  {|@[<7>printf(@[<h>"%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
                   !Utils.captured_log_prefix p_name
+                  (Tnode.num_elems @@ Option.value_exn merge_node)
               else
                 fprintf ppf
-                  {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)merge_buffer);@]@ |} p_name
+                  {|@[<7>fprintf(log_file,@ @[<h>"%s &[%d] = %%p\n",@] (void*)merge_buffer);@]@ |}
+                  p_name
+                  (Tnode.num_elems @@ Option.value_exn merge_node)
           | _, Log_file_name -> ()
           | p_name, Param_ptr tn ->
               if B.logs_to_stdout then
-                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%p\n",@] log_id, (void*)%s);@]@ |}
-                  !Utils.captured_log_prefix p_name
+                fprintf ppf
+                  {|@[<7>printf(@[<h>"%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)%s);@]@ |}
+                  !Utils.captured_log_prefix p_name (Tnode.num_elems tn)
                 @@ get_ident tn
               else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%p\n",@] (void*)%s);@]@ |} p_name
-                @@ get_ident tn
+                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s &[%d] = %%p\n",@] (void*)%s);@]@ |}
+                  p_name (Tnode.num_elems tn) (get_ident tn)
           | p_name, Static_idx s ->
               if B.logs_to_stdout then
                 fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%d\n",@] log_id, %s);@]@ |}
