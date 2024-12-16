@@ -80,7 +80,6 @@ end
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
   owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
   shared_writer_streams :
@@ -112,7 +111,6 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
       ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
-  released : Utils.atomic_bool;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
           shrink. *)

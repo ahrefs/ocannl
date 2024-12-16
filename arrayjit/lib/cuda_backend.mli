@@ -1,1 +1,1 @@
-include Backend_impl.Lowered_backend
+module Fresh : functor () -> Backend_impl.Lowered_backend

@@ -17,7 +17,7 @@ val finalize :
 
     Note: this type will get simpler with modular explicits. *)
 
-val fresh_backend :
-  ?backend_name:string -> unit -> (module Backend_intf.Backend)
+val fresh_backend : ?backend_name:string -> unit -> (module Backend_intf.Backend)
 (** Creates a new backend corresponding to [backend_name], or if omitted, selected via the global
-    [backend] setting. *)
+    [backend] setting. It should be safe to call {!Tensor.unsafe_reinitialize} before
+    [fresh_backend]. *)

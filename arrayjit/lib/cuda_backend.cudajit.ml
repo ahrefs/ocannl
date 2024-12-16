@@ -32,8 +32,6 @@ module Backend_buffer = struct
   end)
 end
 
-let use_host_memory = None
-
 module Device_config = struct
   include Backend_buffer
 
@@ -74,420 +72,419 @@ module Alloc_buffer = struct
   let free_buffer = Some (fun _stream ptr -> Cu.Deviceptr.mem_free ptr)
 end
 
-include Backend_impl.Device (Device_stream) (Alloc_buffer)
-
-let ctx_of (context : context) = context.stream.device.dev.primary_context
-let global_config = ref For_parallel_copying
-let is_done event = Cu.Delimited_event.query event
-let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
-let sync event = Cu.Delimited_event.synchronize event
-let all_work stream = Cu.Delimited_event.record stream.runner
-
-let is_initialized, initialize =
-  let initialized = ref false in
-  let init (config : config) : unit =
-    if not !initialized then Cu.init ();
-    initialized := true;
-    global_config := config
-  in
-  ((fun () -> !initialized), init)
-
-let num_devices = Cu.Device.get_count
-
-(* TODO: this doesn't need to be weak array. *)
-let devices = ref @@ Stdlib.Weak.create 0
-
-(* Unlike [devices] above, [initialized_devices] never forgets its entries. *)
+(* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 
-let get_used_memory (device : device) =
-  set_ctx device.dev.primary_context;
-  let free, total = Cudajit.Device.get_free_and_total_mem () in
-  total - free
+module Fresh () = struct
+  include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
-let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
-  if
-    Option.value_map ~default:true !(stream.merge_buffer) ~f:(fun buffer ->
-        buffer.size_in_bytes < size_in_bytes)
-  then (
-    set_ctx dev.primary_context;
-    Option.iter !(stream.merge_buffer) ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
-    stream.merge_buffer := Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
+  let use_host_memory = None
+  let ctx_of (context : context) = context.stream.device.dev.primary_context
+  let is_done event = Cu.Delimited_event.query event
+  let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
+  let sync event = Cu.Delimited_event.synchronize event
+  let all_work stream = Cu.Delimited_event.record stream.runner
+  let global_config = ref For_parallel_copying
+  let () = Cu.init ()
 
-let%track3_sexp cleanup_device (device : device) =
-  Cu.Context.set_current device.dev.primary_context;
-  Cu.Context.synchronize ();
-  Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
-  (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-  Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
-      Cu.Deviceptr.mem_free buffer_ptr)
-
-let%track5_l_sexp finalize_device (device : device) =
-  if Atomic.compare_and_set device.released false true then cleanup_device device
-
-let%track3_sexp get_device ~(ordinal : int) : device =
-  if num_devices () <= ordinal then
-    invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
-  if Stdlib.Weak.length !devices <= ordinal then (
-    let old = !devices in
-    devices := Stdlib.Weak.create (ordinal + 1);
-    Stdlib.Weak.blit old 0 !devices 0 (Stdlib.Weak.length old));
-  let default () =
-    let dev = Cu.Device.get ~ordinal in
-    let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
-    let dev = { dev; primary_context } in
-    set_ctx primary_context;
-    if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
-      Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
-    Hash_set.add initialized_devices ordinal;
-    let result = make_device dev ~ordinal in
-    Stdlib.Gc.finalise finalize_device result;
-    Stdlib.Weak.set !devices ordinal (Some result);
-    result
-  in
-  let result = Option.value_or_thunk (Stdlib.Weak.get !devices ordinal) ~default in
-  (* We need this: there can be an arbitrary gap between the finalizer run and the deallocation. *)
-  if Atomic.get result.released then default () else result
-
-let%track3_sexp new_stream (device : device) : stream =
-  (* Strange that we need ctx_set_current even with a single device! *)
-  set_ctx device.dev.primary_context;
-  let cu_stream = Cu.Stream.create ~non_blocking:true () in
-  make_stream device cu_stream
-
-let cuda_properties =
-  let cache =
-    let%debug2_sexp f (ordinal : int) =
-      let dev = get_device ~ordinal in
-      lazy (Cu.Device.get_attributes dev.dev.dev)
+  let is_initialized, initialize =
+    let initialized = ref false in
+    let init (config : config) : unit =
+      initialized := true;
+      global_config := config
     in
-    lazy (Array.init (num_devices ()) ~f)
-  in
-  let%debug2_sexp get_props (device : device) : Cu.Device.attributes =
-    if not @@ is_initialized () then invalid_arg "cuda_properties: CUDA not initialized";
-    let cache = Lazy.force cache in
-    Lazy.force cache.(device.ordinal)
-  in
-  get_props
+    ((fun () -> !initialized), init)
 
-let suggested_num_streams device =
-  match !global_config with
-  | Only_devices_parallel -> 1
-  | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
-  | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
+  let num_devices = Cu.Device.get_count
+  let devices = ref @@ Array.create ~len:(num_devices ()) None
 
-let await stream : unit =
-  set_ctx stream.device.dev.primary_context;
-  Cu.Stream.synchronize stream.runner;
-  Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
+  let get_used_memory (device : device) =
+    set_ctx device.dev.primary_context;
+    let free, total = Cudajit.Device.get_free_and_total_mem () in
+    total - free
 
-let is_idle stream = Cu.Stream.is_ready stream.runner
+  let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
+    if
+      Option.value_map ~default:true !(stream.merge_buffer) ~f:(fun buffer ->
+          buffer.size_in_bytes < size_in_bytes)
+    then (
+      set_ctx dev.primary_context;
+      Option.iter !(stream.merge_buffer) ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
+      stream.merge_buffer := Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
 
-let from_host ~dst_ptr ~dst hosted =
-  (* Stdio.printf "run: from_host on backend:0:%d\n" dst.stream.stream_id; *)
-  set_ctx @@ ctx_of dst;
-  let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
-  Ndarray.map { f } hosted
+  let%track4_l_sexp finalize_device (device : device) =
+    Cu.Context.set_current device.dev.primary_context;
+    Cu.Context.synchronize ();
+    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
+    (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
+    Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
+        Cu.Deviceptr.mem_free buffer_ptr)
 
-let to_host ~src_ptr ~src hosted =
-  (* Stdio.printf "run: to_host on backend:0:%d\n" src.stream.stream_id; *)
-  set_ctx @@ ctx_of src;
-  let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
-  Ndarray.map { f } hosted
-
-let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-  (* Stdio.printf "run: device_to_device %s dst backend:0:%d src backend:0:%d\n" (Tn.debug_name tn)
-     dst.stream.stream_id src.stream.stream_id; *)
-  let dev = dst.stream.device in
-  let same_device = dev.ordinal = src.stream.device.ordinal in
-  let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
-  let memcpy ~dst_ptr =
-    if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then ()
-    else if same_device then
-      Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.stream.runner
-    else
-      Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
-        ~src_ctx:(ctx_of src) dst.stream.runner
-  in
-  match (into_merge_buffer, dst_ptr) with
-  | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
-  | No, Some dst_ptr ->
-      set_ctx @@ ctx_of dst;
-      memcpy ~dst_ptr
-  | Streaming_for _, _ ->
-      assert same_device;
-      dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
-  | Copy, _ ->
-      set_ctx @@ ctx_of dst;
-      opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
-      let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-      memcpy ~dst_ptr:buffer.ptr
-
-type code = {
-  traced_store : Low_level.traced_store;
-  ptx : Cu.Nvrtc.compile_to_ptx_result;
-  params : (string * param_source) list;
-  bindings : Indexing.unit_bindings;
-  name : string;
-}
-[@@deriving sexp_of]
-
-type code_batch = {
-  traced_stores : Low_level.traced_store option array;
-  ptx : Cu.Nvrtc.compile_to_ptx_result;
-  bindings : Indexing.unit_bindings;
-  params_and_names : ((string * param_source) list * string) option array;
-}
-[@@deriving sexp_of]
-
-let%diagn2_sexp cuda_to_ptx ~name cu_src =
-  let name_cu = name ^ ".cu" in
-  if Utils.settings.output_debug_files_in_build_directory then (
-    let oc = Out_channel.open_text @@ Utils.build_file name_cu in
-    Stdio.Out_channel.output_string oc cu_src;
-    Stdio.Out_channel.flush oc;
-    Stdio.Out_channel.close oc);
-  [%log "compiling to PTX"];
-  let module Cu = Cudajit in
-  let with_debug =
-    Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
-  in
-  let options =
-    "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
-  in
-  (* FIXME: every now and then the compilation crashes because the options are garbled. *)
-  (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
-  let ptx = Cu.Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
-  if Utils.settings.output_debug_files_in_build_directory then (
-    let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
-    Stdio.Out_channel.output_string oc @@ Cu.Nvrtc.string_from_ptx ptx;
-    Stdio.Out_channel.flush oc;
-    Stdio.Out_channel.close oc;
-    let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
-    Stdio.Out_channel.output_string oc
-    @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
-    Stdio.Out_channel.flush oc;
-    Stdio.Out_channel.close oc);
-  ptx
-
-module C_syntax_config (Input : sig
-  val procs : Low_level.optimized array
-end) =
-struct
-  type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
-
-  let procs = Input.procs
-  let use_host_memory = use_host_memory
-  let logs_to_stdout = true
-  let main_kernel_prefix = "extern \"C\" __global__"
-
-  let kernel_prep_line =
-    "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
-
-  let includes = [ "<cuda_fp16.h>" ]
-
-  let typ_of_prec = function
-    | Ops.Byte_prec _ -> "unsigned char"
-    | Half_prec _ -> "__half"
-    | Single_prec _ -> "float"
-    | Double_prec _ -> "double"
-    | Void_prec -> "void"
-
-  let binop_syntax prec v =
-    match (v, prec) with
-    | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
-    | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
-    | _, Ops.Void_prec -> invalid_arg "Cuda_backend.binop_syntax: Void precision"
-    | Add, Half_prec _ -> ("__hadd(", ", ", ")")
-    | Sub, Half_prec _ -> ("__hsub(", ", ", ")")
-    | Mul, Half_prec _ -> ("__hmul(", ", ", ")")
-    | Div, Half_prec _ -> ("__hdiv(", ", ", ")")
-    | Add, _ -> ("(", " +", ")")
-    | Sub, _ -> ("(", " -", ")")
-    | Mul, _ -> ("(", " *", ")")
-    | Div, _ -> ("(", " /", ")")
-    | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-    | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
-    | ToPowOf, Half_prec _ -> ("hexp2(hlog2(", "), ", ")")
-    | ToPowOf, Byte_prec _ ->
-        invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
-    | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
-    | Relu_gate, Half_prec _ ->
-        ( "(__hgt(",
-          ", __ushort_as_half((unsigned short)0x0000U)) ?",
-          " : __ushort_as_half((unsigned short)0x0000U))" )
-    | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-
-  let unop_syntax prec v =
-    match (v, prec) with
-    | Ops.Identity, _ -> ("", "")
-    | Relu, Ops.Single_prec _ -> ("fmaxf(0.0, ", ")")
-    | Relu, Ops.Half_prec _ -> ("__hmax_nan(__ushort_as_half((unsigned short)0x0000U), ", ")")
-    | Relu, Ops.Byte_prec _ -> ("fmax(0, ", ")")
-    | Relu, _ -> ("fmax(0.0, ", ")")
-
-  let convert_precision ~from ~to_ =
-    match (from, to_) with
-    | Ops.Double_prec _, Ops.Double_prec _
-    | Single_prec _, Single_prec _
-    | Half_prec _, Half_prec _
-    | Byte_prec _, Byte_prec _
-    | Void_prec, Void_prec ->
-        ("", "")
-    | Double_prec _, Half_prec _ -> ("__double2half(", ")")
-    | Single_prec _, Half_prec _ -> ("__float2half(", ")")
-    | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
-    | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
-end
-
-let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
-  (* TODO: The following link seems to claim it's better to expand into loops than use memset.
-     https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs = [| lowered |]
-  end)) in
-  let idx_params = Indexing.bound_symbols bindings in
-  let b = Buffer.create 4096 in
-  let ppf = Stdlib.Format.formatter_of_buffer b in
-  if Utils.debug_log_from_routines () then
-    Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-  Syntax.print_includes ppf;
-  let params = Syntax.compile_proc ~name ppf idx_params lowered in
-  let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
-  { traced_store; ptx; params; bindings; name }
-
-let compile_batch ~names bindings lowereds =
-  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-    let procs = Array.filter_opt lowereds
-  end)) in
-  let idx_params = Indexing.bound_symbols bindings in
-  let b = Buffer.create 4096 in
-  let ppf = Stdlib.Format.formatter_of_buffer b in
-  Syntax.print_includes ppf;
-  let params_and_names =
-    Array.map2_exn names lowereds
-      ~f:
-        (Option.map2 ~f:(fun name lowered ->
-             (Syntax.compile_proc ~name ppf idx_params lowered, name)))
-  in
-  let name : string =
-    String.(
-      strip ~drop:(equal_char '_')
-      @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
-  in
-  let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
-  let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
-  { traced_stores; ptx; params_and_names; bindings }
-
-let get_global_run_id =
-  let next_id = ref 0 in
-  fun () ->
-    Int.incr next_id;
-    if !next_id < 0 then next_id := 0;
-    !next_id
-
-let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
-    lowered_bindings run_module =
-  let module Cu = Cudajit in
-  let func = Cu.Module.get_function run_module ~name in
-  let stream = prior_context.stream in
-  let runner_label = get_name stream in
-  let%diagn3_l_sexp work () : unit =
-    let log_id = get_global_run_id () in
-    let log_id_prefix = Int.to_string log_id ^ ": " in
-    [%log_result
-      "Launching", name, "on", runner_label, (log_id : int), (params : (string * param_source) list)];
-    let module S = Cu.Stream in
-    let args : S.kernel_param list =
-      (* TODO: should we prohibit or warn about local-only tensors that are in
-         prior_context.ctx_arrays? *)
-      List.map params ~f:(function
-        | _name, Param_ptr tn ->
-            let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
-            S.Tensor arr
-        | _name, Log_file_name -> S.Int log_id
-        | _name, Merge_buffer ->
-            let buf = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
-            S.Tensor buf.ptr
-        | _name, Static_idx s ->
-            let i = Indexing.find_exn lowered_bindings s in
-            if !i < 0 then
-              raise
-              @@ Utils.User_error
-                   [%string
-                     "cuda: static index %{Indexing.symbol_ident s.static_symbol} is negative: \
-                      %{!i#Int}"];
-            Option.iter s.static_range ~f:(fun upto ->
-                if !i >= upto then
-                  raise
-                  @@ Utils.User_error
-                       [%string
-                         "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too big: \
-                          %{upto#Int}"]);
-            S.Int !i)
+  let%track3_sexp get_device ~(ordinal : int) : device =
+    if num_devices () <= ordinal then
+      invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
+    (if Array.length !devices <= ordinal then
+       let old, len = (!devices, Array.length !devices) in
+       devices := Array.init (ordinal + 1) ~f:(fun i -> if i < len then old.(i) else None));
+    let default () =
+      let dev = Cu.Device.get ~ordinal in
+      let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
+      let dev = { dev; primary_context } in
+      set_ctx primary_context;
+      if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
+        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
+      Hash_set.add initialized_devices ordinal;
+      let result = make_device dev ~ordinal in
+      Stdlib.Gc.finalise finalize_device result;
+      !devices.(ordinal) <- Some result;
+      result
     in
-    set_ctx @@ ctx_of prior_context;
-    (* FIXME: this happens inside the kernel. *)
-    (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
+    Option.value_or_thunk !devices.(ordinal) ~default
+
+  let%track3_sexp new_stream (device : device) : stream =
+    (* Strange that we need ctx_set_current even with a single device! *)
+    set_ctx device.dev.primary_context;
+    let cu_stream = Cu.Stream.create ~non_blocking:true () in
+    make_stream device cu_stream
+
+  let cuda_properties =
+    let cache =
+      let%debug2_sexp f (ordinal : int) =
+        let dev = get_device ~ordinal in
+        lazy (Cu.Device.get_attributes dev.dev.dev)
+      in
+      lazy (Array.init (num_devices ()) ~f)
+    in
+    let%debug2_sexp get_props (device : device) : Cu.Device.attributes =
+      let cache = Lazy.force cache in
+      Lazy.force cache.(device.ordinal)
+    in
+    get_props
+
+  let suggested_num_streams device =
+    match !global_config with
+    | Only_devices_parallel -> 1
+    | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
+    | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
+
+  let await stream : unit =
+    set_ctx stream.device.dev.primary_context;
+    Cu.Stream.synchronize stream.runner;
+    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
+
+  let is_idle stream = Cu.Stream.is_ready stream.runner
+
+  let from_host ~dst_ptr ~dst hosted =
+    set_ctx @@ ctx_of dst;
+    let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
+    Ndarray.map { f } hosted
+
+  let to_host ~src_ptr ~src hosted =
+    set_ctx @@ ctx_of src;
+    let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
+    Ndarray.map { f } hosted
+
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+    let dev = dst.stream.device in
+    let same_device = dev.ordinal = src.stream.device.ordinal in
+    let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let memcpy ~dst_ptr =
+      if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then ()
+      else if same_device then
+        Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.stream.runner
+      else
+        Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
+          ~src_ctx:(ctx_of src) dst.stream.runner
+    in
+    match (into_merge_buffer, dst_ptr) with
+    | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
+    | No, Some dst_ptr ->
+        set_ctx @@ ctx_of dst;
+        memcpy ~dst_ptr
+    | Streaming_for _, _ ->
+        assert same_device;
+        dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
+    | Copy, _ ->
+        set_ctx @@ ctx_of dst;
+        opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
+        let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
+        memcpy ~dst_ptr:buffer.ptr
+
+  type code = {
+    traced_store : Low_level.traced_store;
+    ptx : Cu.Nvrtc.compile_to_ptx_result;
+    params : (string * param_source) list;
+    bindings : Indexing.unit_bindings;
+    name : string;
+  }
+  [@@deriving sexp_of]
+
+  type code_batch = {
+    traced_stores : Low_level.traced_store option array;
+    ptx : Cu.Nvrtc.compile_to_ptx_result;
+    bindings : Indexing.unit_bindings;
+    params_and_names : ((string * param_source) list * string) option array;
+  }
+  [@@deriving sexp_of]
+
+  let%diagn2_sexp cuda_to_ptx ~name cu_src =
+    let name_cu = name ^ ".cu" in
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let oc = Out_channel.open_text @@ Utils.build_file name_cu in
+      Stdio.Out_channel.output_string oc cu_src;
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc);
+    [%log "compiling to PTX"];
+    let module Cu = Cudajit in
+    let with_debug =
+      Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
+    in
+    let options =
+      "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
+    in
+    (* FIXME: every now and then the compilation crashes because the options are garbled. *)
+    (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
+    let ptx = Cu.Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
+      Stdio.Out_channel.output_string oc @@ Cu.Nvrtc.string_from_ptx ptx;
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc;
+      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
+      Stdio.Out_channel.output_string oc
+      @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc);
+    ptx
+
+  module C_syntax_config (Input : sig
+    val procs : Low_level.optimized array
+  end) =
+  struct
+    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
+
+    let procs = Input.procs
+    let use_host_memory = use_host_memory
+    let logs_to_stdout = true
+    let main_kernel_prefix = "extern \"C\" __global__"
+
+    let kernel_prep_line =
+      "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
+
+    let includes = [ "<cuda_fp16.h>" ]
+
+    let typ_of_prec = function
+      | Ops.Byte_prec _ -> "unsigned char"
+      | Half_prec _ -> "__half"
+      | Single_prec _ -> "float"
+      | Double_prec _ -> "double"
+      | Void_prec -> "void"
+
+    let binop_syntax prec v =
+      match (v, prec) with
+      | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
+      | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
+      | _, Ops.Void_prec -> invalid_arg "Cuda_backend.binop_syntax: Void precision"
+      | Add, Half_prec _ -> ("__hadd(", ", ", ")")
+      | Sub, Half_prec _ -> ("__hsub(", ", ", ")")
+      | Mul, Half_prec _ -> ("__hmul(", ", ", ")")
+      | Div, Half_prec _ -> ("__hdiv(", ", ", ")")
+      | Add, _ -> ("(", " +", ")")
+      | Sub, _ -> ("(", " -", ")")
+      | Mul, _ -> ("(", " *", ")")
+      | Div, _ -> ("(", " /", ")")
+      | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
+      | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
+      | ToPowOf, Half_prec _ -> ("hexp2(hlog2(", "), ", ")")
+      | ToPowOf, Byte_prec _ ->
+          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
+      | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+      | Relu_gate, Half_prec _ ->
+          ( "(__hgt(",
+            ", __ushort_as_half((unsigned short)0x0000U)) ?",
+            " : __ushort_as_half((unsigned short)0x0000U))" )
+      | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+
+    let unop_syntax prec v =
+      match (v, prec) with
+      | Ops.Identity, _ -> ("", "")
+      | Relu, Ops.Single_prec _ -> ("fmaxf(0.0, ", ")")
+      | Relu, Ops.Half_prec _ -> ("__hmax_nan(__ushort_as_half((unsigned short)0x0000U), ", ")")
+      | Relu, Ops.Byte_prec _ -> ("fmax(0, ", ")")
+      | Relu, _ -> ("fmax(0.0, ", ")")
+
+    let convert_precision ~from ~to_ =
+      match (from, to_) with
+      | Ops.Double_prec _, Ops.Double_prec _
+      | Single_prec _, Single_prec _
+      | Half_prec _, Half_prec _
+      | Byte_prec _, Byte_prec _
+      | Void_prec, Void_prec ->
+          ("", "")
+      | Double_prec _, Half_prec _ -> ("__double2half(", ")")
+      | Single_prec _, Half_prec _ -> ("__float2half(", ")")
+      | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
+      | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
+  end
+
+  let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+    (* TODO: The following link seems to claim it's better to expand into loops than use memset.
+       https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
+    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+      let procs = [| lowered |]
+    end)) in
+    let idx_params = Indexing.bound_symbols bindings in
+    let b = Buffer.create 4096 in
+    let ppf = Stdlib.Format.formatter_of_buffer b in
+    if Utils.debug_log_from_routines () then
+      Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
+    Syntax.print_includes ppf;
+    let params = Syntax.compile_proc ~name ppf idx_params lowered in
+    let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
+    { traced_store; ptx; params; bindings; name }
+
+  let compile_batch ~names bindings lowereds =
+    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+      let procs = Array.filter_opt lowereds
+    end)) in
+    let idx_params = Indexing.bound_symbols bindings in
+    let b = Buffer.create 4096 in
+    let ppf = Stdlib.Format.formatter_of_buffer b in
+    Syntax.print_includes ppf;
+    let params_and_names =
+      Array.map2_exn names lowereds
+        ~f:
+          (Option.map2 ~f:(fun name lowered ->
+               (Syntax.compile_proc ~name ppf idx_params lowered, name)))
+    in
+    let name : string =
+      String.(
+        strip ~drop:(equal_char '_')
+        @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
+    in
+    let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
+    let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
+    { traced_stores; ptx; params_and_names; bindings }
+
+  let get_global_run_id =
+    let next_id = ref 0 in
+    fun () ->
+      Int.incr next_id;
+      if !next_id < 0 then next_id := 0;
+      !next_id
+
+  let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
+      lowered_bindings run_module =
+    let module Cu = Cudajit in
+    let func = Cu.Module.get_function run_module ~name in
+    let stream = prior_context.stream in
+    let runner_label = get_name stream in
+    let%diagn3_l_sexp work () : unit =
+      let log_id = get_global_run_id () in
+      let log_id_prefix = Int.to_string log_id ^ ": " in
+      [%log_result
+        "Launching",
+        name,
+        "on",
+        runner_label,
+        (log_id : int),
+        (params : (string * param_source) list)];
+      let module S = Cu.Stream in
+      let args : S.kernel_param list =
+        (* TODO: should we prohibit or warn about local-only tensors that are in
+           prior_context.ctx_arrays? *)
+        List.map params ~f:(function
+          | _name, Param_ptr tn ->
+              let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
+              S.Tensor arr
+          | _name, Log_file_name -> S.Int log_id
+          | _name, Merge_buffer ->
+              let buf = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
+              S.Tensor buf.ptr
+          | _name, Static_idx s ->
+              let i = Indexing.find_exn lowered_bindings s in
+              if !i < 0 then
+                raise
+                @@ Utils.User_error
+                     [%string
+                       "cuda: static index %{Indexing.symbol_ident s.static_symbol} is negative: \
+                        %{!i#Int}"];
+              Option.iter s.static_range ~f:(fun upto ->
+                  if !i >= upto then
+                    raise
+                    @@ Utils.User_error
+                         [%string
+                           "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too \
+                            big: %{upto#Int}"]);
+              S.Int !i)
+      in
+      set_ctx @@ ctx_of prior_context;
+      (* FIXME: this happens inside the kernel. *)
+      (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
        Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
-    [%log "launching the kernel"];
-    (* Stdio.printf "launching %s\n" name; *)
-    (if Utils.debug_log_from_routines () then
-       Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
-       [%log_block
-         runner_label;
-         Utils.log_trace_tree _output]);
-    S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
-    [%log "kernel launched"]
-  in
-  Task.Task
-    {
-      context_lifetime = (run_module, ctx_arrays);
-      description = "launches " ^ name ^ " on " ^ runner_label;
-      work;
-    }
+      [%log "launching the kernel"];
+      (* Stdio.printf "launching %s\n" name; *)
+      (if Utils.debug_log_from_routines () then
+         Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
+         [%log_block
+           runner_label;
+           Utils.log_trace_tree _output]);
+      S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
+      [%log "kernel launched"]
+    in
+    Task.Task
+      {
+        context_lifetime = (run_module, ctx_arrays);
+        description = "launches " ^ name ^ " on " ^ runner_label;
+        work;
+      }
 
-let run_options () =
-  if Utils.with_runtime_debug () then
-    Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
-  else []
+  let run_options () =
+    if Utils.with_runtime_debug () then
+      Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
+    else []
 
-let%track3_sexp link prior_context (code : code) ctx_arrays =
-  let ctx = ctx_of prior_context in
-  set_ctx ctx;
-  let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
-  let idx_params = Indexing.bound_symbols code.bindings in
-  let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let task =
-    link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
-      run_module
-  in
-  (lowered_bindings, task)
+  let%track3_sexp link prior_context (code : code) ctx_arrays =
+    let ctx = ctx_of prior_context in
+    set_ctx ctx;
+    let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
+    let idx_params = Indexing.bound_symbols code.bindings in
+    let lowered_bindings : Indexing.lowered_bindings =
+      List.map idx_params ~f:(fun s -> (s, ref 0))
+    in
+    let task =
+      link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
+        run_module
+    in
+    (lowered_bindings, task)
 
-let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
-  let idx_params = Indexing.bound_symbols code_batch.bindings in
-  let lowered_bindings : Indexing.lowered_bindings = List.map idx_params ~f:(fun s -> (s, ref 0)) in
-  let module Cu = Cudajit in
-  let ctx = ctx_of prior_context in
-  set_ctx ctx;
-  let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
-  let procs =
-    Array.mapi code_batch.params_and_names ~f:(fun i pns ->
-        Option.value ~default:None
-        @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
-               let task =
-                 link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
-               in
-               Some task))
-  in
-  (lowered_bindings, procs)
+  let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
+    let idx_params = Indexing.bound_symbols code_batch.bindings in
+    let lowered_bindings : Indexing.lowered_bindings =
+      List.map idx_params ~f:(fun s -> (s, ref 0))
+    in
+    let module Cu = Cudajit in
+    let ctx = ctx_of prior_context in
+    set_ctx ctx;
+    let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
+    let procs =
+      Array.mapi code_batch.params_and_names ~f:(fun i pns ->
+          Option.value ~default:None
+          @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
+                 let task =
+                   link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
+                 in
+                 Some task))
+    in
+    (lowered_bindings, procs)
 
-let get_global_debug_info () =
-  Sexp.message "cuda_global_debug"
-    [ ("live_streams", [%sexp_of: int] @@ Cudajit.Stream.get_total_live_streams ()) ]
+  let get_global_debug_info () =
+    Sexp.message "cuda_global_debug"
+      [ ("live_streams", [%sexp_of: int] @@ Cudajit.Stream.get_total_live_streams ()) ]
 
-let get_debug_info (stream : stream) =
-  let tot, unr, unf = Cudajit.Stream.total_unreleased_unfinished_delimited_events stream.runner in
-  let i2s = [%sexp_of: int] in
-  Sexp.message "cuda_stream_debug"
-    [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]
+  let get_debug_info (stream : stream) =
+    let tot, unr, unf = Cudajit.Stream.total_unreleased_unfinished_delimited_events stream.runner in
+    let i2s = [%sexp_of: int] in
+    Sexp.message "cuda_stream_debug"
+      [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]
+end

@@ -462,7 +462,6 @@ let finalize (type buffer_ptr dev runner event)
   Option.iter Backend.free_buffer ~f:(fun mem_free ->
       if
         Atomic.compare_and_set ctx.finalized false true
-        && (not @@ Atomic.get ctx.stream.device.released)
       then (
         Backend.await ctx.stream;
         Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
@@ -475,6 +474,8 @@ let%track5_sexp fresh_backend ?backend_name () =
   Stdlib.Gc.full_major ();
   (* TODO: is running again needed to give time to weak arrays to become empty? *)
   Stdlib.Gc.full_major ();
+  (* Note: we invoke functors from within fresh_backend to fully isolate backends from distinct
+     calls to fresh_backend. *)
   match
     Option.value_or_thunk backend_name ~default:(fun () ->
         Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
@@ -486,5 +487,5 @@ let%track5_sexp fresh_backend ?backend_name () =
   | "sync_cc" -> (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
   | "sync_gccjit" ->
       (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend) : Backend)
-  | "cuda" -> (module Raise_backend ((Cuda_backend : Lowered_backend)) : Backend)
+  | "cuda" -> (module Raise_backend ((Cuda_backend.Fresh () : Lowered_backend)) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

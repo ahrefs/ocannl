@@ -13,7 +13,6 @@ let fresh_backend = Arrayjit.Backends.fresh_backend
 
 let benchmark_overhead backend () =
   let n_data = 20 in
-  Arrayjit.Backends.reinitialize backend Only_devices_parallel;
   let module Backend = (val backend : Backend) in
   (* Utils.settings.with_debug <- true; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)

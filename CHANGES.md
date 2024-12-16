@@ -23,6 +23,7 @@
 - Built per-tensor-node stream-to-stream synchronization into copying functions.
 - Re-introduced whole-device blocking synchronization, which now is just a slight optimization as it also cleans up event book-keeping.
 - Simplifications: no more explicit compilation postponing; no more hard-coded pointers (all non-local arrays are passed by parameter).
+- Fresh backends are now fresh modules to structurally prevent any potential cache leaking.
 
 ### Fixed
 

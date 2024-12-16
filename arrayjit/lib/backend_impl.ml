@@ -107,7 +107,6 @@ struct
     {
       dev;
       ordinal;
-      released = Atomic.make false;
       cross_stream_candidates = Hashtbl.create (module Tnode);
       owner_stream = Hashtbl.create (module Tnode);
       shared_writer_streams = Hashtbl.create (module Tnode);
