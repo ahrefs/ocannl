@@ -442,8 +442,6 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           (context, Some r))
 end
 
-module Cuda_backend : Backend = Raise_backend ((Cuda_backend : Lowered_backend))
-
 module Make_device_backend_from_lowered
     (Add_scheduler : functor
       (Impl : For_add_scheduler)
@@ -454,36 +452,6 @@ struct
   module Backend_device = Raise_backend (Lowered_device)
   include Backend_device
 end
-
-module Cc_multicore = Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend)
-module Gcc_multicore = Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend)
-module Cc_sync = Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend)
-module Gcc_sync = Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend)
-
-let%track5_sexp reinitialize (module Backend : Backend) config =
-  if not @@ Backend.is_initialized () then Backend.initialize config
-  else (
-    [%log "reinitialize: cleanup devices"];
-    for ordinal = 0 to Backend.num_devices () - 1 do
-      Backend.(sync_device @@ get_device ~ordinal)
-    done;
-    [%log "reinitialize: efore full_major"];
-    Stdlib.Gc.full_major ();
-    [%log "reinitialize: cleanup devices 2"];
-    (* TODO: does this do anything? *)
-    for ordinal = 0 to Backend.num_devices () - 1 do
-      Backend.(sync_device @@ get_device ~ordinal)
-    done;
-    [%log "reinitialize: after cleanup 2"];
-    (* This ensures cleanliness of the streams weak arrays. *)
-    Stdlib.Gc.full_major ();
-    [%log "reinitialize: after full_major 2"];
-    for ordinal = 0 to Backend.num_devices () - 1 do
-      let device = Backend.get_device ~ordinal in
-      Utils.weak_iter device.streams ~f:(fun _stream -> assert false)
-    done;
-    [%log "reinitialize: after checking devices"];
-    Backend.initialize config)
 
 let finalize (type buffer_ptr dev runner event)
     (module Backend : Backend
@@ -503,19 +471,20 @@ let finalize (type buffer_ptr dev runner event)
               && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
             then mem_free ctx.stream data)))
 
-let%track5_sexp fresh_backend ?backend_name ?(config = Only_devices_parallel) () =
-  let backend =
-    match
-      Option.value_or_thunk backend_name ~default:(fun () ->
-          Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-      |> String.lowercase
-    with
-    | "cc" -> (module Cc_multicore : Backend)
-    | "gccjit" -> (module Gcc_multicore : Backend)
-    | "sync_cc" -> (module Cc_sync : Backend)
-    | "sync_gccjit" -> (module Gcc_sync : Backend)
-    | "cuda" -> (module Cuda_backend : Backend)
-    | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]
-  in
-  reinitialize backend config;
-  backend
+let%track5_sexp fresh_backend ?backend_name () =
+  Stdlib.Gc.full_major ();
+  (* TODO: is running again needed to give time to weak arrays to become empty? *)
+  Stdlib.Gc.full_major ();
+  match
+    Option.value_or_thunk backend_name ~default:(fun () ->
+        Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+    |> String.lowercase
+  with
+  | "cc" -> (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) : Backend)
+  | "gccjit" ->
+      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend) : Backend)
+  | "sync_cc" -> (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
+  | "sync_gccjit" ->
+      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend) : Backend)
+  | "cuda" -> (module Raise_backend ((Cuda_backend : Lowered_backend)) : Backend)
+  | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

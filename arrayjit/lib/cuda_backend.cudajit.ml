@@ -93,6 +93,8 @@ let is_initialized, initialize =
   ((fun () -> !initialized), init)
 
 let num_devices = Cu.Device.get_count
+
+(* TODO: this doesn't need to be weak array. *)
 let devices = ref @@ Stdlib.Weak.create 0
 
 (* Unlike [devices] above, [initialized_devices] never forgets its entries. *)

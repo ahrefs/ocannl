@@ -2,9 +2,6 @@
 
 open Base
 
-val reinitialize : (module Backend_intf.Backend) -> Backend_intf.config -> unit
-(** Initializes the backend, and if it was already initialized, performs garbage collection. *)
-
 val finalize :
   'buffer_ptr 'dev 'runner 'event.
   (module Backend_intf.Backend
@@ -21,6 +18,6 @@ val finalize :
     Note: this type will get simpler with modular explicits. *)
 
 val fresh_backend :
-  ?backend_name:string -> ?config:Backend_intf.config -> unit -> (module Backend_intf.Backend)
-(** Reinitializes and returns a backend corresponding to [backend_name], or if omitted, selected via
-    the global [backend] setting. See {!reinitialize}. *)
+  ?backend_name:string -> unit -> (module Backend_intf.Backend)
+(** Creates a new backend corresponding to [backend_name], or if omitted, selected via the global
+    [backend] setting. *)
