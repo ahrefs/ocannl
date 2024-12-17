@@ -1,0 +1,114 @@
+# This file lists all the current configurations. It can be used as documentation
+# or as a template for writing `ocannl_config` files. Config names must be prefixed
+# by `ocannl_`, except in `ocannl_config` files where it is optional. The names are
+# case-insensitive. The configuration is read from a few sources, from highest priority:
+# 1. Commandline arguments.
+# 2. Environment variables.
+# 3. `ocannl_config` files.
+# 4. Defaults hard-coded at use sites in the source code.
+#
+# Only one `ocannl_config` file is used per run, searched for in the current directory
+# and in ancestor directories. The source of the `log_level` config is always printed,
+# the sources of other configs are printed when the log level > 0.
+# The configuration values below are (one of) the defaults.
+
+# The `-O` argument to the compiler executable for the `cc` backend.
+cc_backend_optimization_level=3
+
+# The `cc` backend compiler executable name.
+cc_backend_compiler_command=cc
+
+# The `-O` argument to `gcc` for the `gcc` backend (using gccjit).
+gccjit_backend_optimization_level=3
+
+# Only tensor nodes with up to this many visits per array cell (in a dedicated interpreter)
+# can be inlined. Values worth considering: 0 (disables inlining) to 3.
+virtualize_max_visits=1
+
+# Truncate longer axes to this many dimensions in the generic optimizer's interpreter.
+virtualize_max_tracing_dim=5
+
+# If `true`, tensor nodes will by default not be hosted.
+enable_device_only=true
+
+# If true, scalar constant expressions will always be inlined.
+inline_scalar_constexprs=true
+
+# The random number library. Options: `stdlib` -- `Base.Random`;
+# `for_tests` -- simplistic randomness with 32 bit seed, focused on reproducibility.
+randomness_lib=stdlib
+
+# Low-level-code identifier syntax. Options: heuristic, name_and_label, name_only.
+ll_ident_style=heuristic
+
+# For ppx_minidebug non-flushing backends, when non-empty, enables snapshotting of ongoing
+# logging into a file, with the given frequency.
+snapshot_every_sec=
+
+# Whether ppx_minidebug entries should be tagged by time information.
+# Options: not_tagged, clock, elapsed (relative to start of the program).
+time_tagged=elapsed
+
+# Whether ppx_minidebug should print the time span of each entry, and in what units.
+# Options: not_reported, seconds, milliseconds, microseconds, nanoseconds.
+elapsed_times=not_reported
+
+# For ppx_minidebug, how file locations should be presented. Options:
+# no_location, file_only, beg_line, beg_pos, range_line, range_pos.
+location_format=beg_pos
+
+# The ppx_minidebug logging backend (i.e. format). Options: text, html, markdown, flushing.
+debug_backend=html
+
+# For ppx_minidebug: a prefix for file positions relative to the project root.
+# A more elaborate example:
+# hyperlink_prefix=vscode://file//wsl.localhost/ubuntu-24.04/home/lukstafi/ocannl/
+hyperlink_prefix=./
+
+# For ppx_minidebug: whether to print IDs for log entries.
+logs_print_entry_ids=false
+
+# For ppx_minidebug.
+logs_verbose_entry_ids=false
+
+# For ppx_minidebug, whether logging from the main domain, `Domain.is_main ()`,
+# should be directed to stdout rather than to a file.
+log_main_domain_to_stdout=false
+
+# For ppx_minidebug Table of Contents.
+toc_entry_minimal_depth=
+toc_entry_minimal_size=
+# The span is expressed in units: ns, us or ms.
+toc_entry_minimal_span=
+
+# For ppx_minidebug: `|`-separated list of terms to highlight in the logs.
+debug_highlights=
+
+# For ppx_minidebug: a pcre syntax regular expression to highlight in the logs.
+debug_highlight_pcre=
+
+# Configurations that are stored as `Utils.settings`:
+
+# The log level, for ppx_minidebug and with a few other uses in OCANNL.
+log_level=1
+
+# If `log_level` is at least 2 and this is true, the generated code will contain
+# printf statements, whose output is then (typically) integrated into ppx_minidebug logs.
+debug_log_from_routines=false
+
+# If true, various intermediate representation files for the compiled code are generated
+# (or not removed). Moreover, if log level is at least 2, the generated binaries will
+# contain debug symbols for debugging with `gdb`, `cuda-gdb` etc.
+output_debug_files_in_build_directory=false
+
+# If given, the integer seed to initialize the randomness library with.
+fixed_state_for_init=
+
+# For printing tensors, etc.
+print_decimals_precision=2
+
+# Complains if a half-precision tensor node is a constant with absolute value exceeding this.
+check_half_prec_constants_cutoff=16384.0
+
+# If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.
+cuda_printf_fifo_size=

@@ -175,13 +175,7 @@ let builtin_op = function
   | Div -> Gccjit.Divide
   | ToPowOf | Relu_gate | Arg2 | Arg1 -> invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
-let node_debug_name get_ident node =
-  let memloc =
-    if Utils.settings.debug_memory_locations && Lazy.is_val node.ptr then
-      "@" ^ Gccjit.RValue.to_string (Lazy.force node.ptr)
-    else ""
-  in
-  get_ident node.tn ^ memloc
+let node_debug_name get_ident node = get_ident node.tn
 
 let debug_log_zero_out ctx log_functions get_ident block node =
   let open Gccjit in

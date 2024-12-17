@@ -31,7 +31,6 @@ type settings = {
       (** If the [debug_log_from_routines] flag is true _and_ the flag [log_level > 1], backends
           should generate code (e.g. fprintf statements) to log the execution, and arrange for the
           logs to be emitted via ppx_minidebug. *)
-  mutable debug_memory_locations : bool;
   mutable output_debug_files_in_build_directory : bool;
       (** Writes compilation related files in the [build_files] subdirectory of the run directory
           (additional files, or files that would otherwise be in temp directory). When both
@@ -47,7 +46,6 @@ type settings = {
       (** If not [None], the setting will be used for the size of the CUDA devices buffer for
           storing logs, see [debug_log_from_routines] above. If [None], the default buffer size on
           the devices is not altered. *)
-  mutable validate_mem : bool;
 }
 [@@deriving sexp]
 
@@ -55,13 +53,11 @@ let settings =
   {
     log_level = 0;
     debug_log_from_routines = false;
-    debug_memory_locations = false;
     output_debug_files_in_build_directory = false;
     fixed_state_for_init = None;
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
     cuda_printf_fifo_size = None;
-    validate_mem = true;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -238,8 +234,9 @@ let get_debug name =
     | "range_line" -> Range_line
     | "range_pos" -> Range_pos
     | s ->
-        invalid_arg @@ "ocannl_location_format setting should be none, clock or elapsed; found: "
-        ^ s
+        invalid_arg
+        @@ "ocannl_location_format setting should be one of: no_location, file_only, beg_line, \
+            beg_pos, range_line, range_pos; found: " ^ s
   in
   let flushing, backend =
     match
@@ -360,8 +357,6 @@ let restore_settings () =
   set_log_level (Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0");
   settings.debug_log_from_routines <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
-  settings.debug_memory_locations <-
-    Bool.of_string @@ get_global_arg ~arg_name:"debug_memory_locations" ~default:"false";
   settings.output_debug_files_in_build_directory <-
     Bool.of_string
     @@ get_global_arg ~arg_name:"output_debug_files_in_build_directory" ~default:"false";
@@ -374,8 +369,7 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.cuda_printf_fifo_size <-
-    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:"";
-  settings.validate_mem <- Bool.of_string @@ get_global_arg ~arg_name:"validate_mem" ~default:"true"
+    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
