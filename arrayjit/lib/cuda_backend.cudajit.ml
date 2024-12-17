@@ -189,8 +189,9 @@ module Fresh () = struct
     let same_device = dev.ordinal = src.stream.device.ordinal in
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
     let memcpy ~dst_ptr =
-      if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then ()
-      else if same_device then
+      (* FIXME: coming in cudajit.0.6.2. *)
+      (* if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then () else *)
+      if same_device then
         Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.stream.runner
       else
         Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
