@@ -301,6 +301,15 @@ let get_debug name =
   let toc_entry =
     Minidebug_runtime.And (toc_entry_minimal_depth @ toc_entry_minimal_size @ toc_entry_minimal_span)
   in
+  let debug_highlights =
+    let arg = get_global_arg ~default:"" ~arg_name:"debug_highlights" in
+    if String.is_empty arg then [] else String.split arg ~on:'|'
+  in
+  let highlight_re =
+    let arg = get_global_arg ~default:"" ~arg_name:"debug_highlight_pcre" in
+    if String.is_empty arg then [] else [ Re.Pcre.re arg ]
+  in
+  let highlight_terms = Re.(alt (highlight_re @ List.map debug_highlights ~f:str)) in
   if flushing then
     Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
       ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level ()
@@ -310,7 +319,7 @@ let get_debug name =
         Minidebug_runtime.forget_printbox
         @@ Minidebug_runtime.debug ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
              ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
-             ~highlight_terms:Re.(alt [ str "float *w2" ])
+             ~highlight_terms
              ~exclude_on_path:Re.(str "env")
              ~log_level ?snapshot_every_sec ()
     | Some filename ->
@@ -318,8 +327,7 @@ let get_debug name =
         @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format
              ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true
              ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
-             ~hyperlink ~toc_specific_hyperlink:""
-             ~highlight_terms:Re.(alt [ str "float *w2" ])
+             ~hyperlink ~toc_specific_hyperlink:"" ~highlight_terms
              ~exclude_on_path:Re.(str "env")
              ~backend ~log_level ?snapshot_every_sec filename
 
