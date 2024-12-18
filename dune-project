@@ -68,7 +68,6 @@
   num
   (saturn_lockfree
    (>= 0.5.0))
-  landmarks
   ppxlib
   ppx_compare
   ppx_hash
@@ -78,8 +77,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.0.0))
-  landmarks-ppx)
+   (>= 2.0.0)))
  (depopts
   (cudajit
    (>= 0.6.0))
@@ -121,7 +119,7 @@
   sexplib
   num
   time_now
-  landmarks
+
   ppxlib
   ppx_compare
   ppx_fields_conv
@@ -131,7 +129,6 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
-  landmarks-ppx
   (ppx_minidebug
    (>= 2.0.0))
   ; Cannot make it (patdiff :with-test), because `dune build -p neural_nets_lib @install`

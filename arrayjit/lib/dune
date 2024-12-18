@@ -12,7 +12,6 @@
   ctypes
   ctypes.foreign
   saturn_lockfree
-  landmarks
   (select
    gcc_backend.ml
    from
@@ -32,7 +31,6 @@
    ppx_sexp_conv
    ppx_string
    ppx_variants_conv
-   landmarks-ppx
    ppx_minidebug))
  (modules
   utils

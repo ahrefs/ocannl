@@ -25,7 +25,6 @@ depends: [
   "sexplib"
   "num"
   "saturn_lockfree" {>= "0.5.0"}
-  "landmarks"
   "ppxlib"
   "ppx_compare"
   "ppx_hash"
@@ -35,7 +34,6 @@ depends: [
   "ppx_variants_conv"
   "ppx_expect"
   "ppx_minidebug" {>= "2.0.0"}
-  "landmarks-ppx"
   "odoc" {with-doc}
 ]
 depopts: [
