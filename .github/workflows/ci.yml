@@ -10,9 +10,7 @@ jobs:
     strategy:
       matrix:
         os:
-          # Error: Package 'darcs' has no installation candidate
-          # - ubuntu-latest
-          - ubuntu-22.04
+          - ubuntu-latest
           - macos-latest
           # Native support for OCaml not verified yet.
           # - windows-latest
@@ -23,7 +21,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
-    - uses: ocaml/setup-ocaml@v2
+    - uses: ocaml/setup-ocaml@v3.1.4
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
         dune-cache: true

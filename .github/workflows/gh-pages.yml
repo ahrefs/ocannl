@@ -16,12 +16,10 @@ jobs:
         uses: actions/cache@v2
         with:
           path: ~/.opam
-          # Error: Package 'darcs' has no installation candidate
-          # key: opam-ubuntu-latest-5.2.0
-          key: opam-ubuntu-22.04-5.2.0
+          key: opam-ubuntu-latest-5.2.0
 
       # - uses: actions/checkout@v2
-      - uses: ocaml/setup-ocaml@v2
+      - uses: ocaml/setup-ocaml@v3.1.4
         with:
           ocaml-compiler: '5.2.0'
 
