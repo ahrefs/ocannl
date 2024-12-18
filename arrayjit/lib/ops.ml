@@ -238,10 +238,10 @@ let sexp_of_voidptr p = Sexp.Atom Ctypes.(string_of (ptr void) p)
 let compare_voidptr = Ctypes.ptr_compare
 let equal_voidptr : voidptr -> voidptr -> bool = phys_equal
 
-let c_rawptr_to_string (type elem) (ptr : nativeint) prec =
+let c_rawptr_to_string (ptr : nativeint) prec =
   "(" ^ c_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr
 
-let rawptr_to_string_hum (type elem) (ptr : nativeint) prec =
+let rawptr_to_string_hum (ptr : nativeint) prec =
   "(" ^ hum_typ_of_prec prec ^ "*)" ^ Nativeint.Hex.to_string ptr
 
 let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =

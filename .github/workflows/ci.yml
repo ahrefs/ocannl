@@ -10,9 +10,11 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          # Error: Package 'darcs' has no installation candidate
+          # - ubuntu-latest
+          - ubuntu-22.04
           - macos-latest
-          # The CI does not support OCaml version 5.1 yet (at the time of writing).
+          # Native support for OCaml not verified yet.
           # - windows-latest
           # Either the waiting queue for FreeBSD is very long, or it is not available.
           # - freebsd-latest
