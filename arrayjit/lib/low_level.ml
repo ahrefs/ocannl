@@ -498,7 +498,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         match Hashtbl.find reverse_node_map index with
         | Some a ->
             if not @@ Tn.known_non_virtual a then (
-              (* FIXME: *)
+              (* FIXME(#296): *)
               Tn.update_memory_mode a Virtual 15;
               None)
             else
@@ -509,13 +509,13 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
             @@ loop_proc ~balanced ~env_dom body)
     | Zero_out tn ->
         if not @@ Tn.known_non_virtual tn then (
-          (* FIXME: *)
+          (* FIXME(#296): *)
           Tn.update_memory_mode tn Virtual 151;
           None)
         else Some llc
     | Set { tn; idcs; llv; debug = _ } ->
         if not @@ Tn.known_non_virtual tn then (
-          (* FIXME: *)
+          (* FIXME(#296): *)
           Tn.update_memory_mode tn Virtual 152;
           None)
         else (
@@ -533,7 +533,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     match llv with
     | Constant _ -> llv
     | Get (a, indices) ->
-        (* DEBUG: *)
+        (* TODO(#296): this should probably already be Never_virtual, we could assert it. *)
         Tn.update_memory_mode a Never_virtual 17;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
