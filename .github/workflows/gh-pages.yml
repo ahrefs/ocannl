@@ -7,7 +7,8 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Avoid Ubuntu 24.04, see: https://github.com/ocaml/opam/issues/5968
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@main
 
@@ -16,7 +17,7 @@ jobs:
         uses: actions/cache@v2
         with:
           path: ~/.opam
-          key: opam-ubuntu-latest-5.2.0
+          key: opam-ubuntu-22.04-5.2.0
 
       # - uses: actions/checkout@v2
       - uses: ocaml/setup-ocaml@v3.1.4
