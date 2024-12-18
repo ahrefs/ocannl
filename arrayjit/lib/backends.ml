@@ -460,9 +460,7 @@ let finalize (type buffer_ptr dev runner event)
        and type runner = runner
        and type event = event) (ctx : Backend.context) : unit =
   Option.iter Backend.free_buffer ~f:(fun mem_free ->
-      if
-        Atomic.compare_and_set ctx.finalized false true
-      then (
+      if Atomic.compare_and_set ctx.finalized false true then (
         Backend.await ctx.stream;
         Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
             if

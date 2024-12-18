@@ -364,7 +364,7 @@ let fprint_hum ?name ?static_indices () ppf c =
 
 let%track6_sexp lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
     Low_level.optimized =
-  let llc: Low_level.t = to_low_level proc in
+  let llc : Low_level.t = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with
   | None -> ()

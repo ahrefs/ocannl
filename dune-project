@@ -4,7 +4,7 @@
 
 (name ocannl)
 
-(version 0.4.1)
+(version 0.5.0.beta)
 
 (generate_opam_files true)
 
@@ -80,12 +80,12 @@
    (>= 2.0.0)))
  (depopts
   (cudajit
-   (>= 0.6.0))
+   (>= 0.6.1))
   (gccjit
    (>= 0.3.2)))
  (conflicts
   (cudajit
-   (< 0.6.0))
+   (< 0.6.1))
   (gccjit
    (< 0.3.2)))
  (tags

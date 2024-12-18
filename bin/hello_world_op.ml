@@ -208,9 +208,7 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Rand.init 0;
-  let hey =
-    TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] ()
-  in
+  let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] () in
   let%op ye = (hey * (1 + 1)) - 10 in
   Train.forward_and_forget backend ctx ye;
   Tensor.print ~with_code:false ~with_grad:false `Default hey;

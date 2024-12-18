@@ -186,7 +186,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
         result_label = "init time in sec, min loss, last loss";
         result =
           [%sexp_of: float * float * float]
-            (init_time_in_sec, List.reduce_exn rev_epoch_losses ~f:Float.min, List.hd_exn rev_epoch_losses);
+            ( init_time_in_sec,
+              List.reduce_exn rev_epoch_losses ~f:Float.min,
+              List.hd_exn rev_epoch_losses );
       }
   in
   Stdio.printf "\n\n%!";
@@ -211,7 +213,7 @@ let _cuda_benchmarks =
         ~f:(fun batch_size ->
           List.concat_map [ (* 0; 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; "cuda";"sync_cc" ; *)  "cc"]
+                  List.concat_map [ (* "gccjit" ; "cuda";"sync_cc" ; *) "cc" ]
                     ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
