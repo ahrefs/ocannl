@@ -12,6 +12,42 @@
 # the sources of other configs are printed when the log level > 0.
 # The configuration values below are (one of) the defaults.
 
+# Configurations that are stored as `Utils.settings`:
+
+# The log level, for ppx_minidebug and with a few other uses in OCANNL.
+log_level=1
+
+# If `log_level` is at least 2 and this is true, the generated code will contain
+# printf statements, whose output is then (typically) integrated into ppx_minidebug logs.
+debug_log_from_routines=false
+
+# If true, various intermediate representation files for the compiled code are generated
+# (or not removed). Moreover, if log level is at least 2, the generated binaries will
+# contain debug symbols for debugging with `gdb`, `cuda-gdb` etc.
+output_debug_files_in_build_directory=false
+
+# If given, the integer seed to initialize the randomness library with.
+fixed_state_for_init=
+
+# For printing tensors, etc.
+print_decimals_precision=2
+
+# Complains if a half-precision tensor node is a constant with absolute value exceeding this.
+check_half_prec_constants_cutoff=16384.0
+
+# Other configurations:
+
+# If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
+# (in particular CUDA logs) remain on the stdout.
+#
+# NOTE: current implementation of stdout capture loses information on channel
+# buffering overflows, so it is important to verify with this setting if one gets
+# sufficient information in the logs files.
+never_capture_stdout=false
+
+# If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.
+cuda_printf_fifo_size=
+
 # The `-O` argument to the compiler executable for the `cc` backend.
 cc_backend_optimization_level=3
 
@@ -86,29 +122,3 @@ debug_highlights=
 
 # For ppx_minidebug: a pcre syntax regular expression to highlight in the logs.
 debug_highlight_pcre=
-
-# Configurations that are stored as `Utils.settings`:
-
-# The log level, for ppx_minidebug and with a few other uses in OCANNL.
-log_level=1
-
-# If `log_level` is at least 2 and this is true, the generated code will contain
-# printf statements, whose output is then (typically) integrated into ppx_minidebug logs.
-debug_log_from_routines=false
-
-# If true, various intermediate representation files for the compiled code are generated
-# (or not removed). Moreover, if log level is at least 2, the generated binaries will
-# contain debug symbols for debugging with `gdb`, `cuda-gdb` etc.
-output_debug_files_in_build_directory=false
-
-# If given, the integer seed to initialize the randomness library with.
-fixed_state_for_init=
-
-# For printing tensors, etc.
-print_decimals_precision=2
-
-# Complains if a half-precision tensor node is a constant with absolute value exceeding this.
-check_half_prec_constants_cutoff=16384.0
-
-# If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.
-cuda_printf_fifo_size=

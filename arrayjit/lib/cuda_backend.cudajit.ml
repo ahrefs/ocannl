@@ -132,7 +132,8 @@ module Fresh () = struct
       let dev = { dev; primary_context } in
       set_ctx primary_context;
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
-        Option.iter Utils.settings.cuda_printf_fifo_size ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
+        Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
+        |> Option.iter ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
       Hash_set.add initialized_devices ordinal;
       let result = make_device dev ~ordinal in
       Stdlib.Gc.finalise finalize_device result;

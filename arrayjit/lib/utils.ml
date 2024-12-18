@@ -42,10 +42,6 @@ type settings = {
   mutable check_half_prec_constants_cutoff : float option;
       (** If given, generic code optimization should fail if a half precision FP16 constant exceeds
           the cutoff. *)
-  mutable cuda_printf_fifo_size : int option;
-      (** If not [None], the setting will be used for the size of the CUDA devices buffer for
-          storing logs, see [debug_log_from_routines] above. If [None], the default buffer size on
-          the devices is not altered. *)
 }
 [@@deriving sexp]
 
@@ -57,7 +53,6 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
-    cuda_printf_fifo_size = None;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -367,13 +362,14 @@ let restore_settings () =
     Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2";
   settings.check_half_prec_constants_cutoff <-
     Float.of_string_opt
-    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
-  settings.cuda_printf_fifo_size <-
-    Int.of_string_opt @@ get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
+    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
+
+let never_capture_stdout () =
+  Bool.of_string @@ get_global_arg ~arg_name:"never_capture_stdout" ~default:"false"
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
@@ -581,8 +577,8 @@ let input_line chan =
   ( n > 0,
     String.chop_suffix_if_exists ~suffix:"\n" @@ String.chop_suffix_if_exists line ~suffix:"\r\n" )
 
-let capture_stdout_logs ?(never_skip = false) arg =
-  if (not never_skip) && not (debug_log_from_routines ()) then arg ()
+let capture_stdout_logs arg =
+  if never_capture_stdout () || not (debug_log_from_routines ()) then arg ()
   else (
     Stdlib.flush Stdlib.stdout;
     let ls = ref [] in

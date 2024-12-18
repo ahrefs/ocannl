@@ -362,8 +362,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
-          snd
-          @@ Backend.(link_batch ctx @@ compile_batch ~occupancy Idx.Empty grad_merges)
+          snd @@ Backend.(link_batch ctx @@ compile_batch ~occupancy Idx.Empty grad_merges)
         else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
@@ -534,9 +533,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tn.log_accessible_headers ());
   for epoch = 0 to epochs - 1 do
     epoch_loss := 0.;
-    (* DEBUG: *)
-    (* Utils.capture_stdout_logs *)
-     update ();
+    Utils.capture_stdout_logs update;
     learning_rates := learning_rate.@[0] :: !learning_rates;
     rev_epoch_losses := !epoch_loss :: !rev_epoch_losses;
     Option.iter per_epoch_callback ~f:(fun f ->
@@ -573,8 +570,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Tensor.set_values infer values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
-       (* DEBUG: *)
-    (* Utils.capture_stdout_logs @@ fun () -> *)
+    Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host routine.context infer.value);
     run routine;
     assert (Backend.to_host routine.context model_result.value);
