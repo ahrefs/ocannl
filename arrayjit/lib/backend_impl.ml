@@ -244,8 +244,8 @@ module type Lowered_backend = sig
 
   val link : context -> code -> ctx_arrays -> Indexing.lowered_bindings * Task.t
   (** [context] is the prior context, while [ctx_arrays] are the arrays of the resulting context.
-      The results correspond to the fields {!field-Backend_intf.bindings} and
-      {!field-Backend_intf.schedule} of {!Backend_intf.routine}. *)
+      The results correspond to the fields {!field:Backend_intf.bindings} and
+      {!field:Backend_intf.schedule} of {!Backend_intf.routine}. *)
 
   val link_batch :
     context ->

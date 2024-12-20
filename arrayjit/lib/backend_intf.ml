@@ -131,7 +131,10 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
     (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
       (** The streams that most recently have been writing to a node's on-host array. The completed
           events are removed opportunistically. *)
-  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;  (** . *)
+  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
+      (** All (live) streams created on the device. Used by
+          {!With_buffer_retrieval_and_syncing.sync_device}. Warning: stream_id fields of garbage
+          collected streams can be reused! *)
 }
 [@@deriving sexp_of]
 
@@ -190,8 +193,8 @@ module type Device = sig
   (** Returns a context without a parent. *)
 
   val make_child : ?ctx_arrays:ctx_arrays -> context -> context
-  (** Returns a context with the same {!field-stream}, and {!field-ctx_arrays} if omitted, as the
-      given context's, which is also the {!field-parent}. *)
+  (** Returns a context with the same {!field:stream}, and {!field:ctx_arrays} if omitted, as the
+      given context's, which is also the {!field:parent}. *)
 
   val get_name : stream -> string
 end
@@ -281,7 +284,7 @@ module type Backend_device_common = sig
   val num_devices : unit -> int
 
   val suggested_num_streams : device -> int
-  (** The optimal number of streams for the given device to follow the {!config} strategy. *)
+  (** The optimal number of streams for the given device to follow the {!type:config} strategy. *)
 
   val new_stream : device -> stream
 end

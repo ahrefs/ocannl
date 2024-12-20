@@ -178,6 +178,7 @@ module Multicore (Backend : For_add_scheduler) :
       in
       { state; domain = Domain.spawn worker }
     in
+    (* We cannot use make_stream because runner needs stream_id. *)
     Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
         let runner = create stream_id in
         {
