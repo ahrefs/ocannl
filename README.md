@@ -46,9 +46,10 @@ A possible route to learning OCANNL:
 2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/) and [bin/](bin/).
 3. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
 4. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
-5. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_types.ml](arrayjit/lib/backend_types.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
-6. Read [arrayjit/lib/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
-7. Read the implementation overview:
+5. Read the configuration documentation [ocannl_config.example](ocannl_config.example).
+6. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
+7. Read [arrayjit/lib/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
+8. Read the implementation overview:
    1. Shape inference details [lib/shape_inference.md](lib/shape_inference.md).
    2. Backend-independent optimizations [arrayjit/lib/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
    3. More documentation to come.
@@ -63,10 +64,8 @@ IMPORTANT: due to potential bugs, debug logging from CUDA in complex settings cu
 
 This is very tentative.
 
-* 0.5: stream-to-stream synchronization at the buffer level.
-  * Need to add support for CUDA events to cudajit, and add `Condition`-based events for CPU backends.
-  * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
-  * Also: Apple Metal backend, either here 0.5.x or later 0.7.x.
+* 0.5.1: Automatic synchronization for transfers between host and devices where unambiguous.
+* 0.5.2: Apple Metal backend.
 * 0.6: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
@@ -97,6 +96,10 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
+* 0.5: stream-to-stream synchronization at the buffer level.
+  * Support for CUDA events, and `Condition`-based events for CPU backends.
+  * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
+  * Automatic stream-to-stream synchronization on a per-tensor-node basis.
 * **0.4.1 Half precision, mixed precision, CUDA virtual devices** (virtual devices renamed to streams in 0.4.2)
   * Half precision. Maybe improvements for mixed-precision computations.
   * Resolve remaining issues with the new scheduler.

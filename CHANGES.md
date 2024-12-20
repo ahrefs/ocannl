@@ -3,13 +3,12 @@
 ### Added
 
 - Interface files for `Backends` and `Low_level`.
-- Fixed #245: tracking of used memory.
+- Fixed #245: tracking of used memory. But there's room for improvement.
 - Stream-to-stream synchronization functionality, with lazy per-tensor-node synchronization.
-- TODO: Automatic blocking on access of a host array when a scheduled `to_host` transfer has not finished.
 
 ### Changed
 
-- Migrated to cudajit 0.5.
+- Migrated to cudajit 0.6.1.
 - Verifying that code is linked with the right contexts, by tracking `embedded_nodes` with assignments.
 - Renaming: (virtual) `device` -> `stream`, `physical_device` -> `device`.
 - New files: split out `backend_intf.ml`, `backend_impl.ml`, `schedulers.ml` from `backends.ml`; moved `Tnode.task` to `task.ml`; renamed `backend_utils.ml` to `c_syntax.ml`.
@@ -17,7 +16,7 @@
 - Fixed #286: cross-stream-sharing incorporated into `Tnode.memory_mode`.
 - Moved the multicore backend from a `device = stream` model to a single device model.
 - Got rid of `unsafe_cleanup`.
-- Got rid of `subordinal`.
+- Rename `subordinal` to `stream_id`.
 - Removed dependency on `core`, broke up dependency on `ppx_jane`.
 - Huge refactoring of backend internal interfaces and API (not repeating same code).
 - Built per-tensor-node stream-to-stream synchronization into copying functions.
