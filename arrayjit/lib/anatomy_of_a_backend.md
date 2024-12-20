@@ -42,8 +42,7 @@ The modules and files of `arrayjit` can loosely be divided into three parts.
       - The functor `Raise_backend` converts any backend implementation relying on the `Low_level` representation (all backends currently), to match the user-facing `Backend_intf.Backend` interface (which relies on the high-level `Assignments` representation).
         - The functor `Add_buffer_retrieval_and_syncing` (used by `Raise_backend`) converts (array pointer) `buffer_ptr`-level copying opeations, to tensor node level, and adds per-tensor-node stream-to-stream synchronization.
     - Putting the above together with the device specific implementations, and exposing the resulting modules to the user via backend names.
-      - It also exposes a couple of backend-generic functions:
-        - `reinitialize` a backend,
+      - It also exposes backend-generic functions, currently just one:
         - `finalize` a context (freeing all of its arrays that don't come from its parent context).
 
 ### Batch compilation; in the future: lazy and cached compilation artifacts
@@ -187,7 +186,7 @@ Besides routines, calling `from_host`, `to_host`, `device_to_device` from a back
 
 ### Data transfers
 
-OCANNL supports asynchronous data transfers by embedding them in the scheduling mechanism.
+OCANNL supports asynchronous data transfers -- `from_host`, `to_host`, `device_to_device` -- by embedding them in the scheduling mechanism. The transfers themselves synchronize streams in a non-blocking way -- when it's time for the destination stream to copy a node, it waits for the source stream to finish computing the node.
 
 OCANNL provides explicit _merge buffers_ for performing those tensor node updates, where different versions of a tensor node from two streams feature in the same computation. The `%cd` syntax for using merge buffers is via the `.merge` pseudo-field. For example, the code for merging gradients might be: `[%cd p.grad =+ p.grad.merge]`. In the current design, there's at most one merge buffer per stream, and the memory is reused for merging different nodes. We keep track of the specific tensor node that was scheduled to occupy this buffer in the stream, and the merge node expected by the linked code, so that we can detect mismatches at scheduling time.
 
