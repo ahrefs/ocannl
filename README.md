@@ -96,7 +96,7 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
-* 0.5: stream-to-stream synchronization at the buffer level.
+* **0.5: Stream-to-stream synchronization at the buffer level.**
   * Support for CUDA events, and `Condition`-based events for CPU backends.
   * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
   * Automatic stream-to-stream synchronization on a per-tensor-node basis.
@@ -104,20 +104,20 @@ For more details, see [CHANGES](CHANGES.md).
   * Half precision. Maybe improvements for mixed-precision computations.
   * Resolve remaining issues with the new scheduler.
   * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
-* **v0.4 merge buffers, C-syntax backend builder**: a significant refactoring of the API.
-* **v0.3 shape inference, jitted routines**: a major rewrite of the whole project.
+* **v0.4 Merge buffers, C-syntax backend builder**: a significant refactoring of the API.
+* **v0.3 Shape inference, jitted routines**: a major rewrite of the whole project.
   * **v0.3.3**: continuous integration and opam release.
   * **v0.3.2**: new shape inference feature: tracking leftmost axes -- complete inference for splicing, ellipsis-in-the-middle allowed in einsum notation.
   * **v0.3.1**: sanitizing code inclusion (rootness checks).
   * **v0.3.0**: declarative shape inference; replaced the session interface with a "jitted code routines" API. Cuda defunct.
-* **v0.2 inching toward GPU**:
+* **v0.2 Inching toward GPU**:
   * **v0.2.1 naive-cuda**: a Cuda backend where blocks and threads are exposed via dedicated axis types.
   * **v0.2.0 stack-as-device**: treating the C function stack as the "device memory".
 * **v0.1 GCCJIT backend**:
   * **v0.1.2**: multicore computations using a thread-local "task id" index.
   * **v0.1.1**: inlining scalar constants, improved inlining for virtual nodes.
   * **v0.1.0**: a `Gccjit` backend, single and double precision floats, code compiled as a monolithic update step function.
-* **v0.0 untagged**: basic design around shape inference, high-level and low-level code representation. Now-abandoned Meta-OCaml and OCaml backends.
+* **v0.0 Untagged**: basic design around shape inference, high-level and low-level code representation. Now-abandoned Meta-OCaml and OCaml backends.
 
 ## Why not just use [OWL](https://ocaml.xyz/)?
 
