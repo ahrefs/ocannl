@@ -277,16 +277,3 @@ val print_tree :
   unit
 
 val debug_name : t -> string
-
-(** {2 Accessors.} *)
-
-val value_1d_points : ?from_axis:int -> xdim:int -> t -> float array
-val value_2d_points : ?from_axis:int -> xdim:int -> ydim:int -> t -> (float * float) array
-val grad_1d_points : ?from_axis:int -> xdim:int -> t -> float array
-val grad_2d_points : ?from_axis:int -> xdim:int -> ydim:int -> t -> (float * float) array
-val set_value : t -> int array -> float -> unit
-val get_value : t -> int array -> float
-val set_grad : t -> int array -> float -> unit
-val get_grad : t -> int array -> float
-val set_values : t -> float array -> unit
-val get_values : t -> float array

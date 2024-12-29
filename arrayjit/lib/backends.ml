@@ -39,7 +39,23 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let update_writer_event ?e ?from s tn =
+  let%track2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
+    match (tn, Map.find ctx.ctx_arrays tn) with
+    | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
+        if Tn.potentially_cross_stream tn then
+          wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
+        [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
+        (* Stdio.printf "copying: %s to_host\n" (Tn.debug_name tn); *)
+        Backend.to_host ~src_ptr:src ~src:ctx hosted;
+        let s = ctx.stream in
+        let e = Backend.all_work s in
+        Hashtbl.update s.device.host_writing_streams tn ~f:(fun l ->
+            (s, e) :: Option.value ~default:[] l);
+        true
+    | _ -> false
+
+  let update_writer_event ?e ?from ctx tn =
+    let s = ctx.stream in
     let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
     let f l = (s, e) :: Option.value ~default:[] l in
     (match (from, tn) with
@@ -47,6 +63,15 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | Some `Host, Assignments.(Node tn | Merge_buffer tn) ->
         Hashtbl.update s.device.host_reading_streams tn ~f
     | Some (`Src src), (Node tn | Merge_buffer tn) -> Hashtbl.update src.reader_streams tn ~f);
+    (* Wait for writing to finish before reading. *)
+    (match (from, tn) with
+    | _, Merge_buffer _ | Some `Host, _ -> ()
+    | _, Node tn ->
+        Tn.prepare_read
+          ~is_done:(fun () -> Backend.is_done e)
+          ~sync:(fun () -> Backend.sync e)
+          ~transfer:(fun () -> assert (to_host ctx tn))
+          tn);
     (* To be on the safe side, record events for potentially cross-stream nodes. *)
     match tn with
     | Node tn ->
@@ -66,22 +91,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
-        update_writer_event ~from:`Host ctx.stream @@ Node tn;
-        true
-    | _ -> false
-
-  let%track2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
-    match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
-        if Tn.potentially_cross_stream tn then
-          wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
-        [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
-        (* Stdio.printf "copying: %s to_host\n" (Tn.debug_name tn); *)
-        Backend.to_host ~src_ptr:src ~src:ctx hosted;
-        let s = ctx.stream in
-        let e = Backend.all_work s in
-        Hashtbl.update s.device.host_writing_streams tn ~f:(fun l ->
-            (s, e) :: Option.value ~default:[] l);
+        update_writer_event ~from:`Host ctx @@ Node tn;
         true
     | _ -> false
 
@@ -105,13 +115,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   Backend.(
                     device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                       ~src);
-                  update_writer_event ~from:(`Src src.stream) dst.stream @@ Node tn;
+                  update_writer_event ~from:(`Src src.stream) dst @@ Node tn;
                   [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
                   true)
           | Copy ->
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
-              update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
+              update_writer_event ~from:(`Src src.stream) dst @@ Merge_buffer tn;
               [%log "copy into merge buffer", Tn.debug_name tn, "from", name_of src];
               true
           | Streaming_for task ->
@@ -120,7 +130,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               dst.stream.updating_for_merge_buffer <- Some (tn, None);
               let merge_task () = Task.run task in
               merge_task ();
-              update_writer_event ~from:(`Src src.stream) dst.stream @@ Merge_buffer tn;
+              update_writer_event ~from:(`Src src.stream) dst @@ Merge_buffer tn;
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
@@ -128,6 +138,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%track2_l_sexp sync_routine (r : r) : r =
     let s = r.context.stream in
+    let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
     let pre () =
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
@@ -141,7 +152,12 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     in
     let post () =
       let e = Backend.all_work s in
-      Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e s @@ Node tn)
+      Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e r.context @@ Node tn);
+      Set.iter hosted_inputs ~f:(fun tn ->
+          Tn.prepare_write
+            ~is_done:(fun () -> Backend.is_done e)
+            ~sync:(fun () -> Backend.sync e)
+            tn)
     in
     { r with schedule = Task.(prepend ~work:pre @@ append ~work:post r.schedule) }
 

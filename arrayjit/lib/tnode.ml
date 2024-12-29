@@ -65,6 +65,9 @@ type memory_mode =
 type delayed_prec = Not_specified | Default_spec of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
 
+type prepare = { is_done : unit -> bool; sync : unit -> unit; transfer : unit -> unit }
+[@@deriving sexp_of]
+
 type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
@@ -79,6 +82,8 @@ type t = {
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
+  mutable prepare_read : prepare option;
+  mutable prepare_write : prepare option;
 }
 [@@deriving sexp_of]
 
@@ -111,6 +116,27 @@ let get_debug_name ?code_name ~id ~label () =
       | Some ident -> [%string "%{ident}%{opt_grad}"]
       | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
       | None -> "n" ^ Int.to_string id)
+
+let prepare ~is_done ~sync ~transfer old =
+  match old with
+  | None -> { is_done; sync; transfer }
+  | Some old ->
+      if old.is_done () then { is_done; sync; transfer }
+      else
+        {
+          is_done = (fun () -> old.is_done () && is_done ());
+          sync =
+            (fun () ->
+              old.sync ();
+              sync ());
+          transfer;
+        }
+
+let prepare_read ~is_done ~sync ~transfer tn =
+  tn.prepare_read <- Some (prepare ~is_done ~sync ~transfer tn.prepare_read)
+
+let prepare_write ~is_done ~sync tn =
+  tn.prepare_write <- Some (prepare ~is_done ~sync ~transfer:(fun () -> ()) tn.prepare_write)
 
 let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
@@ -525,6 +551,8 @@ let create ?default_prec ~id ~label ~dims init_op =
       memory_mode = None;
       backend_info = Sexp.List [];
       code_name = None;
+      prepare_read = None;
+      prepare_write = None;
     }
   in
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
@@ -546,9 +574,42 @@ let find =
       memory_mode = None;
       backend_info = Sexp.List [];
       code_name = None;
+      prepare_read = None;
+      prepare_write = None;
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }
+
+(** {2 Accessors} *)
+
+let points_1d ?from_axis ~xdim tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+  @@ Lazy.force tn.array
+
+let points_2d ?from_axis ~xdim ~ydim tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+  @@ Lazy.force tn.array
+
+let set_value tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
+  Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+
+let get_value tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  Nd.get_as_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+
+let set_values tn values =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
+  Nd.(
+    reset (Constant_fill { values; strict = false })
+    @@ Option.value_exn ~here:[%here]
+    @@ Lazy.force tn.array)
+
+let get_values tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";

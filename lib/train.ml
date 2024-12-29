@@ -567,7 +567,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
                 infer_fwd)])
   in
   let infer_callback values =
-    Tensor.set_values infer values;
+    Tn.set_values infer.value values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
     Utils.capture_stdout_logs @@ fun () ->
@@ -576,7 +576,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     assert (Backend.to_host routine.context model_result.value);
     (* TODO: get_values itself should sync with host writing events. *)
     Backend.(await routine.context.stream);
-    Tensor.get_values model_result
+    Tn.get_values model_result.value
   in
   let used_memory =
     Array.fold devices ~init:0 ~f:(fun acc dev -> acc + Backend.get_used_memory dev) - init_mem

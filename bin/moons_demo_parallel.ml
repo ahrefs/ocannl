@@ -70,8 +70,8 @@ let experiment ~seed ~backend_name ~config () =
       (module Backend)
       ()
   in
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 inputs in
-  let classes = Tensor.value_1d_points ~xdim:0 outputs in
+  let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
+  let classes = Tn.points_1d ~xdim:0 outputs.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;

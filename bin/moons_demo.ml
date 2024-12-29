@@ -64,8 +64,8 @@ let demo () =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in
 
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
+  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
+  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let plot_moons =
     let open PrintBox_utils in
@@ -113,7 +113,7 @@ let demo () =
            mlp_result.forward)]
   in
   let callback (x, y) =
-    Tensor.set_values point [| x; y |];
+    Tn.set_values point.value [| x; y |];
     Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;

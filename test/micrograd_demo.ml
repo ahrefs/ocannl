@@ -6,6 +6,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Arrayjit.Assignments
 module Rand = Arrayjit.Rand.Lib
+module Tn = Arrayjit.Tnode
 
 module type Backend = Arrayjit.Backend_intf.Backend
 
@@ -171,8 +172,8 @@ let%expect_test "Micrograd half-moons example" =
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
         Int.incr step_ref)
   done;
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
+  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
+  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
@@ -185,7 +186,7 @@ let%expect_test "Micrograd half-moons example" =
            mlp_result.forward)]
   in
   let callback (x, y) =
-    Tensor.set_values point [| x; y |];
+    Tn.set_values point.value [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
        needed. *)
     assert (Backend.from_host result_routine.context point.value);

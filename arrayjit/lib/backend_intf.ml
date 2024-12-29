@@ -248,7 +248,7 @@ module type Backend_device_common = sig
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already.
 
-      FIXME: it should rarely be needed to call [sync] explicitly, because it should always be
+      It is rarely needed to call [sync] explicitly, because it should always be
       called internally when necessary, in particular before extracting values from host. *)
 
   val is_done : event -> bool

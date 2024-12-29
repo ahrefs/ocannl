@@ -118,8 +118,8 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
       epoch_loss := 0.
     done
   in
-  let points = Tensor.value_2d_points ~xdim:0 ~ydim:1 moons_flat in
-  let classes = Tensor.value_1d_points ~xdim:0 moons_classes in
+  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
+  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let%op mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
@@ -136,7 +136,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
   Stdio.printf "\n********\n%!";
   let callback (x, y) =
-    Tensor.set_values point [| x; y |];
+    Tn.set_values point.value [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
        needed. *)
     assert (Backend.from_host result_routine.context point.value);

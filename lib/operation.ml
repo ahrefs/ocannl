@@ -3,27 +3,30 @@
 open Base
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
+module Tn = Arrayjit.Tnode
+
+let grad t = (Option.value_exn ~here:[%here] ~message:"No-gradient tensor" t.Tensor.diff).grad
 
 module At = struct
   (** Get the value at the given indices. *)
-  let ( .@{} ) = Tensor.get_value
+  let ( .@{} ) t = Tn.get_value t.Tensor.value
 
-  let ( .@%{} ) = Tensor.get_grad
+  let ( .@%{} ) t = Tn.get_value @@ grad t
 
   (** Set the value at the given indices. *)
-  let ( .@{}<- ) = Tensor.set_value
+  let ( .@{}<- ) t = Tn.set_value t.Tensor.value
 
-  let ( .@%{}<- ) = Tensor.set_grad
+  let ( .@%{}<- ) t = Tn.set_value @@ grad t
 
   (** Get the value at the given index from a single-axis shape tensor. *)
-  let ( .@[] ) t indx = Tensor.get_value t [| indx |]
+  let ( .@[] ) t indx = Tn.get_value t.Tensor.value [| indx |]
 
-  let ( .@%[] ) t indx = Tensor.get_grad t [| indx |]
+  let ( .@%[] ) t indx = Tn.get_value (grad t) [| indx |]
 
   (** Set the value at the given index for a single-axis shape tensor. *)
-  let ( .@[]<- ) t indx = Tensor.set_value t [| indx |]
+  let ( .@[]<- ) t indx = Tn.set_value (grad t) [| indx |]
 
-  let ( .@%[]<- ) t indx = Tensor.set_grad t [| indx |]
+  let ( .@%[]<- ) t indx = Tn.set_value (grad t) [| indx |]
 end
 
 module Initial_NTDSL = struct
