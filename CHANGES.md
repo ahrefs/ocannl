@@ -1,4 +1,14 @@
-## [0.5.0] -- current
+## [0.5.1] -- current
+
+## Added
+
+- Automatic transfers to host from the context that most recently updated a node.
+
+## Fixed
+
+- Added `#` as alternative to `~~` for comment lines in `ocannl_config` files, and a bug in parsing.
+
+## [0.5.0] -- 2024-12-18
 
 ### Added
 

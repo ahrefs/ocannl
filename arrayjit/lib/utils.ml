@@ -120,10 +120,12 @@ let config_file_args =
       in
       Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
       config_lines
-      |> List.filter ~f:(Fn.non @@ String.is_prefix ~prefix:"~~")
+      |> List.filter ~f:(fun l ->
+             not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
       |> List.map ~f:(String.split ~on:'=')
       |> List.filter_map ~f:(function
            | [] -> None
+           | [ s ] when String.is_empty s -> None
            | key :: [ v ] ->
                let key =
                  String.(
@@ -133,9 +135,9 @@ let config_file_args =
                  if String.is_prefix key ~prefix:"ocannl" then String.drop_prefix key 6 else key
                in
                Some (String.strip ~drop:(equal_char '_') key, v)
-           | _ ->
+           | l ->
                failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
-               ^ ", should have a single '=' on each non-empty line")
+               ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
       |> Hashtbl.of_alist_exn (module String)
   | Some _ ->
       Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
