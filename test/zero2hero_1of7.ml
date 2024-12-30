@@ -53,7 +53,6 @@ let%expect_test "Graph drawing recompile" =
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
   let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd.fwd_bprop in
-  Tensor.iter_embedded f ~f:(fun a -> ignore (Backend.from_host f_bprop.context a : bool));
   Train.run f_bprop;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -279,7 +278,6 @@ let%expect_test "Simple gradients hosted" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host grad_routine.context a : bool));
   Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -410,7 +408,6 @@ let%expect_test "Simple gradients virtual" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host grad_routine.context a : bool));
   Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -497,7 +494,6 @@ let%expect_test "2D neuron hosted" =
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Tensor.iter_embedded v ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
@@ -525,7 +521,6 @@ let%expect_test "2D neuron virtual" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Tensor.iter_embedded v ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect

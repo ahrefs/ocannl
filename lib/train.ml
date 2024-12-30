@@ -269,16 +269,6 @@ let every_non_literal_on_host =
   Tensor.iter_embedded ~f:(fun a ->
       if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
 
-(* Note: this will get nicer with modular explicits. *)
-let%debug2_sexp all_host_to_device (type buffer_ptr dev runner event)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type event = event) (context : Backend.context) =
-  let f tn = ignore (Backend.from_host context tn : bool) in
-  Tensor.iter_embedded ~f
-
 module Lazy = Utils.Lazy
 
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are linked with
@@ -469,8 +459,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
   Tensor.log_debug_info ~from_log_level:2 outputs;
-  all_host_to_device (module Backend) sgd_update.context scalar_loss;
-  all_host_to_device (module Backend) sgd_update.context learning_rate;
   let open Operation.At in
   let epoch_loss = ref 0. in
   let step_ref = IDX.find_exn sgd_update.bindings step_n in
@@ -531,7 +519,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
     Utils.capture_stdout_logs @@ fun () ->
-    assert (Backend.from_host routine.context infer.value);
     run routine;
     Tn.get_values model_result.value
   in
@@ -558,7 +545,6 @@ let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type buffer_p
        and type event = event) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
-  Tensor.iter_embedded t ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Task.run routine.schedule;
   routine.context
 

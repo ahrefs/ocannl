@@ -3,6 +3,7 @@
 ## Added
 
 - Automatic transfers to host from the context that most recently updated a node.
+- Automatic transfers of routine's inputs from host to routine's context if the host array modification was not yet transfered.
 
 ## Fixed
 

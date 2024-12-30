@@ -85,8 +85,6 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in
-  Train.all_host_to_device (module Backend) routine.context scalar_loss;
-  Train.all_host_to_device (module Backend) routine.context learning_rate;
   (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
      ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
      **********"; Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
@@ -136,7 +134,6 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
     Tn.set_values point.value [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
        needed. *)
-    assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in

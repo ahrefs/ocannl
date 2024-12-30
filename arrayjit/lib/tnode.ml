@@ -84,6 +84,7 @@ type t = {
   mutable code_name : string option;
   mutable prepare_read : prepare option;
   mutable prepare_write : prepare option;
+  mutable host_modified : bool;
 }
 [@@deriving sexp_of]
 
@@ -553,6 +554,7 @@ let create ?default_prec ~id ~label ~dims init_op =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
+      host_modified = true;
     }
   in
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
@@ -576,6 +578,7 @@ let find =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
+      host_modified = false;
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }
@@ -592,7 +595,8 @@ let do_read tn =
 
 let do_write tn =
   Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
-  tn.prepare_write <- None
+  tn.prepare_write <- None;
+  tn.host_modified <- true
 
 let points_1d ?from_axis ~xdim tn =
   do_read tn;

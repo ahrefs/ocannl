@@ -78,8 +78,6 @@ let demo () =
   PrintBox_text.output Stdio.stdout plot_moons;
   Stdio.print_endline "\n";
 
-  Train.all_host_to_device (module Backend) routine.context scalar_loss;
-  Train.all_host_to_device (module Backend) routine.context learning_rate;
   let open Operation.At in
   let step_ref = IDX.find_exn routine.bindings step_n in
   let batch_ref = IDX.find_exn routine.bindings batch_n in
@@ -112,7 +110,6 @@ let demo () =
   let callback (x, y) =
     Tn.set_values point.value [| x; y |];
     Utils.capture_stdout_logs @@ fun () ->
-    assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in

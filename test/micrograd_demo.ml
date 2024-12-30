@@ -29,7 +29,6 @@ let%expect_test "Micrograd README basic example" =
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
   let step = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Tensor.iter_embedded g ~f:(fun a -> ignore (Backend.from_host step.context a : bool));
   Train.run step;
   Tensor.print ~with_code:false ~with_grad:false `Default g;
   [%expect
@@ -89,13 +88,6 @@ let%expect_test "Micrograd half-moons example" =
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
   let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cc" ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -148,8 +140,6 @@ let%expect_test "Micrograd half-moons example" =
   let sgd_routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
   in
-  Train.all_host_to_device backend sgd_routine.context scalar_loss;
-  Train.all_host_to_device backend sgd_routine.context learning_rate;
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
   for _epoch = 1 to epochs do
@@ -180,7 +170,6 @@ let%expect_test "Micrograd half-moons example" =
     Tn.set_values point.value [| x; y |];
     (* For the gccjit backend, point is only on host, not on device. For cuda, this will be
        needed. *)
-    assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in

@@ -70,7 +70,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Tn.prepare_read
           ~is_done:(fun () -> Backend.is_done e)
           ~sync:(fun () -> Backend.sync e)
-          ~transfer:(fun () -> assert (to_host ctx tn); Backend.await s)
+          ~transfer:(fun () ->
+            assert (to_host ctx tn);
+            Backend.await s)
           tn);
     (* To be on the safe side, record events for potentially cross-stream nodes. *)
     match tn with
@@ -92,6 +94,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ~from:`Host ctx @@ Node tn;
+        tn.host_modified <- false;
         true
     | _ -> false
 
@@ -140,6 +143,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let s = r.context.stream in
     let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
     let pre () =
+      assert (Domain.is_main_domain ());
+      Set.iter hosted_inputs ~f:(fun tn -> if tn.host_modified then assert (from_host r.context tn));
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
             Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->

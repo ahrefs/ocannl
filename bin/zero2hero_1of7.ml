@@ -161,7 +161,6 @@ let  () =
   let routine =
     Train.to_routine (module Backend) (Backend.make_context stream) IDX.empty update.fwd_bprop
   in
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
   (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
      Backend.await stream; *)
@@ -176,18 +175,12 @@ let  () =
     @@ Train.sgd_update ~learning_rate update
   in
   (* learning_rate is virtual so this will not print anything. *)
-  Tensor.iter_embedded learning_rate ~f:(fun a ->
-      ignore (Backend.from_host routine.context a : bool));
   Stdio.print_endline
     {|
       Due to how the gccjit backend works, since the parameters were constant in the grad_update
       computation, they did not exist on the device before. Now they do. This would not be needed
       on the cuda backend.|};
-  List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
-      assert (Backend.from_host routine.context a));
   Train.run routine;
-  (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-     Backend.await stream; *)
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:

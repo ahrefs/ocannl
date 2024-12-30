@@ -39,7 +39,6 @@ let benchmark_overhead backend () =
     Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f.fwd_bprop
   in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
-  Tensor.iter_embedded f ~f:(fun a -> ignore (Backend.from_host f_routine.context a : bool));
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Operation.At in
