@@ -47,7 +47,7 @@ let _suspended () =
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Utils.capture_stdout_logs @@ fun () ->
   Train.forward_and_forget backend ctx ho2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ ho2
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2
 
 let () =
   Utils.set_log_level 2;
@@ -67,16 +67,16 @@ let () =
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
-  Tensor.print ~force:false ~with_code:false ~with_grad:false `Default @@ a;
+  Tensor.print ~spy:true ~with_code:false ~with_grad:false `Default @@ a;
   let ctx = Utils.capture_stdout_logs (fun () -> Train.forward_and_ctx backend ctx a2) in
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
   Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx c);
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in Utils.capture_stdout_logs (fun () ->
      Train.forward_and_forget backend ctx d); let%op e = a *+ "b|i->h; b|h->o => i->o" b in
      Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx e); let%op f = a *+
      "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> Train.forward_and_forget
      backend ctx f); *)
-  (* Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ a2; *)
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ c
+  (* Tensor.print ~with_code:false ~with_grad:false `Default @@ a2; *)
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ c

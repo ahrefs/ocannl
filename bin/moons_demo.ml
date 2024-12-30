@@ -91,9 +91,6 @@ let demo () =
         batch_ref := batch;
         Utils.capture_stdout_logs @@ fun () ->
         Train.run routine;
-        assert (Backend.to_host routine.context learning_rate.value);
-        assert (Backend.to_host routine.context scalar_loss.value);
-        Backend.await stream;
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         Int.incr step_ref
       done;
@@ -117,8 +114,6 @@ let demo () =
     Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
-    assert (Backend.to_host result_routine.context mlp_result.value);
-    Backend.await stream;
     Float.(mlp_result.@[0] >= 0.)
   in
 

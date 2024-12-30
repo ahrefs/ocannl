@@ -279,39 +279,6 @@ let%debug2_sexp all_host_to_device (type buffer_ptr dev runner event)
   let f tn = ignore (Backend.from_host context tn : bool) in
   Tensor.iter_embedded ~f
 
-(* Note: this will get nicer with modular explicits. *)
-let%debug2_sexp all_device_to_host (type buffer_ptr dev runner event)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type event = event) (context : Backend.context) =
-  let f tn = ignore (Backend.to_host context tn : bool) in
-  Tensor.iter_embedded ~f
-
-(** Executes the jitted code and copies arrays embedded in the given tenosor from and to host,
-    synchronizes before copying to host. If [looping] is provided, loops over bindings and executes
-    the given function inside the loop after a run. All and only bindings with associated ranges are
-    iterated, with the binding's initial value lost. Bindings without ranges remain at their initial
-    values. *)
-let%track3_sexp sync_run ?looping (type buffer_ptr dev runner event)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type event = event) (routine : Backend.context BT.routine) t =
-  all_host_to_device (module Backend) routine.context t;
-  (match looping with
-  | None -> Task.run routine.schedule
-  | Some then_ ->
-      let f () =
-        Task.run routine.schedule;
-        then_ ()
-      in
-      sequential_loop ~f routine.bindings);
-  all_device_to_host (module Backend) routine.context t;
-  Backend.await routine.context.stream
-
 module Lazy = Utils.Lazy
 
 (** Performs one optimization step, potentially in parallel (if [grad_updates] are linked with
@@ -393,13 +360,11 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
       Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
     if not streaming then Task.run loss_merge.schedule
   in
-  (* FIXME: missing backcopy. *)
-  let needed_on_host = ref @@ Set.empty (module Tn) in
+  (* FIXME: missing device-to-host? *)
   let%track3_sexp sync (devices_to_sync : int) : unit =
     Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
     Task.run sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
-    Set.iter !needed_on_host ~f:(fun p -> assert (Backend.to_host sgd_update.context p));
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)
     for to_ = 1 to num_streams - 1 do
       Array.iter all_params ~f:(fun p ->
@@ -516,11 +481,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
       ~grad_updates ~sgd_update update ~copy_to_merge
       ~post_sync:(fun ~num_synced_devices ->
         step_ref := !step_ref + num_synced_devices;
-        assert (Backend.to_host sgd_update.context learning_rate.value);
-        (* scalar_loss is not in the sgd_update context. *)
-        assert (Backend.to_host grad_updates.(0).context scalar_loss.value);
-        (* TODO: syncing callbacks should be integrated into Tensor. *)
-        Backend.await grad_updates.(0).context.stream;
         let batch_loss = scalar_loss.@[0] in
         epoch_loss := !epoch_loss +. batch_loss;
         rev_batch_losses := batch_loss :: !rev_batch_losses;
@@ -573,9 +533,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     Utils.capture_stdout_logs @@ fun () ->
     assert (Backend.from_host routine.context infer.value);
     run routine;
-    assert (Backend.to_host routine.context model_result.value);
-    (* TODO: get_values itself should sync with host writing events. *)
-    Backend.(await routine.context.stream);
     Tn.get_values model_result.value
   in
   let used_memory =
@@ -601,9 +558,10 @@ let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type buffer_p
        and type event = event) ctx ?(bindings = IDX.empty) t =
   let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
-  (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
-  sync_run (module Backend) routine t;
+  Tensor.iter_embedded t ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
+  Task.run routine.schedule;
   routine.context
 
 let forward_and_forget ?disable_rootness_check backend ctx ?bindings t =
+  (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
   ignore @@ forward_and_ctx ?disable_rootness_check backend ctx ?bindings t

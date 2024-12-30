@@ -26,7 +26,7 @@ let%diagn_sexp () =
      ]; *)
   let update = Train.grad_update d in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Train.sync_run (module Backend) routine d;
+  Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 d;
   Stdio.print_endline "\n";
   Tensor.print ~with_code:false ~with_grad:false `Default @@ d;
@@ -53,7 +53,7 @@ let%diagn_sexp _suspended () : unit =
   (* Train.every_non_literal_on_host g; *)
   let update = Train.grad_update g in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Train.sync_run (module Backend) routine g;
+  Train.run routine;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;

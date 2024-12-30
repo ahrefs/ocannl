@@ -72,11 +72,11 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   Rand.init 0;
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   Train.forward_and_forget backend ctx hoo;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo;
   let%op hey2 =
     [
@@ -87,7 +87,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     ]
   in
   Train.forward_and_forget backend ctx hey2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey2;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
   let%op hoo2 =
     [|
@@ -98,8 +98,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     |]
   in
   Train.forward_and_forget backend ctx hoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo2;
   let%op heyhoo =
     [|
       [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |];
@@ -109,8 +109,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo;
   let%op heyhoo2 =
     [|
       [| [ [ 1; 31 ]; [ 2; 32 ]; [ 3; 33 ] ]; [ [ 4; 34 ]; [ 5; 35 ]; [ 6; 36 ] ] |];
@@ -120,8 +120,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   let%op heyhoo3 =
     [|
       [|
@@ -135,8 +135,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo3;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   let%op heyhoo4 =
     [|
       [
@@ -150,8 +150,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo4;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo4
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo4
 
 let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();

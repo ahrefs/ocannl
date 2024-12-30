@@ -51,10 +51,7 @@ let benchmark_overhead backend () =
           Train.to_routine (module Backend) f_routine.context ~name:"assign_x" IDX.empty update_x
         in
         Train.run assign_x;
-        (* await device; *)
         Train.run f_routine;
-        assert (Backend.to_host f_routine.context f.value);
-        Backend.await stream;
         f.@[0])
   in
   let plot_box =

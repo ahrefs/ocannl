@@ -247,6 +247,7 @@ val to_printbox :
   ?single_node:bool ->
   ?entries_per_axis:int ->
   ?with_id:bool ->
+  ?spy:bool ->
   ?with_shape:bool ->
   ?with_value:bool ->
   with_grad:bool ->
@@ -255,9 +256,9 @@ val to_printbox :
   PrintBox.t
 
 val print :
+  ?spy:bool ->
   with_grad:bool ->
   with_code:bool ->
-  ?force:bool ->
   ?with_low_level:bool ->
   array_print_style ->
   t ->
@@ -269,6 +270,7 @@ val print_tree :
   ?entries_per_axis:int ->
   ?with_backend_info:bool ->
   ?with_id:bool ->
+  ?spy:bool ->
   ?with_shape:bool ->
   ?with_value:bool ->
   with_grad:bool ->

@@ -101,7 +101,7 @@ let%expect_test "Print constant tensor" =
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect {| [1.00, 2.00, 3.00; 4.00, 5.00, 6.00] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
@@ -118,7 +118,7 @@ let%expect_test "Print constant tensor" =
     |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   Train.forward_and_forget backend ctx hoo;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect {| [|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|] |}];
   Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo;
   [%expect
@@ -142,7 +142,7 @@ let%expect_test "Print constant tensor" =
     ]
   in
   Train.forward_and_forget backend ctx hey2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hey2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect
     {|
     [(1.00, 2.00, 3.00), (4.00, 5.00, 6.00);
@@ -174,14 +174,14 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx hoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ hoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect
     {|
     [|[[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]];
       [[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]];
       [[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]];
       [[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]]|] |}];
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ hoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -204,14 +204,14 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect
     {|
     [|[|[1.00; 2.00; 3.00]; [4.00; 5.00; 6.00]|];
       [|[7.00; 8.00; 9.00]; [10.00; 11.00; 12.00]|];
       [|[13.00; 14.00; 15.00]; [16.00; 17.00; 18.00]|];
       [|[19.00; 20.00; 21.00]; [22.00; 23.00; 24.00]|]|] |}];
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -234,7 +234,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo2;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect
     {|
     [|
@@ -246,7 +246,7 @@ let%expect_test "Print constant tensor" =
         [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]|];
       [|[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
         [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]|]|] |}];
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo2;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   [%expect
     {|
     ┌──────────────────────────────────────────────┐
@@ -286,7 +286,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo3;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect
     {|
     [|
@@ -300,7 +300,7 @@ let%expect_test "Print constant tensor" =
           [[16.00; 46.00]; [17.00; 47.00]; [18.00; 48.00]]];
         [[[19.00; 49.00]; [20.00; 50.00]; [21.00; 51.00]];
           [[22.00; 52.00]; [23.00; 53.00]; [24.00; 54.00]]]|]|] |}];
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   [%expect
     {|
     ┌──────────────────────────────────────────────────┐
@@ -345,7 +345,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo4;
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
+  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   [%expect
     {|
     [|
@@ -359,7 +359,7 @@ let%expect_test "Print constant tensor" =
           [16.00, 46.00; 17.00, 47.00; 18.00, 48.00]];
         [[19.00, 49.00; 20.00, 50.00; 21.00, 51.00];
           [22.00, 52.00; 23.00, 53.00; 24.00, 54.00]]]|] |}];
-  Tensor.print ~force:true ~with_code:false ~with_grad:false `Default @@ heyhoo4;
+  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo4;
   [%expect
     {|
     ┌───────────────────────────────────────────────────┐

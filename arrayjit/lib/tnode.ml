@@ -582,33 +582,45 @@ let find =
 
 (** {2 Accessors} *)
 
+let do_read tn =
+  Option.iter
+    ~f:(fun p ->
+      p.sync ();
+      p.transfer ())
+    tn.prepare_read;
+  tn.prepare_read <- None
+
+let do_write tn =
+  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
+  tn.prepare_write <- None
+
 let points_1d ?from_axis ~xdim tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  do_read tn;
   Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
   @@ Lazy.force tn.array
 
 let points_2d ?from_axis ~xdim ~ydim tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  do_read tn;
   Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
   @@ Lazy.force tn.array
 
 let set_value tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
+  do_write tn;
   Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
 
 let get_value tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  do_read tn;
   Nd.get_as_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
 
 let set_values tn values =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
+  do_write tn;
   Nd.(
     reset (Constant_fill { values; strict = false })
     @@ Option.value_exn ~here:[%here]
     @@ Lazy.force tn.array)
 
 let get_values tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_read;
+  do_read tn;
   Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
 
 let print_accessible_headers () =

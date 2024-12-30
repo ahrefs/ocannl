@@ -53,7 +53,8 @@ let%expect_test "Graph drawing recompile" =
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
   let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd.fwd_bprop in
-  Train.sync_run backend f_bprop f;
+  Tensor.iter_embedded f ~f:(fun a -> ignore (Backend.from_host f_bprop.context a : bool));
+  Train.run f_bprop;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
@@ -85,9 +86,8 @@ let%expect_test "Graph drawing recompile" =
             (module Backend)
             f_bprop.context IDX.empty ~name:"assign_x" [%cd x =: !.v]
         in
-        Train.sync_run (module Backend) assign_x x;
-        Train.sync_run (module Backend) f_bprop f;
-        Backend.await stream;
+        Train.run assign_x;
+        Train.run f_bprop;
         f.@[0])
   in
   let plot_box =
@@ -141,13 +141,6 @@ let%expect_test "Graph drawing fetch" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -190,7 +183,7 @@ let%expect_test "Graph drawing fetch" =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
            step_ref := i;
-           Train.sync_run backend fx_routine fx;
+           Train.run fx_routine;
            (fx.@[0], x.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
@@ -249,13 +242,6 @@ let%expect_test "Simple gradients hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -271,7 +257,7 @@ let%expect_test "Simple gradients hosted" =
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad.fwd_bprop in
   let sgd_routine = Train.to_routine (module Backend) grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
     {|
                                         #12 *._l Host&stream/41
@@ -293,7 +279,8 @@ let%expect_test "Simple gradients hosted" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.sync_run backend grad_routine l;
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host grad_routine.context a : bool));
+  Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -317,7 +304,7 @@ let%expect_test "Simple gradients hosted" =
   (* Now we update the params, but we are not doing the forward and backward passes: only params
      values will change, compared to the above. The update is in the opposite direction of the
      gradient. *)
-  Train.sync_run backend sgd_routine l;
+  Train.run sgd_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -341,7 +328,7 @@ let%expect_test "Simple gradients hosted" =
 
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
-  Train.sync_run backend grad_routine l;
+  Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -367,13 +354,6 @@ let%expect_test "Simple gradients virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
@@ -386,7 +366,7 @@ let%expect_test "Simple gradients virtual" =
   let%op learning_rate = 0.1 in
   let sgd = Train.sgd_update ~learning_rate grad in
   (* Check out the initial state without forcing memory modes by compilation. *)
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
     {|
                                        #12 *._l Host&dev/41
@@ -408,7 +388,7 @@ let%expect_test "Simple gradients virtual" =
     |}];
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad.fwd_bprop in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
     {|
                                         #12 *._l Host&stream/41
@@ -430,7 +410,8 @@ let%expect_test "Simple gradients virtual" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.sync_run backend grad_routine l;
+  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host grad_routine.context a : bool));
+  Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -456,7 +437,7 @@ let%expect_test "Simple gradients virtual" =
   (* Now we update the params, but are not doing the forward and backward passes: only params values
      will change, compared to the above. Since virtual tensors are computed by-need, they will
      always be recomputed using the latest parameter state. *)
-  Train.sync_run backend sgd_routine l;
+  Train.run sgd_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -479,7 +460,7 @@ let%expect_test "Simple gradients virtual" =
     |}];
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
-  Train.sync_run backend grad_routine l;
+  Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
@@ -510,20 +491,14 @@ let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Train.sync_run backend routine v;
+  Tensor.iter_embedded v ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
+  Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
@@ -545,19 +520,13 @@ let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Train.sync_run backend routine v;
+  Tensor.iter_embedded v ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
+  Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|

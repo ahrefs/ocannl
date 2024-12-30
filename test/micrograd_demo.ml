@@ -14,13 +14,6 @@ let%expect_test "Micrograd README basic example" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
@@ -36,8 +29,9 @@ let%expect_test "Micrograd README basic example" =
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let update = Train.grad_update g in
   let step = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
-  Train.sync_run backend step g;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
+  Tensor.iter_embedded g ~f:(fun a -> ignore (Backend.from_host step.context a : bool));
+  Train.run step;
+  Tensor.print ~with_code:false ~with_grad:false `Default g;
   [%expect
     {|
     ┌────────────────────┐
@@ -48,7 +42,7 @@ let%expect_test "Micrograd README basic example" =
     │││ 2.47e+1 │        │
     │└┴─────────┘        │
     └────────────────────┘ |}];
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~with_code:false ~with_grad:true `Default a;
   [%expect
     {|
     ┌─────────────────┐
@@ -68,7 +62,7 @@ let%expect_test "Micrograd README basic example" =
                                                               │└┴─────────┘            │
                                                               └────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ b;
+  Tensor.print ~with_code:false ~with_grad:true `Default b;
   [%expect
     {|
     ┌─────────────────┐
@@ -161,9 +155,6 @@ let%expect_test "Micrograd half-moons example" =
   for _epoch = 1 to epochs do
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;
-        assert (Backend.to_host sgd_routine.context learning_rate.value);
-        assert (Backend.to_host sgd_routine.context scalar_loss.value);
-        Backend.await stream;
         (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
            step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
            scalar_loss.@[0]; *)
@@ -191,8 +182,6 @@ let%expect_test "Micrograd half-moons example" =
        needed. *)
     assert (Backend.from_host result_routine.context point.value);
     Train.run result_routine;
-    assert (Backend.to_host result_routine.context mlp_result.value);
-    Backend.await stream;
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

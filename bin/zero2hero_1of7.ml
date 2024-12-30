@@ -25,7 +25,7 @@ let _suspended () =
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty code.fwd_bprop in
-  Train.sync_run (module Backend) routine v;
+  Train.run routine;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdlib.Format.printf "\nHigh-level code:\n%!";
@@ -47,7 +47,7 @@ let _suspended () =
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
-let () =
+let _suspended () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
   Utils.settings.output_debug_files_in_build_directory <- true;
   Rand.init 0;
@@ -75,14 +75,12 @@ let () =
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
-  let looping () =
-    assert (Backend.to_host routine.context fx.value);
-    assert (Backend.to_host routine.context (Option.value_exn ~here:[%here] x.diff).grad);
-    Backend.await stream;
+  let f () =
+    Train.run routine;
     ys.(!step_ref) <- fx.@[0];
     dys.(!step_ref) <- x.@%[0]
   in
-  Train.sync_run ~looping (module Backend) routine fx;
+  Train.sequential_loop routine.bindings ~f;
   let plot_box =
     let open PrintBox_utils in
     plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
@@ -101,13 +99,6 @@ let _suspended () =
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event)
-  in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -138,7 +129,7 @@ let _suspended () =
       Array.unzip
       @@ Array.mapi xs ~f:(fun i _ ->
              step_ref := i;
-             Train.sync_run backend fx_routine fx;
+             Train.run fx_routine;
              (fx.@[0], x.@%[0]))
     in
     (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
@@ -155,7 +146,7 @@ let _suspended () =
   in
   ()
 
-let _suspended () =
+let  () =
   Rand.init 0;
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
@@ -172,8 +163,8 @@ let _suspended () =
   in
   Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.from_host routine.context a : bool));
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await stream;
+  (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+     Backend.await stream; *)
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
@@ -195,8 +186,8 @@ let _suspended () =
   List.iter [ a.value; b.value; c.value; f.value ] ~f:(fun a ->
       assert (Backend.from_host routine.context a));
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await stream;
+  (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+     Backend.await stream; *)
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
@@ -206,8 +197,8 @@ let _suspended () =
   let update = Train.grad_update l in
   let routine = Train.to_routine (module Backend) routine.context IDX.empty update.fwd_bprop in
   Train.run routine;
-  Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
-  Backend.await stream;
+  (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
+     Backend.await stream; *)
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param

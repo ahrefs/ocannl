@@ -449,8 +449,8 @@ let header t =
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
-let lazy_optional_payload ~present ~missing v =
-  if Lazy.is_val v then
+let lazy_optional_payload ~spy ~present ~missing v =
+  if Lazy.is_val v || not spy then
     match Lazy.force v with
     | Some p -> present p
     | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ])
@@ -459,7 +459,8 @@ let lazy_optional_payload ~present ~missing v =
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 
-let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_value ~with_grad t =
+let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~with_value ~with_grad
+    t =
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
@@ -489,8 +490,9 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
         `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
-          lazy_optional_payload t.value.array
+          lazy_optional_payload t.value.array ~spy
             ~present:(fun v_array ->
+              Tn.do_read t.value;
               `Box
                 (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
@@ -501,6 +503,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
         let node =
           match Lazy.force diff.grad.array with
           | Some g_array ->
+              Tn.do_read diff.grad;
               `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
           | None -> `Text (prefix ^ " " ^ where_located diff.grad)
         in
@@ -508,16 +511,18 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
     | _, true, true, Some diff ->
         let node =
           let value =
-            lazy_optional_payload t.value.array
+            lazy_optional_payload t.value.array ~spy
               ~present:(fun v_array ->
+                Tn.do_read t.value;
                 `Box
                   (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices
                      v_array))
               ~missing:(fun () -> txt ^ " " ^ where_located t.value)
           in
           let grad =
-            lazy_optional_payload diff.grad.array
+            lazy_optional_payload diff.grad.array ~spy
               ~present:(fun g_array ->
+                Tn.do_read diff.grad;
                 `Box
                   (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels
                      ~indices g_array))
@@ -529,9 +534,9 @@ let to_dag ?(single_node = false) ?entries_per_axis ~with_shape ~with_id ~with_v
   in
   to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(with_shape = false)
-    ?(with_value = true) ~with_grad ~depth t =
-  to_dag ?single_node ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
+let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(spy = false)
+    ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
+  to_dag ?single_node ?entries_per_axis ~with_id ~spy ~with_shape ~with_value ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
 let log_debug_info ~from_log_level t =
@@ -551,8 +556,8 @@ let log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
-    (style : array_print_style) t =
+let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style)
+    t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix =
@@ -603,30 +608,34 @@ let print ~with_grad ~with_code ?(force = false) ?(with_low_level = false)
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
   (* TODO: code sharing with [to_dag] *)
-  (if not (force || Lazy.is_val t.value.array) then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
+  (if spy && not (Lazy.is_val t.value.array) then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
    else
      match (style, t.value.array) with
      | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | `Inline, (lazy (Some arr)) ->
+         Tn.do_read t.value;
          Nd.pp_array_inline
            (Stdlib.Format.get_std_formatter ())
            ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
      | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
      | _, (lazy (Some arr)) ->
+         Tn.do_read t.value;
          Nd.pp_array (Stdlib.Format.get_std_formatter ()) ~prefix ~labels ~indices arr;
          Stdlib.Format.print_char '\n');
   if with_grad then
     Option.iter t.diff ~f:(fun diff ->
-        if not (force || Lazy.is_val diff.grad.array) then
+        if spy && not (Lazy.is_val diff.grad.array) then
           Stdlib.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
         else
           match (style, diff.grad.array) with
           | `Inline, (lazy (Some arr)) ->
+              Tn.do_read diff.grad;
               Nd.pp_array_inline
                 (Stdlib.Format.get_std_formatter ())
                 ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
               Stdlib.Format.print_char '\n'
           | _, (lazy (Some arr)) ->
+              Tn.do_read diff.grad;
               Nd.pp_array
                 (Stdlib.Format.get_std_formatter ())
                 ~prefix:(prefix ^ " " ^ grad_txt diff)
@@ -665,9 +674,9 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true)
+let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(spy = false)
     ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
-  @@ to_dag ?entries_per_axis ~with_id ~with_shape ~with_value ~with_grad t
+  @@ to_dag ?entries_per_axis ~with_id ~spy ~with_shape ~with_value ~with_grad t
