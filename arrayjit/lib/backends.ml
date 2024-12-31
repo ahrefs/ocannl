@@ -144,7 +144,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
     let pre () =
       assert (Domain.is_main_domain ());
-      Set.iter hosted_inputs ~f:(fun tn -> if tn.host_modified then assert (from_host r.context tn));
+      if Utils.settings.automatic_host_transfers then
+        Set.iter hosted_inputs ~f:(fun tn ->
+            if tn.host_modified then assert (from_host r.context tn));
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
             Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->

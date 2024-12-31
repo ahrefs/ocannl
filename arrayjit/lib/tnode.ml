@@ -589,7 +589,7 @@ let do_read tn =
   Option.iter
     ~f:(fun p ->
       p.sync ();
-      p.transfer ())
+      if Utils.settings.automatic_host_transfers then p.transfer ())
     tn.prepare_read;
   tn.prepare_read <- None
 

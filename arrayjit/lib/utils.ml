@@ -42,6 +42,13 @@ type settings = {
   mutable check_half_prec_constants_cutoff : float option;
       (** If given, generic code optimization should fail if a half precision FP16 constant exceeds
           the cutoff. *)
+  mutable automatic_host_transfers : bool;
+      (** If true, [from_host] and [to_host] happen automatically in specific situations.
+          - When a host array is about to be read, we transfer to host from the context that most
+            recently updated the node.
+          - When a routine is about to be run, we transfer the routine's inputs from host to the
+            routine's context if the host array was not yet transfered since its creation or most
+            recent modification. *)
 }
 [@@deriving sexp]
 
@@ -53,6 +60,7 @@ let settings =
     fixed_state_for_init = None;
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
+    automatic_host_transfers = true;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -364,7 +372,9 @@ let restore_settings () =
     Int.of_string @@ get_global_arg ~arg_name:"print_decimals_precision" ~default:"2";
   settings.check_half_prec_constants_cutoff <-
     Float.of_string_opt
-    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0"
+    @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
+  settings.automatic_host_transfers <-
+    Bool.of_string @@ get_global_arg ~arg_name:"automatic_host_transfers" ~default:"true"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1

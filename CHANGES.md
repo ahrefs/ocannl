@@ -1,4 +1,4 @@
-## [0.5.1] -- current
+## [0.5.1] -- 2024-12-31
 
 ## Added
 
@@ -7,7 +7,7 @@
 
 ## Fixed
 
-- Added `#` as alternative to `~~` for comment lines in `ocannl_config` files, and a bug in parsing.
+- Added `#` as alternative to `~~` for comment lines in `ocannl_config` files, and fixed a bug in their parsing.
 
 ## [0.5.0] -- 2024-12-18
 
