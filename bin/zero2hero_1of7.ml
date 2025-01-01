@@ -146,7 +146,7 @@ let _suspended () =
   in
   ()
 
-let  () =
+let () =
   Rand.init 0;
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;

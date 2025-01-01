@@ -96,7 +96,7 @@ This is very tentative.
 For more details, see [CHANGES](CHANGES.md).
 
 * **0.5: Synchronization and automation at the buffer level.**
-  * **0.5.1: Automatic synchronization for transfers between host and devices.**
+  * **0.5.1: Automatic synchronization and transfers between host and devices.**
   * **0.5.0: Stream-to-stream synchronization at the buffer level.**
     * Support for CUDA events, and `Condition`-based events for CPU backends.
     * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
