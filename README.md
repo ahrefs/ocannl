@@ -64,7 +64,6 @@ IMPORTANT: due to potential bugs, debug logging from CUDA in complex settings cu
 
 This is very tentative.
 
-* 0.5.1: Automatic synchronization for transfers between host and devices where unambiguous.
 * 0.5.2: Apple Metal backend.
 * 0.6: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * More of primitive numeric operations.
@@ -96,11 +95,13 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
-* **0.5: Stream-to-stream synchronization at the buffer level.**
-  * Support for CUDA events, and `Condition`-based events for CPU backends.
-  * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
-  * Automatic stream-to-stream synchronization on a per-tensor-node basis.
-* **0.4.1 Half precision, mixed precision, CUDA virtual devices** (virtual devices renamed to streams in 0.4.2)
+* **0.5: Synchronization and automation at the buffer level.**
+  * **0.5.1: Automatic synchronization for transfers between host and devices.**
+  * **0.5.0: Stream-to-stream synchronization at the buffer level.**
+    * Support for CUDA events, and `Condition`-based events for CPU backends.
+    * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
+    * Automatic stream-to-stream synchronization on a per-tensor-node basis.
+* **0.4.1 Half precision, mixed precision, CUDA virtual devices** (virtual devices renamed to streams in 0.5.0)
   * Half precision. Maybe improvements for mixed-precision computations.
   * Resolve remaining issues with the new scheduler.
   * Initial version of [lib/nn_blocks.ml](lib/nn_blocks.ml).
