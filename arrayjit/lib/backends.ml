@@ -94,7 +94,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ~from:`Host ctx @@ Node tn;
-        tn.host_modified <- false;
+        Hash_set.add tn.host_read_by_devices ctx.stream.device.device_id;
         true
     | _ -> false
 
@@ -146,7 +146,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       assert (Domain.is_main_domain ());
       if Utils.settings.automatic_host_transfers then
         Set.iter hosted_inputs ~f:(fun tn ->
-            if tn.host_modified then assert (from_host r.context tn));
+            if not (Hash_set.mem tn.host_read_by_devices s.device.device_id) then
+              assert (from_host r.context tn));
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
             Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->
@@ -386,7 +387,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            match key.array with
            | (lazy (Some hosted)) ->
                Device.from_host ~dst_ptr ~dst:parent_context hosted;
-               key.host_modified <- false
+               Hash_set.add key.host_read_by_devices stream.device.device_id
            | _ -> ());
         dst_ptr
       in

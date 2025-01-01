@@ -84,7 +84,8 @@ type t = {
   mutable code_name : string option;
   mutable prepare_read : prepare option;
   mutable prepare_write : prepare option;
-  mutable host_modified : bool;
+  mutable host_read_by_devices : Hash_set.M(Int).t;
+      (** The unique ids of devices that read the most recent modification of the host array. *)
 }
 [@@deriving sexp_of]
 
@@ -554,7 +555,7 @@ let create ?default_prec ~id ~label ~dims init_op =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_modified = true;
+      host_read_by_devices = Hash_set.create (module Int);
     }
   in
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
@@ -578,7 +579,7 @@ let find =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_modified = false;
+      host_read_by_devices = Hash_set.create (module Int);
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }
@@ -596,7 +597,7 @@ let do_read tn =
 let do_write tn =
   Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
   tn.prepare_write <- None;
-  tn.host_modified <- true
+  Hash_set.clear tn.host_read_by_devices
 
 let points_1d ?from_axis ~xdim tn =
   do_read tn;

@@ -93,6 +93,8 @@ module Device_types (Device_config : Device_config) = struct
   type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
 end
 
+let next_global_device_id : Utils.atomic_int = Atomic.make 0
+
 module Device
     (Device_types : Device_types)
     (Alloc_buffer :
@@ -104,9 +106,11 @@ struct
   include Alloc_buffer
 
   let make_device dev ~ordinal =
+    let device_id = Atomic.fetch_and_add next_global_device_id 1 in
     {
       dev;
       ordinal;
+      device_id;
       cross_stream_candidates = Hashtbl.create (module Tnode);
       owner_stream = Hashtbl.create (module Tnode);
       shared_writer_streams = Hashtbl.create (module Tnode);

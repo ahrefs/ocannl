@@ -80,6 +80,7 @@ end
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
+  device_id : int;
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
   owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
   shared_writer_streams :
@@ -111,6 +112,11 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
       ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
+      (** The number of the represented backend's device, in the range from 0 to the number of the
+          backend's devices - 1. *)
+  device_id : int;
+      (** A unique identifier among all device instances of all backends. Note that multiple
+          [device_id] (distinct device instances) might refer to the same physical device. *)
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
           shrink. *)
@@ -248,8 +254,8 @@ module type Backend_device_common = sig
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already.
 
-      It is rarely needed to call [sync] explicitly, because it should always be
-      called internally when necessary, in particular before extracting values from host. *)
+      It is rarely needed to call [sync] explicitly, because it should always be called internally
+      when necessary, in particular before extracting values from host. *)
 
   val is_done : event -> bool
   (** Whether the event completed. *)
