@@ -25,7 +25,7 @@ The modules and files of `arrayjit` can loosely be divided into three parts.
   - `Ops`: numeric precision specification types, primitive numerical operations.
   - `Ndarray`: a wrapper around bigarrays hiding their numeric precision, with accessing and `PrintBox`-based rendering.  
   - `Tnode`: the _tensor node_ type: a tensor node is conceptually an array figuring in computations, that might or might not have different, distinct or shared, memory array instances in different contexts. A tensor node can be virtual, with no array instances. If it is not virtual, different devices that compute using a tensor node will necessarily store different memory arrays.
-  - `Indexing`: a representation and support for indexing into arrays, centered around `projections` from which for loops over arrays can be derived.
+  - `Indexing`: a representation and support for indexing into arrays, centered around `projections` from which `for` loops over arrays can be derived.
   - `Assignments`: the user-facing high-level code representation centered around accumulating assignments.
   - `Low_level`: an intermediate for-loop-based code representation.
 - "Backends": the interface and implementations for executing code on different hardware.
@@ -40,7 +40,8 @@ The modules and files of `arrayjit` can loosely be divided into three parts.
     - Components shared across backends that build on top of device / hardware / external compiler-specific code:
       - The functor `Add_device` combines a single-core CPU implementation with a scheduler, and brings them on par with the device-specific implementations.
       - The functor `Raise_backend` converts any backend implementation relying on the `Low_level` representation (all backends currently), to match the user-facing `Backend_intf.Backend` interface (which relies on the high-level `Assignments` representation).
-        - The functor `Add_buffer_retrieval_and_syncing` (used by `Raise_backend`) converts (array pointer) `buffer_ptr`-level copying opeations, to tensor node level, and adds per-tensor-node stream-to-stream synchronization.
+        - The functor `Add_buffer_retrieval_and_syncing` (used by `Raise_backend`) converts (array pointer) `buffer_ptr`-level copying operations, to tensor node level, and adds per-tensor-node stream-to-stream synchronization.
+        - `Raise_backend` also adds to/from host memory transfers when the host arrays have fresh updates.
     - Putting the above together with the device specific implementations, and exposing the resulting modules to the user via backend names.
       - It also exposes backend-generic functions, currently just one:
         - `finalize` a context (freeing all of its arrays that don't come from its parent context).
@@ -193,3 +194,29 @@ OCANNL provides explicit _merge buffers_ for performing those tensor node update
 The interface exposes two modes of utilizing merge buffers. The `Streaming_for` mode relies in some way on the array from the source context. Currently, this simply means using the source array (buffer) pointer, and the CUDA backend falls back to using `~into_merge_buffer:Copy` when the source and destination contexts live on different devices. The `Copy` mode uses physical arrays to back merge buffers. The merge buffer array (one per stream) is resized (grown) if needed to fit a node's array. To block the source stream from overwriting the array, `Streaming_for` is parameterized by the task (actually, routine) intended to make use of the merge buffer.
 
 Currently, OCANNL does not support merge buffers for `from_host` transfers. But it might in the future. Currently, combining `to_host` and `from_host` is the only way to make different backends cooperate, and that requires `from_host ~into_merge_buffer` to adapt single-backend design patterns.
+
+#### Automated transfers to / from host
+
+Unless disabled via setting `automatic_host_transfers` to false, `arrayjit` automates the calling of `from_host` and `to_host` functions. Tensor node objects have three contributing fields:
+
+- `prepare_read` for synchronization and `to_host` transfers right before a host array is read,
+- `prepare_write` for synchronization right before a host array is written to,
+- `host_read_by_devices` for tracking which devices have scheduled transferring the data already.
+
+Since currently the tagging is per-device, for per-stream tensor nodes might need supplementary `from_host` (or `device_to_device`) calls in rare situations.
+
+There are three code components to the automation.
+
+- Within `Tnode`:
+  - The helper function `do_read` unconditionally invokes synchronization code, and if `automatic_host_transfers` invokes data transfer code, as stored in the `prepare_read` field of a node; then clears the field.
+  - The helper function `do_write` unconditionally invokes synchronization code as stored in the `prepare_write` field of a node, then clears the field.
+  - `do_read` is invoked from `points_1d`, `points_2d`, `get_value`, `get_values` of `Tnode`; and also from `to_dag` and `print` of `Tensor`.
+  - `do_write` is invoked from `set_value`, `set_values`.
+  - `Tnode` exposes `prepare_read` and `prepare_write` for updating the fields: only the new data transfer is preserved, but the synchronization codes are combined.
+- Within `Backends.Add_buffer_retrieval_and_syncing`:
+  - The `update_writer_event` helper adds the after-modification event to synchronization and sets data transfer to `to_host` from the stream, using `prepare_read`. This happens for `device_to_device` and `sync_routine` (after scheduling the routine) scheduling calls, and independently of `automatic_host_transfers`.
+  - Moreover, `sync_routine`, before scheduling the routine and only if `automatic_host_transfers`, directly schedules `from_host` for input nodes that are not tagged with the device (via `host_read_by_devices`). Note that input nodes are the "read only" and "read before write" nodes that are not constants.
+- Within `Backends.Raise_backend.alloc_if_needed`:
+  - If `automatic_host_transfers` and the node allocated for the context is a constant, `alloc_if_needed` directly schedules `from_host` for the node regardless of whether it is tagged with the device (via `host_read_by_devices`); it does add the device tag to the node (if missing).
+
+  **Note:** we do **not** invoke `Tnode.do_read` from within `Backends.Add_buffer_retrieval_and_syncing.from_host`, since to adequately handle such transfers one should deliberately use `device_to_device` functions. This can lead to confusing behavior, in particular observing (or not) a tensor node (on host) can change later computations by inserting (or not) an additional `to_host` before a `from_host`. This aspect of the design might change in the future.
