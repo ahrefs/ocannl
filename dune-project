@@ -60,8 +60,10 @@
   ; (ocamlformat
   ;  (>= 0.27.0)
   ;  :with-dev-setup)
-  printbox
-  printbox-text
+  (printbox
+   (>= 0.12))
+  (printbox-text
+   (>= 0.12))
   ocannl_npy
   stdio
   sexplib
@@ -77,7 +79,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.0.0)))
+   (>= 2.0.3)))
  (depopts
   (cudajit
    (>= 0.6.1))
@@ -109,9 +111,13 @@
   ;  :with-dev-setup)
   ; Here we mean (arrayjit (= 0.4.1)), but we must be compatible with arrayjit.dev during installation.
   (arrayjit
-   (>= 0.4.1))
-  printbox
-  printbox-text
+   (>= 0.5.1))
+  (printbox
+   (>= 0.12))
+  (printbox-text
+   (>= 0.12))
+  (printbox-ext-plot
+   (>= 0.12))
   ocannl_npy
   (angstrom
    (>= 0.15))
@@ -119,7 +125,6 @@
   sexplib
   num
   time_now
-
   ppxlib
   ppx_compare
   ppx_fields_conv
@@ -130,7 +135,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.0.0))
+   (>= 2.0.3))
   ; Cannot make it (patdiff :with-test), because `dune build -p neural_nets_lib @install`
   ; builds the tutorials target from dune/test, despite it being inline_tests!
   (patdiff

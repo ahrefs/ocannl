@@ -5,6 +5,7 @@
   base
   printbox
   printbox-text
+  printbox-ext-plot
   npy
   angstrom
   stdio
