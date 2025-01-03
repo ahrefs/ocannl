@@ -70,36 +70,40 @@ let%expect_test "Half-moons data parallel" =
      let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
      let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
      let plot_moons =
-       let open PrintBox_utils in
-       plot ~no_axes:true ~size:(120, 40)
+       PrintBox_utils.plot ~as_canvas:true
          [
-           Scatterplot { points = points1; pixel = "#" };
-           Scatterplot { points = points2; pixel = "%" };
-           Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+           PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
+           Scatterplot { points = points2; content = PrintBox.line "%" };
+           Boundary_map
+             { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
          ]
      in
      Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
      PrintBox_text.output Stdio.stdout plot_moons;
      Stdio.printf "\nBatch Log-loss:\n%!";
      let plot_loss =
-       let open PrintBox_utils in
-       plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch log loss"
+       PrintBox_utils.plot ~x_label:"step" ~y_label:"batch log loss"
          [
            Line_plot
              {
                points =
                  Array.of_list_rev_map rev_batch_losses
                    ~f:Float.(fun x -> max (log 0.00003) (log x));
-               pixel = "-";
+               content = PrintBox.line "-";
              };
          ]
      in
      PrintBox_text.output Stdio.stdout plot_loss;
      Stdio.printf "\nEpoch Log-loss:\n%!";
      let plot_loss =
-       let open PrintBox_utils in
-       plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch log loss"
-         [ Line_plot { points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log; pixel = "-" } ]
+       PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch log loss"
+         [
+           Line_plot
+             {
+               points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log;
+               content = PrintBox.line "-";
+             };
+         ]
      in
      PrintBox_text.output Stdio.stdout plot_loss);
   [%expect "Success"]

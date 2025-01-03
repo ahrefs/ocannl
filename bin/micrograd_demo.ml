@@ -139,12 +139,12 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   in
   let%track3_sexp _plotting : unit =
     let plot_moons =
-      let open PrintBox_utils in
-      plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+      PrintBox_utils.plot ~as_canvas:true
         [
-          Scatterplot { points = points1; pixel = "#" };
-          Scatterplot { points = points2; pixel = "%" };
-          Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+          Scatterplot { points = points1; content = PrintBox.line "#" };
+          Scatterplot { points = points2; content = PrintBox.line "%" };
+          Boundary_map
+            { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
         ]
     in
     Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
@@ -152,25 +152,22 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   in
   Stdio.printf "Loss:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"loss"
-      [ Line_plot { points = Array.of_list_rev !losses; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"loss"
+      [ Line_plot { points = Array.of_list_rev !losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
 
   Stdio.printf "Log-loss, for better visibility:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"log loss"
-      [ Line_plot { points = Array.of_list_rev !log_losses; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"log loss"
+      [ Line_plot { points = Array.of_list_rev !log_losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
 
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev !learning_rates; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate"
+      [ Line_plot { points = Array.of_list_rev !learning_rates; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr
 

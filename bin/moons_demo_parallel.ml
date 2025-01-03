@@ -78,56 +78,57 @@ let experiment ~seed ~backend_name ~config () =
   Stdio.printf "\n********\nUsed memory: %d\n%!" used_memory;
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
-    let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+    PrintBox_utils.plot ~as_canvas:true
       [
-        Scatterplot { points = points1; pixel = "#" };
-        Scatterplot { points = points2; pixel = "%" };
-        Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+        Scatterplot { points = points1; content = PrintBox.line "#" };
+        Scatterplot { points = points2; content = PrintBox.line "%" };
+        Boundary_map
+          { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
       ]
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
   Stdio.printf "\nBatch Loss:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch loss"
-      [ Line_plot { points = Array.of_list_rev rev_batch_losses; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"batch loss"
+      [ Line_plot { points = Array.of_list_rev rev_batch_losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nEpoch Loss:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch loss"
-      [ Line_plot { points = Array.of_list_rev rev_epoch_losses; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch loss"
+      [ Line_plot { points = Array.of_list_rev rev_epoch_losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nBatch Log-loss:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"batch log loss"
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"batch log loss"
       [
         Line_plot
           {
             points =
               Array.of_list_rev_map rev_batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
-            pixel = "-";
+            content = PrintBox.line "-";
           };
       ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nEpoch Log-loss:\n%!";
   let plot_loss =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"epoch log loss"
-      [ Line_plot { points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch log loss"
+      [
+        Line_plot
+          {
+            points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log;
+            content = PrintBox.line "-";
+          };
+      ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
-    let open PrintBox_utils in
-    plot ~size:(120, 30) ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev learning_rates; pixel = "-" } ]
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate"
+      [ Line_plot { points = Array.of_list_rev learning_rates; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr
 

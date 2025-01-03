@@ -54,9 +54,8 @@ let benchmark_overhead backend () =
         f.@[0])
   in
   let plot_box =
-    let open PrintBox_utils in
-    plot ~size:(40, 25) ~x_label:"x" ~y_label:"f(x)"
-      [ Scatterplot { points = Array.zip_exn xs ys; pixel = "#" } ]
+    PrintBox_utils.plot ~small:true ~x_label:"x" ~y_label:"f(x)"
+      [ Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" } ]
   in
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in

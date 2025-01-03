@@ -82,12 +82,11 @@ let _suspended () =
   in
   Train.sequential_loop routine.bindings ~f;
   let plot_box =
-    let open PrintBox_utils in
-    plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+    PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
       [
-        Scatterplot { points = Array.zip_exn values ys; pixel = "#" };
-        Scatterplot { points = Array.zip_exn values dys; pixel = "*" };
-        Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
+        Scatterplot { points = Array.zip_exn values ys; content = PrintBox.line "#" };
+        Scatterplot { points = Array.zip_exn values dys; content = PrintBox.line "*" };
+        Line_plot { points = Array.create ~len:20 0.; content = PrintBox.line "-" };
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
@@ -134,12 +133,11 @@ let _suspended () =
     in
     (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
     let plot_box =
-      let open PrintBox_utils in
-      plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
+      PrintBox_utils.plot ~size:(75, 35) ~x_label:"x" ~y_label:"f(x)"
         [
-          Scatterplot { points = Array.zip_exn xs ys; pixel = "#" };
-          Scatterplot { points = Array.zip_exn xs dys; pixel = "*" };
-          Line_plot { points = Array.create ~len:20 0.; pixel = "-" };
+          Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" };
+          Scatterplot { points = Array.zip_exn xs dys; content = PrintBox.line "*" };
+          Line_plot { points = Array.create ~len:20 0.; content = PrintBox.line "-" };
         ]
     in
     PrintBox_text.output Stdio.stdout plot_box

@@ -563,7 +563,7 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     let nlines = if brief then size1 else size1 + 1 in
     let ncols = if brief then size2 else size2 + 1 in
     let outer_grid v =
-      (if brief then Fn.id else B.frame)
+      (if brief then Fn.id else B.frame ~stretch:false)
       @@ B.init_grid ~bars:true ~line:nlines ~col:ncols (fun ~line ~col ->
              if (not brief) && line = 0 && col = 0 then
                B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [ tag ~pos:v label0 ind0 ]
@@ -586,7 +586,8 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
       B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->
           if elide_for line ~ind:ind0 then B.hpad 1 @@ B.line "..." else outer_grid line)
     in
-    (if brief then Fn.id else B.frame) @@ B.vlist ~bars:false [ B.text header; screens ]
+    (if brief then Fn.id else B.frame ~stretch:false)
+    @@ B.vlist ~bars:false [ B.text header; screens ]
 
 let pp_array fmt ?prefix ?entries_per_axis ?labels ~indices arr =
   PrintBox_text.pp fmt @@ render_array ?prefix ?entries_per_axis ?labels ~indices arr

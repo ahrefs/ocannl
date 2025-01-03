@@ -68,10 +68,10 @@ let demo () =
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let plot_moons =
-    let open PrintBox_utils in
-    plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+    PrintBox_utils.plot ~as_canvas:true
       [
-        Scatterplot { points = points1; pixel = "#" }; Scatterplot { points = points2; pixel = "+" };
+        Scatterplot { points = points1; content = PrintBox.line "#" };
+        Scatterplot { points = points2; content = PrintBox.line "+" };
       ]
   in
   Stdio.printf "\nHalf-moons scatterplot:\n%!";
@@ -116,12 +116,12 @@ let demo () =
 
   let%track_sexp _plotting : unit =
     let plot_moons =
-      let open PrintBox_utils in
-      plot ~size:(120, 40) ~x_label:"ixes" ~y_label:"ygreks"
+      PrintBox_utils.plot ~as_canvas:true
         [
-          Scatterplot { points = points1; pixel = "#" };
-          Scatterplot { points = points2; pixel = "+" };
-          Boundary_map { pixel_false = "."; pixel_true = "*"; callback };
+          Scatterplot { points = points1; content = PrintBox.line "#" };
+          Scatterplot { points = points2; content = PrintBox.line "+" };
+          Boundary_map
+            { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
         ]
     in
     Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n%!";
