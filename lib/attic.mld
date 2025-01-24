@@ -500,3 +500,44 @@ let%track3_sexp finalize (ctx : context) : unit =
           && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
         then Cu.Deviceptr.mem_free data))
 ]}
+
+Adding constants to the representation is probably a bad idea... File Ops.ml:
+{[
+
+type constant = Min_noninf | Zero | One | Pi | Max_noninf | C of float
+[@@deriving sexp, compare, equal]
+
+let float_of_c prec c =
+  match (c, prec) with
+  | _, Void_prec -> invalid_arg "Ops.float_of_c: void precision"
+  | Min_noninf, Double_prec _ -> ~-.Float.max_finite_value
+  | Min_noninf, Single_prec _ -> ~-.Float.((2. ** 127.) *. (2. -. (2. ** -23.)))
+  | Min_noninf, Half_prec _ -> ~-.Float.((2. ** 15.) *. (2. - (2. ** -10.)))
+  | Min_noninf, Byte_prec _ -> -127.
+  | Zero, _ -> 0.
+  | One, _ -> 1.
+  | Pi, _ -> Float.pi
+  | Max_noninf, Double_prec _ -> Float.max_finite_value
+  | Max_noninf, Single_prec _ -> Float.((2. ** 127.) *. (2. -. (2. ** -23.)))
+  | Max_noninf, Half_prec _ -> Float.((2. ** 15.) *. (2. - (2. ** -10.)))
+  | Max_noninf, Byte_prec _ -> 128.
+  | C c, _ -> c
+
+let constant_cd_syntax = function
+  | Min_noninf -> "min_val"
+  | Zero -> "0"
+  | One -> "1"
+  | Pi -> "pi"
+  | Max_noninf -> "max_val"
+  | C c -> Printf.sprintf "%g" c
+
+let constant_c_syntax = function
+  | Min_noninf -> "(-DBL_MAX)"
+  | Zero -> "0.0"
+  | One -> "1.0"
+  | Pi -> "M_PI"
+  | Max_noninf -> "DBL_MAX"
+  | C c when Float.(c < 0.) -> Printf.sprintf "(%g)" c
+  | C c -> Printf.sprintf "%g" c
+
+]}

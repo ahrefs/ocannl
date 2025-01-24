@@ -118,6 +118,15 @@ val fprint_function_header :
 
 val get_ident_within_code : ?no_dots:bool -> t array -> Tnode.t -> string
 
+val fprint_cstyle :
+  ?name:string ->
+  ?static_indices:Indexing.static_symbol list ->
+  unit ->
+  Stdlib.Format.formatter ->
+  t ->
+  unit
+(** Adheres more to the C syntax, outputs implicit type casts. *)
+
 val fprint_hum :
   ?name:string ->
   ?static_indices:Indexing.static_symbol list ->
@@ -125,3 +134,4 @@ val fprint_hum :
   Stdlib.Format.formatter ->
   t ->
   unit
+(** Adheres more to the %cd syntax, does not output implicit type casts. *)
