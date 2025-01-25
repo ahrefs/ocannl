@@ -164,8 +164,6 @@ type unop =
   | Log
   | Exp2
   | Log2
-  | Exp10
-  | Log10
   | Sin
   | Cos
   | Sqrt
@@ -228,8 +226,6 @@ let interpret_unop op v =
   | Log -> log v
   | Exp2 -> 2. ** v
   | Log2 -> log v / log 2.
-  | Exp10 -> 10. ** v
-  | Log10 -> log v / log 10.
   | Sin -> sin v
   | Cos -> cos v
   | Sqrt -> sqrt v
@@ -294,20 +290,15 @@ let binop_c_syntax prec v =
   | Mul, _ -> ("(", " *", ")")
   | Div, _ -> ("(", " /", ")")
   | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-  | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
-  | ToPowOf, Half_prec _ -> ("powf(", ",", ")")
   | ToPowOf, Byte_prec _ ->
       invalid_arg "Ops.binop_c_syntax: ToPowOf not supported for byte/integer precisions"
+  | ToPowOf, _ -> ("powf(", ",", ")")
   | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
   | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-  | Max, Double_prec _ -> ("fmax(", ",", ")")
-  | Max, Single_prec _ -> ("fmaxf(", ",", ")")
-  | Max, Half_prec _ -> ("fmaxf(", ",", ")")
-  | Max, Byte_prec _ -> ("fmax(", ",", ")")
-  | Min, Double_prec _ -> ("fmin(", ",", ")")
-  | Min, Single_prec _ -> ("fminf(", ",", ")")
-  | Min, Half_prec _ -> ("fminf(", ",", ")")
-  | Min, Byte_prec _ -> ("fmin(", ",", ")")
+  | Max, (Double_prec _ | Byte_prec _) -> ("fmax(", ",", ")")
+  | Max, _ -> ("fmaxf(", ",", ")")
+  | Min, (Double_prec _ | Byte_prec _) -> ("fmin(", ",", ")")
+  | Min, _ -> ("fminf(", ",", ")")
   | Mod, _ -> ("(", " %", ")")
   | Cmplt, _ -> ("(", " <", ")")
   | Cmpne, _ -> ("(", " !=", ")")
@@ -317,10 +308,9 @@ let binop_c_syntax prec v =
   (* | Shr, _ -> ("((", ") / exp2(", "))") *)
   | Or, _ -> ("(", " ||", ")")
   | And, _ -> ("(", " &&", ")")
-  | Threefry, Double_prec _ -> ("threefry(", ",", ")")
-  | Threefry, Single_prec _ -> ("threefryf(", ",", ")")
-  | Threefry, Half_prec _ -> ("threefryf(", ",", ")")
-  | Threefry, Byte_prec _ -> ("threefryf(", ",", ")")
+  | Threefry, _ ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      failwith "Ops.binop_c_syntax: threefry NOT IMPLEMENTED YET"
 
 let is_assign_op = function
   | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne | Threefry -> false
@@ -372,8 +362,6 @@ let unop_cd_syntax = function
   | Log -> "log"
   | Exp2 -> "exp2"
   | Log2 -> "log2"
-  | Exp10 -> "exp10"
-  | Log10 -> "log10"
   | Sin -> "sin"
   | Cos -> "cos"
   | Sqrt -> "sqrt"
@@ -383,18 +371,49 @@ let unop_cd_syntax = function
   | Tanh_approx -> "tanh"
 
 let unop_c_syntax prec v =
+  let fmax () =
+    (* See: https://en.cppreference.com/w/c/numeric/math/fmax option (4) *)
+    match prec with
+    | Double_prec _ | Byte_prec _ -> "fmax"
+    | _ -> "fmaxf"
+  in
+  let fmin () =
+    (* See: https://en.cppreference.com/w/c/numeric/math/fmin option (4) *)
+    match prec with
+    | Double_prec _ | Byte_prec _ -> "fmax"
+    | _ -> "fmaxf"
+  in
   match (v, prec) with
   | Identity, _ -> ("", "")
-  | Relu, Single_prec _ -> ("fmaxf(0.0, ", ")")
   | Relu, Byte_prec _ -> ("fmax(0, ", ")")
-  | Relu, _ -> ("fmax(0.0, ", ")")
-  | _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      failwith "NOT IMPLEMENTED YET"
-(* | Satur01, _ -> ("", "") | Exp, _ -> ("", "") | Log, _ -> ("", "") | Exp2, _ -> ("", "") | Log2,
-   _ -> ("", "") | Exp10, _ -> ("", "") | Log10, _ -> ("", "") | Sin, _ -> ("", "") | Cos, _ -> ("",
-   "") | Sqrt, _ -> ("", "") | Recip, _ -> ("", "") | Recip_sqrt, _ -> ("", "") | Neg, _ -> ("", "")
-   | Tanh_approx, _ -> ("", "") *)
+  | Relu, _ -> (fmax () ^ "(0.0, ", ")")
+  | Satur01, Byte_prec _ -> ("fmax(0, fmin(1, ", "))")
+  | Satur01, _ -> (fmax () ^ "(0.0, " ^ fmin () ^ "(1.0, ", "))")
+  | Exp, (Double_prec _ | Byte_prec _) -> ("exp(", ")")
+  | Exp, _ -> ("expf(", ")")
+  | Log, (Double_prec _ | Byte_prec _) -> ("log(", ")")
+  | Log, _ -> ("logf(", ")")
+  | Exp2, (Double_prec _ | Byte_prec _) -> ("exp2(", ")")
+  | Exp2, _ -> ("exp2f(", ")")
+  | Log2, (Double_prec _ | Byte_prec _) -> ("log2(", ")")
+  | Log2, _ -> ("log2f(", ")")
+  | Sin, (Double_prec _ | Byte_prec _) -> ("sin(", ")")
+  | Sin, _ -> ("sinf(", ")")
+  | Cos, (Double_prec _ | Byte_prec _) -> ("cos(", ")")
+  | Cos, _ -> ("cosf(", ")")
+  | Sqrt, (Double_prec _ | Byte_prec _) -> ("sqrt(", ")")
+  | Sqrt, _ -> ("sqrtf(", ")")
+  | Recip, Byte_prec _ ->
+      invalid_arg "Ops.unop_c_syntax: Recip not supported for byte/integer precisions"
+  | Recip, _ -> ("(1.0 / (", "))")
+  | Recip_sqrt, Byte_prec _ ->
+      invalid_arg "Ops.unop_c_syntax: Recip_sqrt not supported for byte/integer precisions"
+  | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
+  | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
+  | Neg, _ -> ("(-(", "))")
+  | Tanh_approx, Byte_prec _ ->
+      invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for byte/integer precisions"
+  | Tanh_approx, _ -> ("tanhf(", ")")
 
 let c_convert_precision ~from ~to_ =
   match (from, to_) with
