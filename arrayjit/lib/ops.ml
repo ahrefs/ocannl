@@ -153,7 +153,6 @@ type binop =
   (* | Shr *)
   | Or
   | And
-  | Threefry  (** Counter-based random number generator. *)
 [@@deriving sexp, compare, equal]
 
 type unop =
@@ -187,7 +186,7 @@ let neutral_elem = function
   | Min -> Float.infinity
   | And -> 1.
   | Or -> 0.
-  | Arg2 | Arg1 | Mod | Cmplt | Cmpne (* | Shl | Shr *) | Threefry -> 0.
+  | Arg2 | Arg1 | Mod | Cmplt | Cmpne (* | Shl | Shr *) -> 0.
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -209,9 +208,6 @@ let interpret_binop op v1 v2 =
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
-  | Threefry ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      failwith "FIXME: NOT IMPLEMENTED YET"
 
 let interpret_unop op v =
   let open Float in
@@ -234,10 +230,10 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
 
-let is_binop_infix = function Threefry -> false | _ -> true
+let is_binop_infix _ = true
 
 let is_binop_nice_infix = function
-  | Arg1 | Arg2 | Relu_gate | Max | Min | Threefry -> false
+  | Arg1 | Arg2 | Relu_gate | Max | Min -> false
   | _ -> true
 
 let binop_cd_syntax = function
@@ -258,7 +254,6 @@ let binop_cd_syntax = function
   | Min -> "^^"
   (* | Shl -> "lsl" *)
   (* | Shr -> "lsr" *)
-  | Threefry -> "threefry"
 
 let binop_cd_fallback_syntax = function
   | Arg1 -> "fst"
@@ -278,7 +273,6 @@ let binop_cd_fallback_syntax = function
   | Min -> "min"
   (* | Shl -> "shlf" *)
   (* | Shr -> "shrf" *)
-  | Threefry -> "threefry"
 
 let binop_c_syntax prec v =
   match (v, prec) with
@@ -308,12 +302,9 @@ let binop_c_syntax prec v =
   (* | Shr, _ -> ("((", ") / exp2(", "))") *)
   | Or, _ -> ("(", " ||", ")")
   | And, _ -> ("(", " &&", ")")
-  | Threefry, _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      failwith "Ops.binop_c_syntax: threefry NOT IMPLEMENTED YET"
 
 let is_assign_op = function
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne | Threefry -> false
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne -> false
   | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
@@ -338,7 +329,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Min -> "=^^"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne | Threefry ->
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 let assign_op_c_syntax = function
