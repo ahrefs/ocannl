@@ -209,6 +209,18 @@ let debug_log_index ctx log_functions =
         Block.eval block @@ RValue.call ctx ff [ lf ]
   | _ -> fun _block _i _index -> ()
 
+let assign_op_c_syntax = function
+  | Ops.Arg1 -> invalid_arg "Gcc_backend.assign_op_c_syntax: Arg1 is not a C assignment operator"
+  | Arg2 -> "="
+  | Add -> "+="
+  | Sub -> "-="
+  | Mul -> "*="
+  | Div -> "/="
+  | Mod -> "%="
+  (* | Shl -> "<<=" *)
+  (* | Shr -> ">>=" *)
+  | _ -> invalid_arg "Gcc_backend.assign_op_c_syntax: not a C assignment operator"
+
 let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; _ } func
     initial_block (body : Low_level.t) =
   let open Gccjit in
@@ -335,7 +347,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         @@ lf
            :: RValue.string_literal ctx
                 [%string
-                  {|%{node_debug_name get_ident node}[%d]{=%g} %{Ops.assign_op_c_syntax accum_op} %g = %{v_format}
+                  {|%{node_debug_name get_ident node}[%d]{=%g} %{assign_op_c_syntax accum_op} %g = %{v_format}
 |}]
            :: (to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset)
            :: offset :: to_d value :: v_fillers;

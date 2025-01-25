@@ -31,14 +31,14 @@ and float_t =
   | Get_local of scope_id
   | Get_global of Ops.global_identifier * Indexing.axis_index array option
   | Get of Tnode.t * Indexing.axis_index array
+  | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
-val binop : op:Ops.binop -> rhs1:float_t -> rhs2:float_t -> float_t
-val unop : op:Ops.unop -> rhs:float_t -> float_t
+val apply_op : Ops.op -> float_t array -> float_t
 val flat_lines : t list -> t list
 val unflat_lines : t list -> t
 val loop_over_dims : int array -> body:(Indexing.axis_index array -> t) -> t

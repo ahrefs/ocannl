@@ -23,6 +23,7 @@ module C_syntax (B : sig
   val kernel_prep_line : string
   val includes : string list
   val typ_of_prec : Ops.prec -> string
+  val ternop_syntax : Ops.prec -> Ops.ternop -> string * string * string * string
   val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
   val unop_syntax : Ops.prec -> Ops.unop -> string * string
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
@@ -166,6 +167,7 @@ struct
       | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> 0
       | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
       | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
+      | Ternop (_, v1, v2, v3) -> pp_top_locals ppf v1 + pp_top_locals ppf v2 + pp_top_locals ppf v3
       | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
       | Unop (_, v) -> pp_top_locals ppf v
     and pp_float (prec : Ops.prec) ppf value =
@@ -203,6 +205,10 @@ struct
           fprintf ppf "%s%a%s" prefix pp_axis_index idx postfix
       | Binop (Arg1, v1, _v2) -> loop ppf v1
       | Binop (Arg2, _v1, v2) -> loop ppf v2
+      | Ternop (op, v1, v2, v3) ->
+          let prefix, comma1, comma2, postfix = B.ternop_syntax prec op in
+          fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix loop v1 comma1 loop v2 comma2 loop v3
+            postfix
       | Binop (op, v1, v2) ->
           let prefix, infix, postfix = B.binop_syntax prec op in
           fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
@@ -250,6 +256,13 @@ struct
       | Embed_index (Iterator s) -> (Indexing.symbol_ident s, [])
       | Binop (Arg1, v1, _v2) -> loop v1
       | Binop (Arg2, _v1, v2) -> loop v2
+      | Ternop (op, v1, v2, v3) ->
+          let prefix, comma1, comma2, postfix = B.ternop_syntax prec op in
+          let v1, idcs1 = loop v1 in
+          let v2, idcs2 = loop v2 in
+          let v3, idcs3 = loop v3 in
+          ( String.concat [ prefix; v1; comma1; " "; v2; comma2; " "; v3; postfix ],
+            idcs1 @ idcs2 @ idcs3 )
       | Binop (op, v1, v2) ->
           let prefix, infix, postfix = B.binop_syntax prec op in
           let v1, idcs1 = loop v1 in

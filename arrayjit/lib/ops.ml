@@ -175,6 +175,8 @@ type unop =
 type ternop = Where  (** Where(a,b,c): if a then b else c *) | FMA  (** FMA(a,b,c): (a * b) + c *)
 [@@deriving sexp, compare, equal]
 
+type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp, compare, equal]
+
 (** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation
     does not have a neutral element. *)
 let neutral_elem = function
@@ -230,11 +232,12 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
 
-let is_binop_infix _ = true
+let interpret_ternop op v1 v2 v3 =
+  let open Float in
+  match op with Where -> if v1 <> 0. then v2 else v3 | FMA -> (v1 * v2) + v3
 
-let is_binop_nice_infix = function
-  | Arg1 | Arg2 | Relu_gate | Max | Min -> false
-  | _ -> true
+let is_binop_infix _ = true
+let is_binop_nice_infix = function Arg1 | Arg2 | Relu_gate | Max | Min -> false | _ -> true
 
 let binop_cd_syntax = function
   | Arg1 -> "-@>"
@@ -252,8 +255,8 @@ let binop_cd_syntax = function
   | Mod -> "%"
   | Max -> "@^"
   | Min -> "^^"
-  (* | Shl -> "lsl" *)
-  (* | Shr -> "lsr" *)
+(* | Shl -> "lsl" *)
+(* | Shr -> "lsr" *)
 
 let binop_cd_fallback_syntax = function
   | Arg1 -> "fst"
@@ -271,8 +274,8 @@ let binop_cd_fallback_syntax = function
   | Mod -> "modf"
   | Max -> "max"
   | Min -> "min"
-  (* | Shl -> "shlf" *)
-  (* | Shr -> "shrf" *)
+(* | Shl -> "shlf" *)
+(* | Shr -> "shrf" *)
 
 let binop_c_syntax prec v =
   match (v, prec) with
@@ -332,18 +335,6 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
-let assign_op_c_syntax = function
-  | Arg1 -> invalid_arg "Ops.assign_op_c_syntax: Arg1 is not a C assignment operator"
-  | Arg2 -> "="
-  | Add -> "+="
-  | Sub -> "-="
-  | Mul -> "*="
-  | Div -> "/="
-  | Mod -> "%="
-  (* | Shl -> "<<=" *)
-  (* | Shr -> ">>=" *)
-  | _ -> invalid_arg "Ops.assign_op_c_syntax: not a C assignment operator"
-
 (** Note: currently we do not support unary prefix symbols. *)
 let unop_cd_syntax = function
   | Identity -> "id"
@@ -361,7 +352,7 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
 
-let unop_c_syntax prec v =
+let unop_c_syntax prec op =
   let fmax () =
     (* See: https://en.cppreference.com/w/c/numeric/math/fmax option (4) *)
     match prec with
@@ -374,7 +365,7 @@ let unop_c_syntax prec v =
     | Double_prec _ | Byte_prec _ -> "fmax"
     | _ -> "fmaxf"
   in
-  match (v, prec) with
+  match (op, prec) with
   | Identity, _ -> ("", "")
   | Relu, Byte_prec _ -> ("fmax(0, ", ")")
   | Relu, _ -> (fmax () ^ "(0.0, ", ")")
@@ -405,6 +396,15 @@ let unop_c_syntax prec v =
   | Tanh_approx, Byte_prec _ ->
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for byte/integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
+
+let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
+
+let ternop_c_syntax prec op =
+  match (op, prec) with
+  | Where, Byte_prec _ -> ("((", ") != 0 ? (", ") : (", "))")
+  | Where, _ -> ("((", ") != 0.0 ? (", ") : (", "))")
+  | FMA, (Double_prec _ | Byte_prec _) -> ("fma(", ",", ",", ")")
+  | FMA, _ -> ("fmaf(", ",", ",", ")")
 
 let c_convert_precision ~from ~to_ =
   match (from, to_) with

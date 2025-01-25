@@ -45,16 +45,22 @@ and float_t =
   | Get_local of scope_id
   | Get_global of Ops.global_identifier * Indexing.axis_index array option
   | Get of Tn.t * Indexing.axis_index array
+  | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
-let binop ~op ~rhs1 ~rhs2 =
-  match op with Ops.Arg1 -> rhs1 | Arg2 -> rhs2 | _ -> Binop (op, rhs1, rhs2)
-
-let unop ~op ~rhs = match op with Ops.Identity -> rhs | _ -> Unop (op, rhs)
+let apply_op op args =
+  match (op, args) with
+  | Ops.Binop Ops.Arg1, [| rhs1; _ |] -> rhs1
+  | Binop Arg2, [| _; rhs2 |] -> rhs2
+  | Unop Identity, [| rhs |] -> rhs
+  | Ternop op, [| rhs1; rhs2; rhs3 |] -> Ternop (op, rhs1, rhs2, rhs3)
+  | Binop op, [| rhs1; rhs2 |] -> Binop (op, rhs1, rhs2)
+  | Unop op, [| rhs |] -> Unop (op, rhs)
+  | _ -> invalid_arg "Low_level.op: invalid number of arguments"
 
 let rec flat_lines ts =
   List.concat_map ts ~f:(function Seq (t1, t2) -> flat_lines [ t1; t2 ] | t -> [ t ])
@@ -134,6 +140,7 @@ let is_constexpr_comp traced_store llv =
     | Get (tn, _idcs) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
+    | Ternop (_, v1, v2, v3) -> loop v1 && loop v2 && loop v3
     | Binop (_, v1, v2) -> loop v1 && loop v2
     | Unop (_, v) -> loop v
     | Constant _ -> true
@@ -212,6 +219,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
     | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
+    | Ternop (_, llv1, llv2, llv3) ->
+        loop llv1;
+        loop llv2;
+        loop llv3
     | Binop (_, llv1, llv2) ->
         loop llv1;
         loop llv2
@@ -325,6 +336,10 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
             [%log2
               "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
+    | Ternop (_, llv1, llv2, llv3) ->
+        loop_float ~env_dom llv1;
+        loop_float ~env_dom llv2;
+        loop_float ~env_dom llv3
     | Binop (_, llv1, llv2) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2
@@ -404,6 +419,8 @@ let inline_computation ~id traced static_indices call_args =
       | Get_local _ -> llv
       | Get_global _ -> llv
       | Embed_index idx -> Embed_index (subst env idx)
+      | Ternop (op, llv1, llv2, llv3) ->
+          Ternop (op, loop_float env llv1, loop_float env llv2, loop_float env llv3)
       | Binop (op, llv1, llv2) -> Binop (op, loop_float env llv1, loop_float env llv2)
       | Unop (op, llv) -> Unop (op, loop_float env llv)
     in
@@ -478,6 +495,12 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
     | Get_local _ -> llv
     | Get_global _ -> llv
     | Embed_index _ -> llv
+    | Ternop (op, llv1, llv2, llv3) ->
+        Ternop
+          ( op,
+            loop_float ~process_for llv1,
+            loop_float ~process_for llv2,
+            loop_float ~process_for llv3 )
     | Binop (op, llv1, llv2) ->
         Binop (op, loop_float ~process_for llv1, loop_float ~process_for llv2)
     | Unop (op, llv) -> Unop (op, loop_float ~process_for llv)
@@ -557,6 +580,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Embed_index (Iterator s) ->
         assert (Set.mem env_dom s);
         llv
+    | Ternop (op, llv1, llv2, llv3) -> Ternop (op, loop llv1, loop llv2, loop llv3)
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
   in
@@ -578,6 +602,7 @@ let rec substitute_float ~var ~value llv =
     | Get_local _ -> llv
     | Get_global _ -> llv
     | Embed_index _ -> llv
+    | Ternop (op, llv1, llv2, llv3) -> Ternop (op, loop_float llv1, loop_float llv2, loop_float llv3)
     | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
     | Unop (op, llv) -> Unop (op, loop_float llv)
 
@@ -640,6 +665,13 @@ let simplify_llc llc =
     | Get_global _ -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
     | Embed_index (Iterator _) -> llv
+    | Ternop (op, llv1, llv2, llv3) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        let v1 = loop_float llv1 in
+        let v2 = loop_float llv2 in
+        let v3 = loop_float llv3 in
+        let result = Ternop (op, v1, v2, v3) in
+        if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
@@ -725,6 +757,10 @@ let simplify_llc llc =
     match llv with
     | Constant c -> check_constant tn c
     | Local_scope { body; _ } -> check_proc body
+    | Ternop (_, v1, v2, v3) ->
+        loop v1;
+        loop v2;
+        loop v3
     | Binop (_, v1, v2) ->
         loop v1;
         loop v2
@@ -828,6 +864,10 @@ let get_ident_within_code ?no_dots llcs =
         loop body
     | Get_global (_, _) -> ()
     | Get (la, _) -> visit la
+    | Ternop (_, f1, f2, f3) ->
+        loop_float f1;
+        loop_float f2;
+        loop_float f3
     | Binop (_, f1, f2) ->
         loop_float f1;
         loop_float f2
@@ -893,6 +933,10 @@ let fprint_cstyle ?name ?static_indices () ppf llc =
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%.16g" c
     | Embed_index idx -> pp_axis_index ppf idx
+    | Ternop (op, v1, v2, v3) ->
+        let prefix, comma1, comma2, postfix = Ops.ternop_c_syntax prec op in
+        fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix (pp_float prec) v1 comma1 (pp_float prec) v2
+          comma2 (pp_float prec) v3 postfix
     | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
     | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
     | Binop (op, v1, v2) ->
@@ -948,6 +992,9 @@ let fprint_hum ?name ?static_indices () ppf llc =
     | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
     | Constant c -> fprintf ppf "%.16g" c
     | Embed_index idx -> pp_axis_index ppf idx
+    | Ternop (op, v1, v2, v3) ->
+        let prefix = Ops.ternop_cd_syntax op in
+        fprintf ppf "@[<1>%s(%a,@ %a,@ %a@])" prefix pp_float v1 pp_float v2 pp_float v3
     | Binop (Arg1, v1, _v2) -> pp_float ppf v1
     | Binop (Arg2, _v1, v2) -> pp_float ppf v2
     | Binop (op, v1, v2) ->

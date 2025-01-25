@@ -24,6 +24,16 @@ and t =
   | Noop
   | Seq of t * t
   | Block_comment of string * t  (** Same as the given code, with a comment. *)
+  | Accum_ternop of {
+      initialize_neutral : bool;
+      accum : Ops.binop;
+      op : Ops.ternop;
+      lhs : Tn.t;
+      rhs1 : buffer;
+      rhs2 : buffer;
+      rhs3 : buffer;
+      projections : Indexing.projections Lazy.t;
+    }
   | Accum_binop of {
       initialize_neutral : bool;
       accum : Ops.binop;
@@ -93,6 +103,8 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
     | Accum_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
     | Accum_binop { lhs; rhs1; rhs2; _ } ->
         Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2 ]
+    | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
+        Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2; of_node rhs3 ]
     | Fetch { array; _ } -> one array
   in
   loop asgns
@@ -139,98 +151,60 @@ let%diagn2_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     Low_level.Set { tn; idcs; llv; debug = "" }
   in
-  let rec loop code =
+  let rec loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections =
+    let projections = Lazy.force projections in
+    let lhs_idx =
+      derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
+    in
+    let rhs_idcs =
+      Array.map projections.project_rhs ~f:(fun projection ->
+          derive_index ~product_syms:projections.product_iterators ~projection)
+    in
+    let basecase rev_iters =
+      let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
+      let rhses_idcs = Array.map rhs_idcs ~f:(fun rhs_idx -> rhs_idx ~product) in
+      let lhs_idcs = lhs_idx ~product in
+      let open Low_level in
+      let lhs_ll = get (Node lhs) lhs_idcs in
+      let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in
+      let rhs2 = apply_op op rhses_ll in
+      if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
+      else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
+    in
+    let rec for_loop rev_iters = function
+      | [] -> basecase rev_iters
+      | d :: product ->
+          let index = Indexing.get_symbol () in
+          For_loop
+            {
+              index;
+              from_ = 0;
+              to_ = d - 1;
+              body = for_loop (index :: rev_iters) product;
+              trace_it = true;
+            }
+    in
+    let for_loops =
+      try for_loop [] (Array.to_list projections.product_space)
+      with e ->
+        [%log "projections=", (projections : projections)];
+        raise e
+    in
+    if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
+      let dims = lazy projections.lhs_dims in
+      let fetch_op = Constant (Ops.neutral_elem accum) in
+      Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
+    else for_loops
+  and loop code =
     match code with
+    | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
+        loop_accum ~initialize_neutral ~accum ~op:(Ops.Ternop op) ~lhs ~rhses:[| rhs1; rhs2; rhs3 |]
+          projections
     | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
-        let projections = Lazy.force projections in
-        let lhs_idx =
-          derive_index ~product_syms:projections.product_iterators
-            ~projection:projections.project_lhs
-        in
-        let rhs1_idx =
-          derive_index ~product_syms:projections.product_iterators
-            ~projection:projections.project_rhs.(0)
-        in
-        let rhs2_idx =
-          derive_index ~product_syms:projections.product_iterators
-            ~projection:projections.project_rhs.(1)
-        in
-        let basecase rev_iters =
-          let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
-          let rhs1_idcs = rhs1_idx ~product in
-          let rhs2_idcs = rhs2_idx ~product in
-          let lhs_idcs = lhs_idx ~product in
-          let open Low_level in
-          let lhs_ll = get (Node lhs) lhs_idcs in
-          let rhs1_ll = get rhs1 rhs1_idcs in
-          let rhs2_ll = get rhs2 rhs2_idcs in
-          let rhs2 = binop ~op ~rhs1:rhs1_ll ~rhs2:rhs2_ll in
-          if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
-          else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
-        in
-        let rec for_loop rev_iters = function
-          | [] -> basecase rev_iters
-          | d :: product ->
-              let index = Indexing.get_symbol () in
-              For_loop
-                {
-                  index;
-                  from_ = 0;
-                  to_ = d - 1;
-                  body = for_loop (index :: rev_iters) product;
-                  trace_it = true;
-                }
-        in
-        let for_loops =
-          try for_loop [] (Array.to_list projections.product_space)
-          with e ->
-            [%log "projections=", (projections : projections)];
-            raise e
-        in
-        if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
-          let dims = lazy projections.lhs_dims in
-          let fetch_op = Constant (Ops.neutral_elem accum) in
-          Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
-        else for_loops
+        loop_accum ~initialize_neutral ~accum ~op:(Ops.Binop op) ~lhs ~rhses:[| rhs1; rhs2 |]
+          projections
     | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
-        let projections = Lazy.force projections in
-        let lhs_idx =
-          derive_index ~product_syms:projections.product_iterators
-            ~projection:projections.project_lhs
-        in
-        let rhs_idx =
-          derive_index ~product_syms:projections.product_iterators
-            ~projection:projections.project_rhs.(0)
-        in
-        let basecase rev_iters =
-          let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
-          let lhs_idcs = lhs_idx ~product in
-          let open Low_level in
-          let lhs_ll = get (Node lhs) lhs_idcs in
-          let rhs_ll = get rhs @@ rhs_idx ~product in
-          let rhs2 = unop ~op ~rhs:rhs_ll in
-          if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
-          else set lhs lhs_idcs @@ binop ~op:accum ~rhs1:lhs_ll ~rhs2
-        in
-        let rec for_loop rev_iters = function
-          | [] -> basecase rev_iters
-          | d :: product ->
-              let index = Indexing.get_symbol () in
-              For_loop
-                {
-                  index;
-                  from_ = 0;
-                  to_ = d - 1;
-                  body = for_loop (index :: rev_iters) product;
-                  trace_it = true;
-                }
-        in
-        let for_loops = for_loop [] (Array.to_list projections.product_space) in
-        if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
-          let dims = lazy projections.lhs_dims in
-          let fetch_op = Constant (Ops.neutral_elem accum) in
-          Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
-        else for_loops
+        loop_accum ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~rhses:[| rhs |] projections
     | Noop -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.unflat_lines [ Comment s; loop c; Comment "end" ]
     | Seq (c1, c2) ->
@@ -251,7 +225,6 @@ let%diagn2_sexp to_low_level code =
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Get_global (global, Some idcs))
   in
-
   loop code
 
 let flatten c =
@@ -259,7 +232,7 @@ let flatten c =
     | Noop -> []
     | Seq (c1, c2) -> loop c1 @ loop c2
     | Block_comment (s, c) -> Block_comment (s, Noop) :: loop c
-    | (Accum_binop _ | Accum_unop _ | Fetch _) as c -> [ c ]
+    | (Accum_ternop _ | Accum_binop _ | Accum_unop _ | Fetch _) as c -> [ c ]
   in
   loop c
 
@@ -286,6 +259,9 @@ let get_ident_within_code ?no_dots c =
         loop c1;
         loop c2
     | Block_comment (_, c) -> loop c
+    | Accum_ternop
+        { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; rhs3; projections = _ } ->
+        List.iter ~f:visit [ lhs; tn rhs1; tn rhs2; tn rhs3 ]
     | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
         List.iter ~f:visit [ lhs; tn rhs1; tn rhs2 ]
     | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
@@ -331,6 +307,16 @@ let fprint_hum ?name ?static_indices () ppf c =
     | Block_comment (s, c) ->
         fprintf ppf "# \"%s\";@ " s;
         loop c
+    | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
+        let proj_spec =
+          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
+          else "<not-in-yet>"
+        in
+        (* Uncurried syntax for ternary operations. *)
+        fprintf ppf "%s %s %s(%s, %s, %s)%s;@ " (ident lhs)
+          (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+          (Ops.ternop_cd_syntax op) (buffer_ident rhs1) (buffer_ident rhs2) (buffer_ident rhs3)
+          (if not (String.equal proj_spec ".") then " ~logic:\"" ^ proj_spec ^ "\"" else "")
     | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec

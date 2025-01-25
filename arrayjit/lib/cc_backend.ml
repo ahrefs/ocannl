@@ -84,6 +84,7 @@ struct
   let kernel_prep_line = ""
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let typ_of_prec = Ops.c_typ_of_prec
+  let ternop_syntax = Ops.ternop_c_syntax
   let binop_syntax = Ops.binop_c_syntax
   let unop_syntax = Ops.unop_c_syntax
   let convert_precision = Ops.c_convert_precision
