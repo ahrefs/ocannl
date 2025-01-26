@@ -46,21 +46,29 @@ let assignment_op expr =
   | [%expr ( =/ )] -> (false, [%expr Arrayjit.Ops.Div])
   | [%expr ( =** )] -> (false, [%expr Arrayjit.Ops.ToPowOf])
   | [%expr ( =?/ )] -> (false, [%expr Arrayjit.Ops.Relu_gate])
+  | [%expr ( =|| )] -> (false, [%expr Arrayjit.Ops.Or])
+  | [%expr ( =&& )] -> (false, [%expr Arrayjit.Ops.And])
+  | [%expr ( =@^ )] -> (false, [%expr Arrayjit.Ops.Max])
+  | [%expr ( =^^ )] -> (false, [%expr Arrayjit.Ops.Min])
   | [%expr ( =:+ )] -> (true, [%expr Arrayjit.Ops.Add])
   | [%expr ( =:- )] -> (true, [%expr Arrayjit.Ops.Sub])
   | [%expr ( =:* )] -> (true, [%expr Arrayjit.Ops.Mul])
   | [%expr ( =:/ )] -> (true, [%expr Arrayjit.Ops.Div])
   | [%expr ( =:** )] -> (true, [%expr Arrayjit.Ops.ToPowOf])
   | [%expr ( =:?/ )] -> (true, [%expr Arrayjit.Ops.Relu_gate])
+  | [%expr ( =:|| )] -> (true, [%expr Arrayjit.Ops.Or])
+  | [%expr ( =:&& )] -> (true, [%expr Arrayjit.Ops.And])
+  | [%expr ( =:@^ )] -> (true, [%expr Arrayjit.Ops.Max])
+  | [%expr ( =:^^ )] -> (true, [%expr Arrayjit.Ops.Min])
   | _ ->
       ( false,
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc
              "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
-             "=+ (Add), =- (Sub), =* (Mul), =/ (Div), =** (ToPowOf), =?/ (Relu_gate), =: (Arg2), \
-              =:+, =:-,"
-             " =:*, =:/, =:**, =:?/ (same with initializing the tensor to the neutral value before \
-              the start of the calculation)" )
+             "=+ (Add), =- (Sub), =* (Mul), =/ (Div), =** (ToPowOf), =?/ (Relu_gate), =|| (Or), \
+              =&& (And), =@^ (Max), =^^ (Min), =: (Arg2), =:+, =:-,"
+             " =:*, =:/, =:**, =:?/, =:||, =:&&, =:@^, =:^^ (same with initializing the tensor to \
+              the neutral value before the start of the calculation)" )
 
 let binary_op expr =
   (* This and is_binary_op should stay in sync with Arrayjit.Ops.binop_cd_syntax. *)
@@ -84,14 +92,25 @@ let binary_op expr =
   | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate])
   | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg2])
   | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1])
+  | [%expr ( < )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt])
+  | [%expr ( <> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne])
+  | [%expr ( || )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or])
+  | [%expr ( && )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.And])
+  | [%expr ( % )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Mod])
+  | [%expr ( @^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max])
+  | [%expr ( ^^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min])
   | _ ->
       ( [%expr Shape.Pointwise_bin],
         Ast_builder.Default.pexp_extension ~loc
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a binary operator, one of: %s"
-             "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2)" )
+             "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \
+              (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^ (Max), ^^ (Min)" )
 
 let is_binary_op ident =
-  List.mem [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>" ] ident ~equal:String.equal
+  (* TODO: compile into a hashtable *)
+  List.mem
+    [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>"; "<"; "<>"; "&&"; "%"; "@^"; "^^" ]
+    ident ~equal:String.equal
 
 let unary_op expr =
   (* This and is_unary_op should stay in sync with Arrayjit.Ops.unop_cd_syntax. *)

@@ -665,13 +665,6 @@ let simplify_llc llc =
     | Get_global _ -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
     | Embed_index (Iterator _) -> llv
-    | Ternop (op, llv1, llv2, llv3) ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-        let v1 = loop_float llv1 in
-        let v2 = loop_float llv2 in
-        let v3 = loop_float llv3 in
-        let result = Ternop (op, v1, v2, v3) in
-        if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
@@ -721,10 +714,19 @@ let simplify_llc llc =
           | Constant c when Float.is_integer c ->
               loop_float @@ unroll_pow ~base:v1 ~exp:(Float.to_int c)
           | _ -> result)
+    | Binop (Add, Binop (Mul, llv1, llv2), llv3) | Binop (Add, llv3, Binop (Mul, llv1, llv2)) ->
+        (* TODO: this is tentative. *)
+        loop_float @@ Ternop (FMA, llv1, llv2, llv3)
     | Binop (op, llv1, llv2) ->
         let v1 = loop_float llv1 in
         let v2 = loop_float llv2 in
         let result = Binop (op, v1, v2) in
+        if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
+    | Ternop (op, llv1, llv2, llv3) ->
+        let v1 = loop_float llv1 in
+        let v2 = loop_float llv2 in
+        let v3 = loop_float llv3 in
+        let result = Ternop (op, v1, v2, v3) in
         if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
     | Unop (Identity, llv) -> loop_float llv
     | Unop (op, Constant c) -> Constant (Ops.interpret_unop op c)

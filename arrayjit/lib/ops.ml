@@ -236,7 +236,9 @@ let interpret_ternop op v1 v2 v3 =
   let open Float in
   match op with Where -> if v1 <> 0. then v2 else v3 | FMA -> (v1 * v2) + v3
 
+(** Note: currently the %cd syntax only supports infix binops as assignment ops. *)
 let is_binop_infix _ = true
+
 let is_binop_nice_infix = function Arg1 | Arg2 | Relu_gate | Max | Min -> false | _ -> true
 
 let binop_cd_syntax = function
@@ -258,6 +260,8 @@ let binop_cd_syntax = function
 (* | Shl -> "lsl" *)
 (* | Shr -> "lsr" *)
 
+(** In the %cd syntax, we support uncurried notation for binary ops in addition to the infix
+    notation. *)
 let binop_cd_fallback_syntax = function
   | Arg1 -> "fst"
   | Arg2 -> "snd"
@@ -397,6 +401,7 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for byte/integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
 
+(** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
 
 let ternop_c_syntax prec op =
