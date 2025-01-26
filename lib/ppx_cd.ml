@@ -112,19 +112,25 @@ let is_binary_op ident =
     [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>"; "<"; "<>"; "&&"; "%"; "@^"; "^^" ]
     ident ~equal:String.equal
 
-let unary_op expr =
-  (* This and is_unary_op should stay in sync with Arrayjit.Ops.unop_cd_syntax. *)
-  let loc = expr.pexp_loc in
-  match expr with
-  | [%expr ( ~= )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Identity])
-  | [%expr ( ?/ )] -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Relu])
-  | _ ->
-      ( [%expr Shape.Pointwise_un],
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: expected a unary operator, one of: = (Identity), ?/ (Relu)" )
-
-let is_unary_op ident = List.mem [ "~="; "?/" ] ident ~equal:String.equal
+let unary_ops =
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("id", fun loc -> [%expr Arrayjit.Ops.Identity]);
+      ("relu", fun loc -> [%expr Arrayjit.Ops.Relu]);
+      ("sat01", fun loc -> [%expr Arrayjit.Ops.Satur01]);
+      ("exp", fun loc -> [%expr Arrayjit.Ops.Exp]);
+      ("log", fun loc -> [%expr Arrayjit.Ops.Log]);
+      ("exp2", fun loc -> [%expr Arrayjit.Ops.Exp2]);
+      ("log2", fun loc -> [%expr Arrayjit.Ops.Log2]);
+      ("sin", fun loc -> [%expr Arrayjit.Ops.Sin]);
+      ("cos", fun loc -> [%expr Arrayjit.Ops.Cos]);
+      ("sqrt", fun loc -> [%expr Arrayjit.Ops.Sqrt]);
+      ("recip", fun loc -> [%expr Arrayjit.Ops.Recip]);
+      ("recip_sqrt", fun loc -> [%expr Arrayjit.Ops.Recip_sqrt]);
+      ("neg", fun loc -> [%expr Arrayjit.Ops.Neg]);
+      ("tanh", fun loc -> [%expr Arrayjit.Ops.Tanh_approx]);
+    ]
 
 type result = {
   vbs : value_binding Map.M(String).t;
@@ -832,9 +838,24 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~projections ~proj_in_scope:true ()
-    | [%expr [%e? accu_op] [%e? lhs] (([%e? un_op] [%e? rhs]) ~projections:[%e? projections])]
-    | [%expr [%e? accu_op] [%e? lhs] ([%e? un_op] ([%e? rhs] ~projections:[%e? projections]))] ->
-        let _, un_op = unary_op un_op in
+    | [%expr
+        [%e? accu_op]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
+             [%e? rhs]
+             ~projections:[%e? projections])]
+    | [%expr
+        [%e? accu_op]
+          [%e? lhs]
+          (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
+             ~projections:[%e? projections])]
+    | [%expr
+        [%e? accu_op]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
+             ([%e? rhs] ~projections:[%e? projections]))]
+      when Hashtbl.mem unary_ops unop_ident ->
+        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~projections ~proj_in_scope:true ()
     | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
@@ -860,16 +881,16 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? accu_op]
           [%e? lhs]
-          (([%e? un_op] [%e? rhs])
+          (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
     | [%expr
         [%e? accu_op]
           [%e? lhs]
-          ([%e? un_op]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
              ([%e? rhs]
                 ~logic:
                   [%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic]))]
-      ->
+      when Hashtbl.mem unary_ops unop_ident ->
         (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
         let logic =
           let loc = s_loc in
@@ -877,7 +898,7 @@ let translate (expr : expression) : result =
           else if String.equal spec "T" then [%expr Shape.Transpose]
           else [%expr Shape.Permute [%e logic]]
         in
-        let _, un_op = unary_op un_op in
+        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
@@ -890,9 +911,9 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ } as un_op] [%e? rhs])]
-      when is_assignment accu_ident && is_unary_op unop_ident && proj_in_scope ->
-        let _, un_op = unary_op un_op in
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])]
+      when is_assignment accu_ident && Hashtbl.mem unary_ops unop_ident && proj_in_scope ->
+        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~proj_in_scope ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op]
@@ -913,10 +934,11 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ } as un_op] [%e? rhs])]
-      when is_assignment accu_ident && is_unary_op unop_ident ->
-        let logic, un_op = unary_op un_op in
-        process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])]
+      when is_assignment accu_ident && Hashtbl.mem unary_ops unop_ident ->
+        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
+        (* FIXME: projections logic! *)
+        process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic:[%expr Pointwise_un]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op]
           [%e? lhs]

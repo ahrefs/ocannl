@@ -125,7 +125,7 @@ let einsum1 ?(label = []) spec =
 
 let relu ?(label = []) =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: ?/v1 ~projections in
+  let%cd op_asn ~v ~t1 ~projections = v =: relu v1 ~projections in
   let%cd grad_asn ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
   Tensor.unop ~label:("?/" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
