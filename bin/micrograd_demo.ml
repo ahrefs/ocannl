@@ -39,7 +39,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let moons_classes = TDSL.init_const ~l:"moons_classes" ?b ~o:[ 1 ] moons_classes in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
   let%op moons_input = moons_flat @| batch_n in
   (* Tell shape inference to make a minibatch axis. *)
   let () =
@@ -56,7 +56,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
-  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
+  let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)
   let scalar_loss, weight_decay =

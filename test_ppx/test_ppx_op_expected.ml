@@ -56,9 +56,9 @@ let mlp_layer =
           "b"
       and w = (TDSL.param ~more_label:(config.label)) ?values:None "w" in
       fun x ->
-        ((?/) ?label:(Some
-                        (["mlp_layer"] @
-                           (x.Tensor.value).Arrayjit.Tnode.label)))
+        (relu
+           ?label:(Some
+                     (["mlp_layer"] @ (x.Tensor.value).Arrayjit.Tnode.label)))
           (((+) ?label:None) ((( * ) ?label:None) w x) b)
 let _use_layer =
   let config_block__0 = mlp_layer ~config:{ label = ["L2"]; hid_dim = 3 }

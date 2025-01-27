@@ -273,9 +273,9 @@ let binop_cd_fallback_syntax = function
   | Relu_gate -> "relu_gate"
   | Cmplt -> "lt"
   | Cmpne -> "le"
-  | Or -> "orf"
-  | And -> "andf"
-  | Mod -> "modf"
+  | Or -> "or_"
+  | And -> "and_"
+  | Mod -> "mod_"
   | Max -> "max"
   | Min -> "min"
 (* | Shl -> "shlf" *)

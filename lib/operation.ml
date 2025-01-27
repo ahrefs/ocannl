@@ -127,13 +127,13 @@ let relu ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: relu v1 ~projections in
   let%cd grad_asn ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
-  Tensor.unop ~label:("?/" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+  Tensor.unop ~label:("relu" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 module NDO_without_pow = struct
   let ( * ) = matmul ~grad_spec:Prohibit_grad
   let ( *. ) = pointmul ~grad_spec:Prohibit_grad
   let ( + ) = add ~grad_spec:Prohibit_grad
-  let ( ?/ ) = relu ~grad_spec:Prohibit_grad
+  let relu = relu ~grad_spec:Prohibit_grad
   let ( !. ) = Tensor.number ~grad_spec:Prohibit_grad
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:Prohibit_grad @@ Float.of_int i
   let ( - ) = sub ~grad_spec:Prohibit_grad
@@ -260,8 +260,7 @@ module DO = struct
   let ( *. ) = pointmul ~grad_spec:If_needed
   let ( + ) = add ~grad_spec:If_needed
   let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
-  let ( ?/ ) = relu ~grad_spec:If_needed
-  let ( !~ ) label = Tensor.param label
+  let relu = relu ~grad_spec:If_needed
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:If_needed @@ Float.of_int i
   let ( !@ ) = embed_symbol

@@ -7,7 +7,7 @@ module NTDSL = Operation.NTDSL
 
 type mlp_layer_config = { label : string list; hid_dim : int }
 
-let%op mlp_layer ~config x = ?/(("w" * x) + "b" config.hid_dim)
+let%op mlp_layer ~config x = relu (("w" * x) + "b" config.hid_dim)
 
 type mlp_config = { label : string list; hid_dims : int list }
 

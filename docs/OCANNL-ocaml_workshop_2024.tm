@@ -5,10 +5,10 @@
 <\body>
   <doc-data|<doc-title|OCANNL optimization framework>|<doc-subtitle|Tensor
   shape inference, concise notation, multidevice
-  runtime>|<doc-author|<author-data|<author-name|Šukasz
+  runtime>|<doc-author|<author-data|<author-name|ï¿½ukasz
   Stafiniak>|<\author-note>
     Since April 2024, <hlink|<with|font-family|tt|<with|color|orange|a><with|color|blue|hrefs>>|https://ahrefs.com/>
-    sponsors Šukasz's work on OCANNL.
+    sponsors ï¿½ukasz's work on OCANNL.
   </author-note>>>>
 
   <abstract-data|<abstract|OCANNL is a Deep Learning framework with
@@ -98,14 +98,14 @@
   fetaures <with|font-shape|italic|parameter punning> (strings become
   let-bindings of tensors) and inline output dimensions specification. Full
   example of a Multi Layer Perceptron with 2 hidden layers and Rectified
-  Linear Unit non-linearity <verbatim|(?/)>, defining tensors <verbatim|b1>,
+  Linear Unit non-linearity <verbatim|(relu)>, defining tensors <verbatim|b1>,
   <verbatim|w1>, <verbatim|b2>, <verbatim|w2>, <verbatim|b3>, <verbatim|w3>,
   and a tensor-returning function <verbatim|mlp>:
 
   <\verbatim-code>
     let%op mlp x =
 
-    \ \ "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" *
+    \ \ "b3" + ("w3" * relu("b2" hid_dim + ("w2" * relu("b1" hid_dim + ("w1" *
     x)))))
   </verbatim-code>
 

@@ -106,13 +106,82 @@ let rec pat2expr pat =
       @@ Location.error_extensionf ~loc
            "ppx_ocannl does not recognize/support the pattern; maybe try using an `as` alias."
 
-let alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
-let is_operator ident = Str.string_match alphanum_regexp ident 0
+let non_alphanum_regexp = Str.regexp "^[^a-zA-Z0-9]+$"
+let is_operator ident = Str.string_match non_alphanum_regexp ident 0
 
 let is_assignment ident =
   String.length ident > 1
   && Char.equal ident.[0] '='
   && (not @@ List.mem [ "=="; "==="; "=>"; "==>"; "=>>" ] ident ~equal:String.equal)
+
+(** Binary primitive ops, both infix operator and function name variants. *)
+let binary_ops =
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("-@>", fun loc -> [%expr Arrayjit.Ops.Arg1]);
+      ("fst", fun loc -> [%expr Arrayjit.Ops.Arg1]);
+      ("-/>", fun loc -> [%expr Arrayjit.Ops.Arg2]);
+      ("snd", fun loc -> [%expr Arrayjit.Ops.Arg2]);
+      ("+", fun loc -> [%expr Arrayjit.Ops.Add]);
+      ("add", fun loc -> [%expr Arrayjit.Ops.Add]);
+      ("-", fun loc -> [%expr Arrayjit.Ops.Sub]);
+      ("sub", fun loc -> [%expr Arrayjit.Ops.Sub]);
+      ("*", fun loc -> [%expr Arrayjit.Ops.Mul]);
+      ("mul", fun loc -> [%expr Arrayjit.Ops.Mul]);
+      ("/", fun loc -> [%expr Arrayjit.Ops.Div]);
+      ("div", fun loc -> [%expr Arrayjit.Ops.Div]);
+      ("**", fun loc -> [%expr Arrayjit.Ops.ToPowOf]);
+      ("pow", fun loc -> [%expr Arrayjit.Ops.ToPowOf]);
+      ("-?/", fun loc -> [%expr Arrayjit.Ops.Relu_gate]);
+      ("relu_gate", fun loc -> [%expr Arrayjit.Ops.Relu_gate]);
+      ("<", fun loc -> [%expr Arrayjit.Ops.Cmplt]);
+      ("lt", fun loc -> [%expr Arrayjit.Ops.Cmplt]);
+      ("<>", fun loc -> [%expr Arrayjit.Ops.Cmpne]);
+      ("ne", fun loc -> [%expr Arrayjit.Ops.Cmpne]);
+      ("||", fun loc -> [%expr Arrayjit.Ops.Or]);
+      ("or_", fun loc -> [%expr Arrayjit.Ops.Or]);
+      ("&&", fun loc -> [%expr Arrayjit.Ops.And]);
+      ("and_", fun loc -> [%expr Arrayjit.Ops.And]);
+      ("%", fun loc -> [%expr Arrayjit.Ops.Mod]);
+      ("mod_", fun loc -> [%expr Arrayjit.Ops.Mod]);
+      ("@^", fun loc -> [%expr Arrayjit.Ops.Max]);
+      ("max", fun loc -> [%expr Arrayjit.Ops.Max]);
+      ("^^", fun loc -> [%expr Arrayjit.Ops.Min]);
+      ("min", fun loc -> [%expr Arrayjit.Ops.Min]);
+    ]
+
+(** Unary primitive ops. *)
+let unary_ops =
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("id", fun loc -> [%expr Arrayjit.Ops.Identity]);
+      ("relu", fun loc -> [%expr Arrayjit.Ops.Relu]);
+      ("sat01", fun loc -> [%expr Arrayjit.Ops.Satur01]);
+      ("exp", fun loc -> [%expr Arrayjit.Ops.Exp]);
+      ("log", fun loc -> [%expr Arrayjit.Ops.Log]);
+      ("exp2", fun loc -> [%expr Arrayjit.Ops.Exp2]);
+      ("log2", fun loc -> [%expr Arrayjit.Ops.Log2]);
+      ("sin", fun loc -> [%expr Arrayjit.Ops.Sin]);
+      ("cos", fun loc -> [%expr Arrayjit.Ops.Cos]);
+      ("sqrt", fun loc -> [%expr Arrayjit.Ops.Sqrt]);
+      ("recip", fun loc -> [%expr Arrayjit.Ops.Recip]);
+      ("recip_sqrt", fun loc -> [%expr Arrayjit.Ops.Recip_sqrt]);
+      ("neg", fun loc -> [%expr Arrayjit.Ops.Neg]);
+      ("tanh", fun loc -> [%expr Arrayjit.Ops.Tanh_approx]);
+    ]
+
+(** Unary primitive ops. *)
+let ternary_ops =
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("where", fun loc -> [%expr Arrayjit.Ops.Where]); ("fma", fun loc -> [%expr Arrayjit.Ops.FMA]);
+    ]
+
+let is_primitive_op op_ident =
+  List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
 
 let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr

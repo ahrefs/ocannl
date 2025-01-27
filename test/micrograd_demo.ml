@@ -20,8 +20,8 @@ let%expect_test "Micrograd README basic example" =
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
   let%op c = c + 1 + c + ~-a in
-  let%op d = d + (d *. 2) + ?/(b + a) in
-  let%op d = d + (3 *. d) + ?/(b - a) in
+  let%op d = d + (d *. 2) + relu (b + a) in
+  let%op d = d + (3 *. d) + relu (b - a) in
   let%op e = c - d in
   let%op f = e **. 2 in
   let%op g = f /. 2 in
@@ -119,7 +119,7 @@ let%expect_test "Micrograd half-moons example" =
   let moons_classes =
     TDSL.init_const ~l:"moons_classes" (* ~b:[ n_batches; batch_size ] *) ~o:[ 1 ] moons_classes
   in
-  let%op mlp x = "b3" + ("w3" * ?/("b2" 16 + ("w2" * ?/("b1" 16 + ("w1" * x))))) in
+  let%op mlp x = "b3" + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   (* Tell shape inference to make a minibatch axis. *)
@@ -129,7 +129,7 @@ let%expect_test "Micrograd half-moons example" =
   let losses = ref [] in
   let log_losses = ref [] in
   let learning_rates = ref [] in
-  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
+  let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)
   let weight_decay = 0.0001 in

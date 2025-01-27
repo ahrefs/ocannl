@@ -27,7 +27,7 @@ let demo () =
   let steps = epochs * n_batches in
   let weight_decay = 0.0002 in
 
-  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
 
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
@@ -49,7 +49,7 @@ let demo () =
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
 
-  let%op margin_loss = ?/(1 - (moons_class *. mlp moons_input)) in
+  let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 
   let update = Train.grad_update scalar_loss in

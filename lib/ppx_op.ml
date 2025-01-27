@@ -259,7 +259,10 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   | { pexp_desc = Pexp_letmodule (name, module_expr, body); _ } ->
       let vbs, body = loop ?label body in
       (vbs, { expr with pexp_desc = Pexp_letmodule (name, module_expr, body) })
-  | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
+  | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }
+    when is_primitive_op op_ident || is_operator op_ident
+    ->
+      (* FIXME: this heuristic is hacky... *)
       (no_vbs, [%expr [%e expr] ?label:[%e opt_expr ~loc label]])
   | expr -> (no_vbs, expr)
 

@@ -76,11 +76,13 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op mlp x =
     "w4"
-    * ?/("b3" hid_dim_3 + ("w3" * ?/("b2" hid_dim_2 + ("w2" * ?/("b1" hid_dim_1 + ("w1" * x))))))
+    * relu
+        ("b3" hid_dim_3
+        + ("w3" * relu ("b2" hid_dim_2 + ("w2" * relu ("b1" hid_dim_1 + ("w1" * x))))))
   in
   (* TINY for debugging: *)
-  (* let%op mlp x = "w2" * ?/("b1" hid_dim + ("w1" * x)) in *)
-  let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
+  (* let%op mlp x = "w2" * relu("b1" hid_dim + ("w1" * x)) in *)
+  let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
   Arrayjit.Schedulers.sync_suggested_num_streams := num_streams;

@@ -13,7 +13,7 @@ let () = ignore (y0, y1, y2, a, b, y, z)
 
 type mlp_layer_config = { label : string list; hid_dim : int }
 
-let%op mlp_layer ~config x = ?/(("w" * x) + "b" config.hid_dim)
+let%op mlp_layer ~config x = relu (("w" * x) + "b" config.hid_dim)
 
 let%op _use_layer x =
   mlp_layer ~config:{ label = [ "L" ]; hid_dim = 3 }

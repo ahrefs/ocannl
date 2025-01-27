@@ -106,32 +106,6 @@ let binary_op expr =
              "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \
               (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^ (Max), ^^ (Min)" )
 
-let is_binary_op ident =
-  (* TODO: compile into a hashtable *)
-  List.mem
-    [ "+"; "-"; "*"; "/"; "**"; "-?/"; "-/>"; "-@>"; "<"; "<>"; "&&"; "%"; "@^"; "^^" ]
-    ident ~equal:String.equal
-
-let unary_ops =
-  Hashtbl.of_alist_exn
-    (module String)
-    [
-      ("id", fun loc -> [%expr Arrayjit.Ops.Identity]);
-      ("relu", fun loc -> [%expr Arrayjit.Ops.Relu]);
-      ("sat01", fun loc -> [%expr Arrayjit.Ops.Satur01]);
-      ("exp", fun loc -> [%expr Arrayjit.Ops.Exp]);
-      ("log", fun loc -> [%expr Arrayjit.Ops.Log]);
-      ("exp2", fun loc -> [%expr Arrayjit.Ops.Exp2]);
-      ("log2", fun loc -> [%expr Arrayjit.Ops.Log2]);
-      ("sin", fun loc -> [%expr Arrayjit.Ops.Sin]);
-      ("cos", fun loc -> [%expr Arrayjit.Ops.Cos]);
-      ("sqrt", fun loc -> [%expr Arrayjit.Ops.Sqrt]);
-      ("recip", fun loc -> [%expr Arrayjit.Ops.Recip]);
-      ("recip_sqrt", fun loc -> [%expr Arrayjit.Ops.Recip_sqrt]);
-      ("neg", fun loc -> [%expr Arrayjit.Ops.Neg]);
-      ("tanh", fun loc -> [%expr Arrayjit.Ops.Tanh_approx]);
-    ]
-
 type result = {
   vbs : value_binding Map.M(String).t;
       (** [vbs] are the bindings introduced by inline tensor declarations (aka. punning). These
@@ -681,7 +655,7 @@ let translate (expr : expression) : result =
           slot = RHS2;
           expr = [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
         }
-    | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
+    | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_primitive_op op_ident ->
         default_result
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         (* FIXME: `**.` should take a tensor and require that it's a literal. *)
@@ -906,7 +880,7 @@ let translate (expr : expression) : result =
           ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op]
              [%e? rhs1]
              [%e? rhs2])]
-      when is_assignment accu_ident && is_binary_op binop_ident && proj_in_scope ->
+      when is_assignment accu_ident && Hashtbl.mem binary_ops binop_ident && proj_in_scope ->
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~proj_in_scope ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
@@ -928,7 +902,7 @@ let translate (expr : expression) : result =
           ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op]
              [%e? rhs1]
              [%e? rhs2])]
-      when is_assignment accu_ident && is_binary_op binop_ident ->
+      when is_assignment accu_ident && Hashtbl.mem binary_ops binop_ident ->
         let logic, bin_op = binary_op bin_op in
         process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic
     | [%expr
@@ -1100,8 +1074,6 @@ let translate (expr : expression) : result =
     | { pexp_desc = Pexp_letmodule (name, module_expr, expr1); _ } ->
         let res1 = loop ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
-    | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_operator op_ident ->
-        { default_result with typ = Unknown; expr = [%expr [%e expr]] }
     | _ -> { default_result with typ = Unknown }
   in
   transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr

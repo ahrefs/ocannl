@@ -35,9 +35,9 @@ let experiment ~seed ~backend_name ~config () =
   let moons_flat ~b = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
   let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
   let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
-  let%op mlp x = "b3" + ("w3" * ?/("b2" hid_dim + ("w2" * ?/("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
   (* let%op mlp x = "b" + ("w" * x) in *)
-  let%op loss_fn ~output ~expectation = ?/(!..1 - (expectation *. output)) in
+  let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)
   let weight_decay = 0.0002 in
