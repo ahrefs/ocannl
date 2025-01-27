@@ -85,6 +85,8 @@ type transpose_type =
   | Batch_slice of Arrayjit.Indexing.static_symbol
 [@@deriving equal, sexp]
 
+type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
+
 let identifier_multichar = Angstrom.take_while1 Char.is_alphanum
 
 let opt_separators : _ Angstrom.t =
@@ -203,26 +205,19 @@ let einsum_of_spec spec =
   | Error msg ->
       raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
-(** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the
-    tensor. Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =
   | Broadcast of compose_type * t * t
-      (** Matches the shapes for a binary operation.
-
-          For [Broadcast (Einsum (ls1, ls2, ls3), s1, s2)], the labels of [s1] and [s2] must match
-          according to the [ls1], [ls2] lineup, and the resulting shape inherits the labels
-          according to the [ls3] lineup. *)
   | Transpose of transpose_type * t
-      (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
-          [s1], hence the name. *)
+  | Broadcast_tern of ternary_type * t * t * t
   | Terminal of Arrayjit.Ops.init_op
-      (** Extracts any available shape information from the initialization. E.g. for
-          [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp]
 
 let logic_to_spec = function
-  | Broadcast (Pointwise_bin, _, _) | Transpose (Pointwise_un, _) -> "."
-  | Broadcast (Compose, _, _) -> "@"
+  | Broadcast (Pointwise_bin, _, _)
+  | Transpose (Pointwise_un, _)
+  | Broadcast_tern (Pointwise_tern, _, _, _) ->
+      "."
+  | Broadcast (Compose, _, _) | Broadcast_tern (Compose_accumulate, _, _, _) -> "@"
   | Broadcast (Einsum spec, _, _) | Transpose (Permute spec, _) -> spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
@@ -430,6 +425,31 @@ let get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
           Row_ineq { cur = cur_sh.output; subr = sh1.output };
           Row_ineq { cur = cur_sh.output; subr = sh2.output };
         ] )
+  | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = sh1.input; subr = sh2.output };
+          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
+          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh2.input };
+          Row_ineq { cur = cur_sh.output; subr = sh1.output };
+          Row_ineq { cur = cur_sh.batch; subr = sh3.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh3.input };
+          Row_ineq { cur = cur_sh.output; subr = sh3.output };
+        ] )
+  | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
+          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
+          Row_ineq { cur = cur_sh.batch; subr = sh3.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh1.input };
+          Row_ineq { cur = cur_sh.input; subr = sh2.input };
+          Row_ineq { cur = cur_sh.input; subr = sh3.input };
+          Row_ineq { cur = cur_sh.output; subr = sh1.output };
+          Row_ineq { cur = cur_sh.output; subr = sh2.output };
+          Row_ineq { cur = cur_sh.output; subr = sh3.output };
+        ] )
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
       let slice_v = get_var () in
       let slice_var = Var slice_v in
@@ -553,6 +573,10 @@ let iter_shapes update_step ~f =
   | Broadcast (_, sh1, sh2) ->
       f sh1;
       f sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) ->
+      f sh1;
+      f sh2;
+      f sh3
 
 let all_rows update_step =
   let rows_sh sh = [ sh.batch; sh.input; sh.output ] in
@@ -562,6 +586,7 @@ let all_rows update_step =
   | Terminal _ -> []
   | Transpose (_, sh1) -> rows_sh sh1
   | Broadcast (_, sh1, sh2) -> rows_sh sh1 @ rows_sh sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) -> rows_sh sh1 @ rows_sh sh2 @ rows_sh sh3
 
 let apply_env_t env sh =
   sh.batch <- Row.subst_row env sh.batch;
@@ -661,6 +686,10 @@ let fresh_proj_ids update =
   | Broadcast (_, sh1, sh2) ->
       fresh_shape sh1;
       fresh_shape sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) ->
+      fresh_shape sh1;
+      fresh_shape sh2;
+      fresh_shape sh3
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
@@ -692,6 +721,7 @@ let derive_projections (update_step : update_step) : Idx.projections =
     | Terminal _ -> []
     | Transpose (_, sh) -> [ sh ]
     | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
+    | Broadcast_tern (_, sh1, sh2, sh3) -> [ sh1; sh2; sh3 ]
   in
   let lhs_dims = to_dims lhs in
   let rhs_dims = Array.of_list_map ~f:to_dims rhs in

@@ -128,6 +128,17 @@ val unop :
   t ->
   t
 
+val ternop :
+  label:string list ->
+  ?compose_op:Shape.compose_type ->
+  op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
+  ?grad_spec:grad_spec ->
+  t ->
+  t ->
+  t ->
+  t
+
 val term :
   label:string list ->
   grad_spec:grad_spec ->

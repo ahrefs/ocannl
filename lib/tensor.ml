@@ -264,6 +264,11 @@ let binop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~projections in
   op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2 ]
 
+  let ternop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 =
+    let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
+    let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~t3 ~projections in
+    op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2; t3 ]
+  
 let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in

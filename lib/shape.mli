@@ -83,6 +83,12 @@ type transpose_type =
   | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving equal, sexp]
 
+(** If you miss expressivity here, leave a note on {!{https://github.com/ahrefs/ocannl/issues/305}issue 305}. *)
+type ternary_type =
+  | Pointwise_tern  (** As in the operation [Where]. *)
+  | Compose_accumulate  (** As in the operation [FMA]. *)
+[@@deriving equal, sexp]
+
 val make :
   ?batch_dims:int list ->
   ?input_dims:int list ->
@@ -123,6 +129,7 @@ type logic =
   | Transpose of transpose_type * t
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
+  | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
   | Terminal of Arrayjit.Ops.init_op
       (** Extracts any available shape information from the initialization. E.g. for
           [File_mapped fn], opens the file [fn] to check its length. *)

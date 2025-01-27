@@ -33,7 +33,7 @@ type expr_type =
 
 let is_unknown = function Unknown -> true | _ -> false
 
-type projections_slot = LHS | RHS1 | RHS2 | Nonslot | Undet [@@deriving equal, sexp]
+type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Nonslot | Undet [@@deriving equal, sexp]
 
 let assignment_op expr =
   (* This should stay in sync with Arrayjit.Ops.assign_op_cd_syntax. *)
@@ -72,6 +72,7 @@ let assignment_op expr =
 
 let binary_op expr =
   (* This and is_binary_op should stay in sync with Arrayjit.Ops.binop_cd_syntax. *)
+  (* FIXME: get rid of this and use binary_ops table instead. *)
   let loc = expr.pexp_loc in
   match expr with
   | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add])
@@ -105,6 +106,18 @@ let binary_op expr =
         @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a binary operator, one of: %s"
              "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \
               (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^ (Max), ^^ (Min)" )
+
+let ternary_op expr =
+  (* FIXME: get rid of this and use ternary_ops table instead. *)
+  let loc = expr.pexp_loc in
+  match expr with
+  | [%expr where] -> ([%expr Shape.Pointwise_tern], [%expr Arrayjit.Ops.Where])
+  | [%expr fma] -> ([%expr Shape.Compose_accumulate], [%expr Arrayjit.Ops.FMA])
+  | _ ->
+      ( [%expr Shape.Pointwise_bin],
+        Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a ternary operator, one of: %s"
+             "where, fma" )
 
 type result = {
   vbs : value_binding Map.M(String).t;
@@ -206,6 +219,7 @@ let project_p_slot debug loc slot =
   | LHS -> [%expr p.project_lhs]
   | RHS1 -> [%expr p.project_rhs.(0)]
   | RHS2 -> [%expr p.project_rhs.(1)]
+  | RHS3 -> [%expr p.project_rhs.(2)]
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -221,6 +235,7 @@ let project_p_dims debug loc slot =
   | LHS -> [%expr p.lhs_dims]
   | RHS1 -> [%expr p.rhs_dims.(0)]
   | RHS2 -> [%expr p.rhs_dims.(1)]
+  | RHS3 -> [%expr p.rhs_dims.(2)]
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -344,6 +359,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         | LHS -> [%pat? nondiff__lhs]
         | RHS1 -> [%pat? nondiff__rhs1]
         | RHS2 -> [%pat? nondiff__rhs2]
+        | RHS3 -> [%pat? nondiff__rhs3]
         | Nonslot | Undet -> [%pat? nondiff__tensor]
       in
       let t = pat2expr v in
@@ -444,6 +460,74 @@ let translate (expr : expression) : result =
       { vbs = no_vbs; typ = Tensor; slot = Undet; expr; array_opt_of_code = None }
     in
     let loop = transl ~bad_pun_hints in
+    (* FIXME: collapse these (code reuse) *)
+    let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
+        () =
+      let initialize_neutral, accu_op = assignment_op accu_op in
+      let setup_l =
+        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
+      in
+      let _, tern_op = ternary_op tern_op in
+      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
+      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
+      let projections =
+        match projections with
+        | Some prjs -> prjs
+        | None ->
+            let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
+            let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
+            let rhs2_dims = project_p_dims "RHS2" lhs.pexp_loc setup_r2.slot in
+            let rhs3_dims = project_p_dims "RHS3" lhs.pexp_loc setup_r3.slot in
+            let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
+            let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
+            let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
+            let project_rhs3 = project_p_slot "RHS3" rhs3.pexp_loc setup_r3.slot in
+            [%expr
+              lazy
+                (let p = Lazy.force projections in
+                 Arrayjit.Indexing.
+                   {
+                     product_space = p.product_space;
+                     product_iterators = p.product_iterators;
+                     lhs_dims = [%e lhs_dims];
+                     rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims]; [%e rhs3_dims] |];
+                     project_lhs = [%e project_lhs];
+                     project_rhs = [| [%e project_rhs1]; [%e project_rhs2]; [%e project_rhs3] |];
+                     debug_info =
+                       {
+                         p.debug_info with
+                         trace =
+                           ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
+                             ^ [%e expr2string_or_empty tern_op],
+                             Arrayjit.Indexing.unique_debug_id () )
+                           :: p.debug_info.trace;
+                       };
+                   })]
+      in
+      (* TODO: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
+         eliding the code. *)
+      let body =
+        [%expr
+          Option.value ~default:Arrayjit.Assignments.Noop
+          @@ Option.map [%e setup_l.array_opt] ~f:(fun lhs ->
+                 Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r2.array_opt]
+                   ~f:(fun rhs1 rhs2 rhs3 ->
+                     Arrayjit.Assignments.Accum_ternop
+                       {
+                         initialize_neutral = [%e initialize_neutral];
+                         accum = [%e accu_op];
+                         lhs;
+                         op = [%e tern_op];
+                         rhs1;
+                         rhs2;
+                         rhs3;
+                         projections = [%e projections];
+                       }))]
+      in
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
+    in
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
@@ -561,6 +645,27 @@ let translate (expr : expression) : result =
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
     in
+    let process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic =
+      let initialize_neutral, accu_op = assignment_op accu_op in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
+      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
+      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
+      let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
+      let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
+      let t2_expr, rhs2_is_grad, rhs2_is_merge = args_for ~loc setup_r2 in
+      let t3_expr, rhs3_is_grad, rhs3_is_merge = args_for ~loc setup_r3 in
+      let body =
+        [%expr
+          Tensor.raw_ternop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op]
+            ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e tern_op] ~t1:[%e t1_expr]
+            ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs1_is_merge:[%e rhs1_is_merge] ~t2:[%e t2_expr]
+            ~rhs2_is_grad:[%e rhs2_is_grad] ~rhs2_is_merge:[%e rhs2_is_merge] ~t3:[%e t3_expr]
+            ~rhs3_is_grad:[%e rhs3_is_grad] ~rhs3_is_merge:[%e rhs3_is_merge] ~logic:[%e logic]]
+      in
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
+    in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
@@ -654,6 +759,19 @@ let translate (expr : expression) : result =
           typ = Grad_of_tensor [%expr t2];
           slot = RHS2;
           expr = [%expr Option.map t2.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
+        }
+    | { pexp_desc = Pexp_ident { txt = Lident "rhs3"; _ }; _ } ->
+        { default_result with typ = Array; slot = RHS3 }
+    | { pexp_desc = Pexp_ident { txt = Lident "t3"; _ }; _ } ->
+        { default_result with typ = Tensor; slot = RHS3 }
+    | { pexp_desc = Pexp_ident { txt = Lident "v3"; _ }; _ } ->
+        { default_result with typ = Array; slot = RHS3; expr = [%expr t3.Tensor.value] }
+    | { pexp_desc = Pexp_ident { txt = Lident "g3"; _ }; _ } ->
+        {
+          default_result with
+          typ = Grad_of_tensor [%expr t3];
+          slot = RHS3;
+          expr = [%expr Option.map t3.Tensor.diff ~f:(fun d -> d.Tensor.grad)];
         }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_primitive_op op_ident ->
         default_result
@@ -811,7 +929,15 @@ let translate (expr : expression) : result =
         [%e? accu_op]
           [%e? lhs]
           ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
+        (* Note: when clause not needed here and below, it's an error if bin_op is not a primitive
+           binary op. *)
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~projections ~proj_in_scope:true ()
+    | [%expr
+        [%e? accu_op]
+          [%e? lhs]
+          ([%e? tern_op] ([%e? rhs1], [%e? rhs2], [%e? rhs3]) ~projections:[%e? projections])] ->
+        process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~projections
+          ~proj_in_scope:true ()
     | [%expr
         [%e? accu_op]
           [%e? lhs]
@@ -855,6 +981,25 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? accu_op]
           [%e? lhs]
+          ([%e? tern_op]
+             ([%e? rhs1], [%e? rhs2], [%e? rhs3])
+             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])] ->
+        let logic =
+          let loc = s_loc in
+          if String.equal spec "." then [%expr Shape.Pointwise_bin]
+          else if String.equal spec "@" then [%expr Shape.Compose]
+          else
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected <.> or <@>, found <%s> -- einsum notation for ternary \
+                  operators not supported yet, see issue #305"
+                 spec
+        in
+        let _, tern_op = binary_op tern_op in
+        process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic
+    | [%expr
+        [%e? accu_op]
+          [%e? lhs]
           (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
     | [%expr
@@ -885,6 +1030,13 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
           [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident ternop_ident; _ }; _ } as tern_op]
+             ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
+      when is_assignment accu_ident && Hashtbl.mem ternary_ops ternop_ident && proj_in_scope ->
+        process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~proj_in_scope ()
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+          [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])]
       when is_assignment accu_ident && Hashtbl.mem unary_ops unop_ident && proj_in_scope ->
         let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
@@ -905,6 +1057,14 @@ let translate (expr : expression) : result =
       when is_assignment accu_ident && Hashtbl.mem binary_ops binop_ident ->
         let logic, bin_op = binary_op bin_op in
         process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident ternop_ident; _ }; _ } as tern_op]
+             ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
+      when is_assignment accu_ident && Hashtbl.mem ternary_ops ternop_ident ->
+        let logic, tern_op = ternary_op tern_op in
+        process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
           [%e? lhs]
