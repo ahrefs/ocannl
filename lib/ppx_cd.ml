@@ -414,7 +414,7 @@ let translate (expr : expression) : result =
              ( [%expr Shape.Pointwise_tern],
                Ast_builder.Default.pexp_extension ~loc
                @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected a ternary operator, one of: %s" "where, fma" ))
+                    "ppx_ocannl %%cd: expected a ternary operator, one of: where, fma" ))
     in
     (* FIXME: collapse these (code reuse) *)
     let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
@@ -886,6 +886,19 @@ let translate (expr : expression) : result =
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
+             ([%e? rhs1], [%e? rhs2])
+             ~projections:[%e? projections])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
+             ~projections:[%e? projections])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
              ([%e? rhs2] ~projections:[%e? projections]))] ->
         (* Note: when clause not needed here and below, it's an error if bin_op is not a primitive
@@ -896,6 +909,14 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3])
+             ~projections:[%e? projections])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
+             [%e? rhs3]
              ~projections:[%e? projections])] ->
         process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~projections
           ~proj_in_scope:true ()
@@ -908,15 +929,10 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          (([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }] [%e? rhs])
-             ~projections:[%e? projections])]
-    | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
-          [%e? lhs]
+          (* FIXME: this was never needed as prefix operators bind tighter? *)
           ([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }]
              ([%e? rhs] ~projections:[%e? projections]))]
       when Hashtbl.mem unary_ops un_op ->
-        (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~projections ~proj_in_scope:true ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
@@ -928,6 +944,13 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2])
+             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
@@ -951,6 +974,14 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3])
+             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
+             [%e? rhs3]
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])] ->
         let logic =
           let loc = s_loc in
@@ -973,6 +1004,13 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
+             [%e? rhs]
+             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          (* FIXME: this was never needed as prefix operators bind tighter? *)
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
              ([%e? rhs]
                 ~logic:
@@ -1002,6 +1040,13 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
+             [%e? rhs3])]
       when is_assignment accu_op && Hashtbl.mem ternary_ops tern_op && proj_in_scope ->
         process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~proj_in_scope ()
     | [%expr
@@ -1029,6 +1074,13 @@ let translate (expr : expression) : result =
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
+             [%e? rhs1]
+             [%e? rhs2]
+             [%e? rhs3])]
       when is_assignment accu_op && Hashtbl.mem ternary_ops tern_op ->
         let logic, tern_op = ternary_op tern_op in
         process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic

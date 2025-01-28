@@ -114,36 +114,6 @@ let is_assignment ident =
   && Char.equal ident.[0] '='
   && (not @@ List.mem [ "=="; "==="; "=>"; "==>"; "=>>" ] ident ~equal:String.equal)
 
-(* let binary_op expr = (* This and is_binary_op should stay in sync with
-   Arrayjit.Ops.binop_cd_syntax. *) (* FIXME: get rid of this and use binary_ops table instead. *)
-   let loc = expr.pexp_loc in match expr with | [%expr ( + )] -> ([%expr Shape.Pointwise_bin],
-   [%expr Arrayjit.Ops.Add]) | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr
-   Arrayjit.Ops.Sub]) | [%expr ( * )] -> ( Ast_builder.Default.pexp_extension ~loc @@
-   Location.error_extensionf ~loc "No default compose type for binary `*`, try e.g. ~logic:\".\" for
-   pointwise, %s" "~logic:\"@\" for matrix multiplication", [%expr Arrayjit.Ops.Mul] ) | [%expr ( /
-   )] -> ( Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc "For clarity,
-   no default compose type for binary `/`, use ~logic:\".\" for pointwise \ division", [%expr
-   Arrayjit.Ops.Div] ) | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr
-   Arrayjit.Ops.ToPowOf]) | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr
-   Arrayjit.Ops.Relu_gate]) | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr
-   Arrayjit.Ops.Arg2]) | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1])
-   | [%expr ( < )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]) | [%expr ( <> )] ->
-   ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]) | [%expr ( || )] -> ([%expr
-   Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]) | [%expr ( && )] -> ([%expr Shape.Pointwise_bin],
-   [%expr Arrayjit.Ops.And]) | [%expr ( % )] -> ([%expr Shape.Pointwise_bin], [%expr
-   Arrayjit.Ops.Mod]) | [%expr ( @^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max]) |
-   [%expr ( ^^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min]) | _ -> ( [%expr
-   Shape.Pointwise_bin], Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
-   "ppx_ocannl %%cd: expected a binary operator, one of: %s" "+ (Add), - (Sub), * (Mul), / (Div), **
-   (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \ (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^
-   (Max), ^^ (Min)" ) *)
-(* let ternary_op expr =  let loc =
-   expr.pexp_loc in match expr with | [%expr where] -> ([%expr Shape.Pointwise_tern], [%expr
-   Arrayjit.Ops.Where]) | [%expr fma] -> ([%expr Shape.Compose_accumulate], [%expr
-   Arrayjit.Ops.FMA]) | _ -> ( [%expr Shape.Pointwise_bin], Ast_builder.Default.pexp_extension ~loc
-   @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a ternary operator, one of: %s"
-   "where, fma" ) *)
-
 (** Binary primitive ops, both infix operator and function name variants. *)
 let binary_ops =
   Hashtbl.of_alist_exn

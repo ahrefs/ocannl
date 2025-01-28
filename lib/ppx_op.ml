@@ -164,6 +164,15 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
       (reduce_vbss [ vbs2; vbs3 ], [%expr [%e e1] [%e e2] [%e e3]])
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+        ([%e? expr2], [%e? expr3], [%e? expr4])]
+    when Hashtbl.mem ternary_ops op_ident ->
+      let e1 = [%expr [%e expr] ?label:[%e opt_expr ~loc label]] in
+      let vbs2, e2 = loop expr2 in
+      let vbs3, e3 = loop expr3 in
+      let vbs4, e4 = loop expr4 in
+      (reduce_vbss [ vbs2; vbs3; vbs4 ], [%expr [%e e1] [%e e2] [%e e3] [%e e4]])
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = loop ?label expr1 in
       let vbs2, e2 = loop expr2 in
