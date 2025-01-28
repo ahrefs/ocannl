@@ -157,6 +157,13 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr [ expr2 ]
   | [%expr [%e? expr1] ~config:[%e? c_expr]] ->
       lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr []
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
+    when Hashtbl.mem binary_ops op_ident ->
+      let e1 = [%expr [%e expr] ?label:[%e opt_expr ~loc label]] in
+      let vbs2, e2 = loop expr2 in
+      let vbs3, e3 = loop expr3 in
+      (reduce_vbss [ vbs2; vbs3 ], [%expr [%e e1] [%e e2] [%e e3]])
   | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
       let vbs1, e1 = loop ?label expr1 in
       let vbs2, e2 = loop expr2 in
@@ -260,8 +267,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       let vbs, body = loop ?label body in
       (vbs, { expr with pexp_desc = Pexp_letmodule (name, module_expr, body) })
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }
-    when is_primitive_op op_ident || is_operator op_ident
-    ->
+    when is_primitive_op op_ident || is_operator op_ident ->
       (* FIXME: this heuristic is hacky... *)
       (no_vbs, [%expr [%e expr] ?label:[%e opt_expr ~loc label]])
   | expr -> (no_vbs, expr)

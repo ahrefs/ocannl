@@ -927,6 +927,12 @@ let translate (expr : expression) : result =
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
+             ([%e? rhs1], [%e? rhs2])
+             ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
              ([%e? rhs2]
                 ~logic:
@@ -984,6 +990,10 @@ let translate (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }] ([%e? rhs1], [%e? rhs2]))]
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }] [%e? rhs1] [%e? rhs2])]
       when is_assignment accu_op && Hashtbl.mem binary_ops bin_op && proj_in_scope ->
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~proj_in_scope ()
@@ -1003,6 +1013,10 @@ let translate (expr : expression) : result =
     | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }] [%e? lhs] [%e? rhs]]
       when is_assignment accu_op && proj_in_scope ->
         process_assign_unop ~accu_op ~lhs ~un_op:"id" ~rhs ~proj_in_scope ()
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }] ([%e? rhs1], [%e? rhs2]))]
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
