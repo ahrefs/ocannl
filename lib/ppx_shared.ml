@@ -114,41 +114,83 @@ let is_assignment ident =
   && Char.equal ident.[0] '='
   && (not @@ List.mem [ "=="; "==="; "=>"; "==>"; "=>>" ] ident ~equal:String.equal)
 
+(* let binary_op expr = (* This and is_binary_op should stay in sync with
+   Arrayjit.Ops.binop_cd_syntax. *) (* FIXME: get rid of this and use binary_ops table instead. *)
+   let loc = expr.pexp_loc in match expr with | [%expr ( + )] -> ([%expr Shape.Pointwise_bin],
+   [%expr Arrayjit.Ops.Add]) | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr
+   Arrayjit.Ops.Sub]) | [%expr ( * )] -> ( Ast_builder.Default.pexp_extension ~loc @@
+   Location.error_extensionf ~loc "No default compose type for binary `*`, try e.g. ~logic:\".\" for
+   pointwise, %s" "~logic:\"@\" for matrix multiplication", [%expr Arrayjit.Ops.Mul] ) | [%expr ( /
+   )] -> ( Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc "For clarity,
+   no default compose type for binary `/`, use ~logic:\".\" for pointwise \ division", [%expr
+   Arrayjit.Ops.Div] ) | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr
+   Arrayjit.Ops.ToPowOf]) | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr
+   Arrayjit.Ops.Relu_gate]) | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr
+   Arrayjit.Ops.Arg2]) | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1])
+   | [%expr ( < )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]) | [%expr ( <> )] ->
+   ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]) | [%expr ( || )] -> ([%expr
+   Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]) | [%expr ( && )] -> ([%expr Shape.Pointwise_bin],
+   [%expr Arrayjit.Ops.And]) | [%expr ( % )] -> ([%expr Shape.Pointwise_bin], [%expr
+   Arrayjit.Ops.Mod]) | [%expr ( @^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max]) |
+   [%expr ( ^^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min]) | _ -> ( [%expr
+   Shape.Pointwise_bin], Ast_builder.Default.pexp_extension ~loc @@ Location.error_extensionf ~loc
+   "ppx_ocannl %%cd: expected a binary operator, one of: %s" "+ (Add), - (Sub), * (Mul), / (Div), **
+   (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \ (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^
+   (Max), ^^ (Min)" ) *)
+(* let ternary_op expr =  let loc =
+   expr.pexp_loc in match expr with | [%expr where] -> ([%expr Shape.Pointwise_tern], [%expr
+   Arrayjit.Ops.Where]) | [%expr fma] -> ([%expr Shape.Compose_accumulate], [%expr
+   Arrayjit.Ops.FMA]) | _ -> ( [%expr Shape.Pointwise_bin], Ast_builder.Default.pexp_extension ~loc
+   @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a ternary operator, one of: %s"
+   "where, fma" ) *)
+
 (** Binary primitive ops, both infix operator and function name variants. *)
 let binary_ops =
   Hashtbl.of_alist_exn
     (module String)
     [
-      ("-@>", fun loc -> [%expr Arrayjit.Ops.Arg1]);
-      ("fst", fun loc -> [%expr Arrayjit.Ops.Arg1]);
-      ("-/>", fun loc -> [%expr Arrayjit.Ops.Arg2]);
-      ("snd", fun loc -> [%expr Arrayjit.Ops.Arg2]);
-      ("+", fun loc -> [%expr Arrayjit.Ops.Add]);
-      ("add", fun loc -> [%expr Arrayjit.Ops.Add]);
-      ("-", fun loc -> [%expr Arrayjit.Ops.Sub]);
-      ("sub", fun loc -> [%expr Arrayjit.Ops.Sub]);
-      ("*", fun loc -> [%expr Arrayjit.Ops.Mul]);
-      ("mul", fun loc -> [%expr Arrayjit.Ops.Mul]);
-      ("/", fun loc -> [%expr Arrayjit.Ops.Div]);
-      ("div", fun loc -> [%expr Arrayjit.Ops.Div]);
-      ("**", fun loc -> [%expr Arrayjit.Ops.ToPowOf]);
-      ("pow", fun loc -> [%expr Arrayjit.Ops.ToPowOf]);
-      ("-?/", fun loc -> [%expr Arrayjit.Ops.Relu_gate]);
-      ("relu_gate", fun loc -> [%expr Arrayjit.Ops.Relu_gate]);
-      ("<", fun loc -> [%expr Arrayjit.Ops.Cmplt]);
-      ("lt", fun loc -> [%expr Arrayjit.Ops.Cmplt]);
-      ("<>", fun loc -> [%expr Arrayjit.Ops.Cmpne]);
-      ("ne", fun loc -> [%expr Arrayjit.Ops.Cmpne]);
-      ("||", fun loc -> [%expr Arrayjit.Ops.Or]);
-      ("or_", fun loc -> [%expr Arrayjit.Ops.Or]);
-      ("&&", fun loc -> [%expr Arrayjit.Ops.And]);
-      ("and_", fun loc -> [%expr Arrayjit.Ops.And]);
-      ("%", fun loc -> [%expr Arrayjit.Ops.Mod]);
-      ("mod_", fun loc -> [%expr Arrayjit.Ops.Mod]);
-      ("@^", fun loc -> [%expr Arrayjit.Ops.Max]);
-      ("max", fun loc -> [%expr Arrayjit.Ops.Max]);
-      ("^^", fun loc -> [%expr Arrayjit.Ops.Min]);
-      ("min", fun loc -> [%expr Arrayjit.Ops.Min]);
+      ("-@>", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1]));
+      ("fst", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1]));
+      ("-/>", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg2]));
+      ("snd", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg2]));
+      ("+", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add]));
+      ("add", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add]));
+      ("-", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Sub]));
+      ("sub", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Sub]));
+      ( "*",
+        fun loc ->
+          ( Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "No default compose type for binary `*`, try e.g. ~logic:\".\" for pointwise, %s"
+                 "~logic:\"@\" for matrix multiplication",
+            [%expr Arrayjit.Ops.Mul] ) );
+      ("mul", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Mul]));
+      ( "/",
+        fun loc ->
+          ( Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "For clarity, no default compose type for binary `/`, use ~logic:\".\" for \
+                  pointwise division",
+            [%expr Arrayjit.Ops.Div] ) );
+      ("div", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Div]));
+      ("**", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.ToPowOf]));
+      ("pow", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.ToPowOf]));
+      ("-?/", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate]));
+      ("relu_gate", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate]));
+      ("<", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
+      ("lt", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
+      ("<>", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]));
+      ("ne", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]));
+      ("||", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]));
+      ("or_", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]));
+      ("&&", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.And]));
+      ("and_", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.And]));
+      ("%", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Mod]));
+      ("mod_", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Mod]));
+      ("@^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max]));
+      ("max", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max]));
+      ("^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min]));
+      ("min", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min]));
     ]
 
 (** Unary primitive ops. *)
@@ -156,28 +198,58 @@ let unary_ops =
   Hashtbl.of_alist_exn
     (module String)
     [
-      ("id", fun loc -> [%expr Arrayjit.Ops.Identity]);
-      ("relu", fun loc -> [%expr Arrayjit.Ops.Relu]);
-      ("sat01", fun loc -> [%expr Arrayjit.Ops.Satur01]);
-      ("exp", fun loc -> [%expr Arrayjit.Ops.Exp]);
-      ("log", fun loc -> [%expr Arrayjit.Ops.Log]);
-      ("exp2", fun loc -> [%expr Arrayjit.Ops.Exp2]);
-      ("log2", fun loc -> [%expr Arrayjit.Ops.Log2]);
-      ("sin", fun loc -> [%expr Arrayjit.Ops.Sin]);
-      ("cos", fun loc -> [%expr Arrayjit.Ops.Cos]);
-      ("sqrt", fun loc -> [%expr Arrayjit.Ops.Sqrt]);
-      ("recip", fun loc -> [%expr Arrayjit.Ops.Recip]);
-      ("recip_sqrt", fun loc -> [%expr Arrayjit.Ops.Recip_sqrt]);
-      ("neg", fun loc -> [%expr Arrayjit.Ops.Neg]);
-      ("tanh", fun loc -> [%expr Arrayjit.Ops.Tanh_approx]);
+      ("id", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Identity]));
+      ("relu", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Relu]));
+      ("sat01", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Satur01]));
+      ("exp", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Exp]));
+      ("log", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Log]));
+      ("exp2", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Exp2]));
+      ("log2", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Log2]));
+      ("sin", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Sin]));
+      ("cos", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Cos]));
+      ("sqrt", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Sqrt]));
+      ("recip", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Recip]));
+      ("recip_sqrt", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Recip_sqrt]));
+      ("neg", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Neg]));
+      ("tanh", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Tanh_approx]));
     ]
 
-(** Unary primitive ops. *)
+(** Ternary primitive ops. *)
 let ternary_ops =
   Hashtbl.of_alist_exn
     (module String)
     [
-      ("where", fun loc -> [%expr Arrayjit.Ops.Where]); ("fma", fun loc -> [%expr Arrayjit.Ops.FMA]);
+      ("where", fun loc -> ([%expr Shape.Pointwise_tern], [%expr Arrayjit.Ops.Where]));
+      ("fma", fun loc -> ([%expr Shape.Compose_accumulate], [%expr Arrayjit.Ops.FMA]));
+    ]
+
+(** Assignment binary ops, and whether assignment reduction is zero-initialized. *)
+let assignment_ops =
+  (* This should stay in sync with Arrayjit.Ops.assign_op_cd_syntax. *)
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("=:", fun loc -> (false, [%expr Arrayjit.Ops.Arg2]));
+      ("=+", fun loc -> (false, [%expr Arrayjit.Ops.Add]));
+      ("=-", fun loc -> (false, [%expr Arrayjit.Ops.Sub]));
+      ("=*", fun loc -> (false, [%expr Arrayjit.Ops.Mul]));
+      ("=/", fun loc -> (false, [%expr Arrayjit.Ops.Div]));
+      ("=**", fun loc -> (false, [%expr Arrayjit.Ops.ToPowOf]));
+      ("=?/", fun loc -> (false, [%expr Arrayjit.Ops.Relu_gate]));
+      ("=||", fun loc -> (false, [%expr Arrayjit.Ops.Or]));
+      ("=&&", fun loc -> (false, [%expr Arrayjit.Ops.And]));
+      ("=@^", fun loc -> (false, [%expr Arrayjit.Ops.Max]));
+      ("=^^", fun loc -> (false, [%expr Arrayjit.Ops.Min]));
+      ("=:+", fun loc -> (true, [%expr Arrayjit.Ops.Add]));
+      ("=:-", fun loc -> (true, [%expr Arrayjit.Ops.Sub]));
+      ("=:*", fun loc -> (true, [%expr Arrayjit.Ops.Mul]));
+      ("=:/", fun loc -> (true, [%expr Arrayjit.Ops.Div]));
+      ("=:**", fun loc -> (true, [%expr Arrayjit.Ops.ToPowOf]));
+      ("=:?/", fun loc -> (true, [%expr Arrayjit.Ops.Relu_gate]));
+      ("=:||", fun loc -> (true, [%expr Arrayjit.Ops.Or]));
+      ("=:&&", fun loc -> (true, [%expr Arrayjit.Ops.And]));
+      ("=:@^", fun loc -> (true, [%expr Arrayjit.Ops.Max]));
+      ("=:^^", fun loc -> (true, [%expr Arrayjit.Ops.Min]));
     ]
 
 let is_primitive_op op_ident =

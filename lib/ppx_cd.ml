@@ -35,90 +35,6 @@ let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Nonslot | Undet [@@deriving equal, sexp]
 
-let assignment_op expr =
-  (* This should stay in sync with Arrayjit.Ops.assign_op_cd_syntax. *)
-  let loc = expr.pexp_loc in
-  match expr with
-  | [%expr ( =: )] -> (false, [%expr Arrayjit.Ops.Arg2])
-  | [%expr ( =+ )] -> (false, [%expr Arrayjit.Ops.Add])
-  | [%expr ( =- )] -> (false, [%expr Arrayjit.Ops.Sub])
-  | [%expr ( =* )] -> (false, [%expr Arrayjit.Ops.Mul])
-  | [%expr ( =/ )] -> (false, [%expr Arrayjit.Ops.Div])
-  | [%expr ( =** )] -> (false, [%expr Arrayjit.Ops.ToPowOf])
-  | [%expr ( =?/ )] -> (false, [%expr Arrayjit.Ops.Relu_gate])
-  | [%expr ( =|| )] -> (false, [%expr Arrayjit.Ops.Or])
-  | [%expr ( =&& )] -> (false, [%expr Arrayjit.Ops.And])
-  | [%expr ( =@^ )] -> (false, [%expr Arrayjit.Ops.Max])
-  | [%expr ( =^^ )] -> (false, [%expr Arrayjit.Ops.Min])
-  | [%expr ( =:+ )] -> (true, [%expr Arrayjit.Ops.Add])
-  | [%expr ( =:- )] -> (true, [%expr Arrayjit.Ops.Sub])
-  | [%expr ( =:* )] -> (true, [%expr Arrayjit.Ops.Mul])
-  | [%expr ( =:/ )] -> (true, [%expr Arrayjit.Ops.Div])
-  | [%expr ( =:** )] -> (true, [%expr Arrayjit.Ops.ToPowOf])
-  | [%expr ( =:?/ )] -> (true, [%expr Arrayjit.Ops.Relu_gate])
-  | [%expr ( =:|| )] -> (true, [%expr Arrayjit.Ops.Or])
-  | [%expr ( =:&& )] -> (true, [%expr Arrayjit.Ops.And])
-  | [%expr ( =:@^ )] -> (true, [%expr Arrayjit.Ops.Max])
-  | [%expr ( =:^^ )] -> (true, [%expr Arrayjit.Ops.Min])
-  | _ ->
-      ( false,
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
-             "=+ (Add), =- (Sub), =* (Mul), =/ (Div), =** (ToPowOf), =?/ (Relu_gate), =|| (Or), \
-              =&& (And), =@^ (Max), =^^ (Min), =: (Arg2), =:+, =:-,"
-             " =:*, =:/, =:**, =:?/, =:||, =:&&, =:@^, =:^^ (same with initializing the tensor to \
-              the neutral value before the start of the calculation)" )
-
-let binary_op expr =
-  (* This and is_binary_op should stay in sync with Arrayjit.Ops.binop_cd_syntax. *)
-  (* FIXME: get rid of this and use binary_ops table instead. *)
-  let loc = expr.pexp_loc in
-  match expr with
-  | [%expr ( + )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Add])
-  | [%expr ( - )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Sub])
-  | [%expr ( * )] ->
-      ( Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "No default compose type for binary `*`, try e.g. ~logic:\".\" for pointwise, %s"
-             "~logic:\"@\" for matrix multiplication",
-        [%expr Arrayjit.Ops.Mul] )
-  | [%expr ( / )] ->
-      ( Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc
-             "For clarity, no default compose type for binary `/`, use ~logic:\".\" for pointwise \
-              division",
-        [%expr Arrayjit.Ops.Div] )
-  | [%expr ( ** )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.ToPowOf])
-  | [%expr ( -?/ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate])
-  | [%expr ( -/> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg2])
-  | [%expr ( -@> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Arg1])
-  | [%expr ( < )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt])
-  | [%expr ( <> )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne])
-  | [%expr ( || )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or])
-  | [%expr ( && )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.And])
-  | [%expr ( % )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Mod])
-  | [%expr ( @^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Max])
-  | [%expr ( ^^ )] -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Min])
-  | _ ->
-      ( [%expr Shape.Pointwise_bin],
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a binary operator, one of: %s"
-             "+ (Add), - (Sub), * (Mul), / (Div), ** (ToPowOf), -?/ (Relu_gate), -/> (Arg2), < \
-              (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^ (Max), ^^ (Min)" )
-
-let ternary_op expr =
-  (* FIXME: get rid of this and use ternary_ops table instead. *)
-  let loc = expr.pexp_loc in
-  match expr with
-  | [%expr where] -> ([%expr Shape.Pointwise_tern], [%expr Arrayjit.Ops.Where])
-  | [%expr fma] -> ([%expr Shape.Compose_accumulate], [%expr Arrayjit.Ops.FMA])
-  | _ ->
-      ( [%expr Shape.Pointwise_bin],
-        Ast_builder.Default.pexp_extension ~loc
-        @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: expected a ternary operator, one of: %s"
-             "where, fma" )
-
 type result = {
   vbs : value_binding Map.M(String).t;
       (** [vbs] are the bindings introduced by inline tensor declarations (aka. punning). These
@@ -460,6 +376,46 @@ let translate (expr : expression) : result =
       { vbs = no_vbs; typ = Tensor; slot = Undet; expr; array_opt_of_code = None }
     in
     let loop = transl ~bad_pun_hints in
+    let assignment_op accu_op =
+      loc
+      |> Option.value_or_thunk (Hashtbl.find assignment_ops accu_op) ~default:(fun () _loc ->
+             ( false,
+               Ast_builder.Default.pexp_extension ~loc
+               @@ Location.error_extensionf ~loc
+                    "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
+                    "=+ (Add), =- (Sub), =* (Mul),=/ (Div), =** (ToPowOf), =?/ (Relu_gate), =|| \
+                     (Or),  =&& (And), =@^ (Max), =^^ (Min), =: (Arg2),=:+, =:-,"
+                    " =:*, =:/, =:**, =:?/, =:||, =:&&, =:@^, =:^^ (same with initializing the \
+                     tensor to the neutral value before the start of the calculation)" ))
+    in
+    let unary_op un_op =
+      loc
+      |> Option.value_or_thunk (Hashtbl.find unary_ops un_op) ~default:(fun () loc ->
+             ( [%expr Shape.Pointwise_un],
+               Ast_builder.Default.pexp_extension ~loc
+               @@ Location.error_extensionf ~loc
+                    "ppx_ocannl %%cd: expected an assignment operator, one of: %s"
+                    "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, \
+                     neg, tanh" ))
+    in
+    let binary_op bin_op =
+      loc
+      |> Option.value_or_thunk (Hashtbl.find binary_ops bin_op) ~default:(fun () _loc ->
+             ( [%expr Shape.Pointwise_bin],
+               Ast_builder.Default.pexp_extension ~loc
+               @@ Location.error_extensionf ~loc
+                    "ppx_ocannl %%cd: expected a binary operator, one of: %s"
+                    "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -/> (Arg2), \
+                     <  (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^(Max), ^^ (Min)" ))
+    in
+    let ternary_op tern_op =
+      loc
+      |> Option.value_or_thunk (Hashtbl.find ternary_ops tern_op) ~default:(fun () _loc ->
+             ( [%expr Shape.Pointwise_tern],
+               Ast_builder.Default.pexp_extension ~loc
+               @@ Location.error_extensionf ~loc
+                    "ppx_ocannl %%cd: expected a ternary operator, one of: %s" "where, fma" ))
+    in
     (* FIXME: collapse these (code reuse) *)
     let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
         () =
@@ -590,7 +546,8 @@ let translate (expr : expression) : result =
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] body
     in
     let process_assign_unop ~accu_op ~lhs ~un_op ~rhs ?projections ~proj_in_scope () =
-      let initialize_neutral, accu_op = assignment_op accu_op in
+      let initialize_neutral, accum = assignment_op accu_op in
+      let _, op = unary_op un_op in
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
@@ -620,8 +577,8 @@ let translate (expr : expression) : result =
                        {
                          p.debug_info with
                          trace =
-                           ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
-                             ^ [%e expr2string_or_empty un_op],
+                           ( "ppx_cd " ^ [%e string_expr ~loc accu_op] ^ " "
+                             ^ [%e string_expr ~loc un_op],
                              Arrayjit.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
@@ -636,9 +593,9 @@ let translate (expr : expression) : result =
                  Arrayjit.Assignments.Accum_unop
                    {
                      initialize_neutral = [%e initialize_neutral];
-                     accum = [%e accu_op];
+                     accum = [%e accum];
                      lhs;
-                     op = [%e un_op];
+                     op = [%e op];
                      rhs;
                      projections = [%e projections];
                    })]
@@ -926,45 +883,50 @@ let translate (expr : expression) : result =
               }];
         }
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? bin_op] [%e? rhs1] ([%e? rhs2] ~projections:[%e? projections]))] ->
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
+             [%e? rhs1]
+             ([%e? rhs2] ~projections:[%e? projections]))] ->
         (* Note: when clause not needed here and below, it's an error if bin_op is not a primitive
            binary op. *)
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~projections ~proj_in_scope:true ()
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? tern_op] ([%e? rhs1], [%e? rhs2], [%e? rhs3]) ~projections:[%e? projections])] ->
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
+             ([%e? rhs1], [%e? rhs2], [%e? rhs3])
+             ~projections:[%e? projections])] ->
         process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~projections
           ~proj_in_scope:true ()
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }]
              [%e? rhs]
              ~projections:[%e? projections])]
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
+          (([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }] [%e? rhs])
              ~projections:[%e? projections])]
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }]
              ([%e? rhs] ~projections:[%e? projections]))]
-      when Hashtbl.mem unary_ops unop_ident ->
-        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
+      when Hashtbl.mem unary_ops un_op ->
         (* Handle both un_op priority levels -- where application binds tighter and less tight. *)
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~projections ~proj_in_scope:true ()
-    | [%expr [%e? accu_op] [%e? lhs] ([%e? rhs] ~projections:[%e? projections])] ->
-        process_assign_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs ~projections
-          ~proj_in_scope:true ()
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? bin_op]
+          ([%e? rhs] ~projections:[%e? projections])] ->
+        process_assign_unop ~accu_op ~lhs ~un_op:"id" ~rhs ~projections ~proj_in_scope:true ()
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
+          [%e? lhs]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
              ([%e? rhs2]
                 ~logic:
@@ -979,9 +941,9 @@ let translate (expr : expression) : result =
         let _, bin_op = binary_op bin_op in
         process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? tern_op]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3])
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])] ->
         let logic =
@@ -995,15 +957,15 @@ let translate (expr : expression) : result =
                   operators not supported yet, see issue #305"
                  spec
         in
-        let _, tern_op = binary_op tern_op in
+        let _, tern_op = ternary_op tern_op in
         process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           (([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ } as logic])]
     | [%expr
-        [%e? accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
           ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }]
              ([%e? rhs]
@@ -1017,67 +979,54 @@ let translate (expr : expression) : result =
           else if String.equal spec "T" then [%expr Shape.Transpose]
           else [%expr Shape.Permute [%e logic]]
         in
-        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
+        let _, un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op]
-             [%e? rhs1]
-             [%e? rhs2])]
-      when is_assignment accu_ident && Hashtbl.mem binary_ops binop_ident && proj_in_scope ->
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }] [%e? rhs1] [%e? rhs2])]
+      when is_assignment accu_op && Hashtbl.mem binary_ops bin_op && proj_in_scope ->
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~proj_in_scope ()
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident ternop_ident; _ }; _ } as tern_op]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
-      when is_assignment accu_ident && Hashtbl.mem ternary_ops ternop_ident && proj_in_scope ->
+      when is_assignment accu_op && Hashtbl.mem ternary_ops tern_op && proj_in_scope ->
         process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~proj_in_scope ()
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])]
-      when is_assignment accu_ident && Hashtbl.mem unary_ops unop_ident && proj_in_scope ->
-        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }] [%e? rhs])]
+      when is_assignment accu_op && Hashtbl.mem unary_ops un_op && proj_in_scope ->
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~proj_in_scope ()
+    | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }] [%e? lhs] [%e? rhs]]
+      when is_assignment accu_op && proj_in_scope ->
+        process_assign_unop ~accu_op ~lhs ~un_op:"id" ~rhs ~proj_in_scope ()
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          [%e? rhs]]
-      when is_assignment op_ident && proj_in_scope ->
-        process_assign_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs ~proj_in_scope
-          ()
-    | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
-          [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident binop_ident; _ }; _ } as bin_op]
-             [%e? rhs1]
-             [%e? rhs2])]
-      when is_assignment accu_ident && Hashtbl.mem binary_ops binop_ident ->
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }] [%e? rhs1] [%e? rhs2])]
+      when is_assignment accu_op && Hashtbl.mem binary_ops bin_op ->
         let logic, bin_op = binary_op bin_op in
         process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident ternop_ident; _ }; _ } as tern_op]
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident tern_op; _ }; _ }]
              ([%e? rhs1], [%e? rhs2], [%e? rhs3]))]
-      when is_assignment accu_ident && Hashtbl.mem ternary_ops ternop_ident ->
+      when is_assignment accu_op && Hashtbl.mem ternary_ops tern_op ->
         let logic, tern_op = ternary_op tern_op in
         process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic
     | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_ident; _ }; _ } as accu_op]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
-          ([%e? { pexp_desc = Pexp_ident { txt = Lident unop_ident; _ }; _ }] [%e? rhs])]
-      when is_assignment accu_ident && Hashtbl.mem unary_ops unop_ident ->
-        let un_op = Hashtbl.find_exn unary_ops unop_ident loc in
-        (* FIXME: projections logic! *)
-        process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic:[%expr Pointwise_un]
-    | [%expr
-        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as accu_op]
-          [%e? lhs]
-          [%e? rhs]]
-      when is_assignment op_ident ->
+          ([%e? { pexp_desc = Pexp_ident { txt = Lident un_op; _ }; _ }] [%e? rhs])]
+      when is_assignment accu_op && Hashtbl.mem unary_ops un_op ->
+        let logic, un_op = Hashtbl.find_exn unary_ops un_op loc in
+        process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic
+    | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }] [%e? lhs] [%e? rhs]]
+      when is_assignment accu_op ->
         process_raw_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs
           ~logic:[%expr Shape.Pointwise_un]
     | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
