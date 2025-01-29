@@ -200,7 +200,8 @@ let interpret_binop op v1 v2 =
   | Sub -> v1 - v2
   | Mul -> v1 * v2
   | Div -> v1 / v2
-  | ToPowOf -> if is_integer v2 then int_pow v1 @@ to_int v2 else v1 ** v2
+  | ToPowOf when is_integer v2 -> int_pow v1 @@ to_int v2
+  | ToPowOf -> v1 ** v2
   | Relu_gate -> if v1 > 0.0 then v2 else 0.0
   | Max -> max v1 v2
   | Min -> min v1 v2
