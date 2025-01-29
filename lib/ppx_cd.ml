@@ -406,7 +406,7 @@ let translate (expr : expression) : result =
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a binary operator, one of: %s"
                     "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -/> (Arg2), \
-                     <  (Cmplt), <> (Cmpne), || (Or), && (And), % (Mod), @^(Max), ^^ (Min)" ))
+                     <  (Cmplt), = (Cmpeq), || (Or), && (And), % (Mod), @^(Max), ^^ (Min)" ))
     in
     let ternary_op tern_op =
       loc

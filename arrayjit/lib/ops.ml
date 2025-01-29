@@ -147,7 +147,7 @@ type binop =
   | Min
   | Mod
   | Cmplt
-  | Cmpne
+  | Cmpeq
   (* Waiting till we have a use-case to see how to sensibly introduce bitwise operations. *)
   (* | Shl *)
   (* | Shr *)
@@ -170,6 +170,7 @@ type unop =
   | Recip_sqrt
   | Neg
   | Tanh_approx
+  | Not  (** 0. -> 1. | _ -> 0. *)
 [@@deriving sexp, compare, equal]
 
 type ternop = Where  (** Where(a,b,c): if a then b else c *) | FMA  (** FMA(a,b,c): (a * b) + c *)
@@ -188,7 +189,7 @@ let neutral_elem = function
   | Min -> Float.infinity
   | And -> 1.
   | Or -> 0.
-  | Arg2 | Arg1 | Mod | Cmplt | Cmpne (* | Shl | Shr *) -> 0.
+  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq (* | Shl | Shr *) -> 0.
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -205,7 +206,7 @@ let interpret_binop op v1 v2 =
   | Min -> min v1 v2
   | Mod -> v1 % v2
   | Cmplt -> if v1 < v2 then 1. else 0.
-  | Cmpne -> if v1 <> v2 then 1. else 0.
+  | Cmpeq -> if v1 = v2 then 1. else 0.
   (* | Shl -> v1 * (int_pow 2. @@ to_int v2) *)
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
@@ -231,6 +232,7 @@ let interpret_unop op v =
   | Recip_sqrt -> 1. / sqrt v
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
+  | Not -> if v = 0. then 1. else 0.
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
@@ -251,7 +253,7 @@ let binop_cd_syntax = function
   | ToPowOf -> "**"
   | Relu_gate -> "-?/"
   | Cmplt -> "<"
-  | Cmpne -> "<>"
+  | Cmpeq -> "="
   | Or -> "||"
   | And -> "&&"
   | Mod -> "%"
@@ -272,7 +274,7 @@ let binop_cd_fallback_syntax = function
   | ToPowOf -> "pow"
   | Relu_gate -> "relu_gate"
   | Cmplt -> "lt"
-  | Cmpne -> "le"
+  | Cmpeq -> "eq"
   | Or -> "or_"
   | And -> "and_"
   | Mod -> "mod_"
@@ -302,7 +304,7 @@ let binop_c_syntax prec v =
   | Min, _ -> ("fminf(", ",", ")")
   | Mod, _ -> ("(", " %", ")")
   | Cmplt, _ -> ("(", " <", ")")
-  | Cmpne, _ -> ("(", " !=", ")")
+  | Cmpeq, _ -> ("(", " ==", ")")
   (* | Shl, Byte_prec _ -> ("(", " <<", ")") *)
   (* | Shl, _ -> ("((", ") * exp2(", "))") *)
   (* | Shr, Byte_prec _ -> ("(", " >>", ")") *)
@@ -311,7 +313,7 @@ let binop_c_syntax prec v =
   | And, _ -> ("(", " &&", ")")
 
 let is_assign_op = function
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne -> false
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq -> false
   | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
@@ -336,7 +338,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Min -> "=^^"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpne ->
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)
@@ -355,6 +357,7 @@ let unop_cd_syntax = function
   | Recip_sqrt -> "recip_sqrt"
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
+  | Not -> "not"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -400,6 +403,7 @@ let unop_c_syntax prec op =
   | Tanh_approx, Byte_prec _ ->
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for byte/integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
+  | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

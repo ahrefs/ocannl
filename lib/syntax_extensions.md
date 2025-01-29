@@ -74,10 +74,10 @@ The binary primitive operations:
 | `pow` | `**` | pointwise | `ToPowOf` | `=**`, `=:**` |
 | `relu_gate` | `-?/` | pointwise | `Relu_gate` | `=?/`, `=:?/` |
 | `lt` | `<` | pointwise | `Cmplt` | none |
-| `ne` | `<>` | pointwise | `Cmpne` | none |
+| `eq` | `<>` | pointwise | `Cmpeq` | none |
 | `or_` | `\|\|` | pointwise | `Or` | `=\|\|`, `=:\|\|` |
 | `and_` | `&&` | pointwise | `And` | `=&&`, `=:&&` |
-| `mod_` | `%` | pointwise | `Mod` | `=%`, `=:%` |
+| `mod_` | `%` | pointwise | `Mod` | none |
 | `max` | `@^` | pointwise | `Max` | `=@^`, `=:@^` |
 | `min` | `^^` | pointwise | `Min` | `=^^`, `=:^^` |
 

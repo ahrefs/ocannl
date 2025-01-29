@@ -149,8 +149,8 @@ let binary_ops =
       ("relu_gate", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate]));
       ("<", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
       ("lt", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
-      ("<>", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]));
-      ("ne", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpne]));
+      ("=", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpeq]));
+      ("eq", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpeq]));
       ("||", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]));
       ("or_", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Or]));
       ("&&", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.And]));
@@ -182,6 +182,7 @@ let unary_ops =
       ("recip_sqrt", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Recip_sqrt]));
       ("neg", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Neg]));
       ("tanh", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Tanh_approx]));
+      ("not", fun loc -> ([%expr Shape.Pointwise_un], [%expr Arrayjit.Ops.Not]));
     ]
 
 (** Ternary primitive ops. *)
