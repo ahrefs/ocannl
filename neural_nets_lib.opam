@@ -36,7 +36,6 @@ depends: [
   "ppx_variants_conv"
   "ppx_expect"
   "ppx_minidebug" {>= "2.0.3"}
-  "patdiff" {>= "v0.15.0"}
   "odoc" {with-doc}
   "md2mld" {with-doc}
 ]

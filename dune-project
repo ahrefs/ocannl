@@ -136,10 +136,6 @@
   ppx_expect
   (ppx_minidebug
    (>= 2.0.3))
-  ; Cannot make it (patdiff :with-test), because `dune build -p neural_nets_lib @install`
-  ; builds the tutorials target from dune/test, despite it being inline_tests!
-  (patdiff
-   (>= v0.15.0))
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags
