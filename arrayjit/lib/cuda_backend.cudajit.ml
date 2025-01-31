@@ -306,6 +306,13 @@ module Fresh () = struct
             ", __ushort_as_half((unsigned short)0x0000U)) ?",
             " : __ushort_as_half((unsigned short)0x0000U))" )
       | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+      | Satur01_gate, Byte_prec _ -> ("(abs(", ") > 0 ? 0 : (", ")")
+      | Satur01_gate, Half_prec _ ->
+          ( "(__hgt(__habs(htrunc(",
+            ")), __ushort_as_half((unsigned short)0x0000U)) ? __ushort_as_half((unsigned short)0x0000U) : (",
+            "))" )
+      | Satur01_gate, Double_prec _ -> ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
+      | Satur01_gate, Single_prec _ -> ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
 
     let unop_syntax prec v =
       match (v, prec) with

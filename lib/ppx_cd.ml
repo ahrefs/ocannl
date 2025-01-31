@@ -383,10 +383,11 @@ let translate (expr : expression) : result =
                Ast_builder.Default.pexp_extension ~loc
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
-                    "=+ (Add), =- (Sub), =* (Mul),=/ (Div), =** (ToPowOf), =?/ (Relu_gate), =|| \
-                     (Or),  =&& (And), =@^ (Max), =^^ (Min), =: (Arg2),=:+, =:-,"
-                    " =:*, =:/, =:**, =:?/, =:||, =:&&, =:@^, =:^^ (same with initializing the \
-                     tensor to the neutral value before the start of the calculation)" ))
+                    "=+ (Add), =- (Sub), =* (Mul),=/ (Div), =** (ToPowOf), =?/ (Relu_gate), =?^ \
+                     (Satur01_gate), =|| (Or),  =&& (And), =@^ (Max), =^^ (Min), =: (Arg2),=:+, \
+                     =:-,"
+                    " =:*, =:/, =:**, =:?/, =:?^, =:||, =:&&, =:@^, =:^^ (same with initializing \
+                     the tensor to the neutral value before the start of the calculation)" ))
     in
     let unary_op un_op =
       loc
@@ -405,8 +406,9 @@ let translate (expr : expression) : result =
                Ast_builder.Default.pexp_extension ~loc
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a binary operator, one of: %s"
-                    "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -/> (Arg2), \
-                     <  (Cmplt), = (Cmpeq), || (Or), && (And), % (Mod), @^(Max), ^^ (Min)" ))
+                    "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -?^ \
+                     (Satur01_gate), -/> (Arg2), <  (Cmplt), = (Cmpeq), || (Or), && (And), % \
+                     (Mod), @^(Max), ^^ (Min)" ))
     in
     let ternary_op tern_op =
       loc

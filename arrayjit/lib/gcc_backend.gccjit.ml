@@ -166,14 +166,15 @@ let prec_to_kind prec =
 
 let is_builtin_op = function
   | Ops.Add | Sub | Mul | Div -> true
-  | ToPowOf | Relu_gate | Arg2 | Arg1 -> false
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 -> false
 
 let builtin_op = function
   | Ops.Add -> Gccjit.Plus
   | Sub -> Gccjit.Minus
   | Mul -> Gccjit.Mult
   | Div -> Gccjit.Divide
-  | ToPowOf | Relu_gate | Arg2 | Arg1 -> invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 ->
+      invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let node_debug_name get_ident node = get_ident node.tn
 
@@ -273,6 +274,14 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         raise @@ Utils.User_error "gccjit_backend: Byte_prec does not support ToPowOf"
     | Relu_gate, _ ->
         let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1 in
+        RValue.binary_op ctx Mult num_typ cmp @@ v2
+    | Satur01_gate, _ ->
+        let cmp =
+          cast_bool num_typ
+          @@ RValue.binary_op ctx And
+               (RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1)
+               (RValue.comparison ctx Lt v1 (RValue.one ctx num_typ))
+        in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
     | Arg2, _ -> v2
     | Arg1, _ -> v1

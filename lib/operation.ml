@@ -126,10 +126,10 @@ let einsum1 ?(label = []) spec =
 let relu ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: relu v1 ~projections in
-  let%cd grad_asn ~v ~g ~t1 ~projections = g1 =+ v -?/ g in
+  let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ relu_gate (v1, g) in
   Tensor.unop ~label:("relu" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
-module NDO_without_pow = struct
+module NDO_before_pow = struct
   let ( * ) = matmul ~grad_spec:Prohibit_grad
   let ( *. ) = pointmul ~grad_spec:Prohibit_grad
   let ( + ) = add ~grad_spec:Prohibit_grad
@@ -145,7 +145,7 @@ let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
     include Initial_NTDSL
 
     module O = struct
-      include NDO_without_pow
+      include NDO_before_pow
 
       let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
     end
@@ -161,8 +161,8 @@ let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
   in
   Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
 
-module NDO_without_div = struct
-  include NDO_without_pow
+module NDO_before_div = struct
+  include NDO_before_pow
 
   let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
 end
@@ -172,7 +172,7 @@ let rec pointdiv ?(label : string list = []) ~grad_spec t1 t2 =
     include Initial_NTDSL
 
     module O = struct
-      include NDO_without_div
+      include NDO_before_div
 
       let ( /. ) = pointdiv ~grad_spec:Tensor.Prohibit_grad
     end
@@ -185,6 +185,12 @@ let rec pointdiv ?(label : string list = []) ~grad_spec t1 t2 =
     g2 =+ g * (-1 *. t1 /. (t2 **. 2))
   in
   Tensor.binop ~label:("/." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 t2
+
+let sat01 ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: sat01 v1 ~projections in
+  let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ sat01_gate (v1, g) in
+  Tensor.unop ~label:("sat01" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
@@ -261,6 +267,7 @@ module DO = struct
   let ( + ) = add ~grad_spec:If_needed
   let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
   let relu = relu ~grad_spec:If_needed
+  let sat01 = sat01 ~grad_spec:If_needed
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:If_needed @@ Float.of_int i
   let ( !@ ) = embed_symbol
@@ -271,10 +278,11 @@ module DO = struct
 end
 
 module NDO = struct
-  include NDO_without_div
+  include NDO_before_div
 
   let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
   let ( @| ) ?label t1 idx = slice ?label ~grad_spec:Prohibit_grad idx t1
+  let sat01 = sat01 ~grad_spec:If_needed
 end
 
 module TDSL = struct

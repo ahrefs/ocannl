@@ -26,6 +26,14 @@
  (modes exe))
 
 (executable
+ (name primitive_ops)
+ (modules primitive_ops)
+ (libraries ocannl base stdio ppx_minidebug.runtime)
+ (preprocess
+  (pps ppx_minidebug ppx_ocannl ppx_sexp_conv ppx_here))
+ (modes exe))
+
+(executable
  (name compilation_speed)
  (modules compilation_speed)
  (libraries ocannl base stdio time_now)

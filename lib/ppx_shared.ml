@@ -147,6 +147,8 @@ let binary_ops =
       ("pow", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.ToPowOf]));
       ("-?/", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate]));
       ("relu_gate", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Relu_gate]));
+      ("-?^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Satur01_gate]));
+      ("sat01_gate", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Satur01_gate]));
       ("<", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
       ("lt", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmplt]));
       ("=", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Arrayjit.Ops.Cmpeq]));
@@ -207,6 +209,7 @@ let assignment_ops =
       ("=/", fun loc -> (false, [%expr Arrayjit.Ops.Div]));
       ("=**", fun loc -> (false, [%expr Arrayjit.Ops.ToPowOf]));
       ("=?/", fun loc -> (false, [%expr Arrayjit.Ops.Relu_gate]));
+      ("=?^", fun loc -> (false, [%expr Arrayjit.Ops.Satur01_gate]));
       ("=||", fun loc -> (false, [%expr Arrayjit.Ops.Or]));
       ("=&&", fun loc -> (false, [%expr Arrayjit.Ops.And]));
       ("=@^", fun loc -> (false, [%expr Arrayjit.Ops.Max]));
@@ -217,6 +220,7 @@ let assignment_ops =
       ("=:/", fun loc -> (true, [%expr Arrayjit.Ops.Div]));
       ("=:**", fun loc -> (true, [%expr Arrayjit.Ops.ToPowOf]));
       ("=:?/", fun loc -> (true, [%expr Arrayjit.Ops.Relu_gate]));
+      ("=:?^", fun loc -> (true, [%expr Arrayjit.Ops.Satur01_gate]));
       ("=:||", fun loc -> (true, [%expr Arrayjit.Ops.Or]));
       ("=:&&", fun loc -> (true, [%expr Arrayjit.Ops.And]));
       ("=:@^", fun loc -> (true, [%expr Arrayjit.Ops.Max]));

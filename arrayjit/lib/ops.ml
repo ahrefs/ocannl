@@ -135,14 +135,15 @@ type init_op =
 [@@deriving equal, sexp]
 
 type binop =
+  | Arg1
+  | Arg2
   | Add
   | Sub
   | Mul
   | Div
   | ToPowOf
   | Relu_gate
-  | Arg2
-  | Arg1
+  | Satur01_gate
   | Max
   | Min
   | Mod
@@ -185,6 +186,7 @@ let neutral_elem = function
   | Mul | Div -> 1.
   | ToPowOf -> 1.
   | Relu_gate -> 1.
+  | Satur01_gate -> 0.5
   | Max -> Float.neg_infinity
   | Min -> Float.infinity
   | And -> 1.
@@ -203,6 +205,7 @@ let interpret_binop op v1 v2 =
   | ToPowOf when is_integer v2 -> int_pow v1 @@ to_int v2
   | ToPowOf -> v1 ** v2
   | Relu_gate -> if v1 > 0.0 then v2 else 0.0
+  | Satur01_gate -> if v1 > 0.0 && v1 < 1.0 then v2 else 0.0
   | Max -> max v1 v2
   | Min -> min v1 v2
   | Mod -> v1 % v2
@@ -242,7 +245,9 @@ let interpret_ternop op v1 v2 v3 =
 (** Note: currently the %cd syntax only supports infix binops as assignment ops. *)
 let is_binop_infix _ = true
 
-let is_binop_nice_infix = function Arg1 | Arg2 | Relu_gate | Max | Min -> false | _ -> true
+let is_binop_nice_infix = function
+  | Arg1 | Arg2 | Relu_gate | Satur01_gate | Max | Min -> false
+  | _ -> true
 
 let binop_cd_syntax = function
   | Arg1 -> "-@>"
@@ -253,6 +258,7 @@ let binop_cd_syntax = function
   | Div -> "/"
   | ToPowOf -> "**"
   | Relu_gate -> "-?/"
+  | Satur01_gate -> "-?^"
   | Cmplt -> "<"
   | Cmpeq -> "="
   | Or -> "||"
@@ -274,6 +280,7 @@ let binop_cd_fallback_syntax = function
   | Div -> "div"
   | ToPowOf -> "pow"
   | Relu_gate -> "relu_gate"
+  | Satur01_gate -> "sat01_gate"
   | Cmplt -> "lt"
   | Cmpeq -> "eq"
   | Or -> "or_"
@@ -299,6 +306,9 @@ let binop_c_syntax prec v =
   | ToPowOf, _ -> ("powf(", ",", ")")
   | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
   | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+  | Satur01_gate, Byte_prec _ -> ("(abs(", " ) > 0 ? 0 : (", "))")
+  | Satur01_gate, Single_prec _ -> ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
+  | Satur01_gate, _ -> ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
   | Max, (Double_prec _ | Byte_prec _) -> ("fmax(", ",", ")")
   | Max, _ -> ("fmaxf(", ",", ")")
   | Min, (Double_prec _ | Byte_prec _) -> ("fmin(", ",", ")")
@@ -315,7 +325,7 @@ let binop_c_syntax prec v =
 
 let is_assign_op = function
   | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq -> false
-  | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Arg2 | Max | Min | Or | And -> true
+  | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
   | Arg2 -> "=:"
@@ -325,6 +335,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Div when initialize_neutral -> "=:/"
   | ToPowOf when initialize_neutral -> "=:**"
   | Relu_gate when initialize_neutral -> "=:?/"
+  | Satur01_gate when initialize_neutral -> "=:?^"
   | Or when initialize_neutral -> "=:||"
   | And when initialize_neutral -> "=:&&"
   | Max when initialize_neutral -> "=:@^"
@@ -335,6 +346,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Div -> "=/"
   | ToPowOf -> "=**"
   | Relu_gate -> "=?/"
+  | Satur01_gate -> "=?^"
   | Max -> "=@^"
   | Min -> "=^^"
   | Or -> "=||"
@@ -368,10 +380,9 @@ let unop_c_syntax prec op =
     | _ -> "fmaxf"
   in
   let fmin () =
-    (* See: https://en.cppreference.com/w/c/numeric/math/fmin option (4) *)
     match prec with
-    | Double_prec _ | Byte_prec _ -> "fmax"
-    | _ -> "fmaxf"
+    | Double_prec _ | Byte_prec _ -> "fmin"
+    | _ -> "fminf"
   in
   match (op, prec) with
   | Identity, _ -> ("", "")

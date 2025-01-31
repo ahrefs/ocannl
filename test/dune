@@ -20,6 +20,7 @@
   hello_world_op
   micrograd_demo
   zero2hero_1of7
+  primitive_ops
   moons_demo_parallel)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
