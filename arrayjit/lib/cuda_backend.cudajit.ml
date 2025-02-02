@@ -309,10 +309,25 @@ module Fresh () = struct
       | Satur01_gate, Byte_prec _ -> ("(abs(", ") > 0 ? 0 : (", ")")
       | Satur01_gate, Half_prec _ ->
           ( "(__hgt(__habs(htrunc(",
-            ")), __ushort_as_half((unsigned short)0x0000U)) ? __ushort_as_half((unsigned short)0x0000U) : (",
+            ")), __ushort_as_half((unsigned short)0x0000U)) ? __ushort_as_half((unsigned \
+             short)0x0000U) : (",
             "))" )
       | Satur01_gate, Double_prec _ -> ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
       | Satur01_gate, Single_prec _ -> ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
+      | Max, Byte_prec _ -> ("max(", ", ", ")")
+      | Max, Half_prec _ -> ("__hmax(", ", ", ")")
+      | Max, Double_prec _ -> ("fmax(", ", ", ")")
+      | Max, Single_prec _ -> ("fmaxf(", ", ", ")")
+      | Min, Byte_prec _ -> ("min(", ", ", ")")
+      | Min, Half_prec _ -> ("__hmin(", ", ", ")")
+      | Min, Double_prec _ -> ("fmin(", ", ", ")")
+      | Min, Single_prec _ -> ("fminf(", ", ", ")")
+      | Mod, Byte_prec _ -> ("(", " % ", ")")
+      | Mod, _ -> ("fmod(", ", ", ")")
+      | Cmplt, _ -> ("(", " < ", ")")
+      | Cmpeq, _ -> ("(", " == ", ")")
+      | Or, _ -> ("(", " || ", ")")
+      | And, _ -> ("(", " && ", ")")
 
     let unop_syntax prec v =
       match (v, prec) with
@@ -321,6 +336,59 @@ module Fresh () = struct
       | Relu, Ops.Half_prec _ -> ("__hmax_nan(__ushort_as_half((unsigned short)0x0000U), ", ")")
       | Relu, Ops.Byte_prec _ -> ("fmax(0, ", ")")
       | Relu, _ -> ("fmax(0.0, ", ")")
+      | Satur01, Byte_prec _ -> ("fmax(0, fmin(1, ", "))")
+      | Satur01, Half_prec _ ->
+          ( "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), \
+             __hmin_nan(__ushort_as_half((unsigned short)0x3C00U), ",
+            "))" )
+      | Satur01, Single_prec _ -> ("fmaxf(0.0f, fminf(1.0f, ", "))")
+      | Satur01, _ -> ("fmax(0.0, fmin(1.0, ", "))")
+      | Exp, Half_prec _ -> ("hexp(", ")")
+      | Exp, Double_prec _ -> ("exp(", ")")
+      | Exp, _ -> ("expf(", ")")
+      | Log, Half_prec _ -> ("hlog(", ")")
+      | Log, Double_prec _ -> ("log(", ")")
+      | Log, _ -> ("logf(", ")")
+      | Exp2, Half_prec _ -> ("hexp2(", ")")
+      | Exp2, Double_prec _ -> ("exp2(", ")")
+      | Exp2, _ -> ("exp2f(", ")")
+      | Log2, Half_prec _ -> ("hlog2(", ")")
+      | Log2, Double_prec _ -> ("log2(", ")")
+      | Log2, _ -> ("log2f(", ")")
+      | Sin, Half_prec _ -> ("hsin(", ")")
+      | Sin, Double_prec _ -> ("sin(", ")")
+      | Sin, _ -> ("sinf(", ")")
+      | Cos, Half_prec _ -> ("hcos(", ")")
+      | Cos, Double_prec _ -> ("cos(", ")")
+      | Cos, _ -> ("cosf(", ")")
+      | Sqrt, Half_prec _ -> ("hsqrt(", ")")
+      | Sqrt, Double_prec _ -> ("sqrt(", ")")
+      | Sqrt, _ -> ("sqrtf(", ")")
+      | Recip, Byte_prec _ ->
+          invalid_arg "Cuda_backend.unop_syntax: Recip not supported for byte/integer precisions"
+      | Recip, Half_prec _ -> ("hrcp(", ")")
+      | Recip, _ -> ("(1.0 / (", "))")
+      | Recip_sqrt, Byte_prec _ ->
+          invalid_arg
+            "Cuda_backend.unop_syntax: Recip_sqrt not supported for byte/integer precisions"
+      | Recip_sqrt, Half_prec _ -> ("hrsqrt(", ")")
+      | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
+      | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
+      | Neg, _ -> ("(-(", "))")
+      | Tanh_approx, Byte_prec _ ->
+          invalid_arg
+            "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
+      | Tanh_approx, Half_prec _ -> ("htanh_approx(", ")")
+      | Tanh_approx, Single_prec _ -> ("__tanhf(", ")")
+      | Tanh_approx, _ -> ("tanh(", ")")
+      | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
+
+    let ternop_syntax prec v =
+      match (v, prec) with
+      | Ops.Where, _ -> ("(", " ? ", " : ", ")")
+      | FMA, Ops.Half_prec _ -> ("__hfma(", ", ", ", ", ")")
+      | FMA, Ops.Single_prec _ -> ("fmaf(", ", ", ", ", ")")
+      | FMA, _ -> ("fma(", ", ", ", ", ")")
 
     let convert_precision ~from ~to_ =
       match (from, to_) with

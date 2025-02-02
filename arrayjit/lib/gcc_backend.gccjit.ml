@@ -166,14 +166,15 @@ let prec_to_kind prec =
 
 let is_builtin_op = function
   | Ops.Add | Sub | Mul | Div -> true
-  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 -> false
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpeq | Or | And ->
+      false
 
 let builtin_op = function
   | Ops.Add -> Gccjit.Plus
   | Sub -> Gccjit.Minus
   | Mul -> Gccjit.Mult
   | Div -> Gccjit.Divide
-  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 ->
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpeq | Or | And ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let node_debug_name get_ident node = get_ident node.tn
@@ -278,13 +279,34 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Satur01_gate, _ ->
         let cmp =
           cast_bool num_typ
-          @@ RValue.binary_op ctx And
+          @@ RValue.binary_op ctx Logical_and (Type.get ctx Type.Bool)
                (RValue.comparison ctx Lt (RValue.zero ctx num_typ) v1)
                (RValue.comparison ctx Lt v1 (RValue.one ctx num_typ))
         in
         RValue.binary_op ctx Mult num_typ cmp @@ v2
     | Arg2, _ -> v2
     | Arg1, _ -> v1
+    | Max, Double_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fmax") [ to_d v1; to_d v2 ]) num_typ
+    | Max, Single_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fmaxf") [ v1; v2 ]) num_typ
+    | Max, Half_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fmaxf") [ v1; v2 ]) num_typ
+    | Max, Byte_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "max") [ v1; v2 ]) num_typ
+    | Min, Double_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fmin") [ to_d v1; to_d v2 ]) num_typ
+    | Min, Single_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fminf") [ v1; v2 ]) num_typ
+    | Min, Half_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "fminf") [ v1; v2 ]) num_typ
+    | Min, Byte_prec _ ->
+        RValue.cast ctx (RValue.call ctx (Function.builtin ctx "min") [ v1; v2 ]) num_typ
+    | Mod, _ -> RValue.binary_op ctx Modulo num_typ v1 v2
+    | Cmplt, _ -> RValue.comparison ctx Lt v1 v2
+    | Cmpeq, _ -> RValue.comparison ctx Eq v1 v2
+    | Or, _ -> RValue.binary_op ctx Logical_or num_typ v1 v2
+    | And, _ -> RValue.binary_op ctx Logical_and num_typ v1 v2
   in
   let log_comment c =
     match log_functions with
@@ -343,6 +365,17 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Unop (Relu, v) ->
         let v, fillers = loop v in
         (String.concat [ "("; v; " > 0.0 ? "; v; " : 0.0)" ], fillers @ fillers)
+    | Unop (op, v) ->
+        let prefix, postfix = Ops.unop_c_syntax prec op in
+        let v, fillers = loop v in
+        (String.concat [ prefix; v; postfix ], fillers)
+    | Ternop (op, cond_v, then_v, else_v) ->
+        let prefix, infix1, infix2, postfix = Ops.ternop_c_syntax prec op in
+        let cond, fillers1 = loop cond_v in
+        let then_, fillers2 = loop then_v in
+        let else_, fillers3 = loop else_v in
+        ( String.concat [ prefix; cond; infix1; then_; infix2; else_; postfix ],
+          fillers1 @ fillers2 @ fillers3 )
   in
   let debug_log_assignment ~env debug idcs node accum_op value v_code =
     match log_functions with
@@ -484,12 +517,59 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Binop (op, c1, c2) -> loop_binop op ~num_typ prec ~v1:(loop c1) ~v2:(loop c2)
     | Unop (Identity, c) -> loop c
     | Unop (Relu, c) ->
-        (* FIXME: don't recompute c *)
-        let cmp =
-          cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) @@ loop c
+        let v = loop c in
+        let cmp = cast_bool num_typ @@ RValue.comparison ctx Lt (RValue.zero ctx num_typ) v in
+        RValue.binary_op ctx Mult num_typ cmp v
+    | Unop (Satur01, c) ->
+        let v = loop c in
+        let zero = RValue.zero ctx num_typ in
+        let one = RValue.double ctx num_typ 1.0 in
+        let min =
+          RValue.binary_op ctx Plus num_typ zero
+            (RValue.binary_op ctx Mult num_typ (RValue.comparison ctx Lt v zero)
+               (RValue.binary_op ctx Minus num_typ zero v))
         in
-        RValue.binary_op ctx Mult num_typ cmp @@ loop c
+        RValue.binary_op ctx Plus num_typ min
+          (RValue.binary_op ctx Mult num_typ (RValue.comparison ctx Gt v one)
+             (RValue.binary_op ctx Minus num_typ one v))
+    | Unop (((Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Tanh_approx) as op), c) ->
+        let prefix, suffix = Ops.unop_c_syntax prec op in
+        assert (
+          String.is_suffix ~suffix:"(" prefix
+          && String.equal suffix ")"
+          && not (String.is_prefix ~prefix:"(" prefix));
+        let f = Function.builtin ctx (String.drop_suffix prefix 1) in
+        RValue.call ctx f [ loop c ]
+    | Ternop (FMA as op, c1, c2, c3) ->
+        let prefix, _, _, _ = Ops.ternop_c_syntax prec op in
+        let f = Function.builtin ctx (String.drop_suffix prefix 1) in
+        RValue.call ctx f [ loop c1; loop c2; loop c3 ]
+    | Ternop (Where, c1, c2, c3) ->
+        let cond = loop c1 in
+        let zero = RValue.zero ctx num_typ in
+        let cmp = RValue.comparison ctx Eq cond zero in
+        let v1 = loop c2 in
+        let v2 = loop c3 in
+        RValue.binary_op ctx Plus num_typ
+          (RValue.binary_op ctx Mult num_typ cmp v2)
+          (RValue.binary_op ctx Mult num_typ
+             (RValue.binary_op ctx Minus num_typ (RValue.one ctx num_typ) cmp)
+             v1)
     | Constant v -> RValue.double ctx num_typ v
+    | Unop (Recip, c) ->
+        let v = loop c in
+        RValue.binary_op ctx Divide num_typ (RValue.one ctx num_typ) v
+    | Unop (Recip_sqrt, c) ->
+        let v = loop c in
+        RValue.binary_op ctx Divide num_typ (RValue.one ctx num_typ)
+          (RValue.call ctx (Function.builtin ctx "sqrtf") [ v ])
+    | Unop (Neg, c) ->
+        let v = loop c in
+        RValue.unary_op ctx Negate num_typ v
+    | Unop (Not, c) ->
+        let v = loop c in
+        cast_bool num_typ @@ RValue.unary_op ctx Logical_negate (Type.get ctx Type.Bool)
+          (RValue.comparison ctx Eq v (RValue.zero ctx num_typ))
   and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in
