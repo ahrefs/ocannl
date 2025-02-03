@@ -464,25 +464,24 @@ let translate (expr : expression) : result =
                        };
                    })]
       in
-      (* TODO: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
+      (* FIXME: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
          eliding the code. *)
       let body =
         [%expr
           Option.value ~default:Arrayjit.Assignments.Noop
-          @@ Option.map [%e setup_l.array_opt] ~f:(fun lhs ->
-                 Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r2.array_opt]
-                   ~f:(fun rhs1 rhs2 rhs3 ->
-                     Arrayjit.Assignments.Accum_ternop
-                       {
-                         initialize_neutral = [%e initialize_neutral];
-                         accum = [%e accu_op];
-                         lhs;
-                         op = [%e tern_op];
-                         rhs1;
-                         rhs2;
-                         rhs3;
-                         projections = [%e projections];
-                       }))]
+          @@ Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
+               ~f:(fun rhs1 rhs2 rhs3 ->
+                 Arrayjit.Assignments.Accum_ternop
+                   {
+                     initialize_neutral = [%e initialize_neutral];
+                     accum = [%e accu_op];
+                     lhs = Option.value_exn [%e setup_l.array_opt];
+                     op = [%e tern_op];
+                     rhs1;
+                     rhs2;
+                     rhs3;
+                     projections = [%e projections];
+                   })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
     in
