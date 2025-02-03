@@ -192,6 +192,16 @@ let sat01 ?(label = []) =
   let%cd grad_asn ~v:_ ~g ~t1 ~projections = g1 =+ sat01_gate (v1, g) in
   Tensor.unop ~label:("sat01" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
+let fma ?(label = []) ~grad_spec t1 t2 t3 =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: fma v1 v2 v3 in
+  let%cd grad_asn ~v:_ ~g ~t1 ~t2 ~t3 ~projections =
+    g1 =+ g * v2;
+    g2 =+ g * v1;
+    g3 =+ g
+  in
+  Tensor.ternop ~label:("fma" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1 t2 t3
+
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
     Tensor.term
@@ -268,6 +278,7 @@ module DO = struct
   let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
   let relu = relu ~grad_spec:If_needed
   let sat01 = sat01 ~grad_spec:If_needed
+  let fma = fma ~grad_spec:If_needed
   let ( !. ) = Tensor.number ~grad_spec:If_needed
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:If_needed @@ Float.of_int i
   let ( !@ ) = embed_symbol
@@ -282,7 +293,8 @@ module NDO = struct
 
   let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
   let ( @| ) ?label t1 idx = slice ?label ~grad_spec:Prohibit_grad idx t1
-  let sat01 = sat01 ~grad_spec:If_needed
+  let sat01 = sat01 ~grad_spec:Prohibit_grad
+  let fma = fma ~grad_spec:Prohibit_grad
 end
 
 module TDSL = struct
