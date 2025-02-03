@@ -66,6 +66,24 @@ exception Session_error of string * t option
 
 val max_sublabel_length : int ref
 
+val raw_ternop :
+  initialize_neutral:bool ->
+  accum:Arrayjit.Ops.binop ->
+  t:t ->
+  lhs_is_grad:bool ->
+  op:Arrayjit.Ops.ternop ->
+  t1:t ->
+  rhs1_is_grad:bool ->
+  rhs1_is_merge:bool ->
+  t2:t ->
+  rhs2_is_grad:bool ->
+  rhs2_is_merge:bool ->
+  t3:t ->
+  rhs3_is_grad:bool ->
+  rhs3_is_merge:bool ->
+  logic:Shape.ternary_type ->
+  asgns
+
 val raw_binop :
   initialize_neutral:bool ->
   accum:Arrayjit.Ops.binop ->
@@ -99,6 +117,7 @@ val is_prohibit_grad : grad_spec -> bool
 
 val op :
   label:string list ->
+  ?ternary_op:Shape.ternary_type ->
   ?compose_op:Shape.compose_type ->
   ?transpose_op:Shape.transpose_type ->
   ?init_op:init_op ->
@@ -130,7 +149,7 @@ val unop :
 
 val ternop :
   label:string list ->
-  ?compose_op:Shape.compose_type ->
+  ?ternary_op:Shape.ternary_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
   grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
@@ -138,7 +157,6 @@ val ternop :
   t ->
   t ->
   t
-
 val term :
   label:string list ->
   grad_spec:grad_spec ->

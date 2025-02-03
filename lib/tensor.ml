@@ -135,6 +135,23 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
 
+let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
+    ~(rhs1_is_grad : bool) ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~(t3 : t)
+    ~rhs3_is_grad ~rhs3_is_merge ~logic : Asgns.t =
+  let shape = t.shape in
+  let shape_logic = Shape.Broadcast_tern (logic, t1.shape, t2.shape, t3.shape) in
+  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
+  Shape.propagate_shapes local_shape_update;
+  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
+  let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
+  let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
+  let rhs2 = if rhs2_is_grad then (Option.value_exn ~here:[%here] t2.diff).grad else t2.value in
+  let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
+  let rhs3 = if rhs3_is_grad then (Option.value_exn ~here:[%here] t3.diff).grad else t3.value in
+  let rhs3 = if rhs3_is_merge then Asgns.Merge_buffer rhs3 else Node rhs3 in
+  Asgns.Accum_ternop { initialize_neutral; accum; lhs; op; rhs1; rhs2; rhs3; projections }
+
 let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
     ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
   let shape = t.shape in
@@ -149,9 +166,10 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
-    ?(transpose_op = Shape.Pointwise_un) ?(init_op = default_init_op) ~op_asn ~grad_asn
-    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
+    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
+    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape
+    (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let id = session_state.next_id in
@@ -169,6 +187,7 @@ let op ~(label : string list) ?(compose_op = Shape.Pointwise_bin)
     | [] -> [ Shape.Terminal init_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
+    | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
     | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
   in
   let local_shape_updates =
@@ -264,11 +283,11 @@ let binop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~projections in
   op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2 ]
 
-  let ternop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 =
-    let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
-    let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~t3 ~projections in
-    op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2; t3 ]
-  
+let ternop ~label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 =
+  let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
+  let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~t3 ~projections in
+  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2; t3 ]
+
 let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in
