@@ -1,6 +1,8 @@
 (library
  (name arrayjit)
  (public_name arrayjit)
+ (preprocessor_deps
+  (env_var OCANNL_LOG_LEVEL))
  (libraries
   base
   printbox
