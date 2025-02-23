@@ -12,8 +12,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-          # Native support for OCaml not verified yet.
-          # - windows-latest
+          - windows-latest
           # Either the waiting queue for FreeBSD is very long, or it is not available.
           # - freebsd-latest
         ocaml-compiler:
@@ -27,7 +26,7 @@ jobs:
         dune-cache: true
         allow-prerelease-opam: true
     - run: opam pin -n .
-    - run: opam depext -yt ocannl_npy arrayjit neural_nets_lib
+    - run: opam depext -yt arrayjit neural_nets_lib
     - run: opam install . --deps-only --with-test --with-doc
     - run: opam exec -- dune build
     - run: opam exec -- dune runtest

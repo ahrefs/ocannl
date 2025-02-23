@@ -103,6 +103,7 @@ let filename_parts filename =
     match (Stdlib.Filename.dirname filename, Stdlib.Filename.basename filename) with
     | ("." as base), "." -> base :: acc
     | ("/" as base), "/" -> base :: acc
+    | disk, base when String.is_suffix disk ~suffix:":\\" -> disk :: base :: acc
     | rest, dir -> loop (dir :: acc) rest
   in
   loop [] filename

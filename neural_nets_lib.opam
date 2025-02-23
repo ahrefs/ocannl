@@ -20,7 +20,6 @@ depends: [
   "printbox" {>= "0.12"}
   "printbox-text" {>= "0.12"}
   "printbox-ext-plot" {>= "0.12"}
-  "ocannl_npy"
   "angstrom" {>= "0.15"}
   "stdio"
   "sexplib"

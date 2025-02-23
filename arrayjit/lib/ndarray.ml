@@ -630,14 +630,10 @@ let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_s
   in
   loop 0
 
-let save ~file_name t =
-  let f arr = Npy.write arr file_name in
-  map { f } t
+(* TODO: restore npy support or alternative. *)
 
-let restore ~file_name t =
-  let local = Npy.read_mmap file_name ~shared:false in
-  let f prec arr =
-    let local = Npy.to_bigarray Bigarray.c_layout (precision_to_bigarray_kind prec) local in
-    A.blit (Option.value_exn ~here:[%here] local) arr
-  in
-  map_with_prec { f } t
+(* let save ~file_name t = let f arr = Npy.write arr file_name in map { f } t *)
+
+(* let restore ~file_name t = let local = Npy.read_mmap file_name ~shared:false in let f prec arr =
+   let local = Npy.to_bigarray Bigarray.c_layout (precision_to_bigarray_kind prec) local in A.blit
+   (Option.value_exn ~here:[%here] local) arr in map_with_prec { f } t *)

@@ -1,3 +1,10 @@
+## [0.6.0] -- current
+
+### Changed
+
+- `-pthread` -> `-lpthread` in `c_library_flags` in `dune` files.
+- Removed Numpy support.
+
 ## [0.5.1] -- 2025-01-01
 
 ## Added

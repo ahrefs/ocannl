@@ -6,7 +6,6 @@
   printbox
   printbox-text
   printbox-ext-plot
-  npy
   angstrom
   stdio
   sexplib
@@ -29,7 +28,7 @@
    ppx_minidebug))
  (modules PrintBox_utils row shape tensor operation train nn_blocks)
  (modes byte native)
- (c_library_flags -pthread))
+ (c_library_flags -lpthread))
 
 (library
  (name ppx_ocannl)

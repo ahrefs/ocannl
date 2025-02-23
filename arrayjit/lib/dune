@@ -7,7 +7,6 @@
   base
   printbox
   printbox-text
-  npy
   stdio
   sexplib
   str

@@ -1,4 +1,0 @@
-(library
- (name npy)
- (public_name ocannl_npy)
- (libraries bigarray camlzip))

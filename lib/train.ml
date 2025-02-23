@@ -57,54 +57,25 @@ let get_params t =
   in
   loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
 
-let save_params t =
-  let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in
-  assert (not is_grad);
-  let file_name =
-    Option.value_or_thunk
-      ~default:(fun () -> invalid_arg "Train.save_params: root tensor is not named")
-      ident
-  in
-  let with_name p =
-    let is_grad, ident = Tn.no_grad_ident_label p.Tensor.value in
-    assert (not is_grad);
-    ( p.Tensor.value,
-      Option.value_or_thunk
-        ~default:(fun () ->
-          invalid_arg @@ "Train.save_params: parameter is not named: "
-          ^ Tn.debug_name p.Tensor.value)
-        ident )
-  in
-  let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
-  let out_file = Npy.Npz.open_out file_name in
-  List.iter with_names ~f:(fun (v, name) ->
-      let f arr = Npy.Npz.write out_file name arr in
-      Nd.map { f } @@ Option.value_exn ~here:[%here] @@ Lazy.force v.array)
+(* let save_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
+   is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
+   "Train.save_params: root tensor is not named") ident in let with_name p = let is_grad, ident =
+   Tn.no_grad_ident_label p.Tensor.value in assert (not is_grad); ( p.Tensor.value,
+   Option.value_or_thunk ~default:(fun () -> invalid_arg @@ "Train.save_params: parameter is not
+   named: " ^ Tn.debug_name p.Tensor.value) ident ) in let with_names = get_params t |> Set.elements
+   |> List.map ~f:with_name in let out_file = Npy.Npz.open_out file_name in List.iter with_names
+   ~f:(fun (v, name) -> let f arr = Npy.Npz.write out_file name arr in Nd.map { f } @@
+   Option.value_exn ~here:[%here] @@ Lazy.force v.array) *)
 
-let restore_params t =
-  let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in
-  assert (not is_grad);
-  let file_name =
-    Option.value_or_thunk
-      ~default:(fun () -> invalid_arg "Train.restore_params: root tensor is not named")
-      ident
-  in
-  let with_name p =
-    let is_grad, ident = Tn.no_grad_ident_label p.Tensor.value in
-    assert (not is_grad);
-    ( p.Tensor.value,
-      Option.value_or_thunk
-        ~default:(fun () ->
-          invalid_arg @@ "Train.restore_params: parameter is not named: "
-          ^ Tn.debug_name p.Tensor.value)
-        ident )
-  in
-  let with_names = get_params t |> Set.elements |> List.map ~f:with_name in
-  let in_file = Npy.Npz.open_in file_name in
-  List.iter with_names ~f:(fun (v, name) ->
-      let f arr = Npy.Npz.restore in_file name arr in
-      Nd.map { f } @@ Option.value_exn ~here:[%here] @@ Lazy.force v.array)
-
+(* let restore_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
+   is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
+   "Train.restore_params: root tensor is not named") ident in let with_name p = let is_grad, ident =
+   Tn.no_grad_ident_label p.Tensor.value in assert (not is_grad); ( p.Tensor.value,
+   Option.value_or_thunk ~default:(fun () -> invalid_arg @@ "Train.restore_params: parameter is not
+   named: " ^ Tn.debug_name p.Tensor.value) ident ) in let with_names = get_params t |> Set.elements
+   |> List.map ~f:with_name in let in_file = Npy.Npz.open_in file_name in List.iter with_names
+   ~f:(fun (v, name) -> let f arr = Npy.Npz.restore in_file name arr in Nd.map { f } @@
+   Option.value_exn ~here:[%here] @@ Lazy.force v.array) *)
 let set_on_host ?(from_device = true) (a : Tn.t) =
   let memtype = if from_device then Tn.(Changed_on_devices Unset) else Volatile in
   Tn.update_memory_mode a (Hosted memtype) 27

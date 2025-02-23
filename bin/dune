@@ -10,6 +10,14 @@
  (modes exe))
 
 (executable
+ (name sanity_check)
+ (modules sanity_check)
+ (libraries ocannl base stdio)
+ (preprocess
+  (pps ppx_ocannl))
+ (modes exe))
+
+(executable
  (name hello_world)
  (modules hello_world)
  (libraries ocannl base stdio)

@@ -19,26 +19,7 @@
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
-; While we wait to upstream Npy.Npz.restore, we vendor Npy. Alternative:
-; (pin
-;  (url "git+https://github.com/lukstafi/npy-ocaml#master")
-;  (package
-;   (name npy)
-;   (version 0.0.9)))
-
-(package
- (name ocannl_npy)
- (synopsis "Numpy file format support for ocaml")
- (authors "Laurent Mazare")
- (maintainers "Lukasz Stafiniak <lukstafi@gmail.com>")
- (depends
-  ; The real dependency is >= 4.06, but because of multi-package project
-  ; need to keep it in sync with the other packages.
-  (ocaml
-   (>= 5.2.0))
-  camlzip
-  dune
-  (conf-python-3 :with-test)))
+; We give up on npy / ocannl_npy for now.
 
 (package
  (name arrayjit)
@@ -64,7 +45,6 @@
    (>= 0.12))
   (printbox-text
    (>= 0.12))
-  ocannl_npy
   stdio
   sexplib
   num
@@ -118,7 +98,6 @@
    (>= 0.12))
   (printbox-ext-plot
    (>= 0.12))
-  ocannl_npy
   (angstrom
    (>= 0.15))
   stdio
