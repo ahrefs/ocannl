@@ -147,12 +147,33 @@ let is_bijective proj =
   in
   Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
 
-(** Projections for a pointwise unary operator. *)
-let identity_projections ~debug_info ~lhs_dims =
+(** Projections for a pointwise unary operator. Provide only one of [debug_info] or [derived_for].
+*)
+let identity_projections ?debug_info ?derived_for ~lhs_dims () =
   let product_iterators = Array.map lhs_dims ~f:opt_symbol in
   let project_lhs = Array.map product_iterators ~f:opt_iterator in
   let product_space = Array.filter ~f:iterated lhs_dims in
   let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
+  let debug_info =
+    match (debug_info, derived_for) with
+    | Some debug_info, _ ->
+        {
+          debug_info with
+          trace = ("indentity_projections", unique_debug_id ()) :: debug_info.trace;
+        }
+    | None, Some derived_for ->
+        {
+          spec = "";
+          derived_for = Sexp.Atom derived_for;
+          trace = [ ("indentity_projections", unique_debug_id ()) ];
+        }
+    | None, None ->
+        {
+          spec = "";
+          derived_for = Sexp.Atom "";
+          trace = [ ("indentity_projections", unique_debug_id ()) ];
+        }
+  in
   {
     product_space;
     lhs_dims;
@@ -160,8 +181,7 @@ let identity_projections ~debug_info ~lhs_dims =
     product_iterators;
     project_lhs;
     project_rhs = [| project_lhs |];
-    debug_info =
-      { debug_info with trace = ("indentity_projections", unique_debug_id ()) :: debug_info.trace };
+    debug_info;
   }
 
 let derive_index ~product_syms ~(projection : axis_index array) =

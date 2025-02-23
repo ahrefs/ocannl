@@ -18,7 +18,7 @@ let graph_t () =
   let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
-  let%op f x = sat01 x in
+  let%op f x = sin x in
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   let x_flat =
@@ -27,19 +27,21 @@ let graph_t () =
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
-  let%op x = x_flat @| step_sym in
-  let%op fx = f x in
-  Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
+  let%op xkcd = x_flat @| step_sym in
+  let%op fx = f xkcd in
+  Train.set_hosted xkcd.value;
+  Train.set_hosted x_flat.value;
+  Train.set_hosted (Option.value_exn ~here:[%here] xkcd.diff).grad;
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
+  Tensor.print_tree ~with_shape:true ~with_grad:true ~depth:9 xkcd;
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
            step_ref := i;
            Train.run fx_routine;
-           (fx.@[0], x.@%[0]))
+           (fx.@[0], xkcd.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let plot_box =
