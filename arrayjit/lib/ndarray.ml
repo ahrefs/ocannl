@@ -445,7 +445,12 @@ let log_debug_info ~from_log_level:_level _nd =
                has_neg_inf || Float.(v = neg_infinity))
             : bool)]]]]
 
+let round_to_precision x prec =
+  let factor = 10.0 **. Float.of_int prec in
+  Float.round (x *. factor) /. factor
+
 let concise_float ~prec v =
+  let v = round_to_precision v prec in
   let s = Printf.sprintf "%.*e" prec v in
   (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste
      of space. Also handle dangling e+ for 0.0 *)
