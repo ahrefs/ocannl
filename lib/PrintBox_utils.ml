@@ -75,6 +75,7 @@ let dag_to_box (b : dag) =
 
 let reformat_dag box_depth b = boxify box_depth b |> dag_to_box
 let concise_float = Arrayjit.Ndarray.concise_float
+let () = BPlot.concise_float := concise_float
 
 let plot ?(as_canvas = false) ?x_label ?y_label ?axes ?size ?(small = false) specs =
   let default = BPlot.default_config in
