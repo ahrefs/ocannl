@@ -57,20 +57,20 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let c_compile_and_load ~f_name =
-  let base_name = Stdlib.Filename.chop_extension f_name in
+let%track7_sexp c_compile_and_load ~f_name =
+  let base_name : string = Stdlib.Filename.chop_extension f_name in
   (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
      is not required to unload the library, although ideally it should. *)
   let run_id = Int.to_string @@ get_global_run_id () in
   let log_fname = base_name ^ "_run_id_" ^ run_id ^ ".log" in
-  let libname = base_name ^ "_run_id_" ^ run_id ^ ".so" in
+  let libname = base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
-  let cmdline =
-    Printf.sprintf "%s %s -O%d -o %s --shared >> %s 2>&1" (compiler_command ()) f_name
+  let cmdline : string =
+    Printf.sprintf "%s %s -O%d -o %s -shared >> %s 2>&1" (compiler_command ()) f_name
       (optimization_level ()) libname log_fname
   in
-  let rc = Stdlib.Sys.command cmdline in
+  let rc : int = Stdlib.Sys.command cmdline in
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     Unix.sleepf 0.001
   done;
