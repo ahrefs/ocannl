@@ -336,7 +336,7 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
 
 type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
 
-let%debug_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
+let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
   let generative =
     [
@@ -599,7 +599,7 @@ let apply_env_update ~eliminate_variables env update_step =
     List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step
   else []
 
-let%debug_sexp propagate_shapes (update_step : update_step) : unit =
+let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
   ignore (apply_env_update ~eliminate_variables:false !state update_step);
@@ -611,7 +611,7 @@ let%debug_sexp propagate_shapes (update_step : update_step) : unit =
   ignore (apply_env_update ~eliminate_variables:false env update_step);
   state := env
 
-let%debug_sexp finish_inference (() : unit) : unit =
+let%debug4_sexp finish_inference (() : unit) : unit =
   (* TODO: optimize to keep all needed information in unsolved, rather than starting with all
      constraints. *)
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
@@ -894,7 +894,7 @@ let axis_keys_to_idcs (sh : t) : int axis_map =
   Array.rev_inplace idcs;
   Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> (key, i))
 
-let%debug_sexp default_display_indices (sh: t): int array =
+let%debug5_sexp default_display_indices (sh: t): int array =
   let axes = axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
   let occupied = Array.create ~len:5 false in
   let set_occu prio =
