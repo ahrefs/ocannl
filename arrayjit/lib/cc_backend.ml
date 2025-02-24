@@ -15,7 +15,24 @@ let name = "cc"
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
 
-let compiler_command () = Utils.get_global_arg ~default:"cc" ~arg_name:"cc_backend_compiler_command"
+let compiler_command =
+  let default =
+    lazy
+      (let ic = Unix.open_process_in "ocamlc -config" in
+       let rec find_compiler () =
+         match In_channel.input_line ic with
+         | None -> "cc" (* Default fallback *)
+         | Some line ->
+             if String.is_prefix line ~prefix:"c_compiler: " then
+               String.drop_prefix line 12 (* Length of "c_compiler: " *)
+             else find_compiler ()
+       in
+       let compiler = find_compiler () in
+       ignore (Unix.close_process_in ic);
+       compiler)
+  in
+  fun () ->
+    Utils.get_global_arg ~default:(Lazy.force default) ~arg_name:"cc_backend_compiler_command"
 
 module Tn = Tnode
 

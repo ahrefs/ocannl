@@ -115,7 +115,7 @@ let filename_of_parts = function
 
 let config_file_args =
   match read_cmdline_or_env_var "no_config_file" with
-  | None | Some "false" ->
+  | None | Some "false" -> (
       let read = Stdio.In_channel.read_lines in
       let fname, config_lines =
         let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
@@ -141,13 +141,19 @@ let config_file_args =
                    lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
                in
                let key =
-                 if String.is_prefix key ~prefix:"ocannl" then String.drop_prefix key 6 else key
+                 if String.is_prefix key ~prefix:"ocannl" then
+                   String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
+                 else key
                in
-               Some (String.strip ~drop:(equal_char '_') key, v)
+               if String.is_empty v then None else Some (key, v)
            | l ->
                failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
                ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
-      |> Hashtbl.of_alist_exn (module String)
+      |> Hashtbl.of_alist (module String)
+      |> function
+      | `Ok h -> h
+      | `Duplicate_key key ->
+          failwith @@ "OCANNL: duplicate key in config file " ^ fname ^ ": " ^ key)
   | Some _ ->
       Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
       Hashtbl.create (module String)

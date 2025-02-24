@@ -11,6 +11,9 @@
 # and in ancestor directories. The source of the `log_level` config is always printed,
 # the sources of other configs are printed when the log level > 0.
 # The configuration values below are (one of) the defaults.
+#
+# Repeating fields are disallowed. If the value is an empty string, the default value
+# is used (as if the config was not present).
 
 # Configurations that are stored as `Utils.settings`:
 
@@ -59,8 +62,8 @@ cuda_printf_fifo_size=
 # The `-O` argument to the compiler executable for the `cc` backend.
 cc_backend_optimization_level=3
 
-# The `cc` backend compiler executable name.
-cc_backend_compiler_command=cc
+# The `cc` backend compiler executable name. By default, `ocamlc -config` field `c_compiler` is used.
+cc_backend_compiler_command=
 
 # The `-O` argument to `gcc` for the `gcc` backend (using gccjit).
 gccjit_backend_optimization_level=3
