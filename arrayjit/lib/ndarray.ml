@@ -447,7 +447,7 @@ let log_debug_info ~from_log_level:_level _nd =
 
 let concise_float ~prec v =
   (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste
-     of space. Also handle dangling e+ for 0.0. String-based approach to avoid rounding issues I
+     of space. Also handles e+0. String-based approach to avoid rounding issues I
      noticed on Windows. *)
   let s = Printf.sprintf "%.*e" (prec + 3) v in
   let s = Str.global_replace (Str.regexp "[0-9][0-9][0-9]e") "e" s in
