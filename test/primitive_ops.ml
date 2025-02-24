@@ -158,51 +158,51 @@ let%expect_test "exp(x)" =
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect {|
-    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.3e+02│                                                                                                   *│
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                  * │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                *   │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                *   │
-    │        │                                                                                                    │
-    │        │                                                                                               *    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                              *     │
-    │        │                                                                                                    │
-    │f       │                                                                                             *      │
-    │(       │                                                                                                    │
-    │x       │                                                                                           *        │
-    │)       │                                                                                                    │
-    │        │                                                                                           *        │
-    │        │                                                                                                    │
-    │        │                                                                                          *         │
-    │        │                                                                                         *          │
-    │        │                                                                                                    │
-    │        │                                                                                        *           │
-    │        │                                                                                      *             │
-    │        │                                                                                      *             │
-    │        │                                                                                     *              │
-    │        │                                                                                    *               │
-    │        │                                                                                 * *                │
-    │        │                                                                                 *                  │
-    │        │                                                                               **                   │
-    │        │                                                                             *                      │
-    │        │                                                                          ***                       │
-    │        │                                                                      ***                           │
-    │        │                                                              * **** *                              │
-    │ 0      │* * ** * ***** *** **** ***** **** **** * **** **** * ** * ** *  -    -    -    -    -    -    -    │
-    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │        │-5                                                                                               4.9│
-    │        │                                                 x                                                  │
-    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.3e+002│                                                                                                   *│
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                  * │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                *   │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                *   │
+    │         │                                                                                                    │
+    │         │                                                                                               *    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                              *     │
+    │         │                                                                                                    │
+    │f        │                                                                                             *      │
+    │(        │                                                                                                    │
+    │x        │                                                                                           *        │
+    │)        │                                                                                                    │
+    │         │                                                                                           *        │
+    │         │                                                                                                    │
+    │         │                                                                                          *         │
+    │         │                                                                                         *          │
+    │         │                                                                                                    │
+    │         │                                                                                        *           │
+    │         │                                                                                      *             │
+    │         │                                                                                      *             │
+    │         │                                                                                     *              │
+    │         │                                                                                    *               │
+    │         │                                                                                 * *                │
+    │         │                                                                                 *                  │
+    │         │                                                                               **                   │
+    │         │                                                                             *                      │
+    │         │                                                                          ***                       │
+    │         │                                                                      ***                           │
+    │         │                                                              * **** *                              │
+    │ 0       │* * ** * ***** *** **** ***** **** **** * **** **** * ** * ** *  -    -    -    -    -    -    -    │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │-5                                                                                               4.9│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}]
 
 let%expect_test "log(x)" =
@@ -339,12 +339,12 @@ let%expect_test "sin(x)" =
   Called from Stdlib__Format.kfprintf.(fun) in file "format.ml", line 1444, characters 16-34
   Called from Arrayjit__C_syntax.C_syntax.compile_proc in file "arrayjit/lib/c_syntax.ml", line 374, characters 4-38
   Re-raised at Arrayjit__C_syntax.C_syntax.compile_proc in file "arrayjit/lib/c_syntax.ml", lines 278-376, characters 31-10
-  Called from Arrayjit__Cc_backend.compile in file "arrayjit/lib/cc_backend.ml", line 101, characters 15-71
+  Called from Arrayjit__Cc_backend.compile in file "arrayjit/lib/cc_backend.ml", line 118, characters 15-71
   Called from Arrayjit__Backends.Add_device.compile in file "arrayjit/lib/backends.ml", line 246, characters 15-45
   Called from Arrayjit__Backends.Raise_backend.compile in file "arrayjit/lib/backends.ml", line 350, characters 29-59
   Re-raised at Arrayjit__Backends.Raise_backend.compile in file "arrayjit/lib/backends.ml", line 350, characters 4-59
   Re-raised at Arrayjit__Backends.Raise_backend.compile in file "arrayjit/lib/backends.ml", lines 346-354, characters 26-99
-  Called from Ocannl__Train.to_routine in file "lib/train.ml", line 399, characters 26-61
+  Called from Ocannl__Train.to_routine in file "lib/train.ml", line 370, characters 26-61
   Called from Tutorials__Primitive_ops.plot_unop in file "test/primitive_ops.ml", line 34, characters 19-82
   Called from Tutorials__Primitive_ops.(fun) in file "test/primitive_ops.ml", line 314, characters 17-29
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
