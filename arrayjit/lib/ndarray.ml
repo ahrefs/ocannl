@@ -446,13 +446,16 @@ let log_debug_info ~from_log_level:_level _nd =
             : bool)]]]]
 
 let concise_float ~prec v =
-  Printf.sprintf "%.*e" prec v
+  let s = Printf.sprintf "%.*e" prec v in
   (* The C99 standard requires at least two digits for the exponent, but the leading zero is a waste
-     of space. *)
-  |> String.substr_replace_all ~pattern:"e+0" ~with_:"e+"
-  |> String.substr_replace_all ~pattern:"e-0" ~with_:"e-"
-  |> String.substr_replace_all ~pattern:"e+0" ~with_:"e+"
-  |> String.substr_replace_all ~pattern:"e-0" ~with_:"e-"
+     of space. Also handle dangling e+ for 0.0 *)
+  let rec loop s =
+    let s' = String.substr_replace_first s ~pattern:"e+0" ~with_:"e+" in
+    let s' = String.substr_replace_first s' ~pattern:"e-0" ~with_:"e-" in
+    if String.equal s s' then s else loop s'
+  in
+  let s = loop s in
+  if String.is_suffix s ~suffix:"e+" then String.sub s ~pos:0 ~len:(String.length s - 2) else s
 
 (** Prints 0-based [indices] entries out of [arr], where a number between [-5] and [-1] in an axis
     means to print out the axis, and a non-negative number means to print out only the indexed

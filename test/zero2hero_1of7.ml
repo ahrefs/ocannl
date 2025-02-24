@@ -43,7 +43,7 @@ let%expect_test "Graph drawing recompile" =
            #12 grad_*. Virt/30        │       #5 grad_*. Virt/30       │
            <void>                     │       <void>                   │
     #10 3. Virt/40│#7 **. Virt/152    │#3 4. Virt/40│#0 x              │
-    <void>        │<void>             │<void>       │ 5.00e+0          │
+    <void>        │<void>             │<void>       │ 5.00             │
                   │#8 grad_**. Virt/30│             │#1 grad_x Local/30│
                   │<void>             │             │<void>            │
                   │[0]│ #6 2. Virt/40 │             │                  │
@@ -60,19 +60,19 @@ let%expect_test "Graph drawing recompile" =
                                    #32 +_f
                                     6.00e+1
                                    #33 grad_+_f
-                                    1.00e+0
+                                    1.00
                              #30 -                              │#19 5. Virt/40
                               5.50e+1                           │<void>
                              #31 grad_-                         │
-                              1.00e+0                           │
+                              1.00                              │
                #28 *.                 │       #21 *.            │
                 7.50e+1               │        2.00e+1          │
                #29 grad_*.            │       #22 grad_*.       │
-                1.00e+0               │        -1.00e+0         │
+                1.00                  │        -1.00            │
     #27 3. Virt/40│   #24 **.         │#20 4. Virt/40│#17 x     │
-    <void>        │    2.50e+1        │<void>        │ 5.00e+0  │
+    <void>        │    2.50e+1        │<void>        │ 5.00     │
                   │   #25 grad_**.    │              │#18 grad_x│
-                  │    3.00e+0        │              │ 2.60e+1  │
+                  │    3.00           │              │ 2.60e+1  │
                   │[17]│#23 2. Virt/40│              │          │
                   │    │<void>        │              │          │
     |}];
@@ -296,22 +296,22 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                  #12 *._l
-                   -8.00e+0
-                  #13 grad_*._l
-                   1.00e+0
-              #8 +_d               │#10 f
-               4.00e+0             │ -2.00e+0
-              #9 grad_+_d          │#11 grad_f
-               -2.00e+0            │ 4.00e+0
-        #4 *._e         │#6 c      │
-         -6.00e+0       │ 1.00e+1  │
-        #5 grad_*._e    │#7 grad_c │
-         -2.00e+0       │ -2.00e+0 │
-    #0 a     │#2 b      │          │
-     2.00e+0 │ -3.00e+0 │          │
-    #1 grad_a│#3 grad_b │          │
-     6.00e+0 │ -4.00e+0 │          │
+                 #12 *._l
+                  -8.00
+                 #13 grad_*._l
+                  1.00
+             #8 +_d              │#10 f
+              4.00               │ -2.00
+             #9 grad_+_d         │#11 grad_f
+              -2.00              │ 4.00
+       #4 *._e         │#6 c     │
+        -6.00          │ 1.00e+1 │
+       #5 grad_*._e    │#7 grad_c│
+        -2.00          │ -2.00   │
+    #0 a     │#2 b     │         │
+     2.00    │ -3.00   │         │
+    #1 grad_a│#3 grad_b│         │
+     6.00    │ -4.00   │         │
     |}];
   (* Now we update the params, but we are not doing the forward and backward passes: only params
      values will change, compared to the above. The update is in the opposite direction of the
@@ -320,22 +320,22 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                  #12 *._l
-                   -8.00e+0
-                  #13 grad_*._l
-                   1.00e+0
-              #8 +_d               │#10 f
-               4.00e+0             │ -2.40e+0
-              #9 grad_+_d          │#11 grad_f
-               -2.00e+0            │ 4.00e+0
-        #4 *._e         │#6 c      │
-         -6.00e+0       │ 1.02e+1  │
-        #5 grad_*._e    │#7 grad_c │
-         -2.00e+0       │ -2.00e+0 │
-    #0 a     │#2 b      │          │
-     1.40e+0 │ -2.60e+0 │          │
-    #1 grad_a│#3 grad_b │          │
-     6.00e+0 │ -4.00e+0 │          │
+                 #12 *._l
+                  -8.00
+                 #13 grad_*._l
+                  1.00
+             #8 +_d              │#10 f
+              4.00               │ -2.40
+             #9 grad_+_d         │#11 grad_f
+              -2.00              │ 4.00
+       #4 *._e         │#6 c     │
+        -6.00          │ 1.02e+1 │
+       #5 grad_*._e    │#7 grad_c│
+        -2.00          │ -2.00   │
+    #0 a     │#2 b     │         │
+     1.40    │ -2.60   │         │
+    #1 grad_a│#3 grad_b│         │
+     6.00    │ -4.00   │         │
     |}];
 
   (* Now the params will remain as above, but both param gradients and the values and gradients of
@@ -344,22 +344,22 @@ let%expect_test "Simple gradients hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                  #12 *._l
-                   -1.57e+1
-                  #13 grad_*._l
-                   1.00e+0
-              #8 +_d               │#10 f
-               6.56e+0             │ -2.40e+0
-              #9 grad_+_d          │#11 grad_f
-               -2.40e+0            │ 6.56e+0
-        #4 *._e         │#6 c      │
-         -3.64e+0       │ 1.02e+1  │
-        #5 grad_*._e    │#7 grad_c │
-         -2.40e+0       │ -2.40e+0 │
-    #0 a     │#2 b      │          │
-     1.40e+0 │ -2.60e+0 │          │
-    #1 grad_a│#3 grad_b │          │
-     6.24e+0 │ -3.36e+0 │          │
+                 #12 *._l
+                  -1.57e+1
+                 #13 grad_*._l
+                  1.00
+             #8 +_d              │#10 f
+              6.56               │ -2.40
+             #9 grad_+_d         │#11 grad_f
+              -2.40              │ 6.56
+       #4 *._e         │#6 c     │
+        -3.64          │ 1.02e+1 │
+       #5 grad_*._e    │#7 grad_c│
+        -2.40          │ -2.40   │
+    #0 a     │#2 b     │         │
+     1.40    │ -2.60   │         │
+    #1 grad_a│#3 grad_b│         │
+     6.24    │ -3.36   │         │
     |}]
 
 let%expect_test "Simple gradients virtual" =
@@ -427,11 +427,11 @@ let%expect_test "Simple gradients virtual" =
   [%expect
     {|
                                          #12 *._l
-                                          -8.00e+0
+                                          -8.00
                                          #13 grad_*._l Virt/40
                                          <void>
                               #8 +_d Local/46                              │#10 f
-                              <void>                                       │ -2.00e+0
+                              <void>                                       │ -2.00
                               #9 grad_+_d Virt/40                          │#11 grad_f Dev-stream/41
                               <void>                                       │<void>
                  #4 *._e Virt/152                  │#6 c                   │
@@ -439,7 +439,7 @@ let%expect_test "Simple gradients virtual" =
                  #5 grad_*._e Virt/40              │#7 grad_c Dev-stream/41│
                  <void>                            │<void>                 │
     #0 a                   │#2 b                   │                       │
-     2.00e+0               │ -3.00e+0              │                       │
+     2.00                  │ -3.00                 │                       │
     #1 grad_a Dev-stream/41│#3 grad_b Dev-stream/41│                       │
     <void>                 │<void>                 │                       │
     |}];
@@ -453,11 +453,11 @@ let%expect_test "Simple gradients virtual" =
   [%expect
     {|
                                          #12 *._l
-                                          -8.00e+0
+                                          -8.00
                                          #13 grad_*._l Virt/40
                                          <void>
                               #8 +_d Local/46                              │#10 f
-                              <void>                                       │ -2.40e+0
+                              <void>                                       │ -2.40
                               #9 grad_+_d Virt/40                          │#11 grad_f Dev-stream/41
                               <void>                                       │<void>
                  #4 *._e Virt/152                  │#6 c                   │
@@ -465,7 +465,7 @@ let%expect_test "Simple gradients virtual" =
                  #5 grad_*._e Virt/40              │#7 grad_c Dev-stream/41│
                  <void>                            │<void>                 │
     #0 a                   │#2 b                   │                       │
-     1.40e+0               │ -2.60e+0              │                       │
+     1.40                  │ -2.60                 │                       │
     #1 grad_a Dev-stream/41│#3 grad_b Dev-stream/41│                       │
     <void>                 │<void>                 │                       │
     |}];
@@ -480,7 +480,7 @@ let%expect_test "Simple gradients virtual" =
                                          #13 grad_*._l Virt/40
                                          <void>
                               #8 +_d Local/46                              │#10 f
-                              <void>                                       │ -2.40e+0
+                              <void>                                       │ -2.40
                               #9 grad_+_d Virt/40                          │#11 grad_f Dev-stream/41
                               <void>                                       │<void>
                  #4 *._e Virt/152                  │#6 c                   │
@@ -488,7 +488,7 @@ let%expect_test "Simple gradients virtual" =
                  #5 grad_*._e Virt/40              │#7 grad_c Dev-stream/41│
                  <void>                            │<void>                 │
     #0 a                   │#2 b                   │                       │
-     1.40e+0               │ -2.60e+0              │                       │
+     1.40                  │ -2.60                 │                       │
     #1 grad_a Dev-stream/41│#3 grad_b Dev-stream/41│                       │
     <void>                 │<void>                 │                       │
     |}]
@@ -512,18 +512,18 @@ let%expect_test "2D neuron hosted" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                       #8 +_v
-                        7.00e-1
-                       #9 grad_+_v
-                        1.00e+0
-                  #6 *                     │#0 b
-                   -6.00e+0                │ 6.70e+0
-                  #7 grad_*                │#1 grad_b
-                   1.00e+0                 │ 1.00e+0
-    #2 w               │#4 x               │
-     -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0  │
-    #3 grad_w          │#5 grad_x          │
-     2.00e+0  0.00e+0  │ -3.00e+0  1.00e+0 │
+                 #8 +_v
+                  7.00e-1
+                 #9 grad_+_v
+                  1.00
+             #6 *              │#0 b
+              -6.00            │ 6.70
+             #7 grad_*         │#1 grad_b
+              1.00             │ 1.00
+    #2 w         │#4 x         │
+     -3.00  1.00 │ 2.00  0.00  │
+    #3 grad_w    │#5 grad_x    │
+     2.00  0.00  │ -3.00  1.00 │
     |}]
 
 let%expect_test "2D neuron virtual" =
@@ -539,16 +539,16 @@ let%expect_test "2D neuron virtual" =
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
-                       #8 +_v
-                        7.00e-1
-                       #9 grad_+_v Virt/40
-                       <void>
-              #6 * Local/46               │#0 b
-              <void>                      │ 6.70e+0
-              #7 grad_* Virt/40           │#1 grad_b Local/46
-              <void>                      │<void>
-    #2 w               │#4 x              │
-     -3.00e+0  1.00e+0 │ 2.00e+0  0.00e+0 │
-    #3 grad_w Local/46 │#5 grad_x Local/46│
-    <void>             │<void>            │
+                      #8 +_v
+                       7.00e-1
+                      #9 grad_+_v Virt/40
+                      <void>
+              #6 * Local/46              │#0 b
+              <void>                     │ 6.70
+              #7 grad_* Virt/40          │#1 grad_b Local/46
+              <void>                     │<void>
+    #2 w              │#4 x              │
+     -3.00  1.00      │ 2.00  0.00       │
+    #3 grad_w Local/46│#5 grad_x Local/46│
+    <void>            │<void>            │
     |}]
