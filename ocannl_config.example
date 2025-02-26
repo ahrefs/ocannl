@@ -133,3 +133,11 @@ debug_highlights=
 
 # For ppx_minidebug: a pcre syntax regular expression to highlight in the logs.
 debug_highlight_pcre=
+
+# For ppx_minidebug: if provided, enables highlighting differences between the current run
+# and a previous run loaded from this file. The ".raw" extension is added automatically if not present.
+prev_run_file=
+
+# For ppx_minidebug: a pcre syntax regular expression pattern that will be removed from messages
+# before comparison when highlighting differences between runs, allowing certain differences to be ignored.
+diff_ignore_pattern_pcre=
