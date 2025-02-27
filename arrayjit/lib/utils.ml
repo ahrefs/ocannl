@@ -64,6 +64,8 @@ let settings =
   }
 
 let accessed_global_args = Hash_set.create (module String)
+let str_nonempty ~f s = if String.is_empty s then None else Some (f s)
+let pair a b = (a, b)
 
 let read_cmdline_or_env_var n =
   let with_debug =
@@ -86,10 +88,7 @@ let read_cmdline_or_env_var n =
   | None -> (
       match
         List.find_map env_variants ~f:(fun env_n ->
-            Option.(
-              join
-              @@ map (Stdlib.Sys.getenv_opt env_n) ~f:(fun v ->
-                     if String.is_empty v then None else Some (env_n, v))))
+            Option.(join @@ map (Stdlib.Sys.getenv_opt env_n) ~f:(str_nonempty ~f:(pair env_n))))
       with
       | None | Some (_, "") -> None
       | Some (p, arg) ->
@@ -145,7 +144,7 @@ let config_file_args =
                    String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
                  else key
                in
-               if String.is_empty v then None else Some (key, v)
+               str_nonempty ~f:(pair key) v
            | l ->
                failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
                ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
@@ -214,9 +213,10 @@ let diagn_log_file fname =
   filename_concat log_files_dir fname
 
 let get_debug name =
-  let snapshot_every_sec = get_global_arg ~default:"" ~arg_name:"snapshot_every_sec" in
   let snapshot_every_sec =
-    if String.is_empty snapshot_every_sec then None else Float.of_string_opt snapshot_every_sec
+    Option.join
+    @@ str_nonempty ~f:Float.of_string_opt
+    @@ get_global_arg ~default:"" ~arg_name:"snapshot_every_sec"
   in
   let time_tagged =
     match String.lowercase @@ get_global_arg ~default:"elapsed" ~arg_name:"time_tagged" with
@@ -278,8 +278,8 @@ let get_debug name =
   in
   let filename = Option.map file_stem ~f:(fun stem -> diagn_log_file @@ stem) in
   let prev_run_file =
-    let prefix = get_global_arg ~default:"" ~arg_name:"prev_run_prefix" in
-    Option.map file_stem ~f:(fun stem -> diagn_log_file @@ prefix ^ stem ^ ".raw")
+    let prefix = str_nonempty ~f:Fn.id @@ get_global_arg ~default:"" ~arg_name:"prev_run_prefix" in
+    Option.map2 prefix file_stem ~f:(fun prefix stem -> diagn_log_file @@ prefix ^ stem ^ ".raw")
   in
   let log_level =
     let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
@@ -321,12 +321,11 @@ let get_debug name =
   in
   let highlight_re =
     let arg = get_global_arg ~default:"" ~arg_name:"debug_highlight_pcre" in
-    if String.is_empty arg then [] else [ Re.Pcre.re arg ]
+    Option.to_list @@ str_nonempty ~f:Re.Pcre.re arg
   in
   let highlight_terms = Re.(alt (highlight_re @ List.map debug_highlights ~f:str)) in
   let diff_ignore_pattern =
-    let arg = get_global_arg ~default:"" ~arg_name:"diff_ignore_pattern_pcre" in
-    if String.is_empty arg then None else Some (Re.Pcre.re arg)
+    str_nonempty ~f:Re.Pcre.re @@ get_global_arg ~default:"" ~arg_name:"diff_ignore_pattern_pcre"
   in
   if flushing then
     Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
