@@ -272,9 +272,14 @@ let get_debug name =
   let log_main_domain_to_stdout =
     Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"log_main_domain_to_stdout"
   in
-  let filename =
+  let file_stem =
     if log_main_domain_to_stdout && String.is_empty name then None
-    else Some (diagn_log_file @@ if String.is_empty name then "debug" else "debug-" ^ name)
+    else Some ((if String.is_empty name then "debug" else "debug-") ^ name)
+  in
+  let filename = Option.map file_stem ~f:(fun stem -> diagn_log_file @@ stem) in
+  let prev_run_file =
+    let prefix = get_global_arg ~default:"" ~arg_name:"prev_run_prefix" in
+    Option.map file_stem ~f:(fun stem -> diagn_log_file @@ prefix ^ stem ^ ".raw")
   in
   let log_level =
     let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
@@ -319,12 +324,6 @@ let get_debug name =
     if String.is_empty arg then [] else [ Re.Pcre.re arg ]
   in
   let highlight_terms = Re.(alt (highlight_re @ List.map debug_highlights ~f:str)) in
-  let prev_run_file =
-    let arg = get_global_arg ~default:"" ~arg_name:"prev_run_file" in
-    if String.is_empty arg then None
-    else if String.is_suffix arg ~suffix:".raw" then Some arg
-    else Some (arg ^ ".raw")
-  in
   let diff_ignore_pattern =
     let arg = get_global_arg ~default:"" ~arg_name:"diff_ignore_pattern_pcre" in
     if String.is_empty arg then None else Some (Re.Pcre.re arg)
@@ -348,8 +347,7 @@ let get_debug name =
              ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
              ~hyperlink ~toc_specific_hyperlink:"" ~highlight_terms
              ~exclude_on_path:Re.(str "env")
-             ~backend ~log_level ?snapshot_every_sec ?prev_run_file ?diff_ignore_pattern
-             filename
+             ~backend ~log_level ?snapshot_every_sec ?prev_run_file ?diff_ignore_pattern filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
