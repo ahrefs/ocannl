@@ -179,6 +179,16 @@ let get_global_arg ~default ~arg_name:n =
   Hash_set.add accessed_global_args n;
   result
 
+let original_log_level =
+  let log_level =
+    let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
+    match Int.of_string_opt s with
+    | Some ll -> ll
+    | None -> invalid_arg @@ "ocannl_log_level setting should be an integer; found: " ^ s
+  in
+  settings.log_level <- log_level;
+  log_level
+
 (* Originally from the library core.filename_base. *)
 let filename_concat p1 p2 =
   if String.is_empty p1 then
@@ -281,12 +291,6 @@ let get_debug name =
     let prefix = str_nonempty ~f:Fn.id @@ get_global_arg ~default:"" ~arg_name:"prev_run_prefix" in
     Option.map2 prefix file_stem ~f:(fun prefix stem -> diagn_log_file @@ prefix ^ stem ^ ".raw")
   in
-  let log_level =
-    let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
-    match Int.of_string_opt s with
-    | Some ll -> ll
-    | None -> invalid_arg @@ "ocannl_log_level setting should be an integer; found: " ^ s
-  in
   let toc_entry_minimal_depth =
     let arg = get_global_arg ~default:"" ~arg_name:"toc_entry_minimal_depth" in
     if String.is_empty arg then [] else [ Minidebug_runtime.Minimal_depth (Int.of_string arg) ]
@@ -329,7 +333,7 @@ let get_debug name =
   in
   if flushing then
     Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
-      ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level ()
+      ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
   else
     match filename with
     | None ->
@@ -338,7 +342,7 @@ let get_debug name =
              ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
              ~highlight_terms
              ~exclude_on_path:Re.(str "env")
-             ~log_level ?snapshot_every_sec ()
+             ~log_level:original_log_level ?snapshot_every_sec ()
     | Some filename ->
         Minidebug_runtime.forget_printbox
         @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format
@@ -346,7 +350,8 @@ let get_debug name =
              ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
              ~hyperlink ~toc_specific_hyperlink:"" ~highlight_terms
              ~exclude_on_path:Re.(str "env")
-             ~backend ~log_level ?snapshot_every_sec ?prev_run_file ?diff_ignore_pattern filename
+             ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
+             ?diff_ignore_pattern filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
@@ -374,7 +379,7 @@ let%diagn_sexp set_log_level level =
   [%log "Set log_level to", (level : int)]
 
 let restore_settings () =
-  set_log_level (Int.of_string @@ get_global_arg ~arg_name:"log_level" ~default:"0");
+  set_log_level original_log_level;
   settings.debug_log_from_routines <-
     Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
   settings.output_debug_files_in_build_directory <-
