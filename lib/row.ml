@@ -469,7 +469,8 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
 let s_row_one_in_row_constr _v ~value:_ ~in_ = match in_ with Unconstrained | Total_elems _ -> in_
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
-let s_row_one_in_entry v ~value in_ =
+let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
+    constraint_ list * row_entry =
   match in_ with
   | Solved_row in_ -> ([], Solved_row (s_row_one v ~value ~in_))
   | Bounds_row { cur; subr; lub; constr } ->
@@ -497,7 +498,7 @@ let s_row_one_in_entry v ~value in_ =
         Bounds_row
           { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_); constr } )
 
-let subst_row (env : environment) ({ dims; bcast; id } : t) : t =
+let%debug6_sexp subst_row (env : environment) ({ dims; bcast; id } : t) : t =
   let s_dims = List.map ~f:(subst_dim env) in
   let dims = s_dims dims in
   let bcast =
@@ -530,7 +531,8 @@ let subst_row (env : environment) ({ dims; bcast; id } : t) : t =
                 id;
               }))
 
-let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) : constraint_ list * environment =
+let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
+    constraint_ list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -590,8 +592,10 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constraint_ list * environment =
-  let rec solve (ineqs, env) = function
+let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
+    constraint_ list * environment =
+  let rec solve ((ineqs : constraint_ list), env) : constraint_ -> constraint_ list * environment =
+    function
     | Dim_eq { d1; d2 } ->
         let more_ineqs, env = unify_dim ~stage (d1, d2) env in
         List.fold ~init:(ineqs, env) more_ineqs ~f:solve
@@ -637,7 +641,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrai
         else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
         let orig_rows = [ r1; r2 ] in
-        let beg_handled, (ineqs, env), value =
+        let (beg_handled : bool), (ineqs, env), (value : row) =
           match r2.bcast with
           | Row_var { v = v2; beg_dims = beg_dims2 } ->
               let result =
@@ -679,10 +683,10 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrai
                 (true, result, value)
         in
         (* From now on, we have no use for un-reduced r2 since we deal with the row variable. *)
-        let r2 = value in
+        let r2 : row = value in
         let ineqs : constraint_ list ref = ref ineqs in
         let f in_ =
-          let more_ineqs, result = s_row_one_in_entry v ~value in_ in
+          let more_ineqs, result = s_row_one_in_entry v ~value:(value : row) ~in_ in
           ineqs := more_ineqs @ !ineqs;
           result
         in
@@ -724,6 +728,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) : constrai
                 env)
               else env
             in
+            let _bound_elim_ineqs : constraint_ list = !ineqs in
             result env)
   | ( ({ bcast = Broadcastable; dims = dims1; id = _ } as r1),
       ({ bcast = Broadcastable; dims = dims2; id = _ } as r2) ) -> (
@@ -1145,7 +1150,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } ->
       (Row_ineq { cur; subr } :: ineqs, env)
 
-let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : dim) : constraint_ list =
+let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : dim) :
+    constraint_ list =
   match dim with
   | Dim _ -> []
   | Var v -> (
@@ -1160,7 +1166,8 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
-let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
+let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env :
+    constraint_ list =
   match r with
   | { bcast = Broadcastable; _ } ->
       (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
@@ -1198,19 +1205,21 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
           | _ -> [])
       | _ -> [])
 
-let close_row_terminal ~(stage : stage) (env : environment) ({ dims; bcast; id } as _r : row) :
-    constraint_ list =
+let%debug5_sexp close_row_terminal ~(stage : stage) (env : environment)
+    ({ dims; bcast; id } as _r : row) : constraint_ list =
   let suffix () = List.map dims ~f:(fun d -> Terminal_dim d) in
   match bcast with
   | Broadcastable -> if is_stage5_up stage then [] else suffix ()
   | Row_var { v; beg_dims } -> (
       let term_dims () = List.map beg_dims ~f:(fun d -> Terminal_dim d) @ suffix () in
-      let r1 = row_of_var v id in
+      let r1 : row = row_of_var v id in
       let no_further_axes = Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } } in
       match Map.find env.row_env v with
-      | Some (Bounds_row { lub = None; constr = Unconstrained; _ }) when is_stage2_up stage ->
+      | Some (Bounds_row { lub = None; constr = Unconstrained; _ }) when is_stage3_up stage ->
+          [%log6 "terminal row: closing", (_r : row)];
           no_further_axes :: term_dims ()
-      | Some (Bounds_row { lub = None; constr; _ }) when is_stage2_up stage ->
+      | Some (Bounds_row { lub = None; constr; _ })
+        when is_stage2_up stage && not (equal_row_constraint constr Unconstrained) ->
           let ineqs =
             (* This is the constraint on the row variable, not on the original row. *)
             try eliminate_row_constraint r1 ~lub:None constr env
@@ -1221,7 +1230,9 @@ let close_row_terminal ~(stage : stage) (env : environment) ({ dims; bcast; id }
       | Some (Bounds_row { lub = Some lub; _ }) when is_stage3_up stage ->
           Row_eq { r1; r2 = lub } :: term_dims ()
       | _ when is_stage5_up stage -> []
-      | _ -> Terminal_row r1 :: term_dims ())
+      | _ ->
+          [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
+          Terminal_row r1 :: term_dims ())
 
 let%debug5_sexp eliminate_dim_entry v ~lub constr =
   match (lub, constr) with
@@ -1234,7 +1245,8 @@ let%debug5_sexp eliminate_dim_entry v ~lub constr =
   | Some lub, At_least_dim _ -> Some (Dim_eq { d1 = Var v; d2 = lub })
   | None, At_least_dim d -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d () })
 
-let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as _r : row) : constraint_ list =
+let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as _r : row) :
+    constraint_ list =
   let f = function
     | Var v as d1 ->
         Some
@@ -1319,7 +1331,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
   match stage with
   | Stage1 | Stage2 | Stage3 | Stage6 | Stage7 -> solve ineqs env
   | Stage4 ->
-      let finalize_lower_bound v = function
+      let finalize_lower_bound (v : dim_var) = function
         | Bounds_dim { lub; constr; _ } -> Option.to_list @@ eliminate_dim_entry v ~lub constr
         | _ -> []
       in
@@ -1410,8 +1422,8 @@ type proj_equation =
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
-let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env (env : environment) :
-    proj_equation list =
+let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env
+    (env : environment) : proj_equation list =
   let to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
