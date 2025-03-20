@@ -14,7 +14,8 @@
   ; mem_usage
   ppx_minidebug.runtime
   arrayjit)
-  (preprocessor_deps (env_var OCANNL_LOG_LEVEL))
+ (preprocessor_deps
+  (env_var OCANNL_LOG_LEVEL))
  (preprocess
   (pps
    ppx_compare

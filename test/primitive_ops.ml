@@ -153,11 +153,13 @@ let%expect_test "sat01" =
     │     │                                                 x                                                  │
     └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}]
+
 let%expect_test "exp(x)" =
   let%op f x = exp x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.34e+2│                                                                                                   *│
     │        │                                                                                                    │
@@ -206,10 +208,11 @@ let%expect_test "exp(x)" =
     |}]
 
 let%expect_test "log(x)" =
-  let%op f x = log x in 
+  let%op f x = log x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.58│                                                                                                    │
     │     │                                                                                                    │
@@ -261,7 +264,8 @@ let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 2.29│                                                                                                    │
     │     │                                                                                                    │
@@ -313,7 +317,8 @@ let%expect_test "sin(x)" =
   let%op f x = sin x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00    │                                                  *                                                 │
     │         │# # ##                                         **** *         # ####                                │
@@ -365,7 +370,8 @@ let%expect_test "cos(x)" =
   let%op f x = cos x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00    │                                                  #                                                 │
     │         │                                ** ***         #### #                                         *** **│
@@ -417,7 +423,8 @@ let%expect_test "neg(x)" =
   let%op f x = neg x in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌──────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 5.00 │#                                                                                                   │
     │      │# #                                                                                                 │
@@ -469,7 +476,8 @@ let%expect_test "fma(x, 2, 1)" =
   let%op f x = fma x !.2. !.1. in
   let plot_box = plot_unop ~f in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.08e+1│                                                                                                   #│
     │        │                                                                                                # # │

@@ -379,11 +379,7 @@ let unop_c_syntax prec op =
     | Double_prec _ | Byte_prec _ -> "fmax"
     | _ -> "fmaxf"
   in
-  let fmin () =
-    match prec with
-    | Double_prec _ | Byte_prec _ -> "fmin"
-    | _ -> "fminf"
-  in
+  let fmin () = match prec with Double_prec _ | Byte_prec _ -> "fmin" | _ -> "fminf" in
   match (op, prec) with
   | Identity, _ -> ("", "")
   | Relu, Byte_prec _ -> ("fmax(0, ", ")")

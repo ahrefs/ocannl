@@ -540,7 +540,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
           && not (String.is_prefix ~prefix:"(" prefix));
         let f = Function.builtin ctx (String.drop_suffix prefix 1) in
         RValue.call ctx f [ loop c ]
-    | Ternop (FMA as op, c1, c2, c3) ->
+    | Ternop ((FMA as op), c1, c2, c3) ->
         let prefix, _, _, _ = Ops.ternop_c_syntax prec op in
         let f = Function.builtin ctx (String.drop_suffix prefix 1) in
         RValue.call ctx f [ loop c1; loop c2; loop c3 ]
@@ -568,8 +568,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         RValue.unary_op ctx Negate num_typ v
     | Unop (Not, c) ->
         let v = loop c in
-        cast_bool num_typ @@ RValue.unary_op ctx Logical_negate (Type.get ctx Type.Bool)
-          (RValue.comparison ctx Eq v (RValue.zero ctx num_typ))
+        cast_bool num_typ
+        @@ RValue.unary_op ctx Logical_negate (Type.get ctx Type.Bool)
+             (RValue.comparison ctx Eq v (RValue.zero ctx num_typ))
   and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in

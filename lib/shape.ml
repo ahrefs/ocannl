@@ -894,7 +894,7 @@ let axis_keys_to_idcs (sh : t) : int axis_map =
   Array.rev_inplace idcs;
   Map.of_alist_exn (module AxisKey) @@ Array.to_list @@ Array.mapi idcs ~f:(fun i key -> (key, i))
 
-let%debug5_sexp default_display_indices (sh: t): int array =
+let%debug5_sexp default_display_indices (sh : t) : int array =
   let axes = axis_keys_to_idcs sh |> Map.map ~f:(fun _ -> 0) in
   let occupied = Array.create ~len:5 false in
   let set_occu prio =
