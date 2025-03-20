@@ -40,4 +40,7 @@ ocannl_config-*
 # Debug output
 log_files/
 build_files/
+
+# AI interaction files
+.specstory/
 .qodo
