@@ -114,12 +114,11 @@ let hum_typ_of_prec = function
 
 (** {2 *** Operations ***}
 
-    See: {{https://github.com/tinygrad/tinygrad/blob/master/tinygrad/ops.py#L123} tinygrad ops},
-    {{https://docs.nvidia.com/cuda/cuda-math-api/index.html} CUDA Math API} (intrinsics).
+    See: {{:https://github.com/tinygrad/tinygrad/blob/master/tinygrad/ops.py#L123} tinygrad ops},
+    {{:https://docs.nvidia.com/cuda/cuda-math-api/index.html} CUDA Math API} (intrinsics).
 
-    This is a redundant set of operations, aiming to expose hardware-supported "intrinsics",
-    to reduce the need for backends to pattern-match and optimize. Also for convenience.
-*)
+    This is a redundant set of operations, aiming to expose hardware-supported "intrinsics", to
+    reduce the need for backends to pattern-match and optimize. Also for convenience. *)
 
 (** Initializes or resets a array by filling in the corresponding numbers, at the appropriate
     precision. *)
