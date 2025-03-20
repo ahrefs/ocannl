@@ -32,7 +32,7 @@ depends: [
   "ppx_string"
   "ppx_variants_conv"
   "ppx_expect"
-  "ppx_minidebug" {>= "2.0.3"}
+  "ppx_minidebug" {>= "2.1.0" & < "2.2.0"}
   "odoc" {with-doc}
 ]
 depopts: [
