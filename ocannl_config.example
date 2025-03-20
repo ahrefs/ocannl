@@ -142,3 +142,10 @@ prev_run_prefix=
 # For ppx_minidebug: a pcre syntax regular expression pattern that will be removed from messages
 # before comparison when highlighting differences between runs, allowing certain differences to be ignored.
 diff_ignore_pattern_pcre=
+
+# For ppx_minidebug: (minimal) width of the search band for the minimal edit distance algorithm.
+diff_max_distance_factor=
+
+# For ppx_minidebug: semicolon-separated list of comma-separated entry IDs from
+# the previous and current run, that should be considered the same by the diffing algorithm.
+debug_entry_id_pairs=

@@ -330,6 +330,21 @@ let get_debug name =
   let diff_ignore_pattern =
     str_nonempty ~f:Re.Pcre.re @@ get_global_arg ~default:"" ~arg_name:"diff_ignore_pattern_pcre"
   in
+  let max_distance_factor =
+    str_nonempty ~f:Int.of_string @@ get_global_arg ~default:"" ~arg_name:"diff_max_distance_factor"
+  in
+  let entry_id_pairs =
+    let pairs_str = get_global_arg ~default:"" ~arg_name:"debug_entry_id_pairs" in
+    if String.is_empty pairs_str then []
+    else
+      String.split pairs_str ~on:';'
+      |> List.filter_map ~f:(fun pair_str ->
+             match String.split pair_str ~on:',' with
+             | [ id1; id2 ] ->
+                 Option.try_with (fun () ->
+                     (Int.of_string (String.strip id1), Int.of_string (String.strip id2)))
+             | _ -> None)
+  in
   if flushing then
     Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
       ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
@@ -350,7 +365,7 @@ let get_debug name =
              ~hyperlink ~toc_specific_hyperlink:"" ~highlight_terms
              ~exclude_on_path:Re.(str "env")
              ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
-             ?diff_ignore_pattern filename
+             ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
 
 let _get_local_debug_runtime =
   let open Stdlib.Domain in
