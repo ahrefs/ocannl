@@ -67,7 +67,7 @@ let%track7_sexp c_compile_and_load ~f_name =
   (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
   let cmdline : string =
-    Printf.sprintf "%s %s -O%d -o %s -shared >> %s 2>&1" (compiler_command ()) f_name
+    Printf.sprintf "%s %s -O%d -o %s -shared -fPIC >> %s 2>&1" (compiler_command ()) f_name
       (optimization_level ()) libname log_fname
   in
   let rc : int = Stdlib.Sys.command cmdline in
