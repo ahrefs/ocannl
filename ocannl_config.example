@@ -1,7 +1,8 @@
 # This file lists all the current configurations. It can be used as documentation
 # or as a template for writing `ocannl_config` files. Config names must be prefixed
 # by `ocannl_`, except in `ocannl_config` files where it is optional. The names are
-# case-insensitive. The configuration is read from a few sources, from highest priority:
+# case-insensitive. The values are case-sensitive and should be lowercase where case
+# is irrelevant. The configuration is read from a few sources, from highest priority:
 # 1. Commandline arguments.
 # 2. Environment variables.
 # 3. `ocannl_config` files.

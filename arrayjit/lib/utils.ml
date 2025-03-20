@@ -82,7 +82,7 @@ let read_cmdline_or_env_var n =
             Option.some_if (String.is_prefix ~prefix arg) (prefix, arg)))
   with
   | Some (p, arg) ->
-      let result = String.(lowercase @@ drop_prefix arg (length p)) in
+      let result = String.(drop_prefix arg (length p)) in
       if with_debug then Stdio.printf "Found %s, commandline %s\n%!" result arg;
       Some result
   | None -> (
@@ -91,8 +91,7 @@ let read_cmdline_or_env_var n =
             Option.(join @@ map (Stdlib.Sys.getenv_opt env_n) ~f:(str_nonempty ~f:(pair env_n))))
       with
       | None | Some (_, "") -> None
-      | Some (p, arg) ->
-          let result = String.lowercase arg in
+      | Some (p, result) ->
           if with_debug then Stdio.printf "Found %s, environment %s\n%!" result p;
           Some result)
 
