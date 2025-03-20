@@ -17,16 +17,21 @@ jobs:
           # - freebsd-latest
         ocaml-compiler:
           - 5.2.x
+          - 5.3.x
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
-    - uses: ocaml/setup-ocaml@v3.1.4
+    - name: Set git to use LF
+      run: |
+        git config --global core.autocrlf false
+        git config --global core.eol lf
+        git config --global core.ignorecase false
+    - uses: actions/checkout@v4
+    - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
         dune-cache: true
         allow-prerelease-opam: true
     - run: opam pin -n .
-    - run: opam depext -yt arrayjit neural_nets_lib
-    - run: opam install . --deps-only --with-test --with-doc
+    - run: opam install . -y --deps-only --with-test --with-doc
     - run: opam exec -- dune build
     - run: opam exec -- dune runtest

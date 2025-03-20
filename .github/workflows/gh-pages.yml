@@ -14,30 +14,26 @@ jobs:
 
       - name: Cache opam
         id: cache-opam
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.opam
           key: opam-ubuntu-22.04-5.2.0
 
-      # - uses: actions/checkout@v2
-      - uses: ocaml/setup-ocaml@v3.1.4
+      - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.2.0'
 
       - name: Pin
         run: opam pin -n .
 
-      - name: Depext
-        run: opam depext -yt ocannl_npy arrayjit neural_nets_lib
-
       - name: Deps
-        run: opam install -d . --deps-only
+        run: opam install -ydt . --deps-only
 
       - name: Build
         run: opam exec -- dune build @doc
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./_build/default/_doc/_html/
