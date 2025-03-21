@@ -148,6 +148,7 @@ type binop =
   | Mod
   | Cmplt
   | Cmpeq
+  | Cmpne
   (* Waiting till we have a use-case to see how to sensibly introduce bitwise operations. *)
   (* | Shl *)
   (* | Shr *)
@@ -181,8 +182,10 @@ type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp, com
 (** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation
     does not have a neutral element. *)
 let neutral_elem = function
-  | Add | Sub -> 0.
-  | Mul | Div -> 1.
+  | Add -> 0.
+  | Sub -> 0.
+  | Mul -> 1.
+  | Div -> 1.
   | ToPowOf -> 1.
   | Relu_gate -> 1.
   | Satur01_gate -> 0.5
@@ -190,7 +193,7 @@ let neutral_elem = function
   | Min -> Float.infinity
   | And -> 1.
   | Or -> 0.
-  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq (* | Shl | Shr *) -> 0.
+  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq | Cmpne (* | Shl | Shr *) -> 0.
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -210,6 +213,7 @@ let interpret_binop op v1 v2 =
   | Mod -> v1 % v2
   | Cmplt -> if v1 < v2 then 1. else 0.
   | Cmpeq -> if v1 = v2 then 1. else 0.
+  | Cmpne -> if v1 <> v2 then 1. else 0.
   (* | Shl -> v1 * (int_pow 2. @@ to_int v2) *)
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
@@ -260,6 +264,7 @@ let binop_cd_syntax = function
   | Satur01_gate -> "-?^"
   | Cmplt -> "<"
   | Cmpeq -> "="
+  | Cmpne -> "<>"
   | Or -> "||"
   | And -> "&&"
   | Mod -> "%"
@@ -282,6 +287,7 @@ let binop_cd_fallback_syntax = function
   | Satur01_gate -> "sat01_gate"
   | Cmplt -> "lt"
   | Cmpeq -> "eq"
+  | Cmpne -> "ne"
   | Or -> "or_"
   | And -> "and_"
   | Mod -> "mod_"
@@ -315,6 +321,7 @@ let binop_c_syntax prec v =
   | Mod, _ -> ("(", " %", ")")
   | Cmplt, _ -> ("(", " <", ")")
   | Cmpeq, _ -> ("(", " ==", ")")
+  | Cmpne, _ -> ("(", " !=", ")")
   (* | Shl, Byte_prec _ -> ("(", " <<", ")") *)
   (* | Shl, _ -> ("((", ") * exp2(", "))") *)
   (* | Shr, Byte_prec _ -> ("(", " >>", ")") *)
@@ -323,7 +330,7 @@ let binop_c_syntax prec v =
   | And, _ -> ("(", " &&", ")")
 
 let is_assign_op = function
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq -> false
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne -> false
   | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
@@ -350,7 +357,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Min -> "=^^"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq ->
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)

@@ -76,7 +76,8 @@ The binary primitive operations:
 | `relu_gate` | `-?/` | pointwise | `Relu_gate` | `=?/`, `=:?/` |
 | `sat01_gate` | `-?^` | pointwise | `Satur01_gate` | `=?^`, `=:?^` |
 | `lt` | `<` | pointwise | `Cmplt` | none |
-| `eq` | `<>` | pointwise | `Cmpeq` | none |
+| `eq` | `=` | pointwise | `Cmpeq` | none |
+| `ne` | `<>` | pointwise | `Cmpne` | none |
 | `or_` | `\|\|` | pointwise | `Or` | `=\|\|`, `=:\|\|` |
 | `and_` | `&&` | pointwise | `And` | `=&&`, `=:&&` |
 | `mod_` | `%` | pointwise | `Mod` | none |
@@ -133,6 +134,7 @@ let interpret_binop op v1 v2 =
   | Mod -> v1 % v2
   | Cmplt -> if v1 < v2 then 1. else 0.
   | Cmpeq -> if v1 = v2 then 1. else 0.
+  | Cmpne -> if v1 <> v2 then 1. else 0.
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
 

@@ -407,8 +407,8 @@ let translate (expr : expression) : result =
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a binary operator, one of: %s"
                     "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -?^ \
-                     (Satur01_gate), -/> (Arg2), <  (Cmplt), = (Cmpeq), || (Or), && (And), % \
-                     (Mod), @^(Max), ^^ (Min)" ))
+                     (Satur01_gate), -/> (Arg2), <  (Cmplt), = (Cmpeq), <> (Cmpne), || (Or), && \
+                     (And), % (Mod), @^(Max), ^^ (Min)" ))
     in
     let ternary_op tern_op =
       loc
@@ -694,10 +694,8 @@ let translate (expr : expression) : result =
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1 }
-    | { pexp_desc = Pexp_ident { txt = Lident "t"; _ }; _ } ->
-        { default_result with slot = LHS }
-    | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } ->
-        { default_result with slot = RHS1 }
+    | { pexp_desc = Pexp_ident { txt = Lident "t"; _ }; _ } -> { default_result with slot = LHS }
+    | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } -> { default_result with slot = RHS1 }
     | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1; expr = [%expr t1.Tensor.value] }
     | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
