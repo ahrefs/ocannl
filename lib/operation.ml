@@ -376,6 +376,10 @@ module DO = struct
   let cos = cos ~grad_spec:If_needed
   let neg = neg ~grad_spec:If_needed
   let not = not ~grad_spec:If_needed
+  let sqrt = sqrt ~grad_spec:If_needed
+  let recip = recip ~grad_spec:If_needed
+  let recip_sqrt = recip_sqrt ~grad_spec:If_needed
+  let tanh = tanh ~grad_spec:If_needed
 end
 
 module NDO = struct
@@ -392,6 +396,11 @@ module NDO = struct
   let sin = sin ~grad_spec:Prohibit_grad
   let cos = cos ~grad_spec:Prohibit_grad
   let neg = neg ~grad_spec:Prohibit_grad
+  let not = not ~grad_spec:Prohibit_grad
+  let sqrt = sqrt ~grad_spec:Prohibit_grad
+  let recip = recip ~grad_spec:Prohibit_grad
+  let recip_sqrt = recip_sqrt ~grad_spec:Prohibit_grad
+  let tanh = tanh ~grad_spec:Prohibit_grad
 end
 
 module TDSL = struct
