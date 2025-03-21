@@ -247,7 +247,7 @@ let sqrt ?(label = []) =
 let recip ?(label = []) =
   let module NTDSL = NTDSL_before_div in
   let%cd op_asn ~v ~t1 ~projections = v =: recip v1 in
-  let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (-1 * (t **. 2)) in
+  let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (-1 *. (t **. 2)) in
   Tensor.unop ~label:("recip" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let recip_sqrt ?(label = []) =

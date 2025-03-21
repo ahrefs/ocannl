@@ -1084,7 +1084,10 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
       ([ Row_eq { r1 = cur; r2 = template }; Row_ineq { cur = template; subr } ], env)
   | { bcast = Broadcastable; _ }, _ when cur_dims_l + cur_beg_dims_l < subr_dims_l + subr_beg_dims_l
     ->
-      raise @@ Shape_error ("Too many axes in a subtensor", [ Row_mismatch [ cur; subr ] ])
+      raise
+      @@ Shape_error
+           ( "Too many axes in a subtensor; maybe using * instead of *.?",
+             [ Row_mismatch [ cur; subr ] ] )
   | { bcast; dims; id }, { bcast = Row_var { v = subr_v; _ }; _ }
     when subr_dims_l <= cur_dims_l && subr_beg_dims_l <= cur_beg_dims_l -> (
       let bcast =

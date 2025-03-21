@@ -25,9 +25,9 @@ let%debug_sexp graph_t () : unit =
   let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
-  let%op f x = sin x in
-  let size = 100 in
-  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  let%op f x = recip x in
+  let size = 50 in
+  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
       ~init_op:(Constant_fill { values = xs; strict = true })
