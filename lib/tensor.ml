@@ -216,14 +216,14 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+  let t = { forward; diff = None; id; value = v; shape; children } in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
        && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
-    let tensor = { forward; diff = None; id; value = v; shape; children } in
-    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
-    tensor)
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    t)
   else
     let default_prec =
       let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
@@ -262,7 +262,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else None)
     in
-    let backprop = Asgns.sequence @@ (grad_asn ~v ~g ~projections :: bcks) in
+    let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~projections :: bcks) in
     let backprop =
       {
         Asgns.asgns = backprop.asgns;
@@ -280,17 +280,17 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
 
 let binop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
-  let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~projections in
+  let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
   op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2 ]
 
 let ternop ~label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
-  let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~t2 ~t3 ~projections in
+  let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
   op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2; t3 ]
 
 let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
-  let grad_asn ~v ~g ~projections = grad_asn ~v ~g ~t1 ~projections in
+  let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
@@ -319,7 +319,7 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
             Tn.update_memory_mode v Materialized 22);
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
-  let grad_asn ~v:_ ~g:_ ~projections:_ = Asgns.empty_comp in
+  let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in

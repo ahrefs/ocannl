@@ -122,17 +122,22 @@ val op :
   ?transpose_op:Shape.transpose_type ->
   ?init_op:init_op ->
   op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(v:tn -> g:tn -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(t:t -> g:tn -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   (debug_name:string -> id:int -> Shape.t) ->
   t list ->
   t
+(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?init_op] should be
+    provided, except when the operation takes more than three arguments which uses both
+    [?compose_op] or [?transpose_op]. The defaults are pointwise operations. The [grad_asn] function
+    receives the non-differentiable variant of the tensor as an argument, which can be used to
+    access the tensor's value in a tensor expression. *)
 
 val binop :
   label:string list ->
   ?compose_op:Shape.compose_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->
@@ -142,7 +147,7 @@ val unop :
   label:string list ->
   ?transpose_op:Shape.transpose_type ->
   op_asn:(v:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(v:tn -> g:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t
@@ -151,7 +156,7 @@ val ternop :
   label:string list ->
   ?ternary_op:Shape.ternary_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(v:tn -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->

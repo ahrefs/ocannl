@@ -694,8 +694,10 @@ let translate (expr : expression) : result =
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1 }
+    | { pexp_desc = Pexp_ident { txt = Lident "t"; _ }; _ } ->
+        { default_result with slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "t1"; _ }; _ } ->
-        { default_result with slot = RHS1; expr }
+        { default_result with slot = RHS1 }
     | { pexp_desc = Pexp_ident { txt = Lident "v1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1; expr = [%expr t1.Tensor.value] }
     | { pexp_desc = Pexp_ident { txt = Lident "g1"; _ }; _ } ->
