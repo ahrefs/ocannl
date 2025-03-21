@@ -274,6 +274,24 @@ let not ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   Tensor.unop ~label:("not" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
+let lt ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.binop ~label:("<" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
+let eq ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 = v2) in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.binop ~label:("=" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
+let ne ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 <> v2) in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.binop ~label:("<>" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: fma v1 v2 v3 in
@@ -283,6 +301,17 @@ let fma ?(label = []) ~grad_spec t1 t2 t3 =
     g3 =+ g
   in
   Tensor.ternop ~label:("fma" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
+    t2 t3
+
+let where ?(label = []) ~grad_spec t1 t2 t3 =
+  let module NTDSL = NTDSL_before_div in
+  let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
+  (* TODO: introduce a special-case projection for constants *)
+  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
+    g2 =+ where v1 g (t3 - t3);
+    g3 =+ where v1 (t2 - t2) g
+  in
+  Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3
 
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
@@ -375,11 +404,15 @@ module DO = struct
   let sin = sin ~grad_spec:If_needed
   let cos = cos ~grad_spec:If_needed
   let neg = neg ~grad_spec:If_needed
-  let not = not ~grad_spec:If_needed
+  let not = not ~grad_spec:Prohibit_grad
   let sqrt = sqrt ~grad_spec:If_needed
   let recip = recip ~grad_spec:If_needed
   let recip_sqrt = recip_sqrt ~grad_spec:If_needed
   let tanh = tanh ~grad_spec:If_needed
+  let where = where ~grad_spec:If_needed
+  let (<) = lt ~grad_spec:Prohibit_grad
+  let (=) = eq ~grad_spec:Prohibit_grad
+  let (<>) = ne ~grad_spec:Prohibit_grad
 end
 
 module NDO = struct
@@ -401,6 +434,10 @@ module NDO = struct
   let recip = recip ~grad_spec:Prohibit_grad
   let recip_sqrt = recip_sqrt ~grad_spec:Prohibit_grad
   let tanh = tanh ~grad_spec:Prohibit_grad
+  let where = where ~grad_spec:Prohibit_grad
+  let (<) = lt ~grad_spec:Prohibit_grad
+  let (=) = eq ~grad_spec:Prohibit_grad
+  let (<>) = ne ~grad_spec:Prohibit_grad
 end
 
 module TDSL = struct
