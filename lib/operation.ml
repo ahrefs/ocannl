@@ -308,8 +308,8 @@ let where ?(label = []) ~grad_spec t1 t2 t3 =
   let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
   (* TODO: introduce a special-case projection for constants *)
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
-    g2 =+ where v1 g (t3 - t3);
-    g3 =+ where v1 (t2 - t2) g
+    g2 =+ where v1 g 0;
+    g3 =+ where v1 0 g
   in
   Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3

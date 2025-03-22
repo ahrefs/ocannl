@@ -33,7 +33,8 @@ type expr_type =
 
 let is_unknown = function Unknown -> true | _ -> false
 
-type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Nonslot | Undet [@@deriving equal, sexp]
+type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Scalar | Nonslot | Undet
+[@@deriving equal, sexp]
 
 type result = {
   vbs : value_binding Map.M(String).t;
@@ -136,6 +137,7 @@ let project_p_slot debug loc slot =
   | RHS1 -> [%expr p.project_rhs.(0)]
   | RHS2 -> [%expr p.project_rhs.(1)]
   | RHS3 -> [%expr p.project_rhs.(2)]
+  | Scalar -> [%expr [| Arrayjit.Indexing.Fixed_idx 0 |]]
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -152,6 +154,7 @@ let project_p_dims debug loc slot =
   | RHS1 -> [%expr p.rhs_dims.(0)]
   | RHS2 -> [%expr p.rhs_dims.(1)]
   | RHS3 -> [%expr p.rhs_dims.(2)]
+  | Scalar -> [%expr [| 1 |]]
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -276,7 +279,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         | RHS1 -> [%pat? nondiff__rhs1]
         | RHS2 -> [%pat? nondiff__rhs2]
         | RHS3 -> [%pat? nondiff__rhs3]
-        | Nonslot | Undet -> [%pat? nondiff__tensor]
+        | Scalar | Nonslot | Undet -> [%pat? nondiff__tensor]
       in
       let t = pat2expr v in
       let vb = Some (A.Vb.mk ~loc v filler) in
@@ -659,16 +662,20 @@ let translate (expr : expression) : result =
     in
     match expr with
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-        { default_result with expr = [%expr NTDSL.number [%e expr]] }
+        { default_result with expr = [%expr NTDSL.number [%e expr]]; slot = Scalar }
     | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-        { default_result with expr = [%expr NTDSL.number (Float.of_int [%e expr])] }
+        { default_result with expr = [%expr NTDSL.number (Float.of_int [%e expr])]; slot = Scalar }
     | [%expr
         [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
           [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
         let axis =
           Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
         in
-        { default_result with expr = [%expr NTDSL.number ~axis_label:[%e axis] [%e f]] }
+        {
+          default_result with
+          expr = [%expr NTDSL.number ~axis_label:[%e axis] [%e f]];
+          slot = Scalar;
+        }
     | [%expr
         [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
           [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
@@ -678,6 +685,7 @@ let translate (expr : expression) : result =
         {
           default_result with
           expr = [%expr NTDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])];
+          slot = Scalar;
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
         {
