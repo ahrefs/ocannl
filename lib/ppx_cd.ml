@@ -741,6 +741,13 @@ let translate (expr : expression) : result =
         }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_primitive_op op_ident ->
         default_result
+    | [%expr !.[%e? expr1]] ->
+        (* Hardcoding these two patterns to improve projection derivation expressivity. *)
+        let res1 = loop ~proj_in_scope expr1 in
+        { res1 with typ = Tensor; slot = Scalar; expr = [%expr NTDSL.O.( !. ) [%e res1.expr]] }
+    | [%expr !..[%e? expr1]] ->
+        let res1 = loop ~proj_in_scope expr1 in
+        { res1 with typ = Tensor; slot = Scalar; expr = [%expr NTDSL.O.( !.. ) [%e res1.expr]] }
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
         (* FIXME: `**.` should take a tensor and require that it's a literal. *)
         (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
