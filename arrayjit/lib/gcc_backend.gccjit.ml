@@ -166,7 +166,8 @@ let prec_to_kind prec =
 
 let is_builtin_op = function
   | Ops.Add | Sub | Mul | Div -> true
-  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpeq | Or | And ->
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpne | Cmpeq | Or
+  | And ->
       false
 
 let builtin_op = function
@@ -174,7 +175,8 @@ let builtin_op = function
   | Sub -> Gccjit.Minus
   | Mul -> Gccjit.Mult
   | Div -> Gccjit.Divide
-  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpeq | Or | And ->
+  | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpne | Cmpeq | Or
+  | And ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let node_debug_name get_ident node = get_ident node.tn
@@ -304,6 +306,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         RValue.cast ctx (RValue.call ctx (Function.builtin ctx "min") [ v1; v2 ]) num_typ
     | Mod, _ -> RValue.binary_op ctx Modulo num_typ v1 v2
     | Cmplt, _ -> RValue.comparison ctx Lt v1 v2
+    | Cmpne, _ -> RValue.comparison ctx Ne v1 v2
     | Cmpeq, _ -> RValue.comparison ctx Eq v1 v2
     | Or, _ -> RValue.binary_op ctx Logical_or num_typ v1 v2
     | And, _ -> RValue.binary_op ctx Logical_and num_typ v1 v2
