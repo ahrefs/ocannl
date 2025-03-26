@@ -3,7 +3,6 @@ module Nd = Arrayjit.Ndarray
 module Tn = Arrayjit.Tnode
 module Asgns = Arrayjit.Assignments
 module Idx = Arrayjit.Indexing
-module Debug_runtime = Arrayjit.Utils.Debug_runtime
 
 type tn = Tn.t
 type tn_set = Set.M(Arrayjit.Tnode).t
@@ -13,7 +12,7 @@ type init_op = Arrayjit.Ops.init_op
 type fetch_op = Asgns.fetch_op
 type projections = Arrayjit.Indexing.projections
 
-let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Arrayjit.Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]

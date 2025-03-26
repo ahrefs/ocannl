@@ -380,7 +380,7 @@ let _get_local_debug_runtime =
     if not (is_main_domain ()) then Debug_runtime.log_level := settings.log_level;
     (module Debug_runtime : Minidebug_runtime.Debug_runtime)
 
-module Debug_runtime = (val _get_local_debug_runtime ())
+let get_local_debug_runtime = _get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -526,7 +526,7 @@ let header_sep =
   let open Re in
   compile (seq [ str " "; opt any; str "="; str " " ])
 
-let%diagn_l_sexp log_trace_tree _logs =
+let%diagn_sexp log_trace_tree _logs =
   [%log_block
     "trace tree";
     let rec loop = function

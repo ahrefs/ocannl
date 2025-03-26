@@ -2,10 +2,9 @@ open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy
 module Cu = Cudajit
-module Debug_runtime = Utils.Debug_runtime
 open Backend_intf
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -14,7 +13,7 @@ let () =
   Cu.cuda_call_hook :=
     Some
       (fun ~message:_message ~status:_status ->
-        [%debug_l_sexp
+        [%debug_sexp
           [%log5_block
             _message;
             if not @@ Cu.is_success _status then [%log (_status : Cu.result)]]])
@@ -112,7 +111,7 @@ module Fresh () = struct
       Option.iter !(stream.merge_buffer) ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
       stream.merge_buffer := Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
 
-  let%track4_l_sexp finalize_device (device : device) =
+  let%track4_sexp finalize_device (device : device) =
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
     Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
@@ -457,7 +456,7 @@ module Fresh () = struct
     let func = Cu.Module.get_function run_module ~name in
     let stream = prior_context.stream in
     let runner_label = get_name stream in
-    let%diagn3_l_sexp work () : unit =
+    let%diagn3_sexp work () : unit =
       let log_id = get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
       [%log_result

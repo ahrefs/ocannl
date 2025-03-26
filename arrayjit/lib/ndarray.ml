@@ -1,9 +1,7 @@
 open Base
 (** N-dimensional arrays: a precision-handling wrapper for [Bigarray.Genarray] and its utilities. *)
 
-module Debug_runtime = Utils.Debug_runtime
-
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -389,12 +387,12 @@ let hash_t nd = Nativeint.hash @@ to_native nd
 
 let used_memory = Atomic.make 0
 
-let%track7_l_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array)
+let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array)
     init_op =
   let size_in_bytes : int =
     (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
   in
-  let%track7_l_sexp finalizer (_result : t) =
+  let%track7_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     [%log3 "Deleting", _debug, ptr_to_string_hum _result]
   in
@@ -402,7 +400,7 @@ let%track7_l_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims
   let result = Ops.map_prec { f } prec in
   Stdlib.Gc.finalise finalizer result;
   let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
-  [%debug3_l_sexp
+  [%debug3_sexp
     [%log_block
       "create_array";
       [%log _debug, ptr_to_string_hum result]]];

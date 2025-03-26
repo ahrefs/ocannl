@@ -7,11 +7,10 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
-module Debug_runtime = Utils.Debug_runtime
 
 module type Backend = Arrayjit.Backend_intf.Backend
 
-let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]

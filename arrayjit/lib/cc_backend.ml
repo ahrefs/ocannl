@@ -1,8 +1,7 @@
 open Base
 module Lazy = Utils.Lazy
-module Debug_runtime = Utils.Debug_runtime
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -83,7 +82,7 @@ let%track7_sexp c_compile_and_load ~f_name =
     invalid_arg errors);
   (* Note: RTLD_DEEPBIND not available on MacOS. *)
   let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
-  let%track7_l_sexp finalize (lib : library) : unit = Dl.dlclose ~handle:lib.lib in
+  let%track7_sexp finalize (lib : library) : unit = Dl.dlclose ~handle:lib.lib in
   Stdlib.Gc.finalise finalize result;
   result
 
@@ -189,7 +188,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
       let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
       link code.bindings params Ctypes.(void @-> returning void)]
   in
-  let%diagn_l_sexp work () : unit =
+  let%diagn_sexp work () : unit =
     [%log_result name];
     (* Stdio.printf "launching %s\n" name; *)
     Indexing.apply run_variadic ();

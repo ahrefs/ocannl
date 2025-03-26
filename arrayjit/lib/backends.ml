@@ -1,10 +1,9 @@
 open Base
-module Debug_runtime = Utils.Debug_runtime
 module Tn = Tnode
 open Backend_intf
 open Backend_impl
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -39,7 +38,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let%track2_l_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
+  let%track2_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
         if Tn.potentially_cross_stream tn then
@@ -86,7 +85,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%track2_l_sexp from_host (ctx : Backend.context) tn =
+  let%track2_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         wait_for_all ctx ctx.stream.reader_streams tn;
@@ -98,7 +97,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
-  let%diagn2_l_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
+  let%diagn2_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
@@ -139,7 +138,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   type r = Backend.context routine [@@deriving sexp_of]
 
-  let%track2_l_sexp sync_routine (r : r) : r =
+  let%track2_sexp sync_routine (r : r) : r =
     let s = r.context.stream in
     let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
     let pre () =

@@ -8,9 +8,7 @@ module Rand = Arrayjit.Rand.Lib
 
 module type Backend = Arrayjit.Backend_intf.Backend
 
-module Debug_runtime = Arrayjit.Utils.Debug_runtime
-
-let _get_local_debug_runtime = Arrayjit.Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Arrayjit.Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]

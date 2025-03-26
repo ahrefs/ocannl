@@ -374,7 +374,7 @@ Old copying mechanism in backends.ml Multicore_backend:
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_sexp work () =
                  Backend.host_to_buffer h_arr ~dst:c_arr;
                  [%diagn_sexp
                    [%log_block
@@ -407,7 +407,7 @@ Old copying mechanism in backends.ml Multicore_backend:
     @@ Option.map (Backend.get_buffer tn context.ctx) ~f:(fun c_arr ->
            match tn.Tnode.array with
            | (lazy (Some h_arr)) ->
-               let%diagn_l_sexp work () =
+               let%diagn_sexp work () =
                  Backend.buffer_to_host h_arr ~src:c_arr;
                  [%diagn_sexp
                    [%log_block

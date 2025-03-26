@@ -1,10 +1,9 @@
 open Base
-module Debug_runtime = Utils.Debug_runtime
 module Tn = Tnode
 open Backend_intf
 open Backend_impl
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -79,7 +78,7 @@ module Multicore (Backend : For_add_scheduler) :
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
 
-  let%track3_l_sexp await stream =
+  let%track3_sexp await stream =
     assert (Domain.is_main_domain ());
     let d = stream.runner.state in
     if (not @@ is_idle stream) && d.keep_spinning then (
@@ -92,7 +91,7 @@ module Multicore (Backend : For_add_scheduler) :
       Mut.unlock d.mut;
       Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream))
 
-  let%track3_l_sexp schedule_task stream task =
+  let%track3_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
     [%log_result "schedule_task", Task.describe task, get_name stream];
     let d = stream.runner.state in
@@ -135,7 +134,7 @@ module Multicore (Backend : For_add_scheduler) :
     schedule_task stream @@ Task { context_lifetime = (); description = "clock tick"; work };
     { stream_state; is_done }
 
-  let%track3_l_sexp spinup_stream () : stream =
+  let%track3_sexp spinup_stream () : stream =
     let create stream_id =
       Int.incr global_run_no;
       let state =
@@ -152,7 +151,7 @@ module Multicore (Backend : For_add_scheduler) :
           stream_id;
         }
       in
-      let%track3_l_sexp worker (() : unit) : unit =
+      let%track3_sexp worker (() : unit) : unit =
         assert (not @@ Domain.is_main_domain ());
         try
           while state.keep_spinning do
@@ -195,7 +194,7 @@ module Multicore (Backend : For_add_scheduler) :
   let num_devices () = 1
   let suggested_num_streams _device = Domain.recommended_domain_count () - 1
 
-  let%track7_l_sexp cleanup_stream (stream : stream) : unit =
+  let%track7_sexp cleanup_stream (stream : stream) : unit =
     (* Allow running in parallel. *)
     (* assert (Domain.is_main_domain ()); *)
     [%log "cleanup_stream: await stream"];

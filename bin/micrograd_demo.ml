@@ -8,7 +8,8 @@ module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Rand = Arrayjit.Rand.Lib
-module Debug_runtime = Utils.Debug_runtime
+
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Rand.init 0;

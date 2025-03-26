@@ -1,8 +1,7 @@
 open Base
 module Lazy = Utils.Lazy
-module Debug_runtime = Utils.Debug_runtime
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -700,7 +699,7 @@ let compile ~(name : string) bindings (lowered : Low_level.optimized) =
   (if Utils.settings.output_debug_files_in_build_directory then
      let f_name = Utils.build_file @@ name ^ "-gccjit-debug.c" in
      Context.dump_to_file ctx ~update_locs:true f_name);
-  let%track7_l_sexp finalize result = Result.release result in
+  let%track7_sexp finalize result = Result.release result in
   let result = Context.compile ctx in
   Stdlib.Gc.finalise finalize result;
   Context.release ctx;
@@ -789,7 +788,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
          indices. *)
       link code.bindings (List.rev code.params) Ctypes.(void @-> returning void)]
   in
-  let%diagn_l_sexp work () : unit =
+  let%diagn_sexp work () : unit =
     [%log_result name];
     Indexing.apply run_variadic ();
     if Utils.debug_log_from_routines () then (

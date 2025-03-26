@@ -2,7 +2,8 @@ open Base
 module Utils = Arrayjit.Utils
 module BPlot = PrintBox_ext_plot
 module B = PrintBox
-module Debug_runtime = Utils.Debug_runtime
+
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 type box = B.t
 

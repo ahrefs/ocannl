@@ -8,7 +8,8 @@ module CDSL = Train.CDSL
 module Utils = Arrayjit.Utils
 module Asgns = Arrayjit.Assignments
 module Rand = Arrayjit.Rand.Lib
-module Debug_runtime = Utils.Debug_runtime
+
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let demo () =
   let seed = 3 in

@@ -4,9 +4,8 @@
 
 open Base
 module Lazy = Utils.Lazy
-module Debug_runtime = Utils.Debug_runtime
 
-let _get_local_debug_runtime = Utils._get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -40,8 +39,8 @@ module No_device_buffer_and_copying () :
   let used_memory = Atomic.make 0
   let get_used_memory () = Atomic.get used_memory
 
-  let%track7_l_sexp alloc_impl ~(size_in_bytes : int) : buffer_ptr =
-    let%track7_l_sexp finalize (_ptr : buffer_ptr) : unit =
+  let%track7_sexp alloc_impl ~(size_in_bytes : int) : buffer_ptr =
+    let%track7_sexp finalize (_ptr : buffer_ptr) : unit =
       ignore (Atomic.fetch_and_add used_memory ~-size_in_bytes : int)
     in
     let ptr = Ctypes.(to_voidp @@ allocate_n int8_t ~count:size_in_bytes) in
@@ -49,14 +48,14 @@ module No_device_buffer_and_copying () :
     Stdlib.Gc.finalise finalize ptr;
     ptr
 
-  let%track7_l_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
+  let%track7_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
       buffer_ptr =
     let size_in_bytes =
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
     alloc_impl ~size_in_bytes
 
-  let%track7_l_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)
+  let%track7_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)
       ~(size_in_bytes : int) (() : unit) : buffer =
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
@@ -69,7 +68,7 @@ module No_device_buffer_and_copying () :
   let sexp_of_void_buffer_ptr (p : void_buffer_ptr) =
     Sexp.Atom (Ctypes_value_printing_stubs.string_of_pointer p)
 
-  let%track7_l_sexp memcpy ~(dst : void_buffer_ptr) ~(src : void_buffer_ptr) ~(size_in_bytes : int)
+  let%track7_sexp memcpy ~(dst : void_buffer_ptr) ~(src : void_buffer_ptr) ~(size_in_bytes : int)
       : unit =
     if Ctypes_ptr.Fat.compare dst src <> 0 then
       Ctypes_memory_stubs.memcpy ~dst ~src ~size:size_in_bytes

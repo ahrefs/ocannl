@@ -59,9 +59,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (and
-    (>= 2.1.0)
-    (< 2.2.0))))
+   (>= 2.2.0)))
  (depopts
   (cudajit
    (>= 0.6.1))
