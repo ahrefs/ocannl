@@ -38,6 +38,8 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 ## Usage
 
+Starting from OCANNL 0.5.2, the CUDA backend requires at least CUDA version 12.8.
+
 [API documentation entry point](https://ahrefs.github.io/ocannl/dev/).
 
 A possible route to learning OCANNL:
@@ -64,13 +66,12 @@ IMPORTANT: debug logging from CUDA in complex settings currently only works as i
 
 This is very tentative.
 
+* 0.5.x/0.6.x: Apple Metal backend.
 * 0.6: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
-  * More of primitive numeric operations.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
   * Port (translate or bind) the Python files from [llm.c](https://github.com/karpathy/llm.c) to implement tokenization, data loading and saving etc.
   * At the end of 0.6.x, we should have an apples-to-apples benchmark comparing OCANNL to [llm.c](https://github.com/karpathy/llm.c) for both CPU and GPU.
-  * Apple Metal backend.
 * 0.7: Optimize performance -- low hanging fruit.
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
@@ -95,12 +96,16 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
-* **0.5: Synchronization and automation at the buffer level.**
-  * **0.5.1: Automatic synchronization and transfers between host and devices.**
-  * **0.5.0: Stream-to-stream synchronization at the buffer level.**
-    * Support for CUDA events, and `Condition`-based events for CPU backends.
-    * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
-    * Automatic stream-to-stream synchronization on a per-tensor-node basis.
+* **0.5.2: More primitive operations.**
+  * Supports a lot of primitive operations (including ternary ops), and ternary tensor operations.
+  * `%cd` and `%op` support both curried and uncurried operator application syntax.
+  * More flexible gradient construction via the `%cd` syntax (better projections inference).
+  * Works on Native Windows with the C compiler backend (but CUDA backend blocked by cudajit still).
+* **0.5.1: Automatic synchronization and transfers between host and devices.**
+* **0.5.0: Stream-to-stream synchronization at the buffer level.**
+  * Support for CUDA events, and `Condition`-based events for CPU backends.
+  * Overhaul of the backend interfaces, both user-facing but especially internal: full code sharing.
+  * Automatic stream-to-stream synchronization on a per-tensor-node basis.
 * **0.4.1 Half precision, mixed precision, CUDA virtual devices** (virtual devices renamed to streams in 0.5.0)
   * Half precision. Maybe improvements for mixed-precision computations.
   * Resolve remaining issues with the new scheduler.

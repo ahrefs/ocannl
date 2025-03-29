@@ -1,9 +1,31 @@
-## [0.5.2] -- 2025-03-2?
+## [0.5.2] -- 2025-03-29
+
+### Added
+
+- Lots of new primitive ops:
+  - Unary: Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Neg | Tanh_approx | Not
+  - Binary: Satur01_gate | Max | Min | Mod | Cmplt | Cmpeq | Cmpne
+  - Ternary: Where | FMA
+    - TODO: ternary Mul_acc
+- Ternary tensor operations.
+  - A differentiable `where` operation.
+- More flexible gradient construction via the `%cd` syntax (better projections inference).
+- CC backend piggy-backing on OCaml's C compiler (consistent across OSes).
 
 ### Changed
 
+- Updated to printbox 0.12, with upstreamed graphing.
 - `-pthread` -> `-lpthread` in `c_library_flags` in `dune` files.
-- Removed Numpy support.
+- Removed Numpy support for easier compatibility on native Windows.
+- Unary (primitive) ops and relu are now named, not operator syntax.
+- Refactored `%cd` parsing of primitive ops.
+- `%cd` and `%op` support both curried and uncurried operator application syntax.
+- Updated to ppx_minidebug 2.2.0 with support for cross-run diffing.
+
+### Fixed
+
+- Numbers text rendering (consistent across OSes).
+
 
 ## [0.5.1] -- 2025-01-01
 
