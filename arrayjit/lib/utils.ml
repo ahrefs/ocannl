@@ -221,7 +221,7 @@ let diagn_log_file fname =
      try Stdlib.Sys.mkdir log_files_dir 0o777 with Stdlib.Sys_error _ -> ()));
   filename_concat log_files_dir fname
 
-let get_debug name =
+let get_local_debug_runtime =
   let snapshot_every_sec =
     Option.join
     @@ str_nonempty ~f:Float.of_string_opt
@@ -282,8 +282,8 @@ let get_debug name =
     Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"log_main_domain_to_stdout"
   in
   let file_stem =
-    if log_main_domain_to_stdout && String.is_empty name then None
-    else Some ((if String.is_empty name then "debug" else "debug-") ^ name)
+    if log_main_domain_to_stdout then None
+    else Some (get_global_arg ~default:"debug" ~arg_name:"log_file_stem")
   in
   let filename = Option.map file_stem ~f:(fun stem -> diagn_log_file @@ stem) in
   let prev_run_file =
@@ -345,42 +345,31 @@ let get_debug name =
                      (Int.of_string (String.strip id1), Int.of_string (String.strip id2)))
              | _ -> None)
   in
-  if flushing then
-    Minidebug_runtime.debug_flushing ?filename ~time_tagged ~elapsed_times ~print_entry_ids
-      ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
-  else
-    match filename with
-    | None ->
-        Minidebug_runtime.forget_printbox
-        @@ Minidebug_runtime.debug ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-             ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
-             ~highlight_terms
-             ~exclude_on_path:Re.(str "env")
-             ~log_level:original_log_level ?snapshot_every_sec ()
-    | Some filename ->
-        Minidebug_runtime.forget_printbox
-        @@ Minidebug_runtime.debug_file ~time_tagged ~elapsed_times ~location_format
-             ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true
-             ~flame_graph_separation:50 ~toc_entry ~for_append:false ~max_inline_sexp_length:120
-             ~hyperlink ~toc_specific_hyperlink:"" ~highlight_terms
-             ~exclude_on_path:Re.(str "env")
-             ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
-             ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
+  let name = get_global_arg ~default:"debug" ~arg_name:"log_file_stem" in
+  match (flushing, filename) with
+  | true, None ->
+      Minidebug_runtime.prefixed_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
+        ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
+  | true, Some filename ->
+      Minidebug_runtime.local_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
+        ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level
+        filename
+  | false, None ->
+      Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+        ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
+        ~highlight_terms
+        ~exclude_on_path:Re.(str "env")
+        ~log_level:original_log_level ?snapshot_every_sec ()
+  | false, Some filename ->
+      Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
+        ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50
+        ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
+        ~toc_specific_hyperlink:"" ~highlight_terms
+        ~exclude_on_path:Re.(str "env")
+        ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
+        ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
 
-let _get_local_debug_runtime =
-  let open Stdlib.Domain in
-  let get_runtime () =
-    (* IMPORTANT: Domain.self() returns unique_id that is never reused, spinning up a new stream
-       will create a new log file. *)
-    get_debug @@ if is_main_domain () then "" else "Domain-" ^ Int.to_string (self () :> int)
-  in
-  let debug_runtime_key = DLS.new_key get_runtime in
-  fun () ->
-    let module Debug_runtime = (val DLS.get debug_runtime_key) in
-    if not (is_main_domain ()) then Debug_runtime.log_level := settings.log_level;
-    (module Debug_runtime : Minidebug_runtime.Debug_runtime)
-
-let get_local_debug_runtime = _get_local_debug_runtime
+let _get_local_debug_runtime = get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
