@@ -174,7 +174,9 @@ type unop =
   | Not  (** 0. -> 1. | _ -> 0. *)
 [@@deriving sexp, compare, equal]
 
-type ternop = Where  (** Where(a,b,c): if a then b else c *) | FMA  (** FMA(a,b,c): (a * b) + c *)
+type ternop =
+  | Where  (** Where(a,b,c): if a then b else c *)
+  | FMA  (** FMA(a,b,c): (a * b) + c, non-accumulating *)
 [@@deriving sexp, compare, equal]
 
 type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp, compare, equal]

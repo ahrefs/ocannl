@@ -5,8 +5,7 @@
 - Lots of new primitive ops:
   - Unary: Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Neg | Tanh_approx | Not
   - Binary: Satur01_gate | Max | Min | Mod | Cmplt | Cmpeq | Cmpne
-  - Ternary: Where | FMA
-    - TODO: ternary Mul_acc
+  - Ternary: Where | FMA (non-accumulating)
 - Ternary tensor operations.
   - A differentiable `where` operation.
 - More flexible gradient construction via the `%cd` syntax (better projections inference).
@@ -25,7 +24,7 @@
 ### Fixed
 
 - Numbers text rendering (consistent across OSes).
-
+- Moved closing row variables to stage 3, because stage 2 may need to process inequalities generating more LUBs.
 
 ## [0.5.1] -- 2025-01-01
 
