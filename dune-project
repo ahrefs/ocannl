@@ -62,12 +62,12 @@
    (>= 2.2.0)))
  (depopts
   (cudajit
-   (>= 0.6.1))
+   (>= 0.6.2))
   (gccjit
    (>= 0.3.2)))
  (conflicts
   (cudajit
-   (< 0.6.1))
+   (< 0.6.2))
   (gccjit
    (< 0.3.2)))
  (tags
@@ -115,9 +115,7 @@
   ppx_expect
   ; ppx_minidebug 2.2.0 will be a breaking change.
   (ppx_minidebug
-   (and
-    (>= 2.1.0)
-    (< 2.2.0)))
+   (>= 2.2.0))
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags
