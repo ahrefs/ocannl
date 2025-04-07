@@ -1,4 +1,4 @@
-## [0.5.2] -- 2025-03-29
+## [0.5.2] -- 2025-04-07
 
 ### Added
 
@@ -25,6 +25,7 @@
 
 - Numbers text rendering (consistent across OSes).
 - Moved closing row variables to stage 3, because stage 2 may need to process inequalities generating more LUBs.
+- Don't unnecessarily prevent bytecode-only build targets.
 
 ## [0.5.1] -- 2025-01-01
 

@@ -16,7 +16,7 @@ depends: [
   "ocaml" {>= "5.2.0"}
   "dune" {>= "3.16"}
   "base" {>= "v0.17.0"}
-  "arrayjit" {>= "0.5.1"}
+  "arrayjit" {>= "0.5.2"}
   "printbox" {>= "0.12"}
   "printbox-text" {>= "0.12"}
   "printbox-ext-plot" {>= "0.12"}

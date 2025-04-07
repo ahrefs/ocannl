@@ -89,9 +89,9 @@
   ; (ocamlformat
   ;  (>= 0.26.2)
   ;  :with-dev-setup)
-  ; Here we mean (arrayjit (= 0.4.1)), but we must be compatible with arrayjit.dev during installation.
+  ; Here we mean (arrayjit (= 0.5.2)), but we must be compatible with arrayjit.dev during installation.
   (arrayjit
-   (>= 0.5.1))
+   (>= 0.5.2))
   (printbox
    (>= 0.12))
   (printbox-text
