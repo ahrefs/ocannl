@@ -743,7 +743,8 @@ let%expect_test "where(x < 0, sin(x), cos(x))" =
   let%op f x = where (x < !.0.) (sin x) (cos x) in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 9.99e-1 │  #                                                                                             *   │
     │         │#### ##                                        *** ##                                        **  ***│

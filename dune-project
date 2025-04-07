@@ -62,12 +62,12 @@
    (>= 2.2.0)))
  (depopts
   (cudajit
-   (>= 0.6.2))
+   (>= 0.7.0))
   (gccjit
    (>= 0.3.2)))
  (conflicts
   (cudajit
-   (< 0.6.2))
+   (< 0.7.0))
   (gccjit
    (< 0.3.2)))
  (tags

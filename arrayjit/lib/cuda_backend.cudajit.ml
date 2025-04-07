@@ -1,7 +1,7 @@
 open Base
 module Tn = Tnode
 module Lazy = Utils.Lazy
-module Cu = Cudajit
+module Cu = Cuda
 open Backend_intf
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
@@ -99,7 +99,7 @@ module Fresh () = struct
 
   let get_used_memory (device : device) =
     set_ctx device.dev.primary_context;
-    let free, total = Cudajit.Device.get_free_and_total_mem () in
+    let free, total = Cu.Device.get_free_and_total_mem () in
     total - free
 
   let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
@@ -213,7 +213,7 @@ module Fresh () = struct
 
   type code = {
     traced_store : Low_level.traced_store;
-    ptx : Cu.Nvrtc.compile_to_ptx_result;
+    ptx : Nvrtc.compile_to_ptx_result;
     params : (string * param_source) list;
     bindings : Indexing.unit_bindings;
     name : string;
@@ -222,7 +222,7 @@ module Fresh () = struct
 
   type code_batch = {
     traced_stores : Low_level.traced_store option array;
-    ptx : Cu.Nvrtc.compile_to_ptx_result;
+    ptx : Nvrtc.compile_to_ptx_result;
     bindings : Indexing.unit_bindings;
     params_and_names : ((string * param_source) list * string) option array;
   }
@@ -236,7 +236,6 @@ module Fresh () = struct
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc);
     [%log "compiling to PTX"];
-    let module Cu = Cudajit in
     let with_debug =
       Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
     in
@@ -245,15 +244,15 @@ module Fresh () = struct
     in
     (* FIXME: every now and then the compilation crashes because the options are garbled. *)
     (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
-    let ptx = Cu.Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+    let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
     if Utils.settings.output_debug_files_in_build_directory then (
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
-      Stdio.Out_channel.output_string oc @@ Cu.Nvrtc.string_from_ptx ptx;
+      Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc;
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
       Stdio.Out_channel.output_string oc
-      @@ Option.value_exn ~here:[%here] (Cu.Nvrtc.compilation_log ptx);
+      @@ Option.value_exn ~here:[%here] (Nvrtc.compilation_log ptx);
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc);
     ptx
@@ -452,7 +451,6 @@ module Fresh () = struct
 
   let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
       lowered_bindings run_module =
-    let module Cu = Cudajit in
     let func = Cu.Module.get_function run_module ~name in
     let stream = prior_context.stream in
     let runner_label = get_name stream in
@@ -540,7 +538,6 @@ module Fresh () = struct
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
     in
-    let module Cu = Cudajit in
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
@@ -557,10 +554,10 @@ module Fresh () = struct
 
   let get_global_debug_info () =
     Sexp.message "cuda_global_debug"
-      [ ("live_streams", [%sexp_of: int] @@ Cudajit.Stream.get_total_live_streams ()) ]
+      [ ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ()) ]
 
   let get_debug_info (stream : stream) =
-    let tot, unr, unf = Cudajit.Stream.total_unreleased_unfinished_delimited_events stream.runner in
+    let tot, unr, unf = Cu.Stream.total_unreleased_unfinished_delimited_events stream.runner in
     let i2s = [%sexp_of: int] in
     Sexp.message "cuda_stream_debug"
       [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]

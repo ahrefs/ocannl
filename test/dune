@@ -24,4 +24,4 @@
   moons_demo_parallel)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
- (modes native))
+ (modes best))
