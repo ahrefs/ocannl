@@ -68,8 +68,8 @@ module No_device_buffer_and_copying () :
   let sexp_of_void_buffer_ptr (p : void_buffer_ptr) =
     Sexp.Atom (Ctypes_value_printing_stubs.string_of_pointer p)
 
-  let%track7_sexp memcpy ~(dst : void_buffer_ptr) ~(src : void_buffer_ptr) ~(size_in_bytes : int)
-      : unit =
+  let%track7_sexp memcpy ~(dst : void_buffer_ptr) ~(src : void_buffer_ptr) ~(size_in_bytes : int) :
+      unit =
     if Ctypes_ptr.Fat.compare dst src <> 0 then
       Ctypes_memory_stubs.memcpy ~dst ~src ~size:size_in_bytes
 

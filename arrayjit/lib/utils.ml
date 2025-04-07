@@ -355,9 +355,9 @@ let get_local_debug_runtime =
         ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level
         filename
   | false, None ->
-      Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-        ~verbose_entry_ids ~global_prefix:name ~toc_entry ~toc_specific_hyperlink:""
-        ~highlight_terms
+      Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format
+        ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_entry
+        ~toc_specific_hyperlink:"" ~highlight_terms
         ~exclude_on_path:Re.(str "env")
         ~log_level:original_log_level ?snapshot_every_sec ()
   | false, Some filename ->

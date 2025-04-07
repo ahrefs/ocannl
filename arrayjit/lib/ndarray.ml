@@ -387,8 +387,8 @@ let hash_t nd = Nativeint.hash @@ to_native nd
 
 let used_memory = Atomic.make 0
 
-let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array)
-    init_op =
+let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array) init_op
+    =
   let size_in_bytes : int =
     (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
   in
