@@ -21,7 +21,7 @@
   (select
    cuda_backend.ml
    from
-   (cudajit -> cuda_backend.cudajit.ml)
+   (cudajit.cuda -> cuda_backend.cudajit.ml)
    (-> cuda_backend.missing.ml))
   ppx_minidebug.runtime)
  (preprocess
