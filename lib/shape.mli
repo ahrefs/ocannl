@@ -83,7 +83,7 @@ type transpose_type =
   | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving equal, sexp]
 
-(** If you miss expressivity here, leave a note on {!{https://github.com/ahrefs/ocannl/issues/305}issue 305}. *)
+(** If you miss expressivity here, leave a note on {{:https://github.com/ahrefs/ocannl/issues/305}issue 305}. *)
 type ternary_type =
   | Pointwise_tern  (** As in the operation [Where]. *)
   | Compose_accumulate  (** As in the operation [FMA]. *)

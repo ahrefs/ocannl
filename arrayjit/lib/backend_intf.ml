@@ -199,8 +199,9 @@ module type Device = sig
   (** Returns a context without a parent. *)
 
   val make_child : ?ctx_arrays:ctx_arrays -> context -> context
-  (** Returns a context with the same {!field:stream}, and {!field:ctx_arrays} if omitted, as the
-      given context's, which is also the {!field:parent}. *)
+  (** Returns a context with the same {!field:Backend_intf.context.stream}, and
+      {!field:Backend_intf.context.ctx_arrays} if omitted, as the given context's, which is also the
+      {!field:Backend_intf.context.parent}. *)
 
   val get_name : stream -> string
 end
@@ -290,7 +291,8 @@ module type Backend_device_common = sig
   val num_devices : unit -> int
 
   val suggested_num_streams : device -> int
-  (** The optimal number of streams for the given device to follow the {!type:config} strategy. *)
+  (** The optimal number of streams for the given device to follow the {!type:Backend_intf.config}
+      strategy. *)
 
   val new_stream : device -> stream
 end

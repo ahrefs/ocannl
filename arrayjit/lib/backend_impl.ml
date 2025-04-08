@@ -141,10 +141,11 @@ struct
     { stream = parent.stream; parent = Some parent; ctx_arrays; finalized = Atomic.make false }
 end
 
-(** Parts shared by backend implementations excluding what's already in {!Backend_any_common},
-    except for {!Buffer} which is duplicated for technical reasons. *)
+(** Parts shared by backend implementations excluding what's already in
+    {!Backend_intf.Backend_any_common}, except for {!Backend_intf.Buffer} which is duplicated for
+    technical reasons. *)
 module type Backend_impl_common = sig
-  include Buffer
+  include Backend_intf.Buffer
 
   val use_host_memory : (unit Ctypes.ptr -> buffer_ptr) option
   (** If not [None], the backend will read from and write to the host memory directly whenever
@@ -197,10 +198,11 @@ module type No_buffer_retrieval_or_syncing = sig
   include Backend_device_common with type buffer_ptr := buffer_ptr
 
   val from_host : dst_ptr:buffer_ptr -> dst:context -> Ndarray.t -> unit
-  (** Like {!Backend.from_host}, but without synchronization and buffer retrieval. *)
+  (** Like {!Backend_intf.Backend.from_host}, but without synchronization and buffer retrieval. *)
 
   val to_host : src_ptr:buffer_ptr -> src:context -> Ndarray.t -> unit
-  (** Like {!Backend.to_host}, but without synchronization events and buffer retrieval. *)
+  (** Like {!Backend_intf.Backend.to_host}, but without synchronization events and buffer retrieval.
+  *)
 
   val device_to_device :
     Tnode.t ->
@@ -210,8 +212,8 @@ module type No_buffer_retrieval_or_syncing = sig
     src_ptr:buffer_ptr ->
     src:context ->
     unit
-  (** Like {!Backend.device_to_device}, but without synchronization events and buffer retrieval.
-      Raises [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
+  (** Like {!Backend_intf.Backend.device_to_device}, but without synchronization events and buffer
+      retrieval. Raises [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
 end
 
 (** An intermediate stage for converting {!Lowered_no_device_backend} backends into
