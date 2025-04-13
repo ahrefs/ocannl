@@ -1,17 +1,17 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let%expect_test "einsum1 permute axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -274,7 +274,7 @@ let%expect_test "einsum1 permute axes" =
 
 let%expect_test "einsum1 sum out axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -344,7 +344,7 @@ let%expect_test "einsum1 sum out axes" =
 
 let%expect_test "einsum outer product" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -588,7 +588,7 @@ let%expect_test "einsum outer product" =
 
 let%expect_test "einsum matrix/inner+outer products" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -702,7 +702,7 @@ let%expect_test "einsum matrix/inner+outer products" =
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1116,7 +1116,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1230,7 +1230,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 
 let%expect_test "einsum1 fixed dim axis" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1354,7 +1354,7 @@ let%expect_test "einsum1 fixed dim axis" =
 
 let%expect_test "einsum with fixed dim axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1416,7 +1416,7 @@ let%expect_test "einsum with fixed dim axes" =
 
 let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1614,7 +1614,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
 
 let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -1701,7 +1701,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
 
 let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr

@@ -1,6 +1,23 @@
 (library
- (name arrayjit)
- (public_name arrayjit)
+ (name utils)
+ (public_name arrayjit.utils)
+ (preprocessor_deps
+  (env_var OCANNL_LOG_LEVEL))
+ (modules utils)
+ (libraries base stdio ppx_minidebug.runtime)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug)))
+
+(library
+ (name ir)
+ (public_name arrayjit.ir)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (libraries
@@ -13,16 +30,7 @@
   ctypes
   ctypes.foreign
   saturn_lockfree
-  (select
-   gcc_backend.ml
-   from
-   (gccjit -> gcc_backend.gccjit.ml)
-   (-> gcc_backend.missing.ml))
-  (select
-   cuda_backend.ml
-   from
-   (cudajit.cuda -> cuda_backend.cudajit.ml)
-   (-> cuda_backend.missing.ml))
+  utils
   ppx_minidebug.runtime)
  (preprocess
   (pps
@@ -34,7 +42,6 @@
    ppx_variants_conv
    ppx_minidebug))
  (modules
-  utils
   rand
   ops
   ndarray
@@ -45,10 +52,101 @@
   task
   backend_intf
   backend_impl
-  c_syntax
+  c_syntax)
+ (modes best))
+
+(library
+ (name cuda_backend)
+ (optional)
+ (modules cuda_backend)
+ (libraries base cudajit utils ir)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug)))
+
+(library
+ (name metal_backend)
+ (optional)
+ (modules metal_backend)
+ (libraries base metal utils ir)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug)))
+
+(library
+ (name gcc_backend)
+ (optional)
+ (modules gcc_backend)
+ (libraries base gccjit utils ir)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug)))
+
+(library
+ (name backends)
+ (public_name arrayjit.backends)
+ (preprocessor_deps
+  (env_var OCANNL_LOG_LEVEL))
+ (libraries
+  base
+  printbox
+  printbox-text
+  stdio
+  sexplib
+  str
+  ctypes
+  ctypes.foreign
+  saturn_lockfree
+  utils
+  ir
+  (select
+   gcc_backend_impl.ml
+   from
+   (gcc_backend -> gcc_backend_impl.gccjit.ml)
+   (-> gcc_backend_impl.missing.ml))
+  (select
+   cuda_backend_impl.ml
+   from
+   (cuda_backend -> cuda_backend_impl.cudajit.ml)
+   (-> cuda_backend_impl.missing.ml))
+  (select
+   metal_backend_impl.ml
+   from
+   (metal_backend -> metal_backend_impl.metal.ml)
+   (-> metal_backend_impl.missing.ml))
+  ppx_minidebug.runtime)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug))
+ (modules
   cc_backend
-  gcc_backend
-  cuda_backend
+  gcc_backend_impl
+  cuda_backend_impl
+  metal_backend_impl
   lowered_backend_missing
   no_device_backend_missing
   schedulers

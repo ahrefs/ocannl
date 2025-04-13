@@ -1,7 +1,7 @@
 open Base
-module Tn = Tnode
-open Backend_intf
-open Backend_impl
+module Tn = Ir.Tnode
+open Ir.Backend_intf
+open Ir.Backend_impl
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -21,12 +21,12 @@ module Multicore (Backend : For_add_scheduler) :
 
   let is_initialized = is_initialized
 
-  type task_list = Task.t Utils.mutable_list [@@deriving sexp_of]
+  type task_list = Ir.Task.t Utils.mutable_list [@@deriving sexp_of]
 
   module Mut = Stdlib.Mutex
   module Queue = Saturn_lockfree.Single_prod_single_cons_queue
 
-  type task_queue = Task.t Queue.t
+  type task_queue = Ir.Task.t Queue.t
 
   let sexp_of_task_queue q =
     Sexp.(List [ Atom "task_queue_of_size"; Atom (Int.to_string @@ Queue.size q) ])
@@ -93,7 +93,7 @@ module Multicore (Backend : For_add_scheduler) :
 
   let%track3_sexp schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Task.describe task, get_name stream];
+    [%log_result "schedule_task", Ir.Task.describe task, get_name stream];
     let d = stream.runner.state in
     Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream);
     if not d.keep_spinning then invalid_arg "Multicore_scheduler: stream not available";
@@ -111,7 +111,7 @@ module Multicore (Backend : For_add_scheduler) :
   let will_wait_for ctx ({ stream_state; is_done = _ } as event) =
     let work () = sync event in
     let task =
-      Task.Task
+      Ir.Task.Task
         {
           context_lifetime = ();
           description =
@@ -165,7 +165,7 @@ module Multicore (Backend : For_add_scheduler) :
                 done;
                 state.is_ready <- false;
                 Mut.unlock state.mut
-            | Some task -> Task.run task
+            | Some task -> Ir.Task.run task
           done
         with e ->
           state.stream_error <- Some e;
@@ -186,9 +186,9 @@ module Multicore (Backend : For_add_scheduler) :
           merge_buffer = ref None;
           stream_id;
           allocated_buffer = None;
-          updating_for = Hashtbl.create (module Tnode);
+          updating_for = Hashtbl.create (module Ir.Tnode);
           updating_for_merge_buffer = None;
-          reader_streams = Hashtbl.create (module Tnode);
+          reader_streams = Hashtbl.create (module Ir.Tnode);
         })
 
   let num_devices () = 1
@@ -270,7 +270,7 @@ module Sync (Backend : For_add_scheduler) = struct
 
   let initialize = Backend.initialize
   let is_initialized = Backend.is_initialized
-  let schedule_task _stream task = Task.run task
+  let schedule_task _stream task = Ir.Task.run task
   let get_global_debug_info () = Sexp.message "global_debug" []
   let get_debug_info (stream : stream) = sexp_of_runner stream.runner
 end

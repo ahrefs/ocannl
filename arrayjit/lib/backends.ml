@@ -1,5 +1,7 @@
 open Base
+open Ir
 module Tn = Tnode
+module Schedulers = Schedulers
 open Backend_intf
 open Backend_impl
 
@@ -61,12 +63,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | None, _ -> ()
     | Some `Host, Assignments.(Node tn | Merge_buffer tn) ->
         Hashtbl.update s.device.host_reading_streams tn ~f
-    | Some (`Src src), (Node tn | Merge_buffer tn) -> Hashtbl.update src.reader_streams tn ~f);
+    | Some (`Src src), (Assignments.Node tn | Assignments.Merge_buffer tn) ->
+        Hashtbl.update src.reader_streams tn ~f);
     (* Wait for writing to finish before reading. *)
     (match (from, tn) with
-    | _, Merge_buffer _ | Some `Host, _ -> ()
-    | _, Node tn ->
-        Tn.prepare_read
+    | _, Assignments.Merge_buffer _ | Some `Host, _ -> ()
+    | _, Assignments.Node tn ->
+        Tnode.prepare_read
           ~is_done:(fun () -> Backend.is_done e)
           ~sync:(fun () -> Backend.sync e)
           ~transfer:(fun () ->
@@ -513,9 +516,10 @@ let%track5_sexp fresh_backend ?backend_name () =
   with
   | "cc" -> (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) : Backend)
   | "gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend) : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend_impl) : Backend)
   | "sync_cc" -> (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
   | "sync_gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend) : Backend)
-  | "cuda" -> (module Raise_backend ((Cuda_backend.Fresh () : Lowered_backend)) : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend_impl) : Backend)
+  | "cuda" -> (module Raise_backend ((Cuda_backend_impl.Fresh () : Lowered_backend)) : Backend)
+  | "metal" -> (module Raise_backend ((Metal_backend_impl.Fresh () : Lowered_backend)) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

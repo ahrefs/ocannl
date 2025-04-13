@@ -3,14 +3,13 @@ open Ocannl
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let _suspended () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Utils.settings.output_debug_files_in_build_directory <- true;
@@ -27,7 +26,7 @@ let _suspended () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name:"cuda" ()) in
+  let module Backend = (val Backends.fresh_backend ~backend_name:"cuda" ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -53,7 +52,7 @@ let () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr

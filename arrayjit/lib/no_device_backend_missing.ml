@@ -1,3 +1,5 @@
+open Ir
+
 type buffer_ptr
 
 let use_host_memory = None

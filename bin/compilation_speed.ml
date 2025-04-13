@@ -1,15 +1,15 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
-let fresh_backend = Arrayjit.Backends.fresh_backend
+let fresh_backend = Backends.fresh_backend
 
 let benchmark_overhead backend () =
   let n_data = 20 in

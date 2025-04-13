@@ -11,9 +11,11 @@
   sexplib
   num
   str
+  arrayjit.utils
   ; mem_usage
   ppx_minidebug.runtime
-  arrayjit)
+  arrayjit.ir
+  arrayjit.backends)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (preprocess

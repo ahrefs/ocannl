@@ -2,13 +2,13 @@
 
 open Base
 
-type tn = Arrayjit.Tnode.t
-type tn_set = Set.M(Arrayjit.Tnode).t
-type asgns = Arrayjit.Assignments.t
-type comp = Arrayjit.Assignments.comp
-type init_op = Arrayjit.Ops.init_op
-type fetch_op = Arrayjit.Assignments.fetch_op
-type projections = Arrayjit.Indexing.projections
+type tn = Ir.Tnode.t
+type tn_set = Set.M(Ir.Tnode).t
+type asgns = Ir.Assignments.t
+type comp = Ir.Assignments.comp
+type init_op = Ir.Ops.init_op
+type fetch_op = Ir.Assignments.fetch_op
+type projections = Ir.Indexing.projections
 
 type diff = {
   grad : tn;
@@ -48,17 +48,17 @@ val is_bprop_root : t -> bool
 val remove_bprop_root : t -> unit
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
 
-val default_value_prec : Arrayjit.Ops.prec ref
+val default_value_prec : Ir.Ops.prec ref
 (** The default precision for the value node of terminal (i.e. non-composite) tensors.
 
-    Note: the precision of a node can be set arbitrarily via {!Arrayjit.Tnode.update_prec}. The
+    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The
     default precision for value nodes of composite tensors is the maximum of precisions of the value
     nodes of sub-tensors. *)
 
-val default_grad_prec : Arrayjit.Ops.prec ref
+val default_grad_prec : Ir.Ops.prec ref
 (** The default precision for the gradient node of terminal (i.e. non-composite) tensors.
 
-    Note: the precision of a node can be set arbitrarily via {!Arrayjit.Tnode.update_prec}. The
+    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The
     default precision for gradient nodes of composite tensors is the maximum of precisions of the
     gradient nodes of sub-tensors. *)
 
@@ -68,10 +68,10 @@ val max_sublabel_length : int ref
 
 val raw_ternop :
   initialize_neutral:bool ->
-  accum:Arrayjit.Ops.binop ->
+  accum:Ir.Ops.binop ->
   t:t ->
   lhs_is_grad:bool ->
-  op:Arrayjit.Ops.ternop ->
+  op:Ir.Ops.ternop ->
   t1:t ->
   rhs1_is_grad:bool ->
   rhs1_is_merge:bool ->
@@ -86,10 +86,10 @@ val raw_ternop :
 
 val raw_binop :
   initialize_neutral:bool ->
-  accum:Arrayjit.Ops.binop ->
+  accum:Ir.Ops.binop ->
   t:t ->
   lhs_is_grad:bool ->
-  op:Arrayjit.Ops.binop ->
+  op:Ir.Ops.binop ->
   t1:t ->
   rhs1_is_grad:bool ->
   rhs1_is_merge:bool ->
@@ -101,10 +101,10 @@ val raw_binop :
 
 val raw_unop :
   initialize_neutral:bool ->
-  accum:Arrayjit.Ops.binop ->
+  accum:Ir.Ops.binop ->
   t:t ->
   lhs_is_grad:bool ->
-  op:Arrayjit.Ops.unop ->
+  op:Ir.Ops.unop ->
   t1:t ->
   rhs_is_grad:bool ->
   rhs_is_merge:bool ->
@@ -234,8 +234,8 @@ val iter_embedded : f:(tn -> unit) -> t -> unit
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
-    and tensor nodes. Also reinitializes the modules: {!Shape}, {!Arrayjit.Tnode},
-    {!Arrayjit.Rand.Random_for_tests}. *)
+    and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode},
+    {!Ir.Rand.Random_for_tests}. *)
 
 (** {2 Printing.} *)
 

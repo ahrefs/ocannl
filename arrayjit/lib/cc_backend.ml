@@ -1,5 +1,6 @@
 open Base
 module Lazy = Utils.Lazy
+open Ir
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 

@@ -58,18 +58,23 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
+  ; temporary: will move metal to depopts later.
+  metal
   (ppx_minidebug
    (>= 2.2.0)))
  (depopts
   (cudajit
    (>= 0.7.0))
   (gccjit
-   (>= 0.3.2)))
+   (>= 0.3.2))
+  metal)
  (conflicts
   (cudajit
    (< 0.7.0))
   (gccjit
-   (< 0.3.2)))
+   (< 0.3.2))
+  (metal
+   (< 0.12)))
  (tags
   (deeplearning array jit CUDA)))
 

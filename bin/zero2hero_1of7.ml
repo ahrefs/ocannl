@@ -1,14 +1,13 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -17,7 +16,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let _suspended () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
@@ -28,7 +27,7 @@ let _suspended () =
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdlib.Format.printf "\nHigh-level code:\n%!";
-  Stdlib.Format.printf "%a\n%!" (Arrayjit.Assignments.fprint_hum ()) code.fwd_bprop.asgns
+  Stdlib.Format.printf "%a\n%!" (Ir.Assignments.fprint_hum ()) code.fwd_bprop.asgns
 
 let _suspended () =
   Rand.init 0;
@@ -36,7 +35,7 @@ let _suspended () =
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
   Train.forward_and_forget
     (module Backend)
@@ -66,7 +65,7 @@ let _suspended () =
   (* let x = Operation.slice ~label:[ "x" ] ~grad_spec:Require_grad step_sym x_flat in *)
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let%op fx = f x in
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let update = Train.grad_update fx in
@@ -96,7 +95,7 @@ let _suspended () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
@@ -152,7 +151,7 @@ let () =
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
   Train.every_non_literal_on_host l;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let update = Train.grad_update l in
   let routine =

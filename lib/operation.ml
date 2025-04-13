@@ -1,9 +1,9 @@
 (** Computational primitives for neural networks, integrating [Tensor] with [Assignments]. *)
 
 open Base
-module Asgns = Arrayjit.Assignments
-module Idx = Arrayjit.Indexing
-module Tn = Arrayjit.Tnode
+module Asgns = Ir.Assignments
+module Idx = Ir.Indexing
+module Tn = Ir.Tnode
 
 let grad t = (Option.value_exn ~here:[%here] ~message:"No-gradient tensor" t.Tensor.diff).grad
 

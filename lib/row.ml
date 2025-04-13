@@ -1,7 +1,6 @@
 (** The row type, shape inference related types and constraint solving. *)
 
 open Base
-module Utils = Arrayjit.Utils
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -162,7 +161,7 @@ let is_stage5_up = function Stage5 | Stage6 | Stage7 -> true | _ -> false
 let is_stage6_up = function Stage6 | Stage7 -> true | _ -> false
 let is_stage7 = function Stage7 -> true | _ -> false
 
-module Idx = Arrayjit.Indexing
+module Idx = Ir.Indexing
 
 type error_trace = ..
 

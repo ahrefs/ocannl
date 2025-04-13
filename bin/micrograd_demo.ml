@@ -1,13 +1,12 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
-module Asgns = Arrayjit.Assignments
+module Tn = Ir.Tnode
+module Asgns = Ir.Assignments
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -80,7 +79,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
 
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let routine =

@@ -1,8 +1,7 @@
 (** {1 Tensor shape types, shape inference, projection inference.} *)
 
 open Base
-module Utils = Arrayjit.Utils
-module Idx = Arrayjit.Indexing
+module Idx = Ir.Indexing
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -81,7 +80,7 @@ type transpose_type =
   | Transpose
   | Pointwise_un
   | Permute of string
-  | Batch_slice of Arrayjit.Indexing.static_symbol
+  | Batch_slice of Idx.static_symbol
 [@@deriving equal, sexp]
 
 type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
@@ -208,7 +207,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of Arrayjit.Ops.init_op
+  | Terminal of Ir.Ops.init_op
 [@@deriving equal, sexp]
 
 let logic_to_spec = function
@@ -243,7 +242,7 @@ type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
-    via lazy callbacks as the corresponding [Arrayjit.Indexing] dimensions and projections are first
+    via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
     accessed. *)
 
 type Row.error_trace += Shape_mismatch of t list
@@ -326,14 +325,14 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
         let var = Row.get_var () in
         let d = Row.Var var in
         proj_env_update :=
-          Map.add_exn !proj_env_update ~key:var ~data:(Arrayjit.Indexing.Fixed_idx i);
+          Map.add_exn !proj_env_update ~key:var ~data:(Idx.Fixed_idx i);
         extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
         d
   in
   let result = axes_spec_to_dims_bio ~f ~row_var_env ~dim_var_env ~sh_id labels in
   (!extras, !proj_env_update, result)
 
-type proj_axis_env = Arrayjit.Indexing.axis_index Row.dim_map [@@deriving sexp]
+type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
 
 let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
@@ -373,7 +372,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         :: mark_terminal () )
   | Terminal (File_mapped (filename, prec)) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-      let len = Unix.lseek fd 0 Unix.SEEK_END / Arrayjit.Ops.prec_in_bytes prec in
+      let len = Unix.lseek fd 0 Unix.SEEK_END / Ir.Ops.prec_in_bytes prec in
       Unix.close fd;
       let io_dims =
         try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
@@ -453,7 +452,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let slice_v = get_var () in
       let slice_var = Var slice_v in
       let proj_axis_env =
-        Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Arrayjit.Indexing.Iterator static_symbol)
+        Map.add_exn Row.dim_map_empty ~key:slice_v ~data:(Idx.Iterator static_symbol)
       in
       (* Expand a batch row instead of reducing one because even if the dimensions are known, the
          equations are also needed for projection inference. *)

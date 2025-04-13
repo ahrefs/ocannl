@@ -90,7 +90,7 @@ type transpose_type =
   | Permute of string
       (** [Permute (ls1^"=>"^ls2)] is a variant of the [einsum] syntax [Einsum (ls1^";"^ls1^"=>"^ls2)].
       Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs", "rhs1;rhs2=>lhs". *)
-  | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
+  | Batch_slice of Ir.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 
 type logic =
   | Broadcast of compose_type * shape * shape
@@ -102,7 +102,7 @@ type logic =
   | Transpose of transpose_type * shape
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
-  | Terminal of Arrayjit.Ops.init_op
+  | Terminal of Ir.Ops.init_op
       (** Extracts any available shape information from the initialization. E.g.
       for [File_mapped fn], opens the file [fn] to check its length. *)
 ```
@@ -157,7 +157,7 @@ The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, w
 
 ```ocaml
 type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
-type proj_to_index = Arrayjit.Indexing.axis_index Map.M(Int).t
+type proj_to_index = Ir.Indexing.axis_index Map.M(Int).t
 type proj_classes = int Map.M(Int).t
 
 type proj_env = {

@@ -1,14 +1,13 @@
 open Base
 open Ocannl
-module Nd = Arrayjit.Ndarray
-module Ops = Arrayjit.Ops
-module Tn = Arrayjit.Tnode
+module Nd = Ir.Ndarray
+module Ops = Ir.Ops
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -84,8 +83,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
   let start_time = ref None in
   let weight_decay = 0.0002 in
-  Arrayjit.Schedulers.sync_suggested_num_streams := num_streams;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ~backend_name ()) in
+  Backends.Schedulers.sync_suggested_num_streams := num_streams;
+  let module Backend = (val Backends.fresh_backend ~backend_name ()) in
   Stdlib.Format.printf "Initial backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
@@ -123,7 +122,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   Stdio.print_endline "\n******** mlp_result **********";
   Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;
   Stdio.printf "\n********\n%!";
-  (* Arrayjit.Tnode.print_accessible_headers (); *)
+  (* Ir.Tnode.print_accessible_headers (); *)
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let%track3_sexp plot_moons () =
     (* [%log_level 0; *)
@@ -196,7 +195,7 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
       }
   in
   Stdio.printf "\n\n%!";
-  (* Arrayjit.Tnode.print_accessible_headers (); *)
+  (* Ir.Tnode.print_accessible_headers (); *)
   Stdlib.Format.printf "Final backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   result

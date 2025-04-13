@@ -1,19 +1,18 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in

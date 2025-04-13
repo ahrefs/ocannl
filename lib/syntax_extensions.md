@@ -44,7 +44,7 @@ To accomodate stylistic preferences, OCANNL supports both curried and uncurried 
 
 The unary primitive operations:
 
-| Identifier | Default projection | Constructor in `Arrayjit.Ops` |
+| Identifier | Default projection | Constructor in `Ir.Ops` |
 |------------|--------------------|-------------|
 | `id` | pointwise | `Identity` |
 | `relu` | pointwise | `Relu` |
@@ -64,7 +64,7 @@ The unary primitive operations:
 
 The binary primitive operations:
 
-| Identifier | Infix operator | Default projection | Constructor in `Arrayjit.Ops` | Assignments |
+| Identifier | Infix operator | Default projection | Constructor in `Ir.Ops` | Assignments |
 |------------|----------------|--------------------|-------------|-------------|
 | `fst` | `-@>` | pointwise | `Arg1` | none |
 | `snd` | `-/>` | pointwise | `Arg2` | `=:` |
@@ -86,7 +86,7 @@ The binary primitive operations:
 
 The ternary primitive operations:
 
-| Identifier | Default projection | Constructor in `Arrayjit.Ops` |
+| Identifier | Default projection | Constructor in `Ir.Ops` |
 |------------|--------------------|-------------|
 | `where` | pointwise | `Where` |
 | `fma` | compose-accumulate | `FMA` |

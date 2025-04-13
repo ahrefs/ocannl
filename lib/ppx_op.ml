@@ -189,7 +189,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   | [%expr fun [%p? pat] -> [%e? body]] when is_toplevel ->
       let input_label =
         let loc = pat.ppat_loc in
-        [%expr [%e pat2expr pat].Tensor.value.Arrayjit.Tnode.label]
+        [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
       in
       let label =
         match label with

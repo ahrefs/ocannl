@@ -1,8 +1,6 @@
 open Base
-module Utils = Arrayjit.Utils
 module BPlot = PrintBox_ext_plot
 module B = PrintBox
-
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 type box = B.t
@@ -75,7 +73,7 @@ let dag_to_box (b : dag) =
   convert b
 
 let reformat_dag box_depth b = boxify box_depth b |> dag_to_box
-let concise_float = Arrayjit.Ndarray.concise_float
+let concise_float = Ir.Ndarray.concise_float
 let () = BPlot.concise_float := concise_float
 
 let plot ?(as_canvas = false) ?x_label ?y_label ?axes ?size ?(small = false) specs =

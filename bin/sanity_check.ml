@@ -1,17 +1,16 @@
 open! Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   Utils.set_log_level 2;
   Stdio.print_endline "Hello, world!"

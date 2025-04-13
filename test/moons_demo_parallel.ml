@@ -1,12 +1,11 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
 let%expect_test "Half-moons data parallel" =
   Tensor.unsafe_reinitialize ();
@@ -42,7 +41,7 @@ let%expect_test "Half-moons data parallel" =
      computation. *)
   let weight_decay = 0.0002 in
   (* So that we can inspect them. *)
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ = () in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step:_ ~at_epoch:_ ~learning_rate:_ ~epoch_loss:_ = () in

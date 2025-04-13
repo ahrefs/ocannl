@@ -1,16 +1,15 @@
 open Base
-module Ops = Arrayjit.Ops
-module Tn = Arrayjit.Tnode
-module Nd = Arrayjit.Ndarray
+module Ops = Ir.Ops
+module Tn = Ir.Tnode
+module Nd = Ir.Ndarray
 module NTDSL = Operation.NTDSL
-module Asgns = Arrayjit.Assignments
-module Idx = Arrayjit.Indexing
-module Task = Arrayjit.Task
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
-module BT = Arrayjit.Backend_intf
+module Asgns = Ir.Assignments
+module Idx = Ir.Indexing
+module Task = Ir.Task
+module Rand = Ir.Rand.Lib
+module BT = Ir.Backend_intf
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -18,10 +17,10 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module CDSL = struct
-  let half = Arrayjit.Ops.half
-  let single = Arrayjit.Ops.single
-  let double = Arrayjit.Ops.double
-  let virtualize_settings = Arrayjit.Low_level.virtualize_settings
+  let half = Ir.Ops.half
+  let single = Ir.Ops.single
+  let double = Ir.Ops.double
+  let virtualize_settings = Ir.Low_level.virtualize_settings
 
   let enable_all_debugs ?(debug_logs = false) ?(hosted_only = true) () =
     Utils.set_log_level @@ max 2 @@ Utils.settings.log_level;
@@ -267,7 +266,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
   (* to_, from positions correspond to the contexts (and devices) of grad_updates at the
      position. *)
   let dry_merge ~from ~to_ = occupancies_dst_src.(to_).(from) <- true in
-  let dry_sync devices_to_sync = Arrayjit.Utils.parallel_merge dry_merge devices_to_sync in
+  let dry_sync devices_to_sync = Utils.parallel_merge dry_merge devices_to_sync in
   round_robin_dry_run ~num_streams sgd_update.bindings ~dry_sync;
   [%debug_notrace
     assert (
@@ -321,7 +320,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
   in
   (* FIXME: missing device-to-host? *)
   let%track3_sexp sync (devices_to_sync : int) : unit =
-    Arrayjit.Utils.parallel_merge merge_grads devices_to_sync;
+    Utils.parallel_merge merge_grads devices_to_sync;
     Task.run sgd_update.schedule;
     Array.iteri ctxs ~f:(fun i src -> if i <> 0 then merge_loss ~src);
     (* We will need to update params on all devices! Not only the ones that computed gradients. *)

@@ -119,13 +119,13 @@ let assignment ~punned ~lhs ~rhses body =
   in
   let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
   let body =
-    [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Arrayjit.Tnode) }]
+    [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }]
   in
   let comps =
     List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
         [%expr [%e x] :: [%e xs]])
   in
-  let expr = [%expr Arrayjit.Assignments.sequence [%e comps]] in
+  let expr = [%expr Ir.Assignments.sequence [%e comps]] in
   let expr =
     if List.is_empty tensor_vbs then expr else A.Exp.let_ ~loc Nonrecursive tensor_vbs expr
   in
@@ -137,7 +137,7 @@ let project_p_slot debug loc slot =
   | RHS1 -> [%expr p.project_rhs.(0)]
   | RHS2 -> [%expr p.project_rhs.(1)]
   | RHS3 -> [%expr p.project_rhs.(2)]
-  | Scalar -> [%expr [| Arrayjit.Indexing.Fixed_idx 0 |]]
+  | Scalar -> [%expr [| Ir.Indexing.Fixed_idx 0 |]]
   | Nonslot ->
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -167,7 +167,7 @@ let project_p_dims debug loc slot =
 
 let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
   let loc = filler.pexp_loc in
-  let hint = [%expr [%e filler].Arrayjit.Tnode.label] in
+  let hint = [%expr [%e filler].Ir.Tnode.label] in
   match (filler_typ, filler) with
   | Code, _ -> None
   | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } when Set.mem bad_pun_hints name ->
@@ -193,25 +193,25 @@ let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
     when Hashtbl.mem punned name ->
       Hashtbl.find punned name
   | (Value_of_tensor t | Grad_of_tensor t | Merge_value t | Merge_grad t), _ -> (
-      let hint = [%expr [%e t].Tensor.value.Arrayjit.Tnode.label] in
+      let hint = [%expr [%e t].Tensor.value.Ir.Tnode.label] in
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
   | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
-let empty_tns ~loc = [%expr Base.Set.empty (module Arrayjit.Tnode)]
+let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
 
 let empty_comp ~loc =
-  [%expr { asgns = Arrayjit.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
+  [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
 
 let setup_array ~punned ~bad_pun_hints ~is_lhs
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   assert (Map.is_empty vbs);
   let loc = filler.pexp_loc in
   let opt_buffer tn =
-    if is_lhs then [%expr Some [%e tn]] else [%expr Some (Arrayjit.Assignments.Node [%e tn])]
+    if is_lhs then [%expr Some [%e tn]] else [%expr Some (Ir.Assignments.Node [%e tn])]
   in
   let buffer opt_tn =
     if is_lhs then opt_tn
-    else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Arrayjit.Assignments.Node tn)]
+    else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Ir.Assignments.Node tn)]
   in
   let pun_hint_tnode = guess_pun_hint ~punned ~bad_pun_hints filler_typ filler in
   let default_setup =
@@ -304,10 +304,10 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       let fwd_code_or_noop =
         Some
           [%expr
-            Arrayjit.Assignments.
+            Ir.Assignments.
               {
                 asgns = Noop;
-                embedded_nodes = Base.Set.singleton (module Arrayjit.Tnode) [%e filler].Tensor.value;
+                embedded_nodes = Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value;
               }]
       in
       { default_setup with fwd_code_or_noop; tensor = Some filler }
@@ -352,7 +352,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       {
         default_setup with
         array_opt =
-          [%expr Option.map [%e filler] ~f:(fun tn -> Arrayjit.Assignments.Merge_buffer tn)];
+          [%expr Option.map [%e filler] ~f:(fun tn -> Ir.Assignments.Merge_buffer tn)];
         tensor = Some t;
       }
 
@@ -448,7 +448,7 @@ let translate (expr : expression) : result =
             [%expr
               lazy
                 (let p = Lazy.force projections in
-                 Arrayjit.Indexing.
+                 Ir.Indexing.
                    {
                      product_space = p.product_space;
                      product_iterators = p.product_iterators;
@@ -462,7 +462,7 @@ let translate (expr : expression) : result =
                          trace =
                            ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
                              ^ [%e expr2string_or_empty tern_op],
-                             Arrayjit.Indexing.unique_debug_id () )
+                             Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
                    })]
@@ -471,10 +471,10 @@ let translate (expr : expression) : result =
          eliding the code. *)
       let body =
         [%expr
-          Option.value ~default:Arrayjit.Assignments.Noop
+          Option.value ~default:Ir.Assignments.Noop
           @@ Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
                ~f:(fun rhs1 rhs2 rhs3 ->
-                 Arrayjit.Assignments.Accum_ternop
+                 Ir.Assignments.Accum_ternop
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
@@ -510,7 +510,7 @@ let translate (expr : expression) : result =
             [%expr
               lazy
                 (let p = Lazy.force projections in
-                 Arrayjit.Indexing.
+                 Ir.Indexing.
                    {
                      product_space = p.product_space;
                      product_iterators = p.product_iterators;
@@ -524,7 +524,7 @@ let translate (expr : expression) : result =
                          trace =
                            ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
                              ^ [%e expr2string_or_empty bin_op],
-                             Arrayjit.Indexing.unique_debug_id () )
+                             Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
                    })]
@@ -533,10 +533,10 @@ let translate (expr : expression) : result =
          the code. *)
       let body =
         [%expr
-          Option.value ~default:Arrayjit.Assignments.Noop
+          Option.value ~default:Ir.Assignments.Noop
           @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
                ~f:(fun lhs rhs1 rhs2 ->
-                 Arrayjit.Assignments.Accum_binop
+                 Ir.Assignments.Accum_binop
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
@@ -569,7 +569,7 @@ let translate (expr : expression) : result =
             [%expr
               lazy
                 (let p = Lazy.force projections in
-                 Arrayjit.Indexing.
+                 Ir.Indexing.
                    {
                      product_space = p.product_space;
                      product_iterators = p.product_iterators;
@@ -583,7 +583,7 @@ let translate (expr : expression) : result =
                          trace =
                            ( "ppx_cd " ^ [%e string_expr ~loc accu_op] ^ " "
                              ^ [%e string_expr ~loc un_op],
-                             Arrayjit.Indexing.unique_debug_id () )
+                             Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
                    })]
@@ -592,9 +592,9 @@ let translate (expr : expression) : result =
          code. *)
       let body =
         [%expr
-          Option.value ~default:Arrayjit.Assignments.Noop
+          Option.value ~default:Ir.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Arrayjit.Assignments.Accum_unop
+                 Ir.Assignments.Accum_unop
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accum];
@@ -867,10 +867,10 @@ let translate (expr : expression) : result =
             [%expr
               let __comment_block = [%e res2.expr] in
               {
-                Arrayjit.Assignments.asgns =
-                  Arrayjit.Assignments.Block_comment
-                    ([%e comment], __comment_block.Arrayjit.Assignments.asgns);
-                embedded_nodes = __comment_block.Arrayjit.Assignments.embedded_nodes;
+                Ir.Assignments.asgns =
+                  Ir.Assignments.Block_comment
+                    ([%e comment], __comment_block.Ir.Assignments.asgns);
+                embedded_nodes = __comment_block.Ir.Assignments.embedded_nodes;
               }];
         }
     | [%expr
@@ -880,9 +880,9 @@ let translate (expr : expression) : result =
           expr :: List.map ~f:snd exprs
           |> List.map ~f:(function
                | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
-               | [%expr [%e? t].value] -> [%expr Arrayjit.Tnode.debug_name [%e t].value]
-               | [%expr [%e? t].grad] -> [%expr Arrayjit.Tnode.debug_name [%e t].value ^ ".grad"]
-               | t -> [%expr Arrayjit.Tnode.debug_name [%e t].value])
+               | [%expr [%e? t].value] -> [%expr Ir.Tnode.debug_name [%e t].value]
+               | [%expr [%e? t].grad] -> [%expr Ir.Tnode.debug_name [%e t].value ^ ".grad"]
+               | t -> [%expr Ir.Tnode.debug_name [%e t].value])
         in
         let res2 = loop ~proj_in_scope expr2 in
         {
@@ -891,11 +891,11 @@ let translate (expr : expression) : result =
             [%expr
               let __comment_block = [%e res2.expr] in
               {
-                Arrayjit.Assignments.asgns =
-                  Arrayjit.Assignments.Block_comment
+                Ir.Assignments.asgns =
+                  Ir.Assignments.Block_comment
                     ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
-                      __comment_block.Arrayjit.Assignments.asgns );
-                embedded_nodes = __comment_block.Arrayjit.Assignments.embedded_nodes;
+                      __comment_block.Ir.Assignments.asgns );
+                embedded_nodes = __comment_block.Ir.Assignments.embedded_nodes;
               }];
         }
     | [%expr
@@ -1109,7 +1109,7 @@ let translate (expr : expression) : result =
         process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic
     | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }] [%e? lhs] [%e? rhs]]
       when is_assignment accu_op ->
-        process_raw_unop ~accu_op ~lhs ~un_op:[%expr Arrayjit.Ops.Identity] ~rhs
+        process_raw_unop ~accu_op ~lhs ~un_op:[%expr Ir.Ops.Identity] ~rhs
           ~logic:[%expr Shape.Pointwise_un]
     | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
         let res1 = loop ~proj_in_scope expr1 in
@@ -1201,7 +1201,7 @@ let translate (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Code;
           slot = Nonslot;
-          expr = [%expr Arrayjit.Assignments.sequence [ [%e res1.expr]; [%e res2.expr] ]];
+          expr = [%expr Ir.Assignments.sequence [ [%e res1.expr]; [%e res2.expr] ]];
           array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
@@ -1225,7 +1225,7 @@ let translate (expr : expression) : result =
           vbs = res2.vbs;
           typ = Code;
           slot = Nonslot;
-          expr = [%expr if [%e expr1] then [%e res2.expr] else Arrayjit.Assignments.empty_comp];
+          expr = [%expr if [%e expr1] then [%e res2.expr] else Ir.Assignments.empty_comp];
           array_opt_of_code = res2.array_opt_of_code;
         }
     | { pexp_desc = Pexp_match (expr1, cases); _ } ->

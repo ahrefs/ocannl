@@ -1,12 +1,11 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
 let main () =
   let seed = 1 in
@@ -41,7 +40,7 @@ let main () =
      computation. *)
   let weight_decay = 0.0002 in
   (* So that we can inspect them. *)
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
     if (at_batch + 1) % 20 = 0 then
       Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step

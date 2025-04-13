@@ -1,18 +1,18 @@
 open Base
-module Nd = Arrayjit.Ndarray
-module Tn = Arrayjit.Tnode
-module Asgns = Arrayjit.Assignments
-module Idx = Arrayjit.Indexing
+module Nd = Ir.Ndarray
+module Tn = Ir.Tnode
+module Asgns = Ir.Assignments
+module Idx = Ir.Indexing
 
 type tn = Tn.t
-type tn_set = Set.M(Arrayjit.Tnode).t
+type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
-type comp = Arrayjit.Assignments.comp
-type init_op = Arrayjit.Ops.init_op
+type comp = Asgns.comp
+type init_op = Ir.Ops.init_op
 type fetch_op = Asgns.fetch_op
-type projections = Arrayjit.Indexing.projections
+type projections = Ir.Indexing.projections
 
-let _get_local_debug_runtime = Arrayjit.Utils.get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
@@ -76,7 +76,7 @@ let%track5_sexp unsafe_reinitialize () =
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
   Tn.Registry.clear Tn.registry;
-  Arrayjit.Rand.Random_for_tests.rand := (1l : Int32.t);
+  Ir.Rand.Random_for_tests.rand := (1l : Int32.t);
   Shape.unsafe_reinitialize ()
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
@@ -99,8 +99,8 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
-let default_value_prec = ref Arrayjit.Ops.single
-let default_grad_prec = ref Arrayjit.Ops.single
+let default_value_prec = ref Ir.Ops.single
+let default_grad_prec = ref Ir.Ops.single
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -116,7 +116,7 @@ let lazy_to_dims shape = lazy (Shape.to_dims shape)
 let fetch_zeros array shape =
   Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 
-let default_init_op = Arrayjit.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
+let default_init_op = Ir.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
 let max_sublabel_length = ref 25
 
 let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
@@ -179,7 +179,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let default = !default_value_prec in
     lazy
       (List.map lazy_v_precs ~f:Lazy.force
-      |> List.reduce ~f:Arrayjit.Ops.promote_prec
+      |> List.reduce ~f:Ir.Ops.promote_prec
       |> Option.value ~default)
   in
   let rec shape_logics = function
@@ -230,7 +230,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       let default = !default_grad_prec in
       lazy
         (List.map lazy_g_precs ~f:Lazy.force
-        |> List.reduce ~f:Arrayjit.Ops.promote_prec
+        |> List.reduce ~f:Ir.Ops.promote_prec
         |> Option.value ~default)
     in
     let grad_id = session_state.next_id in
@@ -298,12 +298,12 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match (fetch_op, init_op) with
-    | None, Some (Arrayjit.Ops.Constant_fill { values = [| _ |]; strict = _ })
+    | None, Some (Ir.Ops.Constant_fill { values = [| _ |]; strict = _ })
       when not (is_require_grad grad_spec) ->
         (* The scalar literal case. *)
         let fetch_op =
           match init_op with
-          | Some (Arrayjit.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
+          | Some (Ir.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
           | _ -> assert false
         in
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
@@ -329,7 +329,7 @@ let float_to_label v = Float.to_string v
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let init_op = Arrayjit.Ops.Constant_fill { values = [| c |]; strict = true } in
+  let init_op = Ir.Ops.Constant_fill { values = [| c |]; strict = true } in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
   let t =
     match axis_label with
@@ -337,7 +337,7 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
     | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
-  Arrayjit.Ops.(
+  Ir.Ops.(
     if Tn.exceeds_fp16_cutoff t.value c then Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
@@ -355,7 +355,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let debug = "Temporary array for pretty-printing" in
     let ndarr =
-      Nd.create_array ~debug Arrayjit.Ops.double ~dims (Constant_fill { values; strict })
+      Nd.create_array ~debug Ir.Ops.double ~dims (Ir.Ops.Constant_fill { values; strict })
     in
     let ( ! ) = List.length in
     Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
@@ -382,7 +382,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
-  Arrayjit.Ops.(
+  Ir.Ops.(
     if Tn.exceeds_fp16_cutoff t.value max_abs then
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
@@ -391,8 +391,8 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
     ?(strict = false) ?values label =
   let init_op =
     match values with
-    | Some values -> Arrayjit.Ops.Constant_fill { values; strict }
-    | None -> Standard_uniform
+    | Some values -> Ir.Ops.Constant_fill { values; strict }
+    | None -> Ir.Ops.Standard_uniform
   in
   let t =
     term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
@@ -681,13 +681,13 @@ let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style 
     | Noop -> ()
     | fwd_code ->
         Stdlib.Format.printf "@[<v 2>Current forward low-level body:%a@]@,"
-          (Arrayjit.Low_level.fprint_hum ())
+          (Ir.Low_level.fprint_hum ())
         @@ Asgns.to_low_level fwd_code);
     match t.diff with
     | Some { backprop = { asgns = Noop; _ }; _ } -> ()
     | Some { backprop = bwd_code; _ } ->
         Stdlib.Format.printf "@[<v 2>Current backprop low-level body:%a@]@,"
-          (Arrayjit.Low_level.fprint_hum ())
+          (Ir.Low_level.fprint_hum ())
         @@ Asgns.to_low_level bwd_code.asgns
     | None -> ());
   Stdlib.Format.printf "\n"

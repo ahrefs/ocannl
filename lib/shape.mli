@@ -80,7 +80,7 @@ type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
   | Permute of string  (** The unary "einsum" syntax: RHS1=>LHS. *)
-  | Batch_slice of Arrayjit.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
+  | Batch_slice of Ir.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
 [@@deriving equal, sexp]
 
 (** If you miss expressivity here, leave a note on
@@ -131,7 +131,7 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
-  | Terminal of Arrayjit.Ops.init_op
+  | Terminal of Ir.Ops.init_op
       (** Extracts any available shape information from the initialization. E.g. for
           [File_mapped fn], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp]
@@ -144,13 +144,13 @@ type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
-    via lazy callbacks as the corresponding [Arrayjit.Indexing] dimensions and projections are first
+    via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
     accessed. *)
 
 val to_dims : t -> int array
 val propagate_shapes : update_step -> unit
 
-val derive_projections : update_step -> Arrayjit.Indexing.projections
+val derive_projections : update_step -> Ir.Indexing.projections
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 

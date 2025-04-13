@@ -1,18 +1,17 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Utils = Arrayjit.Utils
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let hello1 () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   (* Utils.set_log_level 2; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
@@ -29,7 +28,7 @@ let hello1 () =
 
 let hello2 () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   (* Utils.set_log_level 2; *)
   (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   (* Utils.settings.debug_log_from_routines <- true; *)
@@ -45,7 +44,7 @@ let hello2 () =
 
 let hello3 () =
   Rand.init 0;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   Utils.settings.output_debug_files_in_build_directory <- true;
   (* Utils.settings.debug_log_from_routines <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
@@ -67,7 +66,7 @@ let hello3 () =
   Stdlib.Format.force_newline ()
 
 let hello4 () =
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -102,7 +101,7 @@ let hello5 () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -123,7 +122,7 @@ let hello6 () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr

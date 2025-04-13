@@ -1,25 +1,25 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
-let _get_local_debug_runtime = Arrayjit.Utils.get_local_debug_runtime
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let setup (() : unit) : unit =
-  Arrayjit.Utils.settings.output_debug_files_in_build_directory <- true;
-  Arrayjit.Utils.settings.debug_log_from_routines <- true
+  Utils.settings.output_debug_files_in_build_directory <- true;
+  Utils.settings.debug_log_from_routines <- true
 
 let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -37,7 +37,7 @@ let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
 
 let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -57,7 +57,7 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
 
 let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -153,7 +153,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
 
 let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -172,7 +172,7 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
 
 let%track2_sexp _Big_matrix (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -195,7 +195,7 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
 
 let%track2_sexp _Very_big_tensor (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr

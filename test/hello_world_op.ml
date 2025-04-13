@@ -1,12 +1,12 @@
 open Base
 open Ocannl
-module Tn = Arrayjit.Tnode
+module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
-module Rand = Arrayjit.Rand.Lib
+module Rand = Ir.Rand.Lib
 
-module type Backend = Arrayjit.Backend_intf.Backend
+module type Backend = Ir.Backend_intf.Backend
 
 let%expect_test "Hello World" =
   Tensor.unsafe_reinitialize ();
@@ -15,7 +15,7 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -45,7 +45,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 
 let%expect_test "Matrix multiplication dims 1x1" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -87,7 +87,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 
 let%expect_test "Print constant tensor" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -400,7 +400,7 @@ let%expect_test "Print constant tensor" =
 
 let%expect_test "Matrix multiplication dims 2x3" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -443,7 +443,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr
@@ -508,7 +508,7 @@ let%expect_test "Big matrix" =
 
 let%expect_test "Very big tensor" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Arrayjit.Backends.fresh_backend ()) in
+  let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
       with type buffer_ptr = Backend.buffer_ptr

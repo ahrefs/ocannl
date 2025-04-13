@@ -47,7 +47,7 @@ type error_trace = ..
 type error_trace +=
   | Row_mismatch of t list
   | Dim_mismatch of dim list
-  | Index_mismatch of Arrayjit.Indexing.axis_index list
+  | Index_mismatch of Ir.Indexing.axis_index list
 
 val sexp_of_error_trace : error_trace -> Sexp.t
 
@@ -123,9 +123,9 @@ type proj_equation =
 [@@deriving compare, equal, sexp]
 
 val get_proj_equations :
-  constraint_ list -> Arrayjit.Indexing.axis_index dim_map -> environment -> proj_equation list
+  constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
 
 val solve_proj_equations : proj_equation list -> proj_env
-val get_proj_index : proj_env -> dim -> Arrayjit.Indexing.axis_index
+val get_proj_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (int * int) option
-val proj_to_iterator : proj_env -> int -> Arrayjit.Indexing.symbol
+val proj_to_iterator : proj_env -> int -> Ir.Indexing.symbol
