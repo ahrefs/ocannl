@@ -72,9 +72,7 @@
   (cudajit
    (< 0.7.0))
   (gccjit
-   (< 0.3.2))
-  (metal
-   (< 0.12)))
+   (< 0.3.2)))
  (tags
   (deeplearning array jit CUDA)))
 
