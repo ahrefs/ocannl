@@ -1,4 +1,3 @@
-(* arrayjit/lib/metal_backend.ml *)
 open Base
 open Ir
 module Tn = Tnode
@@ -15,11 +14,11 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type ullong = Unsigned.ULLong.t
 let sexp_of_ullong x = Sexp.Atom (Unsigned.ULLong.to_string x)
 
-(* TODO: Add Metal-specific debug hooks if needed *)
-
 module Backend_buffer = struct
-  (* A Metal buffer object *)
-  type buffer_ptr = Me.Buffer.t [@@deriving sexp_of]
+  type buffer_ptr = Me.Buffer.t
+
+  let sexp_of_buffer_ptr ptr = 
+    Sexp.message "<MetalBuffer>" [("id", Me.Buffer.sexp_of_t ptr)]
 
   include Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
@@ -29,553 +28,628 @@ end
 module Device_config = struct
   include Backend_buffer
 
-  (* A Metal device object *)
-  type dev = Me.Device.t [@@deriving sexp_of]
-
-  (* A Metal command queue *)
-  type runner = Me.CommandQueue.t [@@deriving sexp_of]
-
-  (* A Metal shared event and the value it should reach *)
-  type event = Me.SharedEvent.t * ullong [@@deriving sexp_of]
+  type dev = { 
+    dev : Me.Device.t; 
+    command_queue : Me.CommandQueue.t;
+    compute_library : Me.Library.t;
+  } [@@deriving sexp_of]
+  
+  type runner = Me.CommandBuffer.t [@@deriving sexp_of]
+  type event = Me.SharedEvent.t [@@deriving sexp_of]
 
   let name = "metal"
-
-  (* Metal on Apple Silicon has unified memory *)
-  let use_host_memory =
-    Some
-      (fun ptr ->
-        let length = Bigarray.Array1.dim (Ctypes.bigarray_of_ptr Ctypes.array1 ptr Bigarray.Char) in
-        (* Assuming default device for this mapping. This might need refinement if multiple devices
-           were supported. *)
-        let device = Me.Device.create_system_default () in
-        (* Create a buffer sharing the host memory without copying. The lifetime is tied to the
-           OCaml GC via the payload type unless a custom deallocator is used. *)
-        Me.Buffer.on_device_with_bytes_no_copy device ~bytes:(Ctypes.to_voidp ptr) ~length
-          Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_write_combined)
-          ~deallocator:(fun () -> [%log "Host memory buffer deallocated"]))
 end
 
-module Device_stream = Impl.Device_types (Device_config)
+module Device_stream = Impl.Device_types(Device_config)
+open Device_config
 
-module Alloc_buffer = struct
-  open Device_stream
-  open Device_config
+module Fresh () = struct
+  include Impl.Device(Device_stream)(struct
+    include Device_stream
 
-  let%track7_sexp alloc_buffer ?old_buffer ~size_in_bytes stream =
-    let device = stream.device.dev in
-    let options = Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_write_combined) in
-    match old_buffer with
-    | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size ->
-        (* Can reuse existing buffer if large enough *)
-        buffer
-    | Some _old_buffer ->
-        (* TODO: Could potentially reuse the old ptr if storage options match and no custom
-           deallocator? For simplicity, always reallocate for now. Metal's ARC should handle freeing
-           the old buffer when its payload record is GC'd. *)
-        { ptr = Me.Buffer.on_device device ~length:size_in_bytes options; size_in_bytes }
-    | None -> { ptr = Me.Buffer.on_device device ~length:size_in_bytes options; size_in_bytes }
+    (* It's not actually used, but it's required by the [Backend] interface. *)
+    let alloc_buffer ?old_buffer ~size_in_bytes stream =
+      match old_buffer with
+      | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
+      | Some { ptr; _ } ->
+          (* Old buffer will be freed by Metal's reference counting system *)
+          { ptr = Me.Buffer.on_device stream.device.dev.dev ~length:size_in_bytes 
+                 (Me.ResourceOptions.make ()); 
+            size_in_bytes }
+      | None ->
+          { ptr = Me.Buffer.on_device stream.device.dev.dev ~length:size_in_bytes 
+                 (Me.ResourceOptions.make ()); 
+            size_in_bytes }
 
-  let%track7_sexp alloc_zero_init_array prec ~dims stream =
-    let size_in_bytes =
-      (if Array.length dims = 0 then 1 (* Avoid 0-size alloc *) else Array.reduce_exn dims ~f:( * ))
-      * Ops.prec_in_bytes prec
+    let alloc_zero_init_array prec ~dims stream =
+      let size_in_bytes =
+        (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) 
+        * Ops.prec_in_bytes prec
+      in
+      (* Create a buffer and initialize with zeros *)
+      let zero_buffer = Bytes.make size_in_bytes '\000' in
+      let ptr = Ctypes.(to_voidp @@ allocate_n char ~count:size_in_bytes) in
+      (* Ctypes.memset ptr 0 (Unsigned.Size_t.of_int size_in_bytes); *)
+      Me.Buffer.on_device_with_bytes stream.device.dev.dev 
+        ~bytes:ptr ~length:size_in_bytes (Me.ResourceOptions.make ())
+
+    let free_buffer = None (* Metal handles memory with reference counting *)
+  end)
+
+  let use_host_memory = Some (fun host_ptr -> 
+      (* Create a buffer that wraps the host memory *)
+      let device = Me.Device.create_system_default() in
+      let size = 0 (* This is just a placeholder; real size should be passed *)
+      in
+      Me.Buffer.on_device_with_bytes_no_copy 
+        device 
+        ~bytes:host_ptr
+        ~length:size
+        ?deallocator:None
+        (Me.ResourceOptions.make ())
+    )
+
+  (* Tracks initialized devices *)
+  let initialized_devices = Hash_set.create (module Int)
+
+  let global_config = ref For_parallel_copying
+
+  (* Initialize Metal *)
+  let is_initialized, initialize =
+    let initialized = ref false in
+    let init (config : config) : unit =
+      initialized := true;
+      global_config := config
     in
-    let device = stream.device.dev in
-    let options = Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_write_combined) in
-    let buffer = Me.Buffer.on_device device ~length:size_in_bytes options in
-    (* Schedule a fill operation to zero the buffer *)
-    (* TODO: This requires a command buffer and encoder. Ideally, this should return a task or be
-       integrated differently. For now, we rely on Low_level.Zero_out being handled in the kernel or
-       by explicit initialization. We return the buffer pointer directly. *)
-    buffer
+    ((fun () -> !initialized), init)
 
-  (* Metal uses ARC, explicit freeing via this API is not the standard way. The payload record in
-     metal.ml handles GC. *)
-  let free_buffer = None
-end
-
-module Fresh () : Impl.Lowered_backend = struct
-  include Device_stream
-  include Impl.Device (Device_stream) (Alloc_buffer)
-
-  let use_host_memory = Device_config.use_host_memory
-
-  (* --- State Management --- *)
-  let initialized = ref false
-  let devices = ref [||]
-  let global_config = ref Backend_intf.For_parallel_copying (* Default config *)
-  let next_event_value = Atomic.make Unsigned.ULLong.zero
-
-  let get_next_event_value () =
-    let v = Atomic.get next_event_value in
-    Atomic.set next_event_value Unsigned.ULLong.(v + one);
-    Unsigned.ULLong.(v + one)
-
-  (* --- Initialization --- *)
-  let initialize config =
-    global_config := config;
-    (* Metal doesn't require explicit library init like CUDA's cuInit *)
-    initialized := true;
-    [%log "Metal backend initialized"]
-
-  let is_initialized () = !initialized
-
-  (* --- Device Handling --- *)
-  let num_devices () =
-    (* MTLCopyAllDevices would be needed here. For now, assume 1 default device. *)
+  let num_devices () = 
+    (* Metal can only access the system default device in most cases *)
     1
 
-  let get_device ~ordinal =
-    if ordinal <> 0 then
-      invalid_arg [%string "Metal backend currently only supports device ordinal 0"];
-    if Array.is_empty !devices then (
-      let dev = Me.Device.create_system_default () in
-      let device = make_device dev ~ordinal:0 in
-      Stdlib.Gc.finalise
-        (fun d -> [%log "Finalizing Metal device"; ignore d]) (* TODO: Proper cleanup? *)
-        device;
-      devices := [| Some device |];
-      device)
-    else Option.value_exn !devices.(0)
+  let devices = ref @@ Array.create ~len:(num_devices ()) None
 
-  let suggested_num_streams _device =
-    (* Metal doesn't expose fine-grained parallelism details like CUDA. *)
-    match !global_config with Only_devices_parallel -> 1 | _ -> 2 (* Host + 1 GPU queue *)
+  let get_used_memory (device : device) =
+    (* Metal doesn't provide direct memory usage querying like CUDA *)
+    (* We could keep track of allocated buffers ourselves *)
+    0 (* Placeholder *)
 
-  let new_stream device =
-    let runner = Me.CommandQueue.on_device device.dev in
-    make_stream device runner
+  let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
+    if Option.value_map ~default:true !(stream.merge_buffer) ~f:(fun buffer ->
+        buffer.size_in_bytes < size_in_bytes)
+    then (
+      Option.iter !(stream.merge_buffer) ~f:(fun _buffer -> ()); (* No manual freeing needed *)
+      stream.merge_buffer := Some { 
+        ptr = Me.Buffer.on_device dev.dev ~length:size_in_bytes (Me.ResourceOptions.make ()); 
+        size_in_bytes 
+      })
 
-  (* --- Event Handling --- *)
+  let%track4_sexp finalize_device (device : device) =
+    (* No explicit context synchronization needed *)
+    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
+    (* Release is automatic through reference counting *)
+    Hashtbl.iter device.cross_stream_candidates ~f:(fun _buffer_ptr -> ())
 
-  let sync ((event, value) : event) =
-    [%log_result "Waiting for event value", value];
-    (* Use a very long timeout (effectively infinite for practical purposes) *)
-    let timeout_ms = Unsigned.ULLong.max_int in
-    let signaled = Me.SharedEvent.wait_until_signaled_value event ~value ~timeout_ms in
-    if not signaled then [%log "Warning: Event sync timed out (should be rare)"];
-    [%log_result "Event sync completed for value", value]
+  let%track3_sexp get_device ~(ordinal : int) : device =
+    if num_devices () <= ordinal then
+      invalid_arg [%string "Metal_backend.get_device %{ordinal#Int}: not enough devices"];
+    
+    (if Array.length !devices <= ordinal then
+       let old, len = (!devices, Array.length !devices) in
+       devices := Array.init (ordinal + 1) ~f:(fun i -> if i < len then old.(i) else None));
+    
+    let default () =
+      let metal_device = Me.Device.create_system_default () in
+      let command_queue = Me.CommandQueue.on_device metal_device in
+      
+      (* Create a default compute library with Metal standard library functions *)
+      let default_functions = [
+        "__half hexp(__half x) { return __float2half(exp(__half2float(x))); }";
+        "__half hlog(__half x) { return __float2half(log(__half2float(x))); }";
+        "__half hexp2(__half x) { return __float2half(exp2(__half2float(x))); }";
+        "__half hlog2(__half x) { return __float2half(log2(__half2float(x))); }";
+        "__half hsin(__half x) { return __float2half(sin(__half2float(x))); }";
+        "__half hcos(__half x) { return __float2half(cos(__half2float(x))); }";
+        "__half hsqrt(__half x) { return __float2half(sqrt(__half2float(x))); }";
+        "__half hrcp(__half x) { return __float2half(1.0/__half2float(x)); }";
+        "__half hrsqrt(__half x) { return __float2half(1.0/sqrt(__half2float(x))); }";
+        "__half htanh_approx(__half x) { return __float2half(tanh(__half2float(x))); }";
+        "__half __hmax_nan(__half a, __half b) { return __half2float(a) > __half2float(b) ? a : b; }";
+        "__half __hmin_nan(__half a, __half b) { return __half2float(a) < __half2float(b) ? a : b; }";
+      ] in
+      
+      let lib_source = String.concat ~sep:"\n" [
+        "#include <metal_stdlib>"; 
+        "#include <metal_math>";
+        "using namespace metal;";
+        String.concat ~sep:"\n" default_functions;
+      ] in
+      
+      let options = Me.CompileOptions.init () in
+      Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_2_4;
+      let compute_library = Me.Library.on_device metal_device ~source:lib_source options in
+      
+      let dev = { dev = metal_device; command_queue; compute_library } in
+      
+      if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
+        ();
+      
+      Hash_set.add initialized_devices ordinal;
+      let result = make_device dev ~ordinal in
+      Stdlib.Gc.finalise finalize_device result;
+      !devices.(ordinal) <- Some result;
+      result
+    in
+    Option.value_or_thunk !devices.(ordinal) ~default
 
-  let is_done ((event, value) : event) =
+  let%track3_sexp new_stream (device : device) : stream =
+    let command_buffer = Me.CommandBuffer.on_queue device.dev.command_queue in
+    make_stream device command_buffer
+
+  let metal_properties =
+    let cache =
+      let%debug2_sexp f (ordinal : int) =
+        let dev = get_device ~ordinal in
+        lazy (Me.Device.get_attributes dev.dev.dev)
+      in
+      lazy (Array.init (num_devices ()) ~f)
+    in
+    let%debug2_sexp get_props (device : device) : Me.Device.attributes =
+      let cache = Lazy.force cache in
+      Lazy.force cache.(device.ordinal)
+    in
+    get_props
+
+  let suggested_num_streams device =
+    match !global_config with
+    | Only_devices_parallel -> 1
+    | For_parallel_copying -> 2  (* Metal doesn't expose async engine count *)
+    | Most_parallel_streams -> max 4 (metal_properties device).max_buffer_length / (1024 * 1024)
+                               (* Rough estimate based on device memory *)
+
+  let await stream : unit =
+    Me.CommandBuffer.wait_until_completed stream.runner;
+    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
+
+  let is_done event = 
+    (* Returns true if the event has been signaled with a value >= the wait value *)
     let current_value = Me.SharedEvent.get_signaled_value event in
-    Unsigned.ULLong.(current_value >= value)
+    Unsigned.ULLong.compare current_value Unsigned.ULLong.one >= 0
 
-  (* --- Stream/Queue Operations --- *)
+  let is_idle stream = 
+    Me.CommandBuffer.get_status stream.runner = Me.CommandBuffer.Status.Completed
 
-  (* Helper to get or create a shared event for a stream *)
-  let stream_event_map : (int, Me.SharedEvent.t) Hashtbl.t = Hashtbl.create (module Int)
+  let will_wait_for context event =
+    (* Encode a wait command into the context's command buffer *)
+    Me.CommandBuffer.encode_wait_for_event context.stream.runner event Unsigned.ULLong.one
 
-  let get_stream_event stream =
-    Hashtbl.find_or_add stream_event_map stream.stream_id ~default:(fun () ->
-        Me.SharedEvent.on_device stream.device.dev)
-
-  (* Helper to manage command buffers per stream task *)
-  (* This is tricky: Linking creates a task, but event/copy operations need to be encoded *before*
-     or *after* that task's command buffer. This suggests a more integrated command buffer
-     management or a different event strategy. *)
-  (* Approach: Submit small, dedicated command buffers for sync/copy operations. *)
-
-  let submit_sync_command stream (f : Me.CommandBuffer.t -> unit) =
-    let cmdbuf = Me.CommandBuffer.on_queue stream.runner in
-    f cmdbuf;
-    Me.CommandBuffer.commit cmdbuf;
-    (* We might need to wait for *this* specific buffer if subsequent CPU operations depend on it.*)
-    Me.CommandBuffer.wait_until_completed cmdbuf
-
-  let will_wait_for context ((event, value) : event) =
-    [%log_result "Scheduling wait for event value", value, "on stream", context.stream.stream_id];
-    submit_sync_command context.stream (fun cmdbuf ->
-        Me.CommandBuffer.encode_wait_for_event cmdbuf (Me.SharedEvent.super event) value)
+  let sync event =
+    (* Wait for the event to be signaled *)
+    ignore (Me.SharedEvent.wait_until_signaled_value 
+              event 
+              ~value:Unsigned.ULLong.one 
+              ~timeout_ms:(Unsigned.ULLong.of_int 1000000));
+    ()
 
   let all_work stream =
-    let event = get_stream_event stream in
-    let value = get_next_event_value () in
-    [%log_result "Scheduling signal event value", value, "on stream", stream.stream_id];
-    submit_sync_command stream (fun cmdbuf ->
-        Me.CommandBuffer.encode_signal_event cmdbuf (Me.SharedEvent.super event) value);
-    (event, value)
-
-  let await stream =
-    [%log "Awaiting stream", stream.stream_id];
-    (* Create a command buffer, enqueue a signal, commit, and wait for *that* signal. *)
-    let event, value = all_work stream in
-    sync (event, value);
-    [%log "Stream awaited", stream.stream_id]
-
-  let is_idle stream =
-    (* Check if the latest event signaled by this stream is done. This assumes events are signaled
-       monotonically. *)
-    let event = get_stream_event stream in
-    let last_signaled = Me.SharedEvent.get_signaled_value event in
-    let expected_next = Atomic.get next_event_value in (* This is global, needs refinement *)
-    (* Heuristic: if the last signaled value is close to the globally expected next one, assume not idle?
-       A better way is needed. Querying command queue status isn't directly available.
-       Check the status of the *last submitted command buffer*? Requires tracking it.
-       For now, use event query as a proxy. If the last known event value for this stream is done, assume idle.
-       This requires tracking the last event value *per stream*.
-    *)
-    (* Let's track last event per stream *)
-    let last_event_value = ref Unsigned.ULLong.zero in (* Needs to be per stream state *)
-    (* TODO: Store last_event_value in stream ref *)
-    is_done (event, !last_event_value) (* Placeholder logic *)
-
-  (* --- Memory Info --- *)
-  let get_used_memory device =
-    (* Metal API via metal.ml doesn't expose detailed memory usage. *)
-    let attrs = Me.Device.get_attributes device.dev in
-    (* Return recommended working set size as a very rough proxy? Or 0? *)
-    Int64.to_int_exn @@ Unsigned.ULLong.to_int64 attrs.recommended_max_working_set_size
-  (* Return 0 *)
-
-  let get_global_debug_info () = Sexp.Atom "Metal global debug info not implemented"
-  let get_debug_info stream = Sexp.message "Metal stream debug info" [ ("stream_id", [%sexp_of: int] stream.stream_id) ]
-
-  (* --- Data Transfer --- *)
-
-  (* Helper for blit operations *)
-  let submit_blit_command stream (f : Me.BlitCommandEncoder.t -> unit) =
-     let cmdbuf = Me.CommandBuffer.on_queue stream.runner in
-     let encoder = Me.BlitCommandEncoder.on_buffer cmdbuf in
-     f encoder;
-     Me.BlitCommandEncoder.end_encoding encoder;
-     Me.CommandBuffer.commit cmdbuf;
-     (* Wait immediately for blit commands to simplify synchronization logic for now *)
-     Me.CommandBuffer.wait_until_completed cmdbuf
+    (* Create a new shared event and signal it when the command buffer completes *)
+    let event = Me.SharedEvent.on_device stream.device.dev.dev in
+    let _ = Me.CommandBuffer.add_completed_handler stream.runner (fun _buffer ->
+        Me.SharedEvent.set_signaled_value event Unsigned.ULLong.one
+      ) in
+    Me.CommandBuffer.commit stream.runner;
+    event
 
   let from_host ~dst_ptr ~dst hosted =
-    let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let host_ptr = Ndarray.get_voidptr hosted in
-    [%log_result "Copying from host", size_in_bytes, "bytes"];
-    if phys_equal dst_ptr.ptr host_ptr then [%log "Skipping host copy (pointers identical)"]
-    else
-      let contents_ptr = Me.Buffer.contents dst_ptr in
-      if Ctypes.is_null contents_ptr then failwith "Buffer contents pointer is null";
-      Ctypes_memory_stubs.memcpy ~dst:contents_ptr ~src:host_ptr ~size:size_in_bytes;
-      (* Inform Metal that the buffer range was modified by the CPU *)
-      Me.Buffer.did_modify_range dst_ptr { location = 0; length = size_in_bytes }
+    let f dst_buffer = 
+      let host_ptr = Ndarray.get_voidptr_not_managed hosted in
+      let size_in_bytes = Ndarray.size_in_bytes hosted in
+      
+      (* Create a temporary blitter to copy from host to device *)
+      let blit_buffer = Me.CommandBuffer.on_queue dst.stream.device.dev.command_queue in
+      let blit_encoder = Me.BlitCommandEncoder.on_buffer blit_buffer in
+      
+      (* Copy the bytes from host to device buffer *)
+      let temp_buffer = Me.Buffer.on_device_with_bytes dst.stream.device.dev.dev 
+                          ~bytes:host_ptr ~length:size_in_bytes (Me.ResourceOptions.make ()) in
+      
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder 
+        ~source_buffer:temp_buffer ~source_offset:0
+        ~destination_buffer:dst_buffer ~destination_offset:0
+        ~size:size_in_bytes;
+      
+      Me.BlitCommandEncoder.end_encoding blit_encoder;
+      Me.CommandBuffer.commit blit_buffer;
+      Me.CommandBuffer.wait_until_completed blit_buffer;
+    in
+    f dst_ptr
 
   let to_host ~src_ptr ~src hosted =
-    let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let host_ptr = Ndarray.get_voidptr hosted in
-    [%log_result "Copying to host", size_in_bytes, "bytes"];
-     if phys_equal src_ptr.ptr host_ptr then [%log "Skipping host copy (pointers identical)"]
-     else
-      (* Ensure GPU work is done before reading *)
-      await src.stream;
-      let contents_ptr = Me.Buffer.contents src_ptr in
-       if Ctypes.is_null contents_ptr then failwith "Buffer contents pointer is null";
-      Ctypes_memory_stubs.memcpy ~dst:host_ptr ~src:contents_ptr ~size:size_in_bytes
+    let f dst_host_array = 
+      let host_ptr = Ndarray.get_voidptr_not_managed dst_host_array in
+      let size_in_bytes = Ndarray.size_in_bytes dst_host_array in
+      
+      (* Create a temporary buffer to receive the data *)
+      let temp_buffer = Me.Buffer.on_device src.stream.device.dev.dev
+                          ~length:size_in_bytes (Me.ResourceOptions.make ()) in
+      
+      (* Create a blitter to copy from device to temp buffer *)
+      let blit_buffer = Me.CommandBuffer.on_queue src.stream.device.dev.command_queue in
+      let blit_encoder = Me.BlitCommandEncoder.on_buffer blit_buffer in
+      
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder
+        ~source_buffer:src_ptr ~source_offset:0
+        ~destination_buffer:temp_buffer ~destination_offset:0
+        ~size:size_in_bytes;
+      
+      Me.BlitCommandEncoder.end_encoding blit_encoder;
+      Me.CommandBuffer.commit blit_buffer;
+      Me.CommandBuffer.wait_until_completed blit_buffer;
+      
+      (* Now read from temp buffer to host memory *)
+      let contents_ptr = Me.Buffer.contents temp_buffer in
+      Ctypes.memcpy (Ctypes.to_voidp host_ptr) contents_ptr (Unsigned.Size_t.of_int size_in_bytes);
+    in
+    f hosted
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+    let dev = dst.stream.device in
+    let same_device = dev.ordinal = src.stream.device.ordinal in
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
-    let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
-    if not same_device then
-      failwith "Metal backend does not support device-to-device copy across different devices";
-
-    match into_merge_buffer with
-    | No -> (
-        match dst_ptr with
-        | None -> invalid_arg "Metal_backend.device_to_device: No and missing dst_ptr"
-        | Some dst_ptr_val ->
-            [%log_result "Copying D2D", size_in_bytes, "bytes"];
-            (* Use BlitCommandEncoder for D2D copy *)
-            submit_blit_command dst.stream (fun encoder ->
-                Me.BlitCommandEncoder.copy_from_buffer encoder ~source_buffer:src_ptr
-                  ~source_offset:0 ~destination_buffer:dst_ptr_val ~destination_offset:0
-                  ~size:size_in_bytes)
-            )
-    | Streaming_for task ->
-        (* Just set the merge buffer reference; assumes buffer lifetime is managed correctly. *)
-        dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes };
-         (* Schedule the task that uses the merge buffer *)
-        Impl.schedule_task dst.stream task;
-        (* TODO: Need event management for streaming *)
-        ()
-    | Copy ->
-        [%log_result "Copying D2D to Merge Buffer", size_in_bytes, "bytes"];
-        opt_alloc_merge_buffer ~size_in_bytes dst.stream.device.dev dst.stream;
-        let merge_buf = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-        submit_blit_command dst.stream (fun encoder ->
-            Me.BlitCommandEncoder.copy_from_buffer encoder ~source_buffer:src_ptr
-              ~source_offset:0 ~destination_buffer:merge_buf.ptr ~destination_offset:0
-              ~size:size_in_bytes)
-        (* TODO: Need event management for merge buffer copy completion *)
-
-  (* --- Compilation --- *)
-  type compiled_kernel = {
-    name : string;
-    params : (string * param_source) list;
-    pso : Me.ComputePipelineState.t;
-    bindings : Indexing.unit_bindings;
-    (* Add threadgroup info if needed *)
-  }
-  [@@deriving sexp_of]
+    
+    let memcpy ~dst_ptr =
+      if same_device then
+        (* Using blit encoder to copy within the same device *)
+        let blit_buffer = Me.CommandBuffer.on_queue dst.stream.device.dev.command_queue in
+        let blit_encoder = Me.BlitCommandEncoder.on_buffer blit_buffer in
+        
+        Me.BlitCommandEncoder.copy_from_buffer blit_encoder
+          ~source_buffer:src_ptr ~source_offset:0
+          ~destination_buffer:dst_ptr ~destination_offset:0
+          ~size:size_in_bytes;
+        
+        Me.BlitCommandEncoder.end_encoding blit_encoder;
+        Me.CommandBuffer.commit blit_buffer
+      else
+        (* Cross-device copy requires reading to host memory first then writing to destination *)
+        (* For now we assume size is small enough to use a temporary host buffer *)
+        let host_buffer = Bytes.create size_in_bytes in
+        let host_ptr = Ctypes.(to_voidp @@ allocate_n char ~count:size_in_bytes) in
+        
+        (* Copy from source device to host *)
+        let temp_src_buffer = Me.Buffer.on_device_with_bytes_no_copy 
+                                src.stream.device.dev.dev
+                                ~bytes:host_ptr
+                                ~length:size_in_bytes
+                                ~deallocator:None
+                                (Me.ResourceOptions.make ()) in
+        
+        (* Create a blitter to copy from source to temp *)
+        let blit_src = Me.CommandBuffer.on_queue src.stream.device.dev.command_queue in
+        let blit_src_encoder = Me.BlitCommandEncoder.on_buffer blit_src in
+        
+        Me.BlitCommandEncoder.copy_from_buffer blit_src_encoder
+          ~source_buffer:src_ptr ~source_offset:0
+          ~destination_buffer:temp_src_buffer ~destination_offset:0
+          ~size:size_in_bytes;
+        
+        Me.BlitCommandEncoder.end_encoding blit_src_encoder;
+        Me.CommandBuffer.commit blit_src;
+        Me.CommandBuffer.wait_until_completed blit_src;
+        
+        (* Copy from host to destination device *)
+        let temp_dst_buffer = Me.Buffer.on_device_with_bytes
+                                dst.stream.device.dev.dev
+                                ~bytes:host_ptr
+                                ~length:size_in_bytes
+                                (Me.ResourceOptions.make ()) in
+        
+        (* Create a blitter to copy from temp to destination *)
+        let blit_dst = Me.CommandBuffer.on_queue dst.stream.device.dev.command_queue in
+        let blit_dst_encoder = Me.BlitCommandEncoder.on_buffer blit_dst in
+        
+        Me.BlitCommandEncoder.copy_from_buffer blit_dst_encoder
+          ~source_buffer:temp_dst_buffer ~source_offset:0
+          ~destination_buffer:dst_ptr ~destination_offset:0
+          ~size:size_in_bytes;
+        
+        Me.BlitCommandEncoder.end_encoding blit_dst_encoder;
+        Me.CommandBuffer.commit blit_dst
+    in
+    
+    match (into_merge_buffer, dst_ptr) with
+    | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
+    | No, Some dst_ptr ->
+        memcpy ~dst_ptr
+    | Streaming_for _, _ ->
+        assert same_device;
+        dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
+    | Copy, _ ->
+        opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
+        let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
+        memcpy ~dst_ptr:buffer.ptr
 
   type code = {
-    msl_source : string;
-    kernel_name : string;
+    traced_store : Low_level.traced_store;
+    metal_lib : Me.Library.t;
     params : (string * param_source) list;
     bindings : Indexing.unit_bindings;
-    traced_store : Low_level.traced_store; (* Keep for debug/linking info *)
+    name : string;
   }
   [@@deriving sexp_of]
 
   type code_batch = {
-    msl_source : string; (* Combined source for all kernels *)
-    kernels : (code option) array; (* Info per kernel *)
+    traced_stores : Low_level.traced_store option array;
+    metal_lib : Me.Library.t;
     bindings : Indexing.unit_bindings;
+    params_and_names : ((string * param_source) list * string) option array;
   }
   [@@deriving sexp_of]
 
-  (* --- C Syntax Config for Metal --- *)
-   module C_syntax_config (Input : sig val procs : Low_level.optimized array end) = struct
-     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
+  let%diagn2_sexp metal_to_lib ~name msl_src =
+    let name_msl = name ^ ".metal" in
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let oc = Out_channel.open_text @@ Utils.build_file name_msl in
+      Stdio.Out_channel.output_string oc msl_src;
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc);
+    
+    [%log "compiling to Metal library"];
+    
+    let options = Me.CompileOptions.init () in
+    Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_2_4;
+    
+    let device = Me.Device.create_system_default () in
+    let lib = Me.Library.on_device device ~source:msl_src options in
+    
+    lib
 
-     let procs = Input.procs
-     let use_host_memory = use_host_memory
-     let logs_to_stdout = true (* Metal printf goes to stdout *)
-     let main_kernel_prefix = "kernel"
-     let kernel_prep_line =
-        (* Basic single thread execution for now *)
-       "if (thread_position_in_grid.x != 0 || thread_position_in_grid.y != 0 || thread_position_in_grid.z != 0) { return; }"
+  module C_syntax_config (Input : sig
+    val procs : Low_level.optimized array
+  end) =
+  struct
+    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
 
-     let includes = [ "#include <metal_stdlib>"; "using namespace metal;" ]
+    let procs = Input.procs
+    let use_host_memory = use_host_memory
+    let logs_to_stdout = true
+    let main_kernel_prefix = "kernel"
+    
+    (* Handle thread indexing for Metal kernels *)
+    let kernel_prep_line = 
+      "uint tid = (uint)threadgroup_position_in_grid.x * threadgroups_per_grid.x + (uint)thread_position_in_threadgroup.x;"
 
-     let typ_of_prec = function
-       | Ops.Byte_prec _ -> "uchar"
-       | Half_prec _ -> "half"
-       | Single_prec _ -> "float"
-       | Double_prec _ -> (* Metal doesn't fully support double in kernels by default *)
-           "float" (* Fallback or error? Check Metal spec. Let's fallback to float *)
-       | Void_prec -> "void"
+    let includes = []  (* Metal includes are different from C/CUDA *)
 
-     let binop_syntax prec v =
-       let standard_op op = ("(", " " ^ op, ")") in
-       match (v, prec) with
-       | Ops.Arg1, _ | Arg2, _ -> invalid_arg "C_syntax_config: Arg1/Arg2 not operators"
-       | _, Ops.Void_prec -> invalid_arg "C_syntax_config: Void precision binop"
-       | Add, _ -> standard_op "+"
-       | Sub, _ -> standard_op "-"
-       | Mul, _ -> standard_op "*"
-       | Div, _ -> standard_op "/"
-       | ToPowOf, Ops.Half_prec _ -> ("pow(", ",", ")") (* half has pow *)
-       | ToPowOf, _ -> ("pow(", ",", ")") (* float/double (fallback) has pow *)
-       | Relu_gate, Ops.Byte_prec _ -> ("(", " > 0 ?", " : 0)")
-       | Relu_gate, _ -> ("(", " > 0.0h ?", " : half(0.0h))") (* Assuming half/float *)
-       | Satur01_gate, Ops.Byte_prec _ -> ("(abs(", ") > 0 ? 0 : (", "))") (* Needs check *)
-       | Satur01_gate, _ -> ("(fabs(trunc(", ")) > 0.0h ? half(0.0h) : (", "))")
-       | Max, _ -> ("max(", ",", ")")
-       | Min, _ -> ("min(", ",", ")")
-       | Mod, Ops.Byte_prec _ -> standard_op "%"
-       | Mod, _ -> ("fmod(", ",", ")") (* MSL has fmod *)
-       | Cmplt, _ -> standard_op "<"
-       | Cmpne, _ -> standard_op "!="
-       | Cmpeq, _ -> standard_op "=="
-       | Or, _ -> standard_op "||"
-       | And, _ -> standard_op "&&"
+    let typ_of_prec = function
+      | Ops.Byte_prec _ -> "uchar"
+      | Half_prec _ -> "half"
+      | Single_prec _ -> "float"
+      | Double_prec _ -> "float" (* Metal doesn't support double, using float as fallback *)
+      | Void_prec -> "void"
 
-      let unop_syntax prec v =
-       let standard_fn fn = (fn ^ "(", ")") in
-       match (v, prec) with
-       | Ops.Identity, _ -> ("", "")
-       | Relu, _ -> ("max(", ", 0.0h)") (* Generic max should work *)
-       | Satur01, _ -> ("clamp(", ", 0.0h, 1.0h)") (* MSL clamp *)
-       | Exp, _ -> standard_fn "exp"
-       | Log, _ -> standard_fn "log"
-       | Exp2, _ -> standard_fn "exp2"
-       | Log2, _ -> standard_fn "log2"
-       | Sin, _ -> standard_fn "sin"
-       | Cos, _ -> standard_fn "cos"
-       | Sqrt, _ -> standard_fn "sqrt"
-       | Recip, _ -> ("(1.0h / ", ")") (* half division *)
-       | Recip_sqrt, _ -> standard_fn "rsqrt" (* MSL rsqrt *)
-       | Neg, _ -> ("(-", ")")
-       | Tanh_approx, _ -> standard_fn "tanh" (* MSL tanh *)
-       | Not, _ -> ("(!", ")") (* Logical not? Or bitwise? Assuming logical. *)
+    let binop_syntax prec v =
+      match (v, prec) with
+      | Ops.Arg1, _ -> invalid_arg "Metal_backend.binop_syntax: Arg1 is not an operator"
+      | Arg2, _ -> invalid_arg "Metal_backend.binop_syntax: Arg2 is not an operator"
+      | _, Ops.Void_prec -> invalid_arg "Metal_backend.binop_syntax: Void precision"
+      | Add, _ -> ("(", " +", ")")
+      | Sub, _ -> ("(", " -", ")")
+      | Mul, _ -> ("(", " *", ")")
+      | Div, _ -> ("(", " /", ")")
+      | ToPowOf, _ -> ("pow(", ",", ")")
+      | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+      | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+      | Satur01_gate, Byte_prec _ -> ("(abs(", ") > 0 ? 0 : (", ")")
+      | Satur01_gate, _ -> ("(abs(", ") > 0.0 ? 0.0 : (", ")")
+      | Max, _ -> ("max(", ", ", ")")
+      | Min, _ -> ("min(", ", ", ")")
+      | Mod, Byte_prec _ -> ("(", " % ", ")")
+      | Mod, _ -> ("fmod(", ", ", ")")
+      | Cmplt, _ -> ("(", " < ", ")")
+      | Cmpne, _ -> ("(", " != ", ")")
+      | Cmpeq, _ -> ("(", " == ", ")")
+      | Or, _ -> ("(", " || ", ")")
+      | And, _ -> ("(", " && ", ")")
 
-     let ternop_syntax prec v =
-       match (v, prec) with
-       | Ops.Where, _ -> ("(", " ? ", " : ", ")") (* Standard C ternary *)
-       | FMA, _ -> ("fma(", ", ", ", ", ")") (* MSL fma *)
+    let unop_syntax prec v =
+      match (v, prec) with
+      | Ops.Identity, _ -> ("", "")
+      | Relu, _ -> ("max(0.0, ", ")")
+      | Satur01, _ -> ("max(0.0, min(1.0, ", "))")
+      | Exp, _ -> ("exp(", ")")
+      | Log, _ -> ("log(", ")")
+      | Exp2, _ -> ("exp2(", ")")
+      | Log2, _ -> ("log2(", ")")
+      | Sin, _ -> ("sin(", ")")
+      | Cos, _ -> ("cos(", ")")
+      | Sqrt, _ -> ("sqrt(", ")")
+      | Recip, _ -> ("(1.0 / (", "))")
+      | Recip_sqrt, _ -> ("(1.0 / sqrt(", "))")
+      | Neg, _ -> ("(-(", "))")
+      | Tanh_approx, _ -> ("tanh(", ")")
+      | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
-     let convert_precision ~from ~to_ =
-       match (from, to_) with
-        (* No-op conversion *)
-       | (p1, p2) when Ops.equal_prec p1 p2 -> ("", "")
-       | (_, Ops.Void_prec) -> ("", "") (* Cast to void? *)
-       | (_, _) -> ("(" ^ typ_of_prec to_ ^ ")(", ")") (* C-style cast *)
+    let ternop_syntax prec v =
+      match (v, prec) with
+      | Ops.Where, _ -> ("(", " ? ", " : ", ")")
+      | FMA, _ -> ("fma(", ", ", ", ", ")")
 
-   end
+    let convert_precision ~from ~to_ =
+      match (from, to_) with
+      | Ops.Double_prec _, Ops.Double_prec _
+      | Single_prec _, Single_prec _
+      | Half_prec _, Half_prec _
+      | Byte_prec _, Byte_prec _
+      | Void_prec, Void_prec ->
+          ("", "")
+      | _, _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
+  end
 
-  let compile ~name bindings ({ Low_level.traced_store; llc; merge_node } as lowered) =
-    let module Syntax = C_syntax_config (struct let procs = [| lowered |] end) in
-    let module Pp = C_syntax.C_syntax (Syntax) in
+  let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+      let procs = [| lowered |]
+    end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     let ppf = Stdlib.Format.formatter_of_buffer b in
-    Pp.print_includes ppf;
-    (* Add thread_position_in_grid etc. to parameter list? No, they are built-in. *)
-    let params = Pp.compile_proc ~name ppf idx_params lowered in
-    Stdlib.Format.pp_print_flush ppf ();
-    let msl_source = Buffer.contents b in
-    { msl_source; kernel_name = name; params; bindings; traced_store }
+    
+    (* Add Metal-specific includes and declarations *)
+    Stdlib.Format.fprintf ppf "#include <metal_stdlib>\n";
+    Stdlib.Format.fprintf ppf "#include <metal_math>\n";
+    Stdlib.Format.fprintf ppf "using namespace metal;\n\n";
+    
+    let params = Syntax.compile_proc ~name ppf idx_params lowered in
+    let metal_lib = metal_to_lib ~name @@ Buffer.contents b in
+    { traced_store; metal_lib; params; bindings; name }
 
   let compile_batch ~names bindings lowereds =
-     let module Syntax = C_syntax_config (struct let procs = Array.filter_opt lowereds end) in
-     let module Pp = C_syntax.C_syntax (Syntax) in
-     let idx_params = Indexing.bound_symbols bindings in
-     let b = Buffer.create 4096 in
-     let ppf = Stdlib.Format.formatter_of_buffer b in
-     Pp.print_includes ppf;
-     let kernels =
-       Array.map2_exn names lowereds ~f:(fun name_opt lowered_opt ->
-           Option.both name_opt lowered_opt
-           |> Option.map ~f:(fun (name, lowered) ->
-                  let params = Pp.compile_proc ~name ppf idx_params lowered in
-                  {
-                    msl_source = ""; (* Source is combined *)
-                    kernel_name = name;
-                    params;
-                    bindings;
-                    traced_store = lowered.traced_store;
-                  }))
-     in
-     Stdlib.Format.pp_print_flush ppf ();
-     let msl_source = Buffer.contents b in
-     (* Update source in individual kernel infos - slightly redundant *)
-     Array.iter kernels ~f:(Option.iter ~f:(fun k -> ignore k)); (* Side effect dummy *)
-     let kernels = Array.map kernels ~f:(Option.map ~f:(fun k -> { k with msl_source })) in
-     { msl_source; kernels; bindings }
+    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+      let procs = Array.filter_opt lowereds
+    end)) in
+    let idx_params = Indexing.bound_symbols bindings in
+    let b = Buffer.create 4096 in
+    let ppf = Stdlib.Format.formatter_of_buffer b in
+    
+    (* Add Metal-specific includes and declarations *)
+    Stdlib.Format.fprintf ppf "#include <metal_stdlib>\n";
+    Stdlib.Format.fprintf ppf "#include <metal_math>\n";
+    Stdlib.Format.fprintf ppf "using namespace metal;\n\n";
+    
+    let params_and_names =
+      Array.map2_exn names lowereds
+        ~f:
+          (Option.map2 ~f:(fun name lowered ->
+               (Syntax.compile_proc ~name ppf idx_params lowered, name)))
+    in
+    
+    let name : string =
+      String.(
+        strip ~drop:(equal_char '_')
+        @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
+    in
+    
+    let metal_lib = metal_to_lib ~name @@ Buffer.contents b in
+    let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
+    { traced_stores; metal_lib; params_and_names; bindings }
 
-  (* --- Linking --- *)
-  let link_kernel prior_context (kernel_info : code) ctx_arrays =
-     let device = prior_context.stream.device.dev in
-     (* Compile MSL source to Library *)
-     (* TODO: Cache libraries based on source? *)
-     let compile_options = Me.CompileOptions.init () in
-      (* Set desired Metal language version if needed, e.g.: *)
-      (* Me.CompileOptions.(set_language_version compile_options LanguageVersion.version_3_1); *)
-     let library = Me.Library.on_device device ~source:kernel_info.msl_source compile_options in
+  let get_global_run_id =
+    let next_id = ref 0 in
+    fun () ->
+      Int.incr next_id;
+      if !next_id < 0 then next_id := 0;
+      !next_id
 
-     (* Get Function *)
-     let func = Me.Library.new_function_with_name library kernel_info.kernel_name in
+  let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
+      lowered_bindings metal_lib =
+    
+    let func = Me.Library.new_function_with_name metal_lib name in
+    let stream = prior_context.stream in
+    let runner_label = get_name stream in
+    
+    let%diagn3_sexp work () : unit =
+      let log_id = get_global_run_id () in
+      let log_id_prefix = Int.to_string log_id ^ ": " in
+      
+      [%log_result "Launching", name, "on", runner_label, (log_id : int), 
+                   (params : (string * param_source) list)];
+      
+      (* Create a compute pipeline state for the function *)
+      let compute_pipeline, _ = 
+        Me.ComputePipelineState.on_device_with_function stream.device.dev.dev func in
+      
+      (* Create a command buffer and compute encoder *)
+      let command_buffer = Me.CommandBuffer.on_queue stream.device.dev.command_queue in
+      let compute_encoder = Me.ComputeCommandEncoder.on_buffer command_buffer in
+      
+      (* Set the compute pipeline state *)
+      Me.ComputeCommandEncoder.set_compute_pipeline_state compute_encoder compute_pipeline;
+      
+      (* Set buffer arguments *)
+      List.iteri params ~f:(fun i -> function
+        | _name, Param_ptr tn ->
+            let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
+            Me.ComputeCommandEncoder.set_buffer compute_encoder ~index:i arr
+        | _name, Log_file_name -> 
+            (* For logging, we could use a buffer to collect logs *)
+            ()
+        | _name, Merge_buffer ->
+            let buf = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
+            Me.ComputeCommandEncoder.set_buffer compute_encoder ~index:i buf.ptr
+        | _name, Static_idx s ->
+            let i_val = Indexing.find_exn lowered_bindings s in
+            if !i_val < 0 then
+              raise
+              @@ Utils.User_error
+                   [%string
+                     "metal: static index %{Indexing.symbol_ident s.static_symbol} is negative: \
+                      %{!i_val#Int}"];
+            Option.iter s.static_range ~f:(fun upto ->
+                if !i_val >= upto then
+                  raise
+                  @@ Utils.User_error
+                       [%string
+                         "metal: static index %{Indexing.symbol_ident s.static_symbol} is too \
+                          big: %{upto#Int}"]);
+            
+            (* Set scalar constant i_val into constant memory *)
+            Me.ComputeCommandEncoder.set_bytes compute_encoder 
+              ~bytes:(Ctypes.addr !i_val) ~length:(Ctypes.sizeof Ctypes.int) ~index:i);
+      
+      (* Calculate grid and threadgroup size *)
+      let threads_per_threadgroup = Me.Size.make ~width:64 ~height:1 ~depth:1 in
+      let threadgroups_per_grid = Me.Size.make ~width:1 ~height:1 ~depth:1 in
+      
+      (* Dispatch the compute function *)
+      Me.ComputeCommandEncoder.dispatch_threadgroups compute_encoder
+        ~threadgroups_per_grid ~threads_per_threadgroup;
+      
+      (* End encoding and commit the command buffer *)
+      Me.ComputeCommandEncoder.end_encoding compute_encoder;
+      Me.CommandBuffer.commit command_buffer;
+      
+      [%log "kernel launched"]
+    in
+    
+    Task.Task
+      {
+        context_lifetime = (metal_lib, ctx_arrays);
+        description = "launches " ^ name ^ " on " ^ runner_label;
+        work;
+      }
 
-     (* Create Compute Pipeline State *)
-     let pso, _reflection = Me.ComputePipelineState.on_device_with_function device func in
+  let%track3_sexp link prior_context (code : code) ctx_arrays =
+    let lowered_bindings : Indexing.lowered_bindings =
+      let idx_params = Indexing.bound_symbols code.bindings in
+      List.map idx_params ~f:(fun s -> (s, ref 0))
+    in
+    let task =
+      link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays 
+        lowered_bindings code.metal_lib
+    in
+    (lowered_bindings, task)
 
-     let compiled_kernel =
-       { name = kernel_info.kernel_name; params = kernel_info.params; pso; bindings = kernel_info.bindings }
-     in
+  let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
+    let idx_params = Indexing.bound_symbols code_batch.bindings in
+    let lowered_bindings : Indexing.lowered_bindings =
+      List.map idx_params ~f:(fun s -> (s, ref 0))
+    in
+    
+    let procs =
+      Array.mapi code_batch.params_and_names ~f:(fun i pns ->
+          Option.value ~default:None
+          @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
+                 let task =
+                   link_proc ~prior_context ~name ~params ~ctx_arrays 
+                     lowered_bindings code_batch.metal_lib
+                 in
+                 Some task))
+    in
+    (lowered_bindings, procs)
 
-     let lowered_bindings : Indexing.lowered_bindings =
-      List.map (Indexing.bound_symbols kernel_info.bindings) ~f:(fun s -> (s, ref 0))
-     in
+  let get_global_debug_info () =
+    Sexp.message "metal_global_debug" []
 
-     (* --- Create Task --- *)
-     let work () : unit =
-       [%log_result "Launching Metal kernel", compiled_kernel.name];
-       let stream = prior_context.stream in
-       let cmdbuf = Me.CommandBuffer.on_queue stream.runner in
-       let encoder = Me.ComputeCommandEncoder.on_buffer cmdbuf in
-
-       Me.ComputeCommandEncoder.set_compute_pipeline_state encoder compiled_kernel.pso;
-
-       (* Set arguments *)
-       List.iteri compiled_kernel.params ~f:(fun index (_p_name, param_source) ->
-           match param_source with
-           | Param_ptr tn ->
-               let buffer = Map.find_exn ctx_arrays tn in
-               Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-           | Merge_buffer ->
-               let buffer = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
-               Me.ComputeCommandEncoder.set_buffer encoder ~index buffer.ptr
-           | Static_idx s ->
-               let value_ref = List.Assoc.find_exn lowered_bindings ~equal:Indexing.equal_static_symbol s in
-               let value = !value_ref in
-               (* Pass integer index using setBytes *)
-               let idx_ptr = Ctypes.allocate Ctypes.int value in
-               Me.ComputeCommandEncoder.set_bytes encoder ~bytes:(Ctypes.to_voidp idx_ptr)
-                 ~length:(Ctypes.sizeof Ctypes.int) ~index
-           | Log_file_name ->
-               (* Metal printf goes to stdout, log_id passed differently if needed *)
-               () );
-
-       (* Dispatch - Use simple 1 thread for now *)
-       let threads_per_group = Me.Size.make ~width:1 ~height:1 ~depth:1 in
-       let groups_per_grid = Me.Size.make ~width:1 ~height:1 ~depth:1 in
-       Me.ComputeCommandEncoder.dispatch_threadgroups encoder ~threadgroups_per_grid:groups_per_grid
-         ~threads_per_threadgroup:threads_per_group;
-
-       Me.ComputeCommandEncoder.end_encoding encoder;
-       Me.CommandBuffer.commit cmdbuf;
-       [%log "Metal kernel committed", compiled_kernel.name]
-     in
-
-     let task = Task.Task {
-       context_lifetime = (pso, library, compile_options, ctx_arrays); (* Keep PSO and Library alive *)
-       description = "launch " ^ compiled_kernel.name;
-       work;
-     } in
-     (lowered_bindings, task)
-
-  let link prior_context code ctx_arrays = link_kernel prior_context code ctx_arrays
-
-  let link_batch prior_context code_batch ctx_arrays_opts =
-     let device = prior_context.stream.device.dev in
-     let compile_options = Me.CompileOptions.init () in
-     (* Compile the combined MSL source once *)
-     let library = Me.Library.on_device device ~source:code_batch.msl_source compile_options in
-
-     let lowered_bindings : Indexing.lowered_bindings =
-        List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
-     in
-
-     let tasks =
-       Array.mapi code_batch.kernels ~f:(fun i kernel_opt ->
-           Option.both kernel_opt ctx_arrays_opts.(i)
-           |> Option.map ~f:(fun (kernel_info, ctx_arrays) ->
-                  let func = Me.Library.new_function_with_name library kernel_info.kernel_name in
-                  let pso, _ = Me.ComputePipelineState.on_device_with_function device func in
-                  let compiled_kernel =
-                    { name = kernel_info.kernel_name; params = kernel_info.params; pso; bindings = kernel_info.bindings }
-                  in
-                  (* Create Task - duplicated logic from link_kernel *)
-                   let work () : unit =
-                     [%log_result "Launching Metal kernel", compiled_kernel.name];
-                     let stream = prior_context.stream in
-                     let cmdbuf = Me.CommandBuffer.on_queue stream.runner in
-                     let encoder = Me.ComputeCommandEncoder.on_buffer cmdbuf in
-                     Me.ComputeCommandEncoder.set_compute_pipeline_state encoder compiled_kernel.pso;
-                     List.iteri compiled_kernel.params ~f:(fun index (_p_name, param_source) ->
-                         match param_source with
-                         | Param_ptr tn ->
-                             let buffer = Map.find_exn ctx_arrays tn in
-                             Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-                         | Merge_buffer ->
-                             let buffer = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
-                             Me.ComputeCommandEncoder.set_buffer encoder ~index buffer.ptr
-                         | Static_idx s ->
-                             let value_ref = List.Assoc.find_exn lowered_bindings ~equal:Indexing.equal_static_symbol s in
-                             let value = !value_ref in
-                             let idx_ptr = Ctypes.allocate Ctypes.int value in
-                             Me.ComputeCommandEncoder.set_bytes encoder ~bytes:(Ctypes.to_voidp idx_ptr)
-                               ~length:(Ctypes.sizeof Ctypes.int) ~index
-                          | Log_file_name -> () );
-                     let threads_per_group = Me.Size.make ~width:1 ~height:1 ~depth:1 in
-                     let groups_per_grid = Me.Size.make ~width:1 ~height:1 ~depth:1 in
-                     Me.ComputeCommandEncoder.dispatch_threadgroups encoder ~threadgroups_per_grid:groups_per_grid
-                       ~threads_per_threadgroup:threads_per_group;
-                     Me.ComputeCommandEncoder.end_encoding encoder;
-                     Me.CommandBuffer.commit cmdbuf;
-                     [%log "Metal kernel committed", compiled_kernel.name]
-                   in
-                   Task.Task {
-                     context_lifetime = (pso, library, compile_options, ctx_arrays);
-                     description = "launch " ^ compiled_kernel.name;
-                     work;
-                   }
-           ))
-     in
-     (lowered_bindings, tasks)
-
+  let get_debug_info (_stream : stream) =
+    Sexp.message "metal_stream_debug" []
 end
