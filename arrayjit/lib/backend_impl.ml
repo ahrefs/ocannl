@@ -141,9 +141,7 @@ struct
     { stream = parent.stream; parent = Some parent; ctx_arrays; finalized = Atomic.make false }
 end
 
-(** Parts shared by backend implementations excluding what's already in
-    {!Backend_intf.Backend_any_common}, except for {!Backend_intf.Buffer} which is duplicated for
-    technical reasons. *)
+(** Parts shared by backend implementations. *)
 module type Backend_impl_common = sig
   include Backend_intf.Buffer
 
@@ -157,17 +155,15 @@ end
 (** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations.
 *)
 module type For_add_scheduler = sig
-  include Backend_any_common
-
   val name : string
+  val config : config
 
-  include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
+  include No_device_buffer_and_copying
 end
 
 (** Lowered-level stream agnostic backend interface: implementation-facing API for CPU backends. *)
 module type Lowered_no_device_backend = sig
   include Backend_impl_common
-  include Backend_any_common with type buffer_ptr := buffer_ptr
 
   val name : string
 

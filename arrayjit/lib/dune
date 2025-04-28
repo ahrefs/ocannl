@@ -72,6 +72,8 @@
 
 (library
  (name metal_backend)
+ ; TODO: Enable this backend.
+ (enabled_if false)
  (optional)
  (modules metal_backend)
  (libraries base metal utils ir)

@@ -14,18 +14,16 @@ let name = "gccjit"
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"gccjit_backend_optimization_level"
 
-let root_ctx = ref None
+let root_ctx =
+  let open Gccjit in
+  let ctx = Context.create () in
+  Context.set_option ctx Optimization_level (optimization_level ());
+  ctx
+  
 
 module Tn = Tnode
 
 let is_initialized () = Option.is_some !root_ctx
-
-let initialize _config =
-  if Option.is_none !root_ctx then (
-    let open Gccjit in
-    let ctx = Context.create () in
-    Context.set_option ctx Optimization_level (optimization_level ());
-    root_ctx := Some ctx)
 
 type tn_info = {
   tn : Tn.t;  (** The original array. *)

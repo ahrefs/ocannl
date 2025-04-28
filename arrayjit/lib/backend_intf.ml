@@ -206,22 +206,10 @@ module type Device = sig
   val get_name : stream -> string
 end
 
-(** Parts shared by both assignments-level and lowered-level backend interfaces. *)
-module type Backend_any_common = sig
-  include Buffer
-
-  val initialize : config -> unit
-  (** Initializes a backend before first use. Typically does nothing if the backend is already
-      initialized, but some backends can do some safe cleanups. *)
-
-  val is_initialized : unit -> bool
-  (** Returns false if there was no previous {!initialize} call. If it returns false, one must call
-      {!initialize} before using the backend. *)
-end
 
 (** Parts shared by assignments-level backend interfaces. *)
 module type Backend_common = sig
-  include Backend_any_common
+  include Buffer
 
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
@@ -250,7 +238,6 @@ end
     synchronization is provided by a component outside of backend implementations). *)
 module type Backend_device_common = sig
   include Device
-  include Backend_any_common with type buffer_ptr := buffer_ptr
 
   val sync : event -> unit
   (** Blocks till the event completes, if it's not done already.

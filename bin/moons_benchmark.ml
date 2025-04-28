@@ -84,7 +84,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   let start_time = ref None in
   let weight_decay = 0.0002 in
   Backends.Schedulers.sync_suggested_num_streams := num_streams;
-  let module Backend = (val Backends.fresh_backend ~backend_name ()) in
+  let module Backend =
+    (val Backends.fresh_backend ~backend_name ~config:Train.BT.Most_parallel_streams ())
+  in
   Stdlib.Format.printf "Initial backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
@@ -99,7 +101,6 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
         epoch_loss
   in
 
-  Backend.initialize Train.BT.Most_parallel_streams;
   let {
     Train.inputs;
     outputs;

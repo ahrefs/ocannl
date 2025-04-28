@@ -41,8 +41,7 @@ let experiment ~seed ~backend_name ~config () =
      computation. *)
   let weight_decay = 0.0002 in
   (* So that we can inspect them. *)
-  let module Backend = (val Backends.fresh_backend ~backend_name ()) in
-  Backend.initialize config;
+  let module Backend = (val Backends.fresh_backend ~backend_name ~config ()) in
   let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
     if (at_batch + 1) % 20 = 0 then
       Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step

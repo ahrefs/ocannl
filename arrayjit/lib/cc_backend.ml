@@ -36,10 +36,6 @@ let compiler_command =
 
 module Tn = Tnode
 
-let is_initialized, initialize =
-  let initialized = ref false in
-  ((fun () -> !initialized), fun _config -> initialized := true)
-
 type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]
 
 type procedure = {

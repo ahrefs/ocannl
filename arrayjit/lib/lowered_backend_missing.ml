@@ -49,8 +49,6 @@ let sexp_of_buffer _buffer = failwith "Backend missing -- install the correspond
 type nonrec ctx_arrays = buffer_ptr Backend_intf.ctx_arrays
 
 let sexp_of_ctx_arrays _ctx_arrays = failwith "Backend missing -- install the corresponding library"
-let initialize _config = failwith "Backend missing -- install the corresponding library"
-let is_initialized () = failwith "Backend missing -- install the corresponding library"
 let sync _event = failwith "Backend missing -- install the corresponding library"
 let is_done _event = failwith "Backend missing -- install the corresponding library"
 let will_wait_for _context = failwith "Backend missing -- install the corresponding library"

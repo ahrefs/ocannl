@@ -1,3 +1,13 @@
+## [0.5.3] -- current
+
+### Added
+
+- The Metal framework backend (Apple Silicon).
+
+### Changed
+
+- Removed `initialize` and `is_initialized` from the backend API; instead, backends should be initialized on functor application. The functors now take `config` as argument.
+
 ## [0.5.2] -- 2025-04-07
 
 ### Added

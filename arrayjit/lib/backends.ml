@@ -233,7 +233,10 @@ module Add_device
     (Add_scheduler : functor
       (Impl : For_add_scheduler)
       -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
-    (Backend : Lowered_no_device_backend) : Lowered_backend = struct
+    (Backend : Lowered_no_device_backend)
+    (Config : sig
+      val config : config
+    end) : Lowered_backend = struct
   include Backend
 
   type code = { lowered : Low_level.optimized; proc : Backend.procedure } [@@deriving sexp_of]
@@ -252,7 +255,10 @@ module Add_device
     let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
 
-  include Add_scheduler (Backend)
+  include Add_scheduler (struct
+    include Backend
+    include Config
+  end)
 
   let link context (code : code) ctx_arrays =
     let runner_label = get_name context.stream in
@@ -481,9 +487,12 @@ module Make_device_backend_from_lowered
     (Add_scheduler : functor
       (Impl : For_add_scheduler)
       -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
-    (Backend_impl : Lowered_no_device_backend) =
+    (Backend_impl : Lowered_no_device_backend)
+    (Config : sig
+      val config : config
+    end) =
 struct
-  module Lowered_device = Add_device (Add_scheduler) (Backend_impl)
+  module Lowered_device = Add_device (Add_scheduler) (Backend_impl) (Config)
   module Backend_device = Raise_backend (Lowered_device)
   include Backend_device
 end
@@ -503,23 +512,31 @@ let finalize (type buffer_ptr dev runner event)
               && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
             then mem_free ctx.stream data)))
 
-let%track5_sexp fresh_backend ?backend_name () =
+let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () =
   Stdlib.Gc.full_major ();
   (* TODO: is running again needed to give time to weak arrays to become empty? *)
   Stdlib.Gc.full_major ();
   (* Note: we invoke functors from within fresh_backend to fully isolate backends from distinct
      calls to fresh_backend. *)
+  let module Config = struct
+    let config = config
+  end in
   match
     Option.value_or_thunk backend_name ~default:(fun () ->
         Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
     |> String.lowercase
   with
-  | "cc" -> (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) : Backend)
+  | "cc" ->
+      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) (Config)
+      : Backend)
   | "gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend_impl) : Backend)
-  | "sync_cc" -> (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend_impl) (Config)
+      : Backend)
+  | "sync_cc" ->
+      (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) (Config) : Backend)
   | "sync_gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend_impl) : Backend)
-  | "cuda" -> (module Raise_backend ((Cuda_backend_impl.Fresh () : Lowered_backend)) : Backend)
-  | "metal" -> (module Raise_backend ((Metal_backend_impl.Fresh () : Lowered_backend)) : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend_impl) (Config)
+      : Backend)
+  | "cuda" -> (module Raise_backend ((Cuda_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
+  | "metal" -> (module Raise_backend ((Metal_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

@@ -74,7 +74,10 @@ end
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 
-module Fresh () = struct
+module Fresh (Config : sig
+  val config : Ir.Backend_intf.config
+end) =
+struct
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
   let use_host_memory = None
@@ -83,16 +86,7 @@ module Fresh () = struct
   let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
   let sync event = Cu.Delimited_event.synchronize event
   let all_work stream = Cu.Delimited_event.record stream.runner
-  let global_config = ref For_parallel_copying
   let () = Cu.init ()
-
-  let is_initialized, initialize =
-    let initialized = ref false in
-    let init (config : config) : unit =
-      initialized := true;
-      global_config := config
-    in
-    ((fun () -> !initialized), init)
 
   let num_devices = Cu.Device.get_count
   let devices = ref @@ Array.create ~len:(num_devices ()) None
@@ -162,7 +156,7 @@ module Fresh () = struct
     get_props
 
   let suggested_num_streams device =
-    match !global_config with
+    match Config.config with
     | Only_devices_parallel -> 1
     | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
     | Most_parallel_streams -> (cuda_properties device).multiprocessor_count

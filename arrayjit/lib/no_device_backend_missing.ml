@@ -3,8 +3,6 @@ open Ir
 type buffer_ptr
 
 let use_host_memory = None
-let initialize _config = failwith "Backend missing -- install the corresponding library"
-let is_initialized () = failwith "Backend missing -- install the corresponding library"
 let name = "Backend missing"
 
 type procedure

@@ -12,14 +12,7 @@ module Multicore (Backend : For_add_scheduler) :
   With_scheduler with type buffer_ptr = Backend.buffer_ptr = struct
   include Backend
   module Domain = Domain [@warning "-3"]
-
-  let global_config = ref Only_devices_parallel
-
-  let initialize config =
-    global_config := config;
-    initialize config
-
-  let is_initialized = is_initialized
+  (* Currently, Backend.config is not used. *)
 
   type task_list = Ir.Task.t Utils.mutable_list [@@deriving sexp_of]
 
@@ -267,9 +260,6 @@ module Sync (Backend : For_add_scheduler) = struct
   let is_idle _stream = true
   let await _stream = ()
   (* let global_run_no = ref 0 *)
-
-  let initialize = Backend.initialize
-  let is_initialized = Backend.is_initialized
   let schedule_task _stream task = Ir.Task.run task
   let get_global_debug_info () = Sexp.message "global_debug" []
   let get_debug_info (stream : stream) = sexp_of_runner stream.runner
