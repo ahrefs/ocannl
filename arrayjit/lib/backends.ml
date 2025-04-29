@@ -413,9 +413,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                   && Tn.known_shared_cross_streams key && Tn.is_hosted_force key 44
                 then
                   Hashtbl.update_and_return device.cross_stream_candidates key ~f:(fun _ ->
-                      get_buffer_ptr @@ Ndarray.get_voidptr_not_managed
-                      @@ Option.value_exn ~here:[%here]
-                      @@ Lazy.force key.array)
+                      get_buffer_ptr
+                        ~size_in_bytes:(Lazy.force key.size_in_bytes)
+                        @@ Ndarray.get_voidptr_not_managed
+                        @@ Option.value_exn ~here:[%here]
+                        @@ Lazy.force key.array)
                 else Hashtbl.find_or_add device.cross_stream_candidates key ~default
           in
           if Hashtbl.mem device.cross_stream_candidates key then

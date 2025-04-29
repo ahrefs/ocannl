@@ -16,7 +16,7 @@ module C_syntax (B : sig
 
   type buffer_ptr
 
-  val use_host_memory : (unit Ctypes.ptr -> buffer_ptr) option
+  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
