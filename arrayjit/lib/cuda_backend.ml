@@ -73,6 +73,7 @@ end
 
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
+let initialized = ref false
 
 module Fresh (Config : sig
   val config : Ir.Backend_intf.config
@@ -86,7 +87,11 @@ struct
   let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
   let sync event = Cu.Delimited_event.synchronize event
   let all_work stream = Cu.Delimited_event.record stream.runner
-  let () = Cu.init ()
+
+  let () =
+    if not !initialized then (
+      Cu.init ();
+      initialized := true)
 
   let num_devices = Cu.Device.get_count
   let devices = ref @@ Array.create ~len:(num_devices ()) None
