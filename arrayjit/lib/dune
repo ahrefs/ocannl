@@ -72,8 +72,6 @@
 
 (library
  (name metal_backend)
- ; Temporary disabled until we have a working Metal backend
- (enabled_if false)
  (optional)
  (modules metal_backend)
  (libraries base metal utils ir)

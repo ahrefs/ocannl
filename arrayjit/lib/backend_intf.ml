@@ -206,7 +206,6 @@ module type Device = sig
   val get_name : stream -> string
 end
 
-
 (** Parts shared by assignments-level backend interfaces. *)
 module type Backend_common = sig
   include Buffer
@@ -290,12 +289,18 @@ module type With_buffer_retrieval_and_syncing = sig
   type event
 
   val from_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from host to context and
-      returns true, otherwise returns false. *)
+  (** If the tensor node is both hosted and in-context, schedules a copy(^) from host to context and
+      returns true, otherwise returns false.
+
+      [^] On unified memory devices, the copy is not scheduled if the source and destination are the
+      same buffer (note that this depends on the memory mode of the tensor node). *)
 
   val to_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy from context to host and
-      returns true, otherwise returns false. *)
+  (** If the tensor node is both hosted and in-context, schedules a copy(^) from context to host and
+      returns true, otherwise returns false.
+
+      [^] On unified memory devices, the copy is not scheduled if the source and destination are the
+      same buffer (note that this depends on the memory mode of the tensor node). *)
 
   val device_to_device :
     Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
