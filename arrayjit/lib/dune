@@ -57,6 +57,7 @@
 
 (library
  (name cuda_backend)
+ (public_name arrayjit.cuda_backend)
  (optional)
  (modules cuda_backend)
  (libraries base cudajit utils ir)
@@ -72,6 +73,7 @@
 
 (library
  (name metal_backend)
+ (public_name arrayjit.metal_backend)
  (optional)
  (modules metal_backend)
  (libraries base metal utils ir)
@@ -87,6 +89,7 @@
 
 (library
  (name gcc_backend)
+ (public_name arrayjit.gcc_backend)
  (optional)
  (modules gcc_backend)
  (libraries base gccjit utils ir)
