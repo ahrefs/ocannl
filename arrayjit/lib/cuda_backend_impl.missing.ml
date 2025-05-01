@@ -4,5 +4,7 @@ end) =
 struct
   let _ = ignore Config.config
 
-  include Lowered_backend_missing
+  include Lowered_backend_missing.Missing (struct
+    let name = "cuda"
+  end)
 end
