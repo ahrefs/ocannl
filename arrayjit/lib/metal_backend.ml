@@ -319,7 +319,7 @@ struct
     let kernel_prep_line = "" (* Metal grid setup is external *)
 
     let includes =
-      [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>"; "<metal_half>" ]
+      [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "uint8_t"
