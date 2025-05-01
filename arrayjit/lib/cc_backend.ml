@@ -83,28 +83,10 @@ let%track7_sexp c_compile_and_load ~f_name =
   Stdlib.Gc.finalise finalize result;
   result
 
-module C_syntax_config (Input : sig
-  val procs : Low_level.optimized array
-end) =
-struct
-  let procs = Input.procs
-
-  type nonrec buffer_ptr = buffer_ptr
-
-  let use_host_memory = use_host_memory
-  let logs_to_stdout = false
-  let main_kernel_prefix = ""
-  let kernel_prep_line = ""
-  let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
-  let typ_of_prec = Ops.c_typ_of_prec
-  let ternop_syntax = Ops.ternop_c_syntax
-  let binop_syntax = Ops.binop_c_syntax
-  let unop_syntax = Ops.unop_c_syntax
-  let convert_precision = Ops.c_convert_precision
-end
-
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) =
-  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
+    type nonrec buffer_ptr = buffer_ptr
+    let use_host_memory = use_host_memory
     let procs = [| lowered |]
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
@@ -117,7 +99,9 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   { result; params; bindings; name }
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) =
-  let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+  let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
+    type nonrec buffer_ptr = buffer_ptr
+    let use_host_memory = use_host_memory
     let procs = Array.filter_opt lowereds
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)

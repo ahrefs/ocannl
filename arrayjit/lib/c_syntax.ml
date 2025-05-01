@@ -9,7 +9,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 module Tn = Tnode
 
-module C_syntax (B : sig
+module type C_syntax_config = sig
   val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
       shared and already known. *)
@@ -26,8 +26,31 @@ module C_syntax (B : sig
   val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
   val unop_syntax : Ops.prec -> Ops.unop -> string * string
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
+end
+
+module Pure_C_config (Input : sig
+  type buffer_ptr
+  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
+  val procs : Low_level.optimized array
 end) =
 struct
+  let procs = Input.procs
+
+  type nonrec buffer_ptr = Input.buffer_ptr
+
+  let use_host_memory = Input.use_host_memory
+  let logs_to_stdout = false
+  let main_kernel_prefix = ""
+  let kernel_prep_line = ""
+  let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
+  let typ_of_prec = Ops.c_typ_of_prec
+  let ternop_syntax = Ops.ternop_c_syntax
+  let binop_syntax = Ops.binop_c_syntax
+  let unop_syntax = Ops.unop_c_syntax
+  let convert_precision = Ops.c_convert_precision
+end
+
+module C_syntax (B : C_syntax_config) = struct
   let get_ident =
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun l -> l.llc)
 
