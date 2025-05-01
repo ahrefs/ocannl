@@ -105,7 +105,7 @@ end
 (* Functor defining the backend *)
 module Fresh (Config : sig
   val config : Ir.Backend_intf.config
-end) =
+end) : Ir.Backend_impl.Lowered_backend =
 struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
@@ -210,14 +210,10 @@ struct
     Sexp.message "Metal stream debug info NYI" [ ("stream_id", sexp_of_int stream.stream_id) ]
 
   (* --- Copy Operations --- *)
-  let commit_and_wait cmd_buffer =
-    Me.CommandBuffer.commit cmd_buffer;
-    Me.CommandBuffer.wait_until_completed cmd_buffer
-
   let from_host ~dst_ptr ~dst hosted =
     (* Copy from host memory to Metal buffer *)
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue dst.stream.runner in
+    let command_buffer = Me.CommandBuffer.on_queue dst.stream.runner.queue in
 
     (* Get host memory pointer *)
     let host_ptr = Ndarray.get_fatptr_not_managed hosted in
@@ -238,7 +234,7 @@ struct
   let to_host ~src_ptr ~src hosted =
     (* Copy from Metal buffer to host memory *)
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue src.stream.runner in
+    let command_buffer = Me.CommandBuffer.on_queue src.stream.runner.queue in
 
     (* Get host memory pointer *)
     let host_ptr = Ndarray.get_fatptr_not_managed hosted in

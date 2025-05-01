@@ -77,7 +77,7 @@ let initialized = ref false
 
 module Fresh (Config : sig
   val config : Ir.Backend_intf.config
-end) =
+end) : Ir.Backend_impl.Lowered_backend =
 struct
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
