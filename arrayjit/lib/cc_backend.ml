@@ -92,7 +92,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
-  Syntax.print_includes pp_file.ppf;
+  Syntax.print_declarations pp_file.ppf;
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params lowered in
   pp_file.finalize ();
   let result = c_compile_and_load ~f_name:pp_file.f_name in
@@ -112,7 +112,7 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
   let pp_file = Utils.pp_file ~base_name ~extension:".c" in
-  Syntax.print_includes pp_file.ppf;
+  Syntax.print_declarations pp_file.ppf;
   let params =
     Array.mapi lowereds ~f:(fun i lowered ->
         Option.map2 names.(i) lowered ~f:(fun name lowered ->

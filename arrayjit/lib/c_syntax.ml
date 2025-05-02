@@ -25,6 +25,7 @@ module type C_syntax_config = sig
   val arg_int_prefix : string
   val extra_args : string list
   val includes : string list
+  val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
   val ternop_syntax : Ops.prec -> Ops.ternop -> string * string * string * string
   val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
@@ -52,6 +53,7 @@ struct
   let arg_int_prefix = "const int "
   let extra_args = []
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
+  let extra_declarations = []
   let typ_of_prec = Ops.c_typ_of_prec
   let ternop_syntax = Ops.ternop_c_syntax
   let binop_syntax = Ops.binop_c_syntax
@@ -64,7 +66,6 @@ module C_syntax (B : C_syntax_config) = struct
     Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
-
   let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
 
   open Indexing.Pp_helpers
@@ -91,8 +92,12 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
      -> idx + (offset * dim)) *)
-  let print_includes ppf =
-    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_include) B.includes)
+
+  (** Toplevel declarations, comprised of [includes] and [extra_declarations]. *)
+  let print_declarations ppf =
+    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_include) B.includes);
+    Stdlib.Format.(
+      fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_print_string) B.extra_declarations)
 
   let compile_main ~traced_store:_ ppf llc : unit =
     let open Stdlib.Format in

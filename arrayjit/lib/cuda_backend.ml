@@ -415,7 +415,7 @@ struct
     let ppf = Stdlib.Format.formatter_of_buffer b in
     if Utils.debug_log_from_routines () then
       Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-    Syntax.print_includes ppf;
+    Syntax.print_declarations ppf;
     let params = Syntax.compile_proc ~name ppf idx_params lowered in
     let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
     { traced_store; ptx; params; bindings; name }
@@ -427,7 +427,7 @@ struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_includes ppf;
+    Syntax.print_declarations ppf;
     let params_and_names =
       Array.map2_exn names lowereds
         ~f:
@@ -547,7 +547,7 @@ struct
           Option.value ~default:None
           @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
                  let task =
-                   link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
+                  link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
                  in
                  Some task))
     in

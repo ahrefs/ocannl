@@ -327,6 +327,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ]
 
     let includes = [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
+    let extra_declarations = [ "using namespace metal;" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "uint8_t"
@@ -411,7 +412,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_includes ppf;
+    Syntax.print_declarations ppf;
     (* Add Metal address space qualifiers *)
     let params = Syntax.compile_proc ~name ppf idx_params lowered in
     let source = Buffer.contents b in
@@ -431,7 +432,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_includes ppf;
+    Syntax.print_declarations ppf;
     let funcs =
       Array.map2_exn names lowereds
         ~f:
