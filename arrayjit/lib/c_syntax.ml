@@ -65,10 +65,6 @@ module C_syntax (B : C_syntax_config) = struct
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
 
-  let pp_zero_out ppf tn =
-    Stdlib.Format.fprintf ppf "@[<2>memset(%s, 0, %d);@]@ " (get_ident tn)
-    @@ Lazy.force tn.size_in_bytes
-
   let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
 
   open Indexing.Pp_helpers
@@ -98,7 +94,7 @@ module C_syntax (B : C_syntax_config) = struct
   let print_includes ppf =
     Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_include) B.includes)
 
-  let compile_main ~traced_store ppf llc : unit =
+  let compile_main ~traced_store:_ ppf llc : unit =
     let open Stdlib.Format in
     let visited = Hash_set.create (module Tn) in
     let rec pp_ll ppf c : unit =
@@ -121,9 +117,9 @@ module C_syntax (B : C_syntax_config) = struct
                 pp_symbol i;
           fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
       | Zero_out tn ->
-          let traced = Low_level.(get_node traced_store tn) in
-          (* The initialization will be emitted at the end of compile_proc. *)
-          if Hash_set.mem visited tn then pp_zero_out ppf tn else assert traced.zero_initialized
+          pp_ll ppf
+            (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
+                 Set { tn; idcs; llv = Constant 0.0; debug = get_ident tn ^ " := 0" }))
       | Set { tn; idcs; llv; debug } ->
           Hash_set.add visited tn;
           let ident = get_ident tn in
@@ -326,9 +322,7 @@ module C_syntax (B : C_syntax_config) = struct
              (* We often don't know ahead of linking with relevant contexts what the stream sharing
                 mode of the node will become. Conservatively, use passing as argument. *)
              if is_param then
-               ( B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn,
-                 Param_ptr tn )
-               :: params
+               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
     let idx_params =
@@ -406,8 +400,7 @@ module C_syntax (B : C_syntax_config) = struct
           fprintf ppf "%s %s[%d]%s;@ "
             (B.typ_of_prec @@ Lazy.force tn.prec)
             (get_ident tn) (Tn.num_elems tn)
-            (if node.zero_initialized then " = {0}" else "")
-        else if (not (Tn.is_virtual_force tn 333)) && node.zero_initialized then pp_zero_out ppf tn);
+            (if node.zero_initialized then " = {0}" else ""));
     fprintf ppf "@,/* Main logic. */@ ";
     compile_main ~traced_store ppf llc;
     fprintf ppf "@;<0 -2>}@]@.";
