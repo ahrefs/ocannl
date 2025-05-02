@@ -260,10 +260,12 @@ struct
     val procs : Low_level.optimized array
   end) =
   struct
-    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
+    include C_syntax.Pure_C_config (struct
+      type nonrec buffer_ptr = buffer_ptr
+      let use_host_memory = None
+      let procs = Input.procs
+    end)
 
-    let procs = Input.procs
-    let use_host_memory = use_host_memory
     let logs_to_stdout = true
     let main_kernel_prefix = "extern \"C\" __global__"
 

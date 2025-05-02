@@ -105,8 +105,7 @@ end
 (* Functor defining the backend *)
 module Fresh (Config : sig
   val config : Ir.Backend_intf.config
-end) : Ir.Backend_impl.Lowered_backend =
-struct
+end) : Ir.Backend_impl.Lowered_backend = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
@@ -309,17 +308,25 @@ struct
     val procs : Low_level.optimized array
   end) =
   struct
-    (* Same as CUDA for now, adjust specific syntax/types *)
-    type nonrec buffer_ptr = buffer_ptr
+    include C_syntax.Pure_C_config (struct
+      type nonrec buffer_ptr = buffer_ptr
 
-    let procs = Input.procs
-    let use_host_memory = use_host_memory
-    let logs_to_stdout = true (* Metal printf goes to stdout/stderr *)
+      let use_host_memory = use_host_memory
+      let procs = Input.procs
+    end)
+
+    let logs_to_stdout = true (* FIXME: support Metal logging *)
     let main_kernel_prefix = "kernel"
-    let kernel_prep_line = "" (* Metal grid setup is external *)
+    let buffer_prefix = "device "
+    let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
+    let arg_int_prefix = "const int& "
 
-    let includes =
-      [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
+    let extra_args =
+      [
+        "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
+      ]
+
+    let includes = [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "uint8_t"

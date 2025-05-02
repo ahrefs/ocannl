@@ -20,6 +20,10 @@ module type C_syntax_config = sig
   val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
+  val buffer_prefix : string
+  val buffer_suffix : pos:int -> string
+  val arg_int_prefix : string
+  val extra_args : string list
   val includes : string list
   val typ_of_prec : Ops.prec -> string
   val ternop_syntax : Ops.prec -> Ops.ternop -> string * string * string * string
@@ -30,6 +34,7 @@ end
 
 module Pure_C_config (Input : sig
   type buffer_ptr
+
   val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   val procs : Low_level.optimized array
 end) =
@@ -42,6 +47,10 @@ struct
   let logs_to_stdout = false
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
+  let buffer_prefix = ""
+  let buffer_suffix = fun ~pos:_ -> ""
+  let arg_int_prefix = "const int "
+  let extra_args = []
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let typ_of_prec = Ops.c_typ_of_prec
   let ternop_syntax = Ops.ternop_c_syntax
@@ -317,14 +326,17 @@ module C_syntax (B : C_syntax_config) = struct
              (* We often don't know ahead of linking with relevant contexts what the stream sharing
                 mode of the node will become. Conservatively, use passing as argument. *)
              if is_param then
-               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+               ( B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn,
+                 Param_ptr tn )
+               :: params
              else params)
     in
     let idx_params =
       List.map idx_params ~f:(fun s ->
-          ("int " ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
+          (B.arg_int_prefix ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
     in
     let log_file =
+      (* FIXME: this is a hack that should be fixed by the backends. *)
       if Utils.debug_log_from_routines () then
         [
           ((if B.logs_to_stdout then "int log_id" else "const char* log_file_name"), Log_file_name);
@@ -341,11 +353,15 @@ module C_syntax (B : C_syntax_config) = struct
     let params =
       List.sort params ~compare:(fun (p1_name, _) (p2_name, _) -> compare_string p1_name p2_name)
     in
+    let args =
+      List.mapi ~f:(fun pos (name, _) -> B.buffer_prefix ^ name ^ B.buffer_suffix ~pos) params
+      @ B.extra_args
+    in
     fprintf ppf "@[<v 2>@[<hv 4>%s%svoid %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " B.main_kernel_prefix
       (if String.is_empty B.main_kernel_prefix then "" else " ")
       name
       (pp_print_list ~pp_sep:pp_comma pp_print_string)
-    @@ List.map ~f:fst params;
+      args;
     if not (String.is_empty B.kernel_prep_line) then fprintf ppf "%s@ " B.kernel_prep_line;
     (* FIXME: we should also close the file. *)
     if (not (List.is_empty log_file)) && not B.logs_to_stdout then
