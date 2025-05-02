@@ -114,13 +114,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let () = assert (Array.length metal_devices > 0)
 
   (* Metal has unified memory on Apple Silicon, so we can use host memory *)
-  let use_host_memory =
-    Some
-      (fun ~size_in_bytes:length ptr ->
-        (* Need to create a Metal buffer that wraps the host memory *)
-        let device = metal_devices.(0) in
-        Me.Buffer.on_device_with_bytes_no_copy device ~bytes:ptr ~length
-          Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache))
+  let get_buffer_for_ptr device ~size_in_bytes bytes =
+    Me.Buffer.on_device_with_bytes_no_copy device ~bytes ~length:size_in_bytes
+      Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
+
+  let use_host_memory = Some (get_buffer_for_ptr metal_devices.(0))
 
   (* Device Management *)
   let num_devs = Array.length metal_devices
@@ -450,7 +448,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       traced_stores;
     }
 
-  let%diagn_sexp link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays
+  let%diagn2_sexp link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays
       run_log_id =
     let stream = prior_context.stream in
     let device = stream.device.dev in
@@ -460,7 +458,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let pso, _ = Me.ComputePipelineState.on_device_with_function device func in
 
     let work () : unit =
-      [%log_result "Launching", func_name, "on", runner_label, (run_log_id : int)];
+      [%log3_result "Launching", func_name, "on", runner_label, (run_log_id : int)];
       try
         let command_buffer = Me.CommandBuffer.on_queue queue in
         let encoder = Me.ComputeCommandEncoder.on_buffer command_buffer in
@@ -469,14 +467,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         (* Set arguments *)
         List.iteri params ~f:(fun index (_p_name, p_source) ->
             match p_source with
-            | Param_ptr tn -> (
-                try
-                  let buffer = Map.find_exn ctx_arrays tn in
-                  Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-                with Not_found_s _ ->
-                  failwith
-                    [%string
-                      "Param_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"])
+            | Param_ptr tn when Map.mem ctx_arrays tn ->
+                let buffer = Map.find_exn ctx_arrays tn in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
+            | Param_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
+                let buffer =
+                  Hashtbl.find_or_add stream.device.cross_stream_candidates tn ~default:(fun () ->
+                      get_buffer_for_ptr device ~size_in_bytes:(Lazy.force tn.size_in_bytes)
+                      @@ Ndarray.get_voidptr_not_managed
+                      @@ Option.value_exn ~here:[%here]
+                      @@ Lazy.force tn.array)
+                in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
+            | Param_ptr tn ->
+                failwith
+                  [%string "Param_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in

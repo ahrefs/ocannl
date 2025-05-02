@@ -119,7 +119,8 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
           [device_id] (distinct device instances) might refer to the same physical device. *)
   cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
       (** Freshly created arrays that might be shared across streams. The map can both grow and
-          shrink. *)
+          shrink. This map also contains buffer/pointer wrappers for hosted tnodes
+          on unified memory systems. *)
   owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
       (** The stream owning a given node. This map can only grow. Currently, if the memory mode of a
           node is inferred, only this stream will modify a cross-stream shared array. But memory
