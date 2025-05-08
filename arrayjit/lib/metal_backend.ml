@@ -334,12 +334,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Double_prec _ -> "double"
       | Void_prec -> "void"
 
+    let metal_prec_suffix_float = function
+      (* Suffix for float literals like 0.0, 1.0 *)
+      | Ops.Half_prec _ -> "h"
+      | Ops.Single_prec _ -> "f"
+      | Ops.Double_prec _ -> "" (* No suffix for double literals *)
+      | Ops.Byte_prec _ -> ""
+      | Ops.Void_prec -> ""
+
     let ternop_syntax _prec op =
       match op with
       | Ops.Where ->
           fun ppf pp1 v1 pp2 v2 pp3 v3 ->
-            (* select(if_true, if_false, condition) *)
-            Stdlib.Format.fprintf ppf "@[<1>select(%a, %a, %a)@]" pp2 v2 pp3 v3 pp1 v1
+            (* Ops.Where (v1: cond, v2: if_true, v3: if_false) *)
+            (* MSL signature: select(if_false_expr, if_true_expr, condition_expr) *)
+            Stdlib.Format.fprintf ppf "@[<1>select(%a, %a, %a)@]" pp3 v3 pp2 v2 pp1 v1
       | FMA -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
 
     let binop_syntax prec op =
@@ -358,8 +367,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmplt, _ -> f "<"
       | And, _ -> f "&&"
       | Or, _ -> f "||"
-      | Relu_gate, _ -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
-      | Satur01_gate, _ -> C_syntax.binop_adapter ("abs(", ") > 0 ? 0 : (", ")")
+      | Relu_gate, Ops.Half_prec _ -> C_syntax.binop_adapter ("(", " > 0.0h ?", " : 0.0h)")
+      | Relu_gate, Ops.Single_prec _ -> C_syntax.binop_adapter ("(", " > 0.0f ?", " : 0.0f)")
+      | Relu_gate, Ops.Double_prec _ -> C_syntax.binop_adapter ("(", " > 0.0 ?", " : 0.0)")
+      | Relu_gate, _ (* Byte_prec, Void_prec *) -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
+      | Satur01_gate, p_res ->
+          let s = metal_prec_suffix_float p_res in
+          fun fmt pp_gate_val gate_val pp_value_val value_val ->
+            Stdlib.Format.fprintf fmt "((%a > 0.0%s && %a < 1.0%s) ? %a : 0.0%s)" pp_gate_val
+              gate_val s pp_gate_val gate_val s pp_value_val value_val s
       | ToPowOf, _ -> func "pow"
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
@@ -376,9 +392,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cos, _ -> f "cos"
       | Sqrt, _ -> f "sqrt"
       | Relu, Ops.Half_prec _ -> C_syntax.unop_adapter ("max(0.0h, ", ")")
-      | Relu, _ -> C_syntax.unop_adapter ("max(0.0f, ", ")")
-      | Satur01, _ -> C_syntax.unop_adapter ("clamp(", ", 0.0, 1.0)")
-      | Recip, _ -> C_syntax.unop_adapter ("(1.0 / ", ")")
+      | Relu, Ops.Single_prec _ -> C_syntax.unop_adapter ("max(0.0f, ", ")")
+      | Relu, Ops.Double_prec _ -> C_syntax.unop_adapter ("max(0.0, ", ")")
+      | Relu, _ (* Byte_prec, Void_prec *) -> C_syntax.unop_adapter ("max(0, ", ")")
+      | Satur01, p ->
+          let s = metal_prec_suffix_float p in
+          let suffix_str = Stdlib.Format.sprintf ", 0.0%s, 1.0%s)" s s in
+          C_syntax.unop_adapter ("clamp(", suffix_str)
+      | Recip, p ->
+          let s = metal_prec_suffix_float p in
+          let prefix_str = Stdlib.Format.sprintf "(1.0%s / " s in
+          C_syntax.unop_adapter (prefix_str, ")")
       | Recip_sqrt, _ -> f "rsqrt"
       | Tanh_approx, _ -> f "tanh"
       | Not, _ -> C_syntax.unop_adapter ("!", "")
