@@ -1,10 +1,10 @@
-(lang dune 3.16)
+(lang dune 3.18)
 
 (using ctypes 0.3)
 
 (name ocannl)
 
-(version 0.5.2)
+(version 0.5.3)
 
 (generate_opam_files true)
 
@@ -15,6 +15,8 @@
 
 (maintainers "Lukasz Stafiniak <lukstafi@gmail.com>")
 
+(maintenance_intent "(latest)")
+
 (license "BSD-2-Clause")
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
@@ -24,7 +26,7 @@
 (package
  (name arrayjit)
  (synopsis
-  "An array language compiler with multiple backends (CPU, CUDA), staged compilation")
+  "An array language compiler with multiple backends (CPU, CUDA, Metal), staged compilation")
  (description
   "The optimizing compiler sub-package of OCANNL. Use neural_nets_lib instead to also get: nice syntax, shape inference, backpropagation, optimizers.")
  (depends
@@ -74,7 +76,7 @@
   (gccjit
    (< 0.3.2)))
  (tags
-  (deeplearning array jit CUDA)))
+  (deeplearning array jit gccjit CUDA Metal)))
 
 (package
  (name neural_nets_lib)
@@ -92,9 +94,9 @@
   ; (ocamlformat
   ;  (>= 0.26.2)
   ;  :with-dev-setup)
-  ; Here we mean (arrayjit (= 0.5.2)), but we must be compatible with arrayjit.dev during installation.
+  ; Here we mean (arrayjit (= 0.5.3)), but we must be compatible with arrayjit.dev during installation.
   (arrayjit
-   (>= 0.5.2))
+   (>= 0.5.3))
   (printbox
    (>= 0.12))
   (printbox-text
@@ -122,6 +124,6 @@
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags
-  (deeplearning tensor backprop jit gccjit CUDA)))
+  (deeplearning tensor backprop jit CUDA Metal)))
 
 ; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project

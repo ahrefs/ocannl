@@ -1,4 +1,4 @@
-## [0.5.3] -- current
+## [0.5.3] -- 2025-05-08
 
 ### Added
 
@@ -7,7 +7,7 @@
 ### Changed
 
 - Removed `initialize` and `is_initialized` from the backend API; instead, backends should be initialized on functor application. The functors now take `config` as argument.
-- More descriptive code identifier names in case of name conflicts.
+- More descriptive identifier names in C-syntax code in case of name conflicts.
 
 ### Fixed
 
