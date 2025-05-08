@@ -116,7 +116,7 @@ val fprint_function_header :
   Stdlib.Format.formatter ->
   unit
 
-val get_ident_within_code : ?no_dots:bool -> t array -> Tnode.t -> string
+val get_ident_within_code : ?no_dots:bool -> ?blacklist:string list -> t array -> Tnode.t -> string
 
 val fprint_cstyle :
   ?name:string ->

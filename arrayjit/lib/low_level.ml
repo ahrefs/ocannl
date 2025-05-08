@@ -832,10 +832,15 @@ let fprint_function_header ?name ?static_indices () ppf =
   | Some name, None -> fprintf ppf "%s:@ " name
   | _ -> ()
 
-let get_ident_within_code ?no_dots llcs =
+let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
   let ident_style = Tn.get_style ~arg_name:"ll_ident_style" ?no_dots () in
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
+  List.iter blacklist ~f:(fun b_ident ->
+      (* Consider blacklisted items as already seen with a placeholder ID like -1 to avoid
+         clashes *)
+      Hashtbl.set nograd_idents ~key:b_ident ~data:(Set.singleton (module Int) (-1));
+      Hashtbl.set grad_idents ~key:b_ident ~data:(Set.singleton (module Int) (-1)));
   let visit tn =
     let is_grad, ident = Tn.no_grad_ident_label tn in
     let idents = if is_grad then grad_idents else nograd_idents in

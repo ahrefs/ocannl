@@ -39,6 +39,7 @@ module type C_syntax_config = sig
   val includes : string list
   val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
+  val ident_blacklist : string list
 
   val ternop_syntax :
     Ops.prec ->
@@ -81,6 +82,67 @@ struct
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let extra_declarations = []
   let typ_of_prec = Ops.c_typ_of_prec
+
+  let ident_blacklist =
+    let remove_paren s = String.substr_replace_all s ~pattern:"(" ~with_:"" in
+    let functions = ref (Set.empty (module String)) in
+    let precs = Ops.[ byte; half; single; double ] in
+    List.iter precs ~f:(fun prec ->
+        List.iter
+          Ops.[ Where; FMA ]
+          ~f:(fun op ->
+            let p, _, _, _ =
+              try Ops.ternop_c_syntax prec op with Invalid_argument _ -> ("", "", "", "")
+            in
+            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+        List.iter
+          Ops.
+            [
+              Add;
+              Sub;
+              Mul;
+              Div;
+              ToPowOf;
+              Relu_gate;
+              Satur01_gate;
+              Max;
+              Min;
+              Mod;
+              Cmplt;
+              Cmpeq;
+              Cmpne;
+              Or;
+              And;
+            ]
+          ~f:(fun op ->
+            let p, _, _ =
+              try Ops.binop_c_syntax prec op with Invalid_argument _ -> ("", "", "")
+            in
+            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+        List.iter
+          Ops.
+            [
+              Identity;
+              Relu;
+              Satur01;
+              Exp;
+              Log;
+              Exp2;
+              Log2;
+              Sin;
+              Cos;
+              Sqrt;
+              Recip;
+              Recip_sqrt;
+              Neg;
+              Tanh_approx;
+              Not;
+            ]
+          ~f:(fun op ->
+            let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
+            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
+    Set.to_list !functions
+
   let ternop_syntax prec op = ternop_adapter (Ops.ternop_c_syntax prec op)
   let binop_syntax prec op = binop_adapter (Ops.binop_c_syntax prec op)
   let unop_syntax prec op = unop_adapter (Ops.unop_c_syntax prec op)
@@ -89,7 +151,8 @@ end
 
 module C_syntax (B : C_syntax_config) = struct
   let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true @@ Array.map B.procs ~f:(fun l -> l.llc)
+    Low_level.get_ident_within_code ~no_dots:true ~blacklist:B.ident_blacklist
+    @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
   let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
