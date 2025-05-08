@@ -77,8 +77,7 @@ let initialized = ref false
 
 module Fresh (Config : sig
   val config : Ir.Backend_intf.config
-end) : Ir.Backend_impl.Lowered_backend =
-struct
+end) : Ir.Backend_impl.Lowered_backend = struct
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
   let use_host_memory = None
@@ -262,6 +261,7 @@ struct
   struct
     include C_syntax.Pure_C_config (struct
       type nonrec buffer_ptr = buffer_ptr
+
       let use_host_memory = None
       let procs = Input.procs
     end)
@@ -282,113 +282,122 @@ struct
       | Void_prec -> "void"
 
     let binop_syntax prec v =
+      let f op_str = C_syntax.binop_adapter ("(", " " ^ op_str, ")") in
+      let func fn = C_syntax.binop_adapter (fn ^ "(", ",", ")") in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
       | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
       | _, Ops.Void_prec -> invalid_arg "Cuda_backend.binop_syntax: Void precision"
-      | Add, Half_prec _ -> ("__hadd(", ", ", ")")
-      | Sub, Half_prec _ -> ("__hsub(", ", ", ")")
-      | Mul, Half_prec _ -> ("__hmul(", ", ", ")")
-      | Div, Half_prec _ -> ("__hdiv(", ", ", ")")
-      | Add, _ -> ("(", " +", ")")
-      | Sub, _ -> ("(", " -", ")")
-      | Mul, _ -> ("(", " *", ")")
-      | Div, _ -> ("(", " /", ")")
-      | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-      | ToPowOf, Single_prec _ -> ("powf(", ",", ")")
-      | ToPowOf, Half_prec _ -> ("hexp2(hlog2(", "), ", ")")
+      | Add, Half_prec _ -> func "__hadd"
+      | Sub, Half_prec _ -> func "__hsub"
+      | Mul, Half_prec _ -> func "__hmul"
+      | Div, Half_prec _ -> func "__hdiv"
+      | Add, _ -> f "+"
+      | Sub, _ -> f "-"
+      | Mul, _ -> f "*"
+      | Div, _ -> f "/"
+      | ToPowOf, Double_prec _ -> func "pow"
+      | ToPowOf, Single_prec _ -> func "powf"
+      | ToPowOf, Half_prec _ -> C_syntax.binop_adapter ("hexp2(hlog2(", "),", ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
       | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
       | Relu_gate, Half_prec _ ->
-          ( "(__hgt(",
-            ", __ushort_as_half((unsigned short)0x0000U)) ?",
-            " : __ushort_as_half((unsigned short)0x0000U))" )
-      | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-      | Satur01_gate, Byte_prec _ -> ("(abs(", ") > 0 ? 0 : (", ")")
+          C_syntax.binop_adapter
+            ( "(__hgt(",
+              ", __ushort_as_half((unsigned short)0x0000U)) ?",
+              " : __ushort_as_half((unsigned short)0x0000U))" )
+      | Relu_gate, _ -> C_syntax.binop_adapter ("(", " > 0.0 ?", " : 0.0)")
+      | Satur01_gate, Byte_prec _ -> C_syntax.binop_adapter ("(abs(", ") > 0 ? 0 : (", ")")
       | Satur01_gate, Half_prec _ ->
-          ( "(__hgt(__habs(htrunc(",
-            ")), __ushort_as_half((unsigned short)0x0000U)) ? __ushort_as_half((unsigned \
-             short)0x0000U) : (",
-            "))" )
-      | Satur01_gate, Double_prec _ -> ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
-      | Satur01_gate, Single_prec _ -> ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
-      | Max, Byte_prec _ -> ("max(", ", ", ")")
-      | Max, Half_prec _ -> ("__hmax(", ", ", ")")
-      | Max, Double_prec _ -> ("fmax(", ", ", ")")
-      | Max, Single_prec _ -> ("fmaxf(", ", ", ")")
-      | Min, Byte_prec _ -> ("min(", ", ", ")")
-      | Min, Half_prec _ -> ("__hmin(", ", ", ")")
-      | Min, Double_prec _ -> ("fmin(", ", ", ")")
-      | Min, Single_prec _ -> ("fminf(", ", ", ")")
-      | Mod, Byte_prec _ -> ("(", " % ", ")")
-      | Mod, _ -> ("fmod(", ", ", ")")
-      | Cmplt, _ -> ("(", " < ", ")")
-      | Cmpne, _ -> ("(", " != ", ")")
-      | Cmpeq, _ -> ("(", " == ", ")")
-      | Or, _ -> ("(", " || ", ")")
-      | And, _ -> ("(", " && ", ")")
+          C_syntax.binop_adapter
+            ( "(__hgt(__habs(htrunc(",
+              ")), __ushort_as_half((unsigned short)0x0000U)) ? __ushort_as_half((unsigned \
+               short)0x0000U) : (",
+              "))" )
+      | Satur01_gate, Double_prec _ ->
+          C_syntax.binop_adapter ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
+      | Satur01_gate, Single_prec _ ->
+          C_syntax.binop_adapter ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
+      | Max, Byte_prec _ -> func "max"
+      | Max, Half_prec _ -> func "__hmax"
+      | Max, Double_prec _ -> func "fmax"
+      | Max, Single_prec _ -> func "fmaxf"
+      | Min, Byte_prec _ -> func "min"
+      | Min, Half_prec _ -> func "__hmin"
+      | Min, Double_prec _ -> func "fmin"
+      | Min, Single_prec _ -> func "fminf"
+      | Mod, Byte_prec _ -> f "%"
+      | Mod, _ -> func "fmod"
+      | Cmplt, _ -> f "<"
+      | Cmpne, _ -> f "!="
+      | Cmpeq, _ -> f "=="
+      | Or, _ -> f "||"
+      | And, _ -> f "&&"
 
     let unop_syntax prec v =
+      let f prefix suffix = C_syntax.unop_adapter (prefix, suffix) in
+      let func fn = C_syntax.unop_adapter (fn ^ "(", ")") in
       match (v, prec) with
-      | Ops.Identity, _ -> ("", "")
-      | Relu, Ops.Single_prec _ -> ("fmaxf(0.0, ", ")")
-      | Relu, Ops.Half_prec _ -> ("__hmax_nan(__ushort_as_half((unsigned short)0x0000U), ", ")")
-      | Relu, Ops.Byte_prec _ -> ("fmax(0, ", ")")
-      | Relu, _ -> ("fmax(0.0, ", ")")
-      | Satur01, Byte_prec _ -> ("fmax(0, fmin(1, ", "))")
+      | Ops.Identity, _ -> f "" ""
+      | Relu, Ops.Single_prec _ -> f "fmaxf(0.0, " ")"
+      | Relu, Ops.Half_prec _ -> f "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), " ")"
+      | Relu, Ops.Byte_prec _ -> f "fmax(0, " ")"
+      | Relu, _ -> f "fmax(0.0, " ")"
+      | Satur01, Byte_prec _ -> f "fmax(0, fmin(1, " "))"
       | Satur01, Half_prec _ ->
-          ( "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), \
-             __hmin_nan(__ushort_as_half((unsigned short)0x3C00U), ",
-            "))" )
-      | Satur01, Single_prec _ -> ("fmaxf(0.0f, fminf(1.0f, ", "))")
-      | Satur01, _ -> ("fmax(0.0, fmin(1.0, ", "))")
-      | Exp, Half_prec _ -> ("hexp(", ")")
-      | Exp, Double_prec _ -> ("exp(", ")")
-      | Exp, _ -> ("expf(", ")")
-      | Log, Half_prec _ -> ("hlog(", ")")
-      | Log, Double_prec _ -> ("log(", ")")
-      | Log, _ -> ("logf(", ")")
-      | Exp2, Half_prec _ -> ("hexp2(", ")")
-      | Exp2, Double_prec _ -> ("exp2(", ")")
-      | Exp2, _ -> ("exp2f(", ")")
-      | Log2, Half_prec _ -> ("hlog2(", ")")
-      | Log2, Double_prec _ -> ("log2(", ")")
-      | Log2, _ -> ("log2f(", ")")
-      | Sin, Half_prec _ -> ("hsin(", ")")
-      | Sin, Double_prec _ -> ("sin(", ")")
-      | Sin, _ -> ("sinf(", ")")
-      | Cos, Half_prec _ -> ("hcos(", ")")
-      | Cos, Double_prec _ -> ("cos(", ")")
-      | Cos, _ -> ("cosf(", ")")
-      | Sqrt, Half_prec _ -> ("hsqrt(", ")")
-      | Sqrt, Double_prec _ -> ("sqrt(", ")")
-      | Sqrt, _ -> ("sqrtf(", ")")
+          f
+            "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), \
+             __hmin_nan(__ushort_as_half((unsigned short)0x3C00U), "
+            "))"
+      | Satur01, Single_prec _ -> f "fmaxf(0.0f, fminf(1.0f, " "))"
+      | Satur01, _ -> f "fmax(0.0, fmin(1.0, " "))"
+      | Exp, Half_prec _ -> func "hexp"
+      | Exp, Double_prec _ -> func "exp"
+      | Exp, _ -> func "expf"
+      | Log, Half_prec _ -> func "hlog"
+      | Log, Double_prec _ -> func "log"
+      | Log, _ -> func "logf"
+      | Exp2, Half_prec _ -> func "hexp2"
+      | Exp2, Double_prec _ -> func "exp2"
+      | Exp2, _ -> func "exp2f"
+      | Log2, Half_prec _ -> func "hlog2"
+      | Log2, Double_prec _ -> func "log2"
+      | Log2, _ -> func "log2f"
+      | Sin, Half_prec _ -> func "hsin"
+      | Sin, Double_prec _ -> func "sin"
+      | Sin, _ -> func "sinf"
+      | Cos, Half_prec _ -> func "hcos"
+      | Cos, Double_prec _ -> func "cos"
+      | Cos, _ -> func "cosf"
+      | Sqrt, Half_prec _ -> func "hsqrt"
+      | Sqrt, Double_prec _ -> func "sqrt"
+      | Sqrt, _ -> func "sqrtf"
       | Recip, Byte_prec _ ->
           invalid_arg "Cuda_backend.unop_syntax: Recip not supported for byte/integer precisions"
-      | Recip, Half_prec _ -> ("hrcp(", ")")
-      | Recip, _ -> ("(1.0 / (", "))")
+      | Recip, Half_prec _ -> func "hrcp"
+      | Recip, _ -> f "(1.0 / (" "))"
       | Recip_sqrt, Byte_prec _ ->
           invalid_arg
             "Cuda_backend.unop_syntax: Recip_sqrt not supported for byte/integer precisions"
-      | Recip_sqrt, Half_prec _ -> ("hrsqrt(", ")")
-      | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
-      | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
-      | Neg, _ -> ("(-(", "))")
+      | Recip_sqrt, Half_prec _ -> func "hrsqrt"
+      | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
+      | Recip_sqrt, _ -> f "(1.0 / sqrtf(" "))"
+      | Neg, _ -> (f "(-(", "))")
       | Tanh_approx, Byte_prec _ ->
           invalid_arg
             "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
-      | Tanh_approx, Half_prec _ -> ("htanh_approx(", ")")
-      | Tanh_approx, Single_prec _ -> ("__tanhf(", ")")
-      | Tanh_approx, _ -> ("tanh(", ")")
-      | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
+      | Tanh_approx, Half_prec _ -> func "htanh_approx"
+      | Tanh_approx, Single_prec _ -> func "__tanhf"
+      | Tanh_approx, _ -> func "tanh"
+      | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
 
     let ternop_syntax prec v =
       match (v, prec) with
-      | Ops.Where, _ -> ("(", " ? ", " : ", ")")
-      | FMA, Ops.Half_prec _ -> ("__hfma(", ", ", ", ", ")")
-      | FMA, Ops.Single_prec _ -> ("fmaf(", ", ", ", ", ")")
-      | FMA, _ -> ("fma(", ", ", ", ", ")")
+      | Ops.Where, _ -> C_syntax.ternop_adapter ("(", " ?", " :", ")")
+      | FMA, Ops.Half_prec _ -> C_syntax.ternop_adapter ("__hfma(", ",", ",", ")")
+      | FMA, Ops.Single_prec _ -> C_syntax.ternop_adapter ("fmaf(", ",", ",", ")")
+      | FMA, _ -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
 
     let convert_precision ~from ~to_ =
       match (from, to_) with
@@ -547,7 +556,7 @@ struct
           Option.value ~default:None
           @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
                  let task =
-                  link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
+                   link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
                  in
                  Some task))
     in

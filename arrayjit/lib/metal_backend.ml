@@ -336,12 +336,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let ternop_syntax _prec op =
       match op with
-      | Ops.Where -> ("select(", ", ", ", ", ")") (* select(false, true, condition) *)
-      | FMA -> ("fma(", ", ", ", ", ")")
+      | Ops.Where ->
+          fun ppf pp1 v1 pp2 v2 pp3 v3 ->
+            (* select(if_true, if_false, condition) *)
+            Stdlib.Format.fprintf ppf "@[<1>select(%a, %a, %a)@]" pp2 v2 pp3 v3 pp1 v1
+      | FMA -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
 
     let binop_syntax prec op =
-      let f op_str = ("(", " " ^ op_str ^ " ", ")") in
-      let func fn = (fn ^ "(", ", ", ")") in
+      let f op_str = C_syntax.binop_adapter ("(", " " ^ op_str, ")") in
+      let func fn = C_syntax.binop_adapter (fn ^ "(", ",", ")") in
       match (op, prec) with
       | Ops.Add, _ -> f "+"
       | Sub, _ -> f "-"
@@ -355,16 +358,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmplt, _ -> f "<"
       | And, _ -> f "&&"
       | Or, _ -> f "||"
-      | Relu_gate, _ -> ("(", " > 0 ?", " : 0)")
-      | Satur01_gate, _ -> ("(abs(", ") > 0 ? 0 : (", ")")
+      | Relu_gate, _ -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
+      | Satur01_gate, _ -> C_syntax.binop_adapter ("abs(", ") > 0 ? 0 : (", ")")
       | ToPowOf, _ -> func "pow"
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
-      let f fn = (fn ^ "(", ")") in
+      let f fn = C_syntax.unop_adapter (fn ^ "(", ")") in
       match (op, prec) with
-      | Ops.Identity, _ -> ("", "")
-      | Neg, _ -> ("-", "") (* Prefix negation *)
+      | Ops.Identity, _ -> C_syntax.unop_adapter ("", "")
+      | Neg, _ -> C_syntax.unop_adapter ("-", "") (* Prefix negation *)
       | Exp, _ -> f "exp"
       | Log, _ -> f "log"
       | Exp2, _ -> f "exp2"
@@ -372,13 +375,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Sin, _ -> f "sin"
       | Cos, _ -> f "cos"
       | Sqrt, _ -> f "sqrt"
-      | Relu, Ops.Half_prec _ -> ("max(0.0h, ", ")")
-      | Relu, _ -> ("max(0.0f, ", ")")
-      | Satur01, _ -> ("clamp(", ", 0.0, 1.0)")
-      | Recip, _ -> ("(1.0 / ", ")")
+      | Relu, Ops.Half_prec _ -> C_syntax.unop_adapter ("max(0.0h, ", ")")
+      | Relu, _ -> C_syntax.unop_adapter ("max(0.0f, ", ")")
+      | Satur01, _ -> C_syntax.unop_adapter ("clamp(", ", 0.0, 1.0)")
+      | Recip, _ -> C_syntax.unop_adapter ("(1.0 / ", ")")
       | Recip_sqrt, _ -> f "rsqrt"
       | Tanh_approx, _ -> f "tanh"
-      | Not, _ -> ("!", "")
+      | Not, _ -> C_syntax.unop_adapter ("!", "")
     (* Logical not *)
 
     let convert_precision ~from ~to_ =

@@ -9,6 +9,18 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 module Tn = Tnode
 
+type fmt = Stdlib.Format.formatter
+
+let ternop_adapter (prefix, infix1, infix2, suffix) ppf pp1 v1 pp2 v2 pp3 v3 =
+  Stdlib.Format.fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix pp1 v1 infix1 pp2 v2 infix2 pp3 v3
+    suffix
+
+let binop_adapter (prefix, infix, suffix) ppf pp1 v1 pp2 v2 =
+  Stdlib.Format.fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix pp1 v1 infix pp2 v2 suffix
+
+let unop_adapter (prefix, suffix) ppf pp1 v1 =
+  Stdlib.Format.fprintf ppf "@[<1>%s%a@]%s" prefix pp1 v1 suffix
+
 module type C_syntax_config = sig
   val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
@@ -27,9 +39,23 @@ module type C_syntax_config = sig
   val includes : string list
   val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
-  val ternop_syntax : Ops.prec -> Ops.ternop -> string * string * string * string
-  val binop_syntax : Ops.prec -> Ops.binop -> string * string * string
-  val unop_syntax : Ops.prec -> Ops.unop -> string * string
+
+  val ternop_syntax :
+    Ops.prec ->
+    Ops.ternop ->
+    fmt ->
+    (fmt -> 'a -> unit) ->
+    'a ->
+    (fmt -> 'b -> unit) ->
+    'b ->
+    (fmt -> 'c -> unit) ->
+    'c ->
+    unit
+
+  val binop_syntax :
+    Ops.prec -> Ops.binop -> fmt -> (fmt -> 'a -> unit) -> 'a -> (fmt -> 'b -> unit) -> 'b -> unit
+
+  val unop_syntax : Ops.prec -> Ops.unop -> fmt -> (fmt -> 'a -> unit) -> 'a -> unit
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end
 
@@ -55,9 +81,9 @@ struct
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let extra_declarations = []
   let typ_of_prec = Ops.c_typ_of_prec
-  let ternop_syntax = Ops.ternop_c_syntax
-  let binop_syntax = Ops.binop_c_syntax
-  let unop_syntax = Ops.unop_c_syntax
+  let ternop_syntax prec op = ternop_adapter (Ops.ternop_c_syntax prec op)
+  let binop_syntax prec op = binop_adapter (Ops.binop_c_syntax prec op)
+  let unop_syntax prec op = unop_adapter (Ops.unop_c_syntax prec op)
   let convert_precision = Ops.c_convert_precision
 end
 
@@ -237,16 +263,9 @@ module C_syntax (B : C_syntax_config) = struct
           fprintf ppf "%s%a%s" prefix pp_axis_index idx postfix
       | Binop (Arg1, v1, _v2) -> loop ppf v1
       | Binop (Arg2, _v1, v2) -> loop ppf v2
-      | Ternop (op, v1, v2, v3) ->
-          let prefix, comma1, comma2, postfix = B.ternop_syntax prec op in
-          fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix loop v1 comma1 loop v2 comma2 loop v3
-            postfix
-      | Binop (op, v1, v2) ->
-          let prefix, infix, postfix = B.binop_syntax prec op in
-          fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix loop v1 infix loop v2 postfix
-      | Unop (op, v) ->
-          let prefix, postfix = B.unop_syntax prec op in
-          fprintf ppf "@[<1>%s%a@]%s" prefix loop v postfix
+      | Ternop (op, v1, v2, v3) -> B.ternop_syntax prec op ppf loop v1 loop v2 loop v3
+      | Binop (op, v1, v2) -> B.binop_syntax prec op ppf loop v1 loop v2
+      | Unop (op, v) -> B.unop_syntax prec op ppf loop v
     and debug_float (prec : Ops.prec) (value : Low_level.float_t) : string * 'a list =
       let loop = debug_float prec in
       match value with
@@ -289,21 +308,24 @@ module C_syntax (B : C_syntax_config) = struct
       | Binop (Arg1, v1, _v2) -> loop v1
       | Binop (Arg2, _v1, v2) -> loop v2
       | Ternop (op, v1, v2, v3) ->
-          let prefix, comma1, comma2, postfix = B.ternop_syntax prec op in
           let v1, idcs1 = loop v1 in
           let v2, idcs2 = loop v2 in
           let v3, idcs3 = loop v3 in
-          ( String.concat [ prefix; v1; comma1; " "; v2; comma2; " "; v3; postfix ],
-            idcs1 @ idcs2 @ idcs3 )
+          let open Stdlib.Format in
+          B.ternop_syntax prec op (get_str_formatter ()) pp_print_string v1 pp_print_string v2
+            pp_print_string v3;
+          (flush_str_formatter (), idcs1 @ idcs2 @ idcs3)
       | Binop (op, v1, v2) ->
-          let prefix, infix, postfix = B.binop_syntax prec op in
           let v1, idcs1 = loop v1 in
           let v2, idcs2 = loop v2 in
-          (String.concat [ prefix; v1; infix; " "; v2; postfix ], idcs1 @ idcs2)
+          let open Stdlib.Format in
+          B.binop_syntax prec op (get_str_formatter ()) pp_print_string v1 pp_print_string v2;
+          (flush_str_formatter (), idcs1 @ idcs2)
       | Unop (op, v) ->
-          let prefix, postfix = B.unop_syntax prec op in
           let v, idcs = loop v in
-          (String.concat [ prefix; v; postfix ], idcs)
+          let open Stdlib.Format in
+          B.unop_syntax prec op (get_str_formatter ()) pp_print_string v;
+          (flush_str_formatter (), idcs)
     in
     pp_ll ppf llc
 
