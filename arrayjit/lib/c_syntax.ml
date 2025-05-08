@@ -144,7 +144,27 @@ struct
     Set.to_list !functions
 
   let ternop_syntax prec op = ternop_adapter (Ops.ternop_c_syntax prec op)
-  let binop_syntax prec op = binop_adapter (Ops.binop_c_syntax prec op)
+
+  let binop_syntax prec op =
+    match op with
+    | Ops.Satur01_gate -> (
+        match prec with
+        | Ops.Byte_prec _ ->
+            fun ppf pp1 v1 pp2 v2 ->
+              Stdlib.Format.fprintf ppf "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)"
+                pp1 v1 pp1 v1 pp2 v2
+        | Ops.Half_prec _ ->
+            fun ppf pp1 v1 pp2 v2 ->
+              Stdlib.Format.fprintf ppf "((%a > 0.0f16 && %a < 1.0f16) ? %a : 0.0f16)" pp1 v1 pp1 v1 pp2 v2
+        | Ops.Single_prec _ ->
+            fun ppf pp1 v1 pp2 v2 ->
+              Stdlib.Format.fprintf ppf "((%a > 0.0f && %a < 1.0f) ? %a : 0.0f)" pp1 v1 pp1 v1 pp2 v2
+        | Ops.Double_prec _ ->
+            fun ppf pp1 v1 pp2 v2 ->
+              Stdlib.Format.fprintf ppf "((%a > 0.0 && %a < 1.0) ? %a : 0.0)" pp1 v1 pp1 v1 pp2 v2
+        | Ops.Void_prec -> invalid_arg "Pure_C_config.binop_syntax: Satur01_gate on Void_prec")
+    | _ -> binop_adapter (Ops.binop_c_syntax prec op)
+
   let unop_syntax prec op = unop_adapter (Ops.unop_c_syntax prec op)
   let convert_precision = Ops.c_convert_precision
 end

@@ -314,8 +314,10 @@ let binop_c_syntax prec v =
   | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
   | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
   | Satur01_gate, Byte_prec _ -> ("(abs(", " ) > 0 ? 0 : (", "))")
-  | Satur01_gate, Single_prec _ -> ("(fabsf(truncf(", ")) > 0.0 ? 0.0 : (", "))")
-  | Satur01_gate, _ -> ("(fabs(trunc(", ")) > 0.0 ? 0.0 : (", "))")
+  | Satur01_gate, Single_prec _ ->
+      (* This disagrees at 0 with the semantics. *)
+      ("(fabsf(floorf(", ")) > 0.0 ? 0.0 : (", "))")
+  | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
   | Max, (Double_prec _ | Byte_prec _) -> ("fmax(", ",", ")")
   | Max, _ -> ("fmaxf(", ",", ")")
   | Min, (Double_prec _ | Byte_prec _) -> ("fmin(", ",", ")")

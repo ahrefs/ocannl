@@ -7,6 +7,12 @@
 ### Changed
 
 - Removed `initialize` and `is_initialized` from the backend API; instead, backends should be initialized on functor application. The functors now take `config` as argument.
+- More descriptive code identifier names in case of name conflicts.
+
+### Fixed
+
+- Avoid conflicts with C math function names like `fma`.
+- Satur01_gate had wrong semantics.
 
 ## [0.5.2] -- 2025-04-07
 

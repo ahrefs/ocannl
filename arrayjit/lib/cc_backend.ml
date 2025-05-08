@@ -91,7 +91,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
+let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
   Syntax.print_declarations pp_file.ppf;
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params lowered in
   pp_file.finalize ();
