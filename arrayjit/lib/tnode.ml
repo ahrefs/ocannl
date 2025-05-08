@@ -467,14 +467,13 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
         | `Under_grad, true -> "_grad"
         | (`Dot_grad | `Under_grad), _ -> ""
       in
+      let n_id = if is_grad then arr.id - 1 else arr.id in
       match ident with
       | Some ident ->
           if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident
-          then
-            if is_grad then [%string "n%{arr.id - 1#Int}_%{ident}%{opt_grad}"]
-            else [%string "n%{arr.id#Int}_%{ident}"]
+          then [%string "n%{n_id#Int}_%{ident}%{opt_grad}"]
           else [%string "%{ident}%{opt_grad}"]
-      | None when is_grad -> [%string "n%{arr.id - 1#Int}%{opt_grad}"]
+      | None when is_grad -> [%string "n%{n_id#Int}%{opt_grad}"]
       | None -> n)
 
 let update_code_name tn ident =
