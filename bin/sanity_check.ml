@@ -13,4 +13,4 @@ let () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   Utils.set_log_level 2;
-  Stdio.print_endline "Hello, world!"
+  Stdio.printf "Hello, world %d!\n%!" (Backend.get_device ~ordinal:0).device_id

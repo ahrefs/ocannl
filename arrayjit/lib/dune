@@ -60,7 +60,7 @@
  (public_name arrayjit.cuda_backend)
  (optional)
  (modules cuda_backend)
- (libraries base cudajit utils ir)
+ (libraries base cudajit.cuda cudajit.nvrtc utils ir)
  (preprocess
   (pps
    ppx_compare
