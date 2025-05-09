@@ -33,12 +33,12 @@ depends: [
   "ppx_variants_conv"
   "ppx_expect"
   "ppx_minidebug" {>= "2.2.0"}
+  "metal" {os = "macos"}
   "odoc" {with-doc}
 ]
 depopts: [
   "cudajit" {>= "0.7.0"}
   "gccjit" {>= "0.3.2"}
-  "metal"
 ]
 conflicts: [
   "cudajit" {< "0.7.0"}

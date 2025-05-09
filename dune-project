@@ -61,13 +61,14 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.2.0)))
+   (>= 2.2.0))
+  (metal
+   (= :os macos)))
  (depopts
   (cudajit
    (>= 0.7.0))
   (gccjit
-   (>= 0.3.2))
-  metal)
+   (>= 0.3.2)))
  (conflicts
   (cudajit
    (< 0.7.0))

@@ -35,3 +35,24 @@ jobs:
     - run: opam install . -y --deps-only --with-test --with-doc
     - run: opam exec -- dune build
     - run: opam exec -- dune runtest
+
+  test-metal:
+    name: Test Metal Backend
+    runs-on: macos-13-xlarge
+    steps:
+    - name: Set git to use LF
+      run: |
+        git config --global core.autocrlf false
+        git config --global core.eol lf
+        git config --global core.ignorecase false
+    - uses: actions/checkout@v4
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.3.x
+        dune-cache: true
+        allow-prerelease-opam: true
+    - run: opam pin -n .
+    - run: opam install . -y --deps-only --with-test
+    - run: opam exec -- dune build
+    - name: Run tests with Metal backend
+      run: OCANNL_BACKEND=metal opam exec -- dune runtest
