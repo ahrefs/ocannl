@@ -151,14 +151,17 @@ struct
         match prec with
         | Ops.Byte_prec _ ->
             fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)"
-                pp1 v1 pp1 v1 pp2 v2
+              Stdlib.Format.fprintf ppf
+                "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)" pp1 v1 pp1 v1 pp2
+                v2
         | Ops.Half_prec _ ->
             fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "((%a > 0.0f16 && %a < 1.0f16) ? %a : 0.0f16)" pp1 v1 pp1 v1 pp2 v2
+              Stdlib.Format.fprintf ppf "((%a > 0.0f16 && %a < 1.0f16) ? %a : 0.0f16)" pp1 v1 pp1 v1
+                pp2 v2
         | Ops.Single_prec _ ->
             fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "((%a > 0.0f && %a < 1.0f) ? %a : 0.0f)" pp1 v1 pp1 v1 pp2 v2
+              Stdlib.Format.fprintf ppf "((%a > 0.0f && %a < 1.0f) ? %a : 0.0f)" pp1 v1 pp1 v1 pp2
+                v2
         | Ops.Double_prec _ ->
             fun ppf pp1 v1 pp2 v2 ->
               Stdlib.Format.fprintf ppf "((%a > 0.0 && %a < 1.0) ? %a : 0.0)" pp1 v1 pp1 v1 pp2 v2

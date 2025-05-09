@@ -118,9 +118,7 @@ let assignment ~punned ~lhs ~rhses body =
     else body
   in
   let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
-  let body =
-    [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }]
-  in
+  let body = [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }] in
   let comps =
     List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
         [%expr [%e x] :: [%e xs]])
@@ -198,9 +196,7 @@ let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
   | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
 
 let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
-
-let empty_comp ~loc =
-  [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
+let empty_comp ~loc = [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
 
 let setup_array ~punned ~bad_pun_hints ~is_lhs
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
@@ -210,8 +206,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
     if is_lhs then [%expr Some [%e tn]] else [%expr Some (Ir.Assignments.Node [%e tn])]
   in
   let buffer opt_tn =
-    if is_lhs then opt_tn
-    else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Ir.Assignments.Node tn)]
+    if is_lhs then opt_tn else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Ir.Assignments.Node tn)]
   in
   let pun_hint_tnode = guess_pun_hint ~punned ~bad_pun_hints filler_typ filler in
   let default_setup =
@@ -351,8 +346,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
   | Merge_grad t ->
       {
         default_setup with
-        array_opt =
-          [%expr Option.map [%e filler] ~f:(fun tn -> Ir.Assignments.Merge_buffer tn)];
+        array_opt = [%expr Option.map [%e filler] ~f:(fun tn -> Ir.Assignments.Merge_buffer tn)];
         tensor = Some t;
       }
 
@@ -868,8 +862,7 @@ let translate (expr : expression) : result =
               let __comment_block = [%e res2.expr] in
               {
                 Ir.Assignments.asgns =
-                  Ir.Assignments.Block_comment
-                    ([%e comment], __comment_block.Ir.Assignments.asgns);
+                  Ir.Assignments.Block_comment ([%e comment], __comment_block.Ir.Assignments.asgns);
                 embedded_nodes = __comment_block.Ir.Assignments.embedded_nodes;
               }];
         }

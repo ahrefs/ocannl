@@ -310,12 +310,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Relu_gate, _ -> C_syntax.binop_adapter ("(", " > 0.0 ?", " : 0.0)")
       | Satur01_gate, Byte_prec _ ->
           fun ppf pp1 v1 pp2 v2 ->
-            Stdlib.Format.fprintf ppf "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)"
-              pp1 v1 pp1 v1 pp2 v2
+            Stdlib.Format.fprintf ppf
+              "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)" pp1 v1 pp1 v1 pp2
+              v2
       | Satur01_gate, Half_prec _ ->
           fun ppf pp1 v1 pp2 v2 ->
             Stdlib.Format.fprintf ppf
-              "((__hgt(%a, __ushort_as_half((unsigned short)0x0000U)) && __hlt(%a, __ushort_as_half((unsigned short)0x3C00U))) ? %a : __ushort_as_half((unsigned short)0x0000U))"
+              "((__hgt(%a, __ushort_as_half((unsigned short)0x0000U)) && __hlt(%a, \
+               __ushort_as_half((unsigned short)0x3C00U))) ? %a : __ushort_as_half((unsigned \
+               short)0x0000U))"
               pp1 v1 pp1 v1 pp2 v2
       | Satur01_gate, Single_prec _ ->
           fun ppf pp1 v1 pp2 v2 ->

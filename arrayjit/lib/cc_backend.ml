@@ -86,12 +86,13 @@ let%track7_sexp c_compile_and_load ~f_name =
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) =
   let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
+
     let use_host_memory = use_host_memory
     let procs = [| lowered |]
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
+  let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
   Syntax.print_declarations pp_file.ppf;
   let params = Syntax.compile_proc ~name pp_file.ppf idx_params lowered in
   pp_file.finalize ();
@@ -101,6 +102,7 @@ let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) =
   let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
+
     let use_host_memory = use_host_memory
     let procs = Array.filter_opt lowereds
   end)) in

@@ -19,7 +19,6 @@ let root_ctx =
   let ctx = Context.create () in
   Context.set_option ctx Optimization_level (optimization_level ());
   ctx
-  
 
 module Tn = Tnode
 

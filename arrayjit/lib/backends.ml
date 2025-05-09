@@ -413,11 +413,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                   && Tn.known_shared_cross_streams key && Tn.is_hosted_force key 44
                 then
                   Hashtbl.update_and_return device.cross_stream_candidates key ~f:(fun _ ->
-                      get_buffer_ptr
-                        ~size_in_bytes:(Lazy.force key.size_in_bytes)
-                        @@ Ndarray.get_voidptr_not_managed
-                        @@ Option.value_exn ~here:[%here]
-                        @@ Lazy.force key.array)
+                      get_buffer_ptr ~size_in_bytes:(Lazy.force key.size_in_bytes)
+                      @@ Ndarray.get_voidptr_not_managed
+                      @@ Option.value_exn ~here:[%here]
+                      @@ Lazy.force key.array)
                 else Hashtbl.find_or_add device.cross_stream_candidates key ~default
           in
           if Hashtbl.mem device.cross_stream_candidates key then
@@ -539,6 +538,8 @@ let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () 
   | "sync_gccjit" ->
       (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend_impl) (Config)
       : Backend)
-  | "cuda" -> (module Raise_backend ((Cuda_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
-  | "metal" -> (module Raise_backend ((Metal_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
+  | "cuda" ->
+      (module Raise_backend ((Cuda_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
+  | "metal" ->
+      (module Raise_backend ((Metal_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

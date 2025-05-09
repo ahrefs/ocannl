@@ -51,16 +51,16 @@ val with_unchanged_roots : f:(unit -> 'a) -> 'a
 val default_value_prec : Ir.Ops.prec ref
 (** The default precision for the value node of terminal (i.e. non-composite) tensors.
 
-    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The
-    default precision for value nodes of composite tensors is the maximum of precisions of the value
-    nodes of sub-tensors. *)
+    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The default
+    precision for value nodes of composite tensors is the maximum of precisions of the value nodes
+    of sub-tensors. *)
 
 val default_grad_prec : Ir.Ops.prec ref
 (** The default precision for the gradient node of terminal (i.e. non-composite) tensors.
 
-    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The
-    default precision for gradient nodes of composite tensors is the maximum of precisions of the
-    gradient nodes of sub-tensors. *)
+    Note: the precision of a node can be set arbitrarily via {!Ir.Tnode.update_prec}. The default
+    precision for gradient nodes of composite tensors is the maximum of precisions of the gradient
+    nodes of sub-tensors. *)
 
 exception Session_error of string * t option
 

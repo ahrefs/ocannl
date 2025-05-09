@@ -324,8 +324,7 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
     | Second i ->
         let var = Row.get_var () in
         let d = Row.Var var in
-        proj_env_update :=
-          Map.add_exn !proj_env_update ~key:var ~data:(Idx.Fixed_idx i);
+        proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Idx.Fixed_idx i);
         extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
         d
   in

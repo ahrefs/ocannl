@@ -259,6 +259,7 @@ module Sync (Backend : For_add_scheduler) = struct
   let all_work _stream = ()
   let is_idle _stream = true
   let await _stream = ()
+
   (* let global_run_no = ref 0 *)
   let schedule_task _stream task = Ir.Task.run task
   let get_global_debug_info () = Sexp.message "global_debug" []
