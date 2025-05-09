@@ -1,4 +1,5 @@
 open Base
+open Ir
 module Lazy = Utils.Lazy
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
@@ -21,8 +22,6 @@ let root_ctx =
   ctx
 
 module Tn = Tnode
-
-let is_initialized () = Option.is_some !root_ctx
 
 type tn_info = {
   tn : Tn.t;  (** The original array. *)
@@ -686,8 +685,7 @@ let%diagn_sexp compile_proc ~name ctx bindings ~get_ident
 let compile ~(name : string) bindings (lowered : Low_level.optimized) =
   let get_ident = Low_level.get_ident_within_code ~no_dots:true [| lowered.llc |] in
   let open Gccjit in
-  if Option.is_none !root_ctx then initialize ();
-  let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
+  let ctx = Context.create_child root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
@@ -709,8 +707,7 @@ let%diagn_sexp compile_batch ~(names : string option array) bindings
     @@ Array.filter_map lowereds ~f:(Option.map ~f:(fun { Low_level.llc; _ } -> llc))
   in
   let open Gccjit in
-  if Option.is_none !root_ctx then initialize ();
-  let ctx = Context.create_child @@ Option.value_exn ~here:[%here] !root_ctx in
+  let ctx = Context.create_child root_ctx in
   Context.set_option ctx Context.Optimization_level (optimization_level ());
   (* if Utils.settings.with_debug && Utils.settings.output_debug_files_in_build_directory then (
      Context.set_option ctx Context.Keep_intermediates true; Context.set_option ctx
