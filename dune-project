@@ -60,8 +60,6 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
-  ; temporary: will move metal to depopts later.
-  metal
   (ppx_minidebug
    (>= 2.2.0)))
  (depopts
