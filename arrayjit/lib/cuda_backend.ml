@@ -1,4 +1,5 @@
 open Base
+open Ir
 module Tn = Tnode
 module Lazy = Utils.Lazy
 module Cu = Cuda
@@ -301,7 +302,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Half_prec _ -> C_syntax.binop_adapter ("hexp2(hlog2(", "),", ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
-      | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+      | Relu_gate, Byte_prec _ -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
       | Relu_gate, Half_prec _ ->
           C_syntax.binop_adapter
             ( "(__hgt(",
@@ -390,7 +391,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, Half_prec _ -> func "hrsqrt"
       | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
       | Recip_sqrt, _ -> f "(1.0 / sqrtf(" "))"
-      | Neg, _ -> (f "(-(", "))")
+      | Neg, _ -> f "(-(" "))"
       | Tanh_approx, Byte_prec _ ->
           invalid_arg
             "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
