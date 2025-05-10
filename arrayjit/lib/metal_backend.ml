@@ -201,6 +201,65 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     | Only_devices_parallel | For_parallel_copying | Most_parallel_streams -> 1
 
   let get_used_memory _device = Atomic.get allocated_memory
+
+  let static_properties =
+    let device_properties =
+      Array.mapi metal_devices ~f:(fun ordinal device ->
+          let attributes = Me.Device.get_attributes device in
+          Sexp.List
+            [
+              Sexp.Atom "device";
+              Sexp.List
+                [
+                  Sexp.List [ Sexp.Atom "device_name"; Sexp.Atom attributes.name ];
+                  Sexp.List [ Sexp.Atom "device_ordinal"; Sexp.Atom (Int.to_string ordinal) ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "registry_id";
+                      Sexp.Atom (Unsigned.ULLong.to_string attributes.registry_id);
+                    ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "max_buffer_length";
+                      Sexp.Atom (Unsigned.ULong.to_string attributes.max_buffer_length);
+                    ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "max_threadgroup_memory_length";
+                      Sexp.Atom (Unsigned.ULong.to_string attributes.max_threadgroup_memory_length);
+                    ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "recommended_max_working_set_size";
+                      Sexp.Atom
+                        (Unsigned.ULLong.to_string attributes.recommended_max_working_set_size);
+                    ];
+                  Sexp.List
+                    [ Sexp.Atom "is_low_power"; Sexp.Atom (Bool.to_string attributes.is_low_power) ];
+                  Sexp.List
+                    [ Sexp.Atom "is_headless"; Sexp.Atom (Bool.to_string attributes.is_headless) ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "has_unified_memory";
+                      Sexp.Atom (Bool.to_string attributes.has_unified_memory);
+                    ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "total_memory";
+                      Sexp.Atom (Int.to_string (Atomic.get allocated_memory));
+                    ];
+                  Sexp.List
+                    [
+                      Sexp.Atom "supported_gpu_families";
+                      Sexp.List
+                        (List.map attributes.supported_gpu_families ~f:(fun gpu_family ->
+                             Me.Device.GPUFamily.sexp_of_t gpu_family));
+                    ];
+                ];
+            ])
+    in
+    Sexp.List (Sexp.Atom "metal_devices" :: Array.to_list device_properties)
+
   let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
 
   let get_debug_info stream =
@@ -414,7 +473,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =
     let options = Me.CompileOptions.init () in
-    Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_1;
+    Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_0;
     if Utils.debug_log_from_routines () then Me.CompileOptions.set_enable_logging options true;
 
     if Utils.with_runtime_debug () then (

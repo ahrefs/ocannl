@@ -254,6 +254,9 @@ module type Backend_device_common = sig
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it should always
       be called internally when necessary. *)
 
+  val static_properties : Sexp.t
+  (** Returns a sexp description of the properties of all devices. *)
+
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 

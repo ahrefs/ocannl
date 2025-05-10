@@ -574,6 +574,28 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     Sexp.message "cuda_global_debug"
       [ ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ()) ]
 
+  let static_properties =
+    let device_properties = 
+      Array.init (num_devices ()) ~f:(fun ordinal ->
+        let dev = Cu.Device.get ~ordinal in
+        let attributes = Cu.Device.get_attributes dev in
+        let props = [
+          ("device_name", Sexp.Atom (Cu.Device.get_name dev));
+          ("device_ordinal", [%sexp_of: int] ordinal);
+          ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
+          ("total_global_memory", [%sexp_of: int] (Cu.Device.get_total_memory dev));
+          ("clock_rate", [%sexp_of: int] attributes.clock_rate);
+          ("async_engine_count", [%sexp_of: int] attributes.async_engine_count);
+          ("compute_capability_major", [%sexp_of: int] attributes.compute_capability_major);
+          ("compute_capability_minor", [%sexp_of: int] attributes.compute_capability_minor);
+          ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
+          ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
+        ] in
+        Sexp.List [Sexp.Atom "device"; Sexp.List props]
+      )
+    in
+    Sexp.List (Sexp.Atom "cuda_devices" :: device_properties)
+  
   let get_debug_info (stream : stream) =
     let tot, unr, unf = Cu.Stream.total_unreleased_unfinished_delimited_events stream.runner in
     let i2s = [%sexp_of: int] in

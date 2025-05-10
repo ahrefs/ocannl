@@ -94,6 +94,15 @@ struct
   let get_global_debug_info () =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
+  let static_properties =
+    Sexp.List [
+      Sexp.Atom (Config.name ^ "_missing");
+      Sexp.List [
+        Sexp.Atom "error"; 
+        Sexp.Atom ("Backend " ^ Config.name ^ " missing -- install the corresponding library")
+      ]
+    ]
+
   let get_debug_info _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
