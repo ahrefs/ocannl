@@ -38,7 +38,7 @@ jobs:
 
   test-metal:
     name: Test Metal Backend
-    runs-on: flyci-macos-large-latest-m2
+    runs-on: flyci-macos-large-latest-m1
     steps:
     - name: Set git to use LF
       run: |
