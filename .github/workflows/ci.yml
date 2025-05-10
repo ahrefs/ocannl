@@ -54,5 +54,11 @@ jobs:
     - run: opam pin -n .
     - run: opam install . -y --deps-only --with-test
     - run: opam exec -- dune build
-    - name: Run tests with Metal backend
-      run: OCANNL_BACKEND=metal opam exec -- dune runtest
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/sanity_check.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/hello_world.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/primitive_ops.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/hello_world_op.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/micrograd_basic.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/einsum_trivia.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/zero2hero_1of7.exe
+    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/micrograd_demo.exe

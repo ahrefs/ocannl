@@ -2,8 +2,6 @@
 
 (test
  (name moons_demo_parallel_run)
- ; Temporary disabled.
- (enabled_if false)
  (package neural_nets_lib)
  (modules moons_demo_parallel_run)
  (deps ocannl_config)
