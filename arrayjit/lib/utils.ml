@@ -118,14 +118,18 @@ let config_file_args =
       let fname, config_lines =
         let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
         let rec find_up = function
-          | [] -> failwith "OCANNL could not find the ocannl_config file along current path"
+          | [] ->
+              Stdio.printf
+                "\nWelcome to OCANNL! No ocannl_config file found along current path.\n%!";
+              ("", [])
           | _ :: tl as rev_dirs -> (
               let fname = filename_of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
               try (fname, read fname) with Sys_error _ -> find_up tl)
         in
         find_up rev_dirs
       in
-      Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
+      if String.length fname > 0 then
+        Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
       config_lines
       |> List.filter ~f:(fun l ->
              not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
