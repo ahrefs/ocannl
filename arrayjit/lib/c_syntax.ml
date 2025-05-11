@@ -211,6 +211,14 @@ module C_syntax (B : C_syntax_config) = struct
     Stdlib.Format.(
       fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_print_string) B.extra_declarations)
 
+  let with_formatter f =
+    let b = Buffer.create 32 in
+    let ppf = Stdlib.Format.formatter_of_buffer b in
+    f ppf;
+    Stdlib.Format.pp_print_flush ppf ();
+    Buffer.contents b
+
+      
   let compile_main ~traced_store:_ ppf llc : unit =
     let open Stdlib.Format in
     let visited = Hash_set.create (module Tn) in
@@ -227,11 +235,13 @@ module C_syntax (B : C_syntax_config) = struct
             to_ pp_symbol i;
           if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
-              fprintf ppf {|printf(@[<h>"%s%%d: index %a = %%d\n",@] log_id, %a);@ |}
-                !Utils.captured_log_prefix pp_symbol i pp_symbol i
+              let msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: index %a = %%d" !Utils.captured_log_prefix pp_symbol i) in
+              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|printf(@[<h>"%s\n",@] log_id, %a);@ |} msg pp_symbol i
             else
-              fprintf ppf {|fprintf(log_file,@ @[<h>"index %a = %%d\n",@] %a);@ |} pp_symbol i
-                pp_symbol i;
+              let msg = with_formatter (fun ppf -> fprintf ppf "index %a = %%d" pp_symbol i) in
+              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|fprintf(log_file,@ @[<h>"%s\n",@] %a);@ |} msg pp_symbol i;
           fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
       | Zero_out tn ->
           pp_ll ppf
@@ -256,22 +266,28 @@ module C_syntax (B : C_syntax_config) = struct
               | `Value v ->
                   pp_comma ppf ();
                   pp_print_string ppf v
-            in
+            in 
             let offset = (idcs, dims) in
             if B.logs_to_stdout then (
-              fprintf ppf {|@[<7>printf(@[<h>"%s%%d: # %s\n", log_id@]);@]@ |}
-                !Utils.captured_log_prefix
-                (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
+              let comment_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: # %s" !Utils.captured_log_prefix debug) in
+              let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|@[<7>printf(@[<h>"%s\n", log_id@]);@]@ |} comment_msg;
+              
+              let value_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: %s[%%u]{=%%g} = %%g = %s" !Utils.captured_log_prefix ident v_code) in
+              let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
               fprintf ppf
-                {|@[<7>printf(@[<h>"%s%%d: %s[%%u]{=%%g} = %%g = %s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
-                !Utils.captured_log_prefix ident v_code pp_array_offset offset ident pp_array_offset
-                offset pp_args v_idcs)
+                {|@[<7>printf(@[<h>"%s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs)
             else (
-              fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"# %s\n"@]);@]@ |}
-                (String.substr_replace_all debug ~pattern:"\n" ~with_:"$");
+              let comment_msg = with_formatter (fun ppf -> fprintf ppf "# %s" debug) in
+              let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s\n"@]);@]@ |} comment_msg;
+              
+              let value_msg = with_formatter (fun ppf -> fprintf ppf "%s[%%u]{=%%g} = %%g = %s" ident v_code) in
+              let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
               fprintf ppf
-                {|@[<7>fprintf(log_file,@ @[<h>"%s[%%u]{=%%g} = %%g = %s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
-                ident v_code pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
+                {|@[<7>fprintf(log_file,@ @[<h>"%s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
             if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
               (idcs, dims))
@@ -284,12 +300,13 @@ module C_syntax (B : C_syntax_config) = struct
       | Comment message ->
           if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
-              fprintf ppf {|printf(@[<h>"%s%%d: COMMENT: %s\n",@] log_id);@ |}
-                !Utils.captured_log_prefix
-                (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
+              let msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: COMMENT: %s" !Utils.captured_log_prefix message) in
+              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|@[<7>printf("%s\n", log_id);@]@ |} msg
             else
-              fprintf ppf {|fprintf(log_file,@ @[<h>"COMMENT: %s\n"@]);@ |}
-                (String.substr_replace_all ~pattern:"%" ~with_:"%%" message)
+              let msg = with_formatter (fun ppf -> fprintf ppf "COMMENT: %s" message) in
+              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+              fprintf ppf {|@[<7>fprintf(log_file, "%s\n");@]@ |} msg
           else fprintf ppf "/* %s */@ " message
       | Staged_compilation callback -> callback ()
       | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->

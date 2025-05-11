@@ -520,6 +520,7 @@ let header_sep =
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%diagn_sexp log_trace_tree _logs =
+  let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
   [%log_block
     "trace tree";
     let rec loop = function
@@ -529,16 +530,13 @@ let%diagn_sexp log_trace_tree _logs =
       | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
           let more =
             [%log_entry
-              String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+              sep @@ String.chop_prefix_exn ~prefix:"COMMENT: " comment;
               loop more]
           in
           loop more
       | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-          (let source =
-             String.concat ~sep:"\n" @@ String.split ~on:'$'
-             @@ String.chop_prefix_exn ~prefix:"# " source
-           in
-           match split_with_seps header_sep trace with
+          (let source = sep @@ String.chop_prefix_exn ~prefix:"# " source in
+           match split_with_seps header_sep @@ sep trace with
            | [] | [ "" ] -> [%log source]
            | header1 :: assign1 :: header2 :: body ->
                let header = String.concat [ header1; assign1; header2 ] in
@@ -548,7 +546,7 @@ let%diagn_sexp log_trace_tree _logs =
            | _ -> [%log source, trace]);
           loop more
       | _line :: more ->
-          [%log _line];
+          [%log sep _line];
           loop more
     in
     let rec loop_logs logs =
