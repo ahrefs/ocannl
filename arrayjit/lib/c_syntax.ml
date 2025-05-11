@@ -237,11 +237,11 @@ module C_syntax (B : C_syntax_config) = struct
             if B.logs_to_stdout then
               let msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: index %a = %%d" !Utils.captured_log_prefix pp_symbol i) in
               let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|printf(@[<h>"%s\n",@] log_id, %a);@ |} msg pp_symbol i
+              fprintf ppf {|printf(@["%s\n",@] log_id, %a);@ |} msg pp_symbol i
             else
               let msg = with_formatter (fun ppf -> fprintf ppf "index %a = %%d" pp_symbol i) in
               let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|fprintf(log_file,@ @[<h>"%s\n",@] %a);@ |} msg pp_symbol i;
+              fprintf ppf {|fprintf(log_file,@ @["%s\n",@] %a);@ |} msg pp_symbol i;
           fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
       | Zero_out tn ->
           pp_ll ppf
@@ -271,22 +271,22 @@ module C_syntax (B : C_syntax_config) = struct
             if B.logs_to_stdout then (
               let comment_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: # %s" !Utils.captured_log_prefix debug) in
               let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>printf(@[<h>"%s\n", log_id@]);@]@ |} comment_msg;
+              fprintf ppf {|@[<7>printf(@["%s\n", log_id@]);@]@ |} comment_msg;
               
               let value_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: %s[%%u]{=%%g} = %%g = %s" !Utils.captured_log_prefix ident v_code) in
               let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
               fprintf ppf
-                {|@[<7>printf(@[<h>"%s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                {|@[<7>printf(@["%s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
                 value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs)
             else (
               let comment_msg = with_formatter (fun ppf -> fprintf ppf "# %s" debug) in
               let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s\n"@]);@]@ |} comment_msg;
+              fprintf ppf {|@[<7>fprintf(log_file,@ @["%s\n"@]);@]@ |} comment_msg;
               
               let value_msg = with_formatter (fun ppf -> fprintf ppf "%s[%%u]{=%%g} = %%g = %s" ident v_code) in
               let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
               fprintf ppf
-                {|@[<7>fprintf(log_file,@ @[<h>"%s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
+                {|@[<7>fprintf(log_file,@ @["%s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
                 value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
             if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
             fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
@@ -497,31 +497,31 @@ module C_syntax (B : C_syntax_config) = struct
           | p_name, Merge_buffer ->
               if B.logs_to_stdout then
                 fprintf ppf
-                  {|@[<7>printf(@[<h>"%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
+                  {|@[<7>printf(@["%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
                   !Utils.captured_log_prefix p_name
                   (Tnode.num_elems @@ Option.value_exn merge_node)
               else
                 fprintf ppf
-                  {|@[<7>fprintf(log_file,@ @[<h>"%s &[%d] = %%p\n",@] (void*)merge_buffer);@]@ |}
+                  {|@[<7>fprintf(log_file,@ @["%s &[%d] = %%p\n",@] (void*)merge_buffer);@]@ |}
                   p_name
                   (Tnode.num_elems @@ Option.value_exn merge_node)
           | _, Log_file_name -> ()
           | p_name, Param_ptr tn ->
               if B.logs_to_stdout then
                 fprintf ppf
-                  {|@[<7>printf(@[<h>"%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)%s);@]@ |}
+                  {|@[<7>printf(@["%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)%s);@]@ |}
                   !Utils.captured_log_prefix p_name (Tnode.num_elems tn)
                 @@ get_ident tn
               else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s &[%d] = %%p\n",@] (void*)%s);@]@ |}
+                fprintf ppf {|@[<7>fprintf(log_file,@ @["%s &[%d] = %%p\n",@] (void*)%s);@]@ |}
                   p_name (Tnode.num_elems tn) (get_ident tn)
           | p_name, Static_idx s ->
               if B.logs_to_stdout then
-                fprintf ppf {|@[<7>printf(@[<h>"%s%%d: %s = %%d\n",@] log_id, %s);@]@ |}
+                fprintf ppf {|@[<7>printf(@["%s%%d: %s = %%d\n",@] log_id, %s);@]@ |}
                   !Utils.captured_log_prefix p_name
                 @@ Indexing.symbol_ident s.Indexing.static_symbol
               else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @[<h>"%s = %%d\n",@] %s);@]@ |} p_name
+                fprintf ppf {|@[<7>fprintf(log_file,@ @["%s = %%d\n",@] %s);@]@ |} p_name
                 @@ Indexing.symbol_ident s.Indexing.static_symbol)
         params);
     fprintf ppf "/* Local declarations and initialization. */@ ";
