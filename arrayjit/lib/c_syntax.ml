@@ -9,17 +9,19 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 module Tn = Tnode
 
-type fmt = Stdlib.Format.formatter
+type t = PPrint.document
 
-let ternop_adapter (prefix, infix1, infix2, suffix) ppf pp1 v1 pp2 v2 pp3 v3 =
-  Stdlib.Format.fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix pp1 v1 infix1 pp2 v2 infix2 pp3 v3
-    suffix
+let ternop_adapter (pref, infix1, infix2, suf) v1 v2 v3 =
+  let open PPrint in
+  group (string pref ^^ v1 ^^ string infix1 ^^ space ^^ v2 ^^ string infix2 ^^ space ^^ v3 ^^ string suf)
 
-let binop_adapter (prefix, infix, suffix) ppf pp1 v1 pp2 v2 =
-  Stdlib.Format.fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix pp1 v1 infix pp2 v2 suffix
+let binop_adapter (pref, inf, suf) v1 v2 =
+  let open PPrint in
+  group (string pref ^^ v1 ^^ string inf ^^ space ^^ v2 ^^ string suf)
 
-let unop_adapter (prefix, suffix) ppf pp1 v1 =
-  Stdlib.Format.fprintf ppf "@[<1>%s%a@]%s" prefix pp1 v1 suffix
+let unop_adapter (pref, suf) v1 =
+  let open PPrint in
+  group (string pref ^^ v1 ^^ string suf)
 
 module type C_syntax_config = sig
   val procs : Low_level.optimized array
@@ -44,19 +46,15 @@ module type C_syntax_config = sig
   val ternop_syntax :
     Ops.prec ->
     Ops.ternop ->
-    fmt ->
-    (fmt -> 'a -> unit) ->
-    'a ->
-    (fmt -> 'b -> unit) ->
-    'b ->
-    (fmt -> 'c -> unit) ->
-    'c ->
-    unit
+    t ->
+    t ->
+    t ->
+    t
 
   val binop_syntax :
-    Ops.prec -> Ops.binop -> fmt -> (fmt -> 'a -> unit) -> 'a -> (fmt -> 'b -> unit) -> 'b -> unit
+    Ops.prec -> Ops.binop -> t -> t -> t
 
-  val unop_syntax : Ops.prec -> Ops.unop -> fmt -> (fmt -> 'a -> unit) -> 'a -> unit
+  val unop_syntax : Ops.prec -> Ops.unop -> t -> t
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end
 
@@ -143,32 +141,39 @@ struct
             if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
     Set.to_list !functions
 
-  let ternop_syntax prec op = ternop_adapter (Ops.ternop_c_syntax prec op)
+  let ternop_syntax prec op v1 v2 v3 =
+    let (prefix, infix1, infix2, suffix) = Ops.ternop_c_syntax prec op in
+    ternop_adapter (prefix, infix1, infix2, suffix) v1 v2 v3
 
   let binop_syntax prec op =
     match op with
     | Ops.Satur01_gate -> (
         match prec with
         | Ops.Byte_prec _ ->
-            fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf
-                "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)" pp1 v1 pp1 v1 pp2
-                v2
+            fun v1 v2 ->
+              let open PPrint in
+              group (string "(((float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f) ? " ^^ v2 ^^ string " : (unsigned char)0)")
         | Ops.Half_prec _ ->
-            fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "((%a > 0.0f16 && %a < 1.0f16) ? %a : 0.0f16)" pp1 v1 pp1 v1
-                pp2 v2
+            fun v1 v2 ->
+              let open PPrint in
+              group (string "((" ^^ v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16) ? " ^^ v2 ^^ string " : 0.0f16)")
         | Ops.Single_prec _ ->
-            fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "((%a > 0.0f && %a < 1.0f) ? %a : 0.0f)" pp1 v1 pp1 v1 pp2
-                v2
+            fun v1 v2 ->
+              let open PPrint in
+              group (string "((" ^^ v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f) ? " ^^ v2 ^^ string " : 0.0f)")
         | Ops.Double_prec _ ->
-            fun ppf pp1 v1 pp2 v2 ->
-              Stdlib.Format.fprintf ppf "((%a > 0.0 && %a < 1.0) ? %a : 0.0)" pp1 v1 pp1 v1 pp2 v2
+            fun v1 v2 ->
+              let open PPrint in
+              group (string "((" ^^ v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0) ? " ^^ v2 ^^ string " : 0.0)")
         | Ops.Void_prec -> invalid_arg "Pure_C_config.binop_syntax: Satur01_gate on Void_prec")
-    | _ -> binop_adapter (Ops.binop_c_syntax prec op)
+    | _ -> 
+      let (prefix, infix, suffix) = Ops.binop_c_syntax prec op in
+      fun v1 v2 -> binop_adapter (prefix, infix, suffix) v1 v2
 
-  let unop_syntax prec op = unop_adapter (Ops.unop_c_syntax prec op)
+  let unop_syntax prec op v =
+    let (prefix, suffix) = Ops.unop_c_syntax prec op in
+    unop_adapter (prefix, suffix) v
+
   let convert_precision = Ops.c_convert_precision
 end
 
@@ -178,38 +183,8 @@ module C_syntax (B : C_syntax_config) = struct
     @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
-  let pp_include ppf s = Stdlib.Format.fprintf ppf "#include %s" s
 
   open Indexing.Pp_helpers
-
-  let pp_array_offset ppf (idcs, dims) =
-    let open Stdlib.Format in
-    assert (not @@ Array.is_empty idcs);
-    for _ = 0 to Array.length idcs - 3 do
-      fprintf ppf "@[<1>("
-    done;
-    for i = 0 to Array.length idcs - 1 do
-      let dim = dims.(i) in
-      if i = 0 then fprintf ppf "%a" pp_axis_index idcs.(i)
-      else if i = Array.length idcs - 1 then fprintf ppf " * %d + %a" dim pp_axis_index idcs.(i)
-      else fprintf ppf " * %d +@ %a@;<0 -1>)@]" dim pp_axis_index idcs.(i)
-    done
-
-  let array_offset_to_string (idcs, dims) =
-    let b = Buffer.create 32 in
-    let ppf = Stdlib.Format.formatter_of_buffer b in
-    pp_array_offset ppf (idcs, dims);
-    Stdlib.Format.pp_print_flush ppf ();
-    Buffer.contents b
-
-  (* let compute_array_offset ~idcs ~dims = Array.fold2_exn idcs dims ~init:0 ~f:(fun offset idx dim
-     -> idx + (offset * dim)) *)
-
-  (** Toplevel declarations, comprised of [includes] and [extra_declarations]. *)
-  let print_declarations ppf =
-    Stdlib.Format.(fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_include) B.includes);
-    Stdlib.Format.(
-      fprintf ppf {|@[<v 0>%a@,@,|} (pp_print_list pp_print_string) B.extra_declarations)
 
   let with_formatter f =
     let b = Buffer.create 32 in
@@ -218,157 +193,221 @@ module C_syntax (B : C_syntax_config) = struct
     Stdlib.Format.pp_print_flush ppf ();
     Buffer.contents b
 
+  let doc_of_axis_index idx =
+    let open PPrint in
+    match idx with
+    | Indexing.Fixed_idx i -> string (Int.to_string i)
+    | Iterator s -> string (Indexing.symbol_ident s)
+
+  let doc_array_offset (idcs, dims) =
+    let open PPrint in
+    assert (not @@ Array.is_empty idcs);
+    let build_expr i =
+      if i = 0 then
+        doc_of_axis_index idcs.(i)
+      else if i = Array.length idcs - 1 then
+        string " * " ^^ string (Int.to_string dims.(i)) ^^ string " + " ^^ doc_of_axis_index idcs.(i)
+      else
+        group (string " * " ^^ string (Int.to_string dims.(i)) ^^ string " + " ^^ doc_of_axis_index idcs.(i))
+    in
+    let rec nest_parens i result =
+      if i >= Array.length idcs - 2 then result
+      else nest_parens (i + 1) (string "(" ^^ result ^^ string ")")
+    in
+    nest_parens 0 (Array.fold (Array.init (Array.length idcs) ~f:Fn.id) ~init:PPrint.empty ~f:(fun acc i -> 
+      if i = 0 then build_expr i else acc ^^ build_expr i))
+
+  let array_offset_to_string (idcs, dims) =
+    let doc = doc_array_offset (idcs, dims) in
+    let buf = Buffer.create 32 in
+    PPrint.ToBuffer.pretty 0.8 80 buf doc;
+    Buffer.contents buf
+
+  (** Toplevel declarations, comprised of [includes] and [extra_declarations]. *)
+  let print_declarations : t =
+    let open PPrint in
+    let include_docs = List.map B.includes ~f:(fun incl -> string "#include " ^^ string incl) in
+    let decl_docs = List.map B.extra_declarations ~f:string in
+    let vbox = group in
+    vbox (separate_map hardline (fun x -> x) include_docs) ^^ hardline ^^ hardline ^^
+    vbox (separate_map hardline (fun x -> x) decl_docs) ^^ hardline ^^ hardline
       
-  let compile_main ~traced_store:_ ppf llc : unit =
-    let open Stdlib.Format in
+  let compile_main ~traced_store llc : t =
+    let open PPrint in
+    let vbox = group in
     let visited = Hash_set.create (module Tn) in
-    let rec pp_ll ppf c : unit =
+    let rec pp_ll c : t =
       match c with
-      | Low_level.Noop -> ()
+      | Low_level.Noop -> empty
       | Seq (c1, c2) ->
           (* Note: no separator. Filter out some entries known to not generate code to avoid
              whitespace. *)
-          fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-            (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
+          vbox (
+            List.filter_map [ c1; c2 ] ~f:(function 
+              | Noop -> None 
+              | c -> Some (pp_ll c))
+            |> separate_map empty (fun x -> x)
+          )
       | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-          fprintf ppf "@[<2>for (int@ %a = %d;@ %a <= %d;@ ++%a) {@ " pp_symbol i from_ pp_symbol i
-            to_ pp_symbol i;
-          if Utils.debug_log_from_routines () then
-            if B.logs_to_stdout then
-              let msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: index %a = %%d" !Utils.captured_log_prefix pp_symbol i) in
-              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|printf(@["%s\n",@] log_id, %a);@ |} msg pp_symbol i
-            else
-              let msg = with_formatter (fun ppf -> fprintf ppf "index %a = %%d" pp_symbol i) in
-              let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|fprintf(log_file,@ @["%s\n",@] %a);@ |} msg pp_symbol i;
-          fprintf ppf "%a@;<1 -2>}@]@," pp_ll body
+          let sym_i = string (Indexing.symbol_ident i) in
+          group (string "for (int " ^^ sym_i ^^ string " = " ^^ string (Int.to_string from_) ^^ 
+                 string "; " ^^ sym_i ^^ string " <= " ^^ string (Int.to_string to_) ^^ 
+                 string "; ++" ^^ sym_i ^^ string ") {" ^^ hardline ^^
+                 (if Utils.debug_log_from_routines () then
+                   if B.logs_to_stdout then
+                     let msg = with_formatter (fun fmt -> 
+                       let prefix = !Utils.captured_log_prefix in
+                       Stdlib.Format.fprintf fmt "%s%%d: index %s = %%d" prefix (Indexing.symbol_ident i)) in
+                     let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+                     group (string (Printf.sprintf "printf(\"%s\\n\", log_id, %s);" msg (Indexing.symbol_ident i)) ^^ space)
+                   else
+                     let msg = with_formatter (fun fmt -> 
+                       Stdlib.Format.fprintf fmt "index %s = %%d" (Indexing.symbol_ident i)) in
+                     let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
+                     group (string (Printf.sprintf "fprintf(log_file, \"%s\\n\", %s);" msg (Indexing.symbol_ident i)) ^^ space)
+                 else empty) ^^
+                 nest 2 (pp_ll body) ^^ hardline ^^ string "}")
       | Zero_out tn ->
-          pp_ll ppf
+          pp_ll
             (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
                  Set { tn; idcs; llv = Constant 0.0; debug = get_ident tn ^ " := 0" }))
       | Set { tn; idcs; llv; debug } ->
           Hash_set.add visited tn;
           let ident = get_ident tn in
           let dims = Lazy.force tn.dims in
-          let loop_f = pp_float @@ Lazy.force tn.prec in
-          let loop_debug_f = debug_float @@ Lazy.force tn.prec in
-          let num_closing_braces = pp_top_locals ppf llv in
           let num_typ = B.typ_of_prec @@ Lazy.force tn.prec in
-          if Utils.debug_log_from_routines () then (
-            fprintf ppf "@[<2>{@ @[<2>%s new_set_v =@ %a;@]@ " num_typ loop_f llv;
-            let v_code, v_idcs = loop_debug_f llv in
-            let pp_args =
-              pp_print_list @@ fun ppf -> function
-              | `Accessor idx ->
-                  pp_comma ppf ();
-                  pp_array_offset ppf idx
-              | `Value v ->
-                  pp_comma ppf ();
-                  pp_print_string ppf v
-            in 
-            let offset = (idcs, dims) in
-            if B.logs_to_stdout then (
-              let comment_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: # %s" !Utils.captured_log_prefix debug) in
-              let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>printf(@["%s\n", log_id@]);@]@ |} comment_msg;
-              
-              let value_msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: %s[%%u]{=%%g} = %%g = %s" !Utils.captured_log_prefix ident v_code) in
-              let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf
-                {|@[<7>printf(@["%s\n",@]@ log_id,@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
-                value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs)
-            else (
-              let comment_msg = with_formatter (fun ppf -> fprintf ppf "# %s" debug) in
-              let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>fprintf(log_file,@ @["%s\n"@]);@]@ |} comment_msg;
-              
-              let value_msg = with_formatter (fun ppf -> fprintf ppf "%s[%%u]{=%%g} = %%g = %s" ident v_code) in
-              let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf
-                {|@[<7>fprintf(log_file,@ @["%s\n",@]@ %a,@ %s[%a],@ new_set_v%a);@]@ |}
-                value_msg pp_array_offset offset ident pp_array_offset offset pp_args v_idcs);
-            if not B.logs_to_stdout then fprintf ppf "fflush(log_file);@ ";
-            fprintf ppf "@[<2>%s[@,%a] =@ new_set_v;@]@;<1 -2>}@]@ " ident pp_array_offset
-              (idcs, dims))
-          else
-            (* No idea why adding any cut hint at the end of the assign line breaks formatting! *)
-            fprintf ppf "@[<2>%s[@,%a] =@ %a;@]@ " ident pp_array_offset (idcs, dims) loop_f llv;
-          for _ = 1 to num_closing_braces do
-            fprintf ppf "@]@ }@,"
-          done
+          let closing_braces, doc_locals = pp_top_locals llv in
+          let doc = pp_float (Lazy.force tn.prec) llv in
+          let doc_debug =
+            if Utils.debug_log_from_routines () then
+              let v_code, v_idcs = debug_float (Lazy.force tn.prec) llv in
+              let args_text = String.concat (List.map v_idcs ~f:(function
+                | `Accessor idx -> ", " ^ array_offset_to_string idx
+                | `Value v -> ", " ^ v)) in
+              let offset = array_offset_to_string (idcs, dims) in
+              if B.logs_to_stdout then
+                let comment_msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "%s%%d: # %s" !Utils.captured_log_prefix debug) in
+                let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
+                let printf_cmd = Printf.sprintf "printf(\"%s\\n\", log_id);" comment_msg in
+                
+                let value_msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "%s%%d: %s[%%u]{=%%g} = %%g = %s" !Utils.captured_log_prefix ident v_code) in
+                let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
+                let printf_val_cmd = Printf.sprintf "printf(\"%s\\n\", log_id, %s, %s[%s], new_set_v%s);" 
+                  value_msg offset ident offset args_text in
+                
+                group (string "{ " ^^ 
+                       string (num_typ ^ " new_set_v = ") ^^ doc ^^ string ";" ^^ hardline ^^
+                       string printf_cmd ^^ hardline ^^
+                       string printf_val_cmd ^^ hardline ^^
+                       string (ident ^ "[") ^^ doc_array_offset (idcs, dims) ^^ string "] = new_set_v;" ^^ hardline ^^
+                       string "}")
+              else
+                let comment_msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "# %s" debug) in
+                let comment_msg = String.substr_replace_all comment_msg ~pattern:"\n" ~with_:"$" in
+                let fprintf_cmd = Printf.sprintf "fprintf(log_file, \"%s\\n\");" comment_msg in
+                
+                let value_msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "%s[%%u]{=%%g} = %%g = %s" ident v_code) in
+                let value_msg = String.substr_replace_all value_msg ~pattern:"\n" ~with_:"$" in
+                let fprintf_val_cmd = Printf.sprintf "fprintf(log_file, \"%s\\n\", %s, %s[%s], new_set_v%s);" 
+                  value_msg offset ident offset args_text in
+                
+                group (string "{ " ^^ 
+                       string (num_typ ^ " new_set_v = ") ^^ doc ^^ string ";" ^^ hardline ^^
+                       string fprintf_cmd ^^ hardline ^^
+                       string fprintf_val_cmd ^^ hardline ^^
+                       string "fflush(log_file);" ^^ hardline ^^
+                       string (ident ^ "[") ^^ doc_array_offset (idcs, dims) ^^ string "] = new_set_v;" ^^ hardline ^^
+                       string "}")
+            else
+              group (string (ident ^ "[") ^^ doc_array_offset (idcs, dims) ^^ string "] = " ^^ doc ^^ string ";")
+          in
+          let closing_doc = List.fold ~init:empty ~f:(fun acc _ -> acc ^^ string "}" ^^ hardline) (List.init closing_braces ~f:ignore) in
+          (doc_locals ^^ doc_debug ^^ closing_doc)
       | Comment message ->
           if Utils.debug_log_from_routines () then
             if B.logs_to_stdout then
-              let msg = with_formatter (fun ppf -> fprintf ppf "%s%%d: COMMENT: %s" !Utils.captured_log_prefix message) in
+              let msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "%s%%d: COMMENT: %s" !Utils.captured_log_prefix message) in
               let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>printf("%s\n", log_id);@]@ |} msg
+              string (Printf.sprintf "printf(\"%s\\n\", log_id);" msg)
             else
-              let msg = with_formatter (fun ppf -> fprintf ppf "COMMENT: %s" message) in
+              let msg = with_formatter (fun fmt -> Stdlib.Format.fprintf fmt "COMMENT: %s" message) in
               let msg = String.substr_replace_all msg ~pattern:"\n" ~with_:"$" in
-              fprintf ppf {|@[<7>fprintf(log_file, "%s\n");@]@ |} msg
-          else fprintf ppf "/* %s */@ " message
-      | Staged_compilation callback -> callback ()
+              string (Printf.sprintf "fprintf(log_file, \"%s\\n\");" msg)
+          else
+            string ("/* " ^ message ^ " */")
+      | Staged_compilation callback -> 
+          callback ();
+          empty
       | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
-          let num_closing_braces = pp_top_locals ppf value in
-          fprintf ppf "@[<2>v%d =@ %a;@]" scope_id (pp_float @@ Lazy.force prec) value;
-          for _ = 1 to num_closing_braces do
-            fprintf ppf "@]@ }@,"
-          done
-    and pp_top_locals ppf (vcomp : Low_level.float_t) : int =
+          let closing_braces, doc_locals = pp_top_locals value in
+          let prec_val = Lazy.force prec in 
+          let value_doc = pp_float prec_val value in
+          let assignment_doc = 
+            group (string (Printf.sprintf "v%d = " scope_id) ^^ value_doc ^^ string ";")
+          in
+          let closing_doc = List.fold ~init:empty ~f:(fun acc _ -> acc ^^ string "}" ^^ hardline) (List.init closing_braces ~f:ignore) in
+          doc_locals ^^ assignment_doc ^^ closing_doc
+    
+    and pp_top_locals (vcomp : Low_level.float_t) : int * t =
       match vcomp with
       | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
           let num_typ = B.typ_of_prec @@ Lazy.force prec in
           (* Arrays are initialized to 0 by default. However, there is typically an explicit
              initialization for virtual nodes. *)
-          fprintf ppf "@[<2>{@ %s v%d = 0;@ " num_typ i;
-          pp_ll ppf body;
-          pp_print_space ppf ();
-          1
-      | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> 0
-      | Binop (Arg1, v1, _v2) -> pp_top_locals ppf v1
-      | Binop (Arg2, _v1, v2) -> pp_top_locals ppf v2
-      | Ternop (_, v1, v2, v3) -> pp_top_locals ppf v1 + pp_top_locals ppf v2 + pp_top_locals ppf v3
-      | Binop (_, v1, v2) -> pp_top_locals ppf v1 + pp_top_locals ppf v2
-      | Unop (_, v) -> pp_top_locals ppf v
-    and pp_float (prec : Ops.prec) ppf value =
-      let loop = pp_float prec in
+          (1, 
+           group (string ("{ " ^ num_typ ^ " v" ^ Int.to_string i ^ " = 0;") ^^ hardline ^^ 
+                  pp_ll body ^^ space))
+      | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> (0, empty)
+      | Binop (Arg1, v1, _v2) -> pp_top_locals v1
+      | Binop (Arg2, _v1, v2) -> pp_top_locals v2
+      | Ternop (_, v1, v2, v3) -> 
+          let n1, d1 = pp_top_locals v1 in
+          let n2, d2 = pp_top_locals v2 in
+          let n3, d3 = pp_top_locals v3 in
+          (n1 + n2 + n3, d1 ^^ d2 ^^ d3)
+      | Binop (_, v1, v2) -> 
+          let n1, d1 = pp_top_locals v1 in
+          let n2, d2 = pp_top_locals v2 in
+          (n1 + n2, d1 ^^ d2)
+      | Unop (_, v) -> pp_top_locals v
+    
+    and pp_float (prec : Ops.prec) (value : Low_level.float_t) : t =
       match value with
       | Local_scope { id; _ } ->
           (* Embedding of Local_scope is done by pp_top_locals. *)
-          loop ppf @@ Get_local id
+          pp_float prec @@ Get_local id
       | Get_local id ->
           let prefix, postfix = B.convert_precision ~from:(Lazy.force id.tn.prec) ~to_:prec in
-          fprintf ppf "%sv%d%s" prefix id.scope_id postfix
+          string (prefix ^ "v" ^ Int.to_string id.scope_id ^ postfix)
       | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
           let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
           let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
-          fprintf ppf "@[<2>%smerge_buffer[%a@;<0 -2>]%s@]" prefix pp_array_offset
-            (idcs, Lazy.force tn.dims)
-            postfix
+          group (string (prefix ^ "merge_buffer[") ^^ doc_array_offset (idcs, Lazy.force tn.dims) ^^ string ("]" ^ postfix))
       | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
       | Get (tn, idcs) ->
           Hash_set.add visited tn;
           let ident = get_ident tn in
           let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
-          fprintf ppf "@[<2>%s%s[%a@;<0 -2>]%s@]" prefix ident pp_array_offset
-            (idcs, Lazy.force tn.dims)
-            postfix
+          group (string (prefix ^ ident ^ "[") ^^ doc_array_offset (idcs, Lazy.force tn.dims) ^^ string ("]" ^ postfix))
       | Constant c ->
           let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
           let prefix, postfix =
             if String.is_empty prefix && Float.(c < 0.0) then ("(", ")" ^ postfix)
             else (prefix, postfix)
           in
-          fprintf ppf "%s%.16g%s" prefix c postfix
+          string (prefix ^ Printf.sprintf "%.16g" c ^ postfix)
       | Embed_index idx ->
           let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
-          fprintf ppf "%s%a%s" prefix pp_axis_index idx postfix
-      | Binop (Arg1, v1, _v2) -> loop ppf v1
-      | Binop (Arg2, _v1, v2) -> loop ppf v2
-      | Ternop (op, v1, v2, v3) -> B.ternop_syntax prec op ppf loop v1 loop v2 loop v3
-      | Binop (op, v1, v2) -> B.binop_syntax prec op ppf loop v1 loop v2
-      | Unop (op, v) -> B.unop_syntax prec op ppf loop v
+          string prefix ^^ doc_of_axis_index idx ^^ string postfix
+      | Binop (Arg1, v1, _v2) -> pp_float prec v1
+      | Binop (Arg2, _v1, v2) -> pp_float prec v2
+      | Ternop (op, v1, v2, v3) -> 
+          B.ternop_syntax prec op (pp_float prec v1) (pp_float prec v2) (pp_float prec v3)
+      | Binop (op, v1, v2) -> 
+          B.binop_syntax prec op (pp_float prec v1) (pp_float prec v2)
+      | Unop (op, v) -> 
+          B.unop_syntax prec op (pp_float prec v)
+    
     and debug_float (prec : Ops.prec) (value : Low_level.float_t) : string * 'a list =
       let loop = debug_float prec in
       match value with
@@ -385,7 +424,7 @@ module C_syntax (B : C_syntax_config) = struct
           let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           let dims = Lazy.force tn.dims in
           let v =
-            sprintf "@[<2>%smerge_buffer[%s@;<0 -2>]%s@]" prefix
+            Printf.sprintf "%smerge_buffer[%s]%s" prefix
               (array_offset_to_string (idcs, dims))
               postfix
           in
@@ -397,7 +436,7 @@ module C_syntax (B : C_syntax_config) = struct
           let ident = get_ident tn in
           let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
           let v =
-            sprintf "@[<2>%s%s[%s@;<0 -2>]%s@]" prefix ident
+            Printf.sprintf "%s%s[%s]%s" prefix ident
               (array_offset_to_string (idcs, dims))
               postfix
           in
@@ -414,26 +453,44 @@ module C_syntax (B : C_syntax_config) = struct
           let v1, idcs1 = loop v1 in
           let v2, idcs2 = loop v2 in
           let v3, idcs3 = loop v3 in
-          let open Stdlib.Format in
-          B.ternop_syntax prec op (get_str_formatter ()) pp_print_string v1 pp_print_string v2
-            pp_print_string v3;
-          (flush_str_formatter (), idcs1 @ idcs2 @ idcs3)
+          let doc1 = PPrint.string v1 in
+          let doc2 = PPrint.string v2 in
+          let doc3 = PPrint.string v3 in
+          let doc = B.ternop_syntax prec op doc1 doc2 doc3 in
+          let result = 
+            let buf = Buffer.create 128 in
+            PPrint.ToBuffer.pretty 0.8 80 buf doc;
+            Buffer.contents buf
+          in
+          (result, idcs1 @ idcs2 @ idcs3)
       | Binop (op, v1, v2) ->
           let v1, idcs1 = loop v1 in
           let v2, idcs2 = loop v2 in
-          let open Stdlib.Format in
-          B.binop_syntax prec op (get_str_formatter ()) pp_print_string v1 pp_print_string v2;
-          (flush_str_formatter (), idcs1 @ idcs2)
+          let doc1 = PPrint.string v1 in
+          let doc2 = PPrint.string v2 in
+          let doc = B.binop_syntax prec op doc1 doc2 in
+          let result = 
+            let buf = Buffer.create 128 in
+            PPrint.ToBuffer.pretty 0.8 80 buf doc;
+            Buffer.contents buf
+          in
+          (result, idcs1 @ idcs2)
       | Unop (op, v) ->
           let v, idcs = loop v in
-          let open Stdlib.Format in
-          B.unop_syntax prec op (get_str_formatter ()) pp_print_string v;
-          (flush_str_formatter (), idcs)
+          let doc1 = PPrint.string v in
+          let doc = B.unop_syntax prec op doc1 in
+          let result = 
+            let buf = Buffer.create 128 in
+            PPrint.ToBuffer.pretty 0.8 80 buf doc;
+            Buffer.contents buf
+          in
+          (result, idcs)
     in
-    pp_ll ppf llc
+    pp_ll llc
 
-  let%track3_sexp compile_proc ~name ppf idx_params Low_level.{ traced_store; llc; merge_node } =
-    let open Stdlib.Format in
+  let compile_proc ~name (ppf : Stdlib.Format.formatter) idx_params Low_level.{ traced_store; llc; merge_node } =
+    let open PPrint in
+    let vbox = group in
     let params : (string * param_source) list =
       (* Preserve the order in the hashtable. *)
       List.rev
@@ -481,58 +538,65 @@ module C_syntax (B : C_syntax_config) = struct
       List.mapi ~f:(fun pos (name, _) -> B.buffer_prefix ^ name ^ B.buffer_suffix ~pos) params
       @ B.extra_args
     in
-    fprintf ppf "@[<v 2>@[<hv 4>%s%svoid %s(@,@[<hov 0>%a@]@;<0 -4>)@] {@ " B.main_kernel_prefix
-      (if String.is_empty B.main_kernel_prefix then "" else " ")
-      name
-      (pp_print_list ~pp_sep:pp_comma pp_print_string)
-      args;
-    if not (String.is_empty B.kernel_prep_line) then fprintf ppf "%s@ " B.kernel_prep_line;
-    (* FIXME: we should also close the file. *)
-    if (not (List.is_empty log_file)) && not B.logs_to_stdout then
-      fprintf ppf {|FILE* log_file = fopen(log_file_name, "w");@ |};
-    if Utils.debug_log_from_routines () then (
-      fprintf ppf "/* Debug initial parameter state. */@ ";
-      List.iter
-        ~f:(function
-          | p_name, Merge_buffer ->
-              if B.logs_to_stdout then
-                fprintf ppf
-                  {|@[<7>printf(@["%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)merge_buffer);@]@ |}
-                  !Utils.captured_log_prefix p_name
-                  (Tnode.num_elems @@ Option.value_exn merge_node)
-              else
-                fprintf ppf
-                  {|@[<7>fprintf(log_file,@ @["%s &[%d] = %%p\n",@] (void*)merge_buffer);@]@ |}
-                  p_name
-                  (Tnode.num_elems @@ Option.value_exn merge_node)
-          | _, Log_file_name -> ()
-          | p_name, Param_ptr tn ->
-              if B.logs_to_stdout then
-                fprintf ppf
-                  {|@[<7>printf(@["%s%%d: %s &[%d] = %%p\n",@] log_id, (void*)%s);@]@ |}
-                  !Utils.captured_log_prefix p_name (Tnode.num_elems tn)
-                @@ get_ident tn
-              else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @["%s &[%d] = %%p\n",@] (void*)%s);@]@ |}
-                  p_name (Tnode.num_elems tn) (get_ident tn)
-          | p_name, Static_idx s ->
-              if B.logs_to_stdout then
-                fprintf ppf {|@[<7>printf(@["%s%%d: %s = %%d\n",@] log_id, %s);@]@ |}
-                  !Utils.captured_log_prefix p_name
-                @@ Indexing.symbol_ident s.Indexing.static_symbol
-              else
-                fprintf ppf {|@[<7>fprintf(log_file,@ @["%s = %%d\n",@] %s);@]@ |} p_name
-                @@ Indexing.symbol_ident s.Indexing.static_symbol)
-        params);
-    fprintf ppf "/* Local declarations and initialization. */@ ";
-    Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:node ->
-        if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
-          fprintf ppf "%s %s[%d]%s;@ "
-            (B.typ_of_prec @@ Lazy.force tn.prec)
-            (get_ident tn) (Tn.num_elems tn)
-            (if node.zero_initialized then " = {0}" else ""));
-    fprintf ppf "@,/* Main logic. */@ ";
-    compile_main ~traced_store ppf llc;
-    fprintf ppf "@;<0 -2>}@]@.";
+    
+    (* Construct the document *)
+    let args_doc = separate_map (string "," ^^ break 1) string args in
+    let func_decl = 
+      group (string (B.main_kernel_prefix ^ (if String.is_empty B.main_kernel_prefix then "" else " ") ^ "void " ^ name ^ "(") ^^ 
+             nest 4 (group args_doc) ^^ string ")") 
+    in
+    
+    let body = 
+      vbox (
+        string "{" ^^ hardline ^^
+        (if not (String.is_empty B.kernel_prep_line) then string B.kernel_prep_line ^^ hardline else empty) ^^
+        (if (not (List.is_empty log_file)) && not B.logs_to_stdout then 
+           string "FILE* log_file = fopen(log_file_name, \"w\");" ^^ hardline 
+         else empty) ^^
+        
+        (if Utils.debug_log_from_routines () then
+           string "/* Debug initial parameter state. */" ^^ hardline ^^
+           concat_map params ~f:(function
+             | p_name, Merge_buffer ->
+                 if B.logs_to_stdout then
+                   string (Printf.sprintf "printf(\"%s%%d: %s &[%d] = %%p\\n\", log_id, (void*)merge_buffer);" 
+                            !Utils.captured_log_prefix p_name (Tnode.num_elems @@ Option.value_exn merge_node)) ^^ hardline
+                 else
+                   string (Printf.sprintf "fprintf(log_file, \"%s &[%d] = %%p\\n\", (void*)merge_buffer);" 
+                            p_name (Tnode.num_elems @@ Option.value_exn merge_node)) ^^ hardline
+             | _, Log_file_name -> empty
+             | p_name, Param_ptr tn ->
+                 if B.logs_to_stdout then
+                   string (Printf.sprintf "printf(\"%s%%d: %s &[%d] = %%p\\n\", log_id, (void*)%s);" 
+                            !Utils.captured_log_prefix p_name (Tnode.num_elems tn) (get_ident tn)) ^^ hardline
+                 else
+                   string (Printf.sprintf "fprintf(log_file, \"%s &[%d] = %%p\\n\", (void*)%s);" 
+                            p_name (Tnode.num_elems tn) (get_ident tn)) ^^ hardline
+             | p_name, Static_idx s ->
+                 if B.logs_to_stdout then
+                   string (Printf.sprintf "printf(\"%s%%d: %s = %%d\\n\", log_id, %s);" 
+                            !Utils.captured_log_prefix p_name (Indexing.symbol_ident s.Indexing.static_symbol)) ^^ hardline
+                 else
+                   string (Printf.sprintf "fprintf(log_file, \"%s = %%d\\n\", %s);" 
+                            p_name (Indexing.symbol_ident s.Indexing.static_symbol)) ^^ hardline)
+         else empty) ^^
+        
+        string "/* Local declarations and initialization. */" ^^ hardline ^^
+        concat_map (Hashtbl.to_alist traced_store) ~f:(fun (tn, node) ->
+            if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
+              string (Printf.sprintf "%s %s[%d]%s;" 
+                       (B.typ_of_prec @@ Lazy.force tn.prec)
+                       (get_ident tn) (Tn.num_elems tn)
+                       (if node.zero_initialized then " = {0}" else "")) ^^ hardline
+            else empty) ^^
+        
+        hardline ^^ string "/* Main logic. */" ^^ hardline ^^
+        compile_main ~traced_store llc ^^ hardline ^^
+        string "}"
+      )
+    in
+    
+    let doc = vbox (func_decl ^^ hardline ^^ body ^^ hardline) in
+    ToBuffer.pretty 0.8 80 ppf doc;
     params
 end
