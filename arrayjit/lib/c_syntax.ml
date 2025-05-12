@@ -1,7 +1,6 @@
 open Base
 module Lazy = Utils.Lazy
 open Backend_intf
-open PPrint (* Open PPrint for direct access to combinators *)
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -10,20 +9,8 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 module Tn = Tnode
 
-type t = document
+type t = PPrint.document
 
-(* Refactored adapters to return PPrint documents instead of using Format *)
-let ternop_adapter (prefix, infix1, infix2, suffix) v1 v2 v3 =
-  group
-    (string prefix ^^ v1 ^^ string infix1 ^^ space ^^ v2 ^^ string infix2 ^^ space ^^ v3
-   ^^ string suffix)
-
-let binop_adapter (prefix, infix, suffix) v1 v2 =
-  group (string prefix ^^ v1 ^^ string infix ^^ space ^^ v2 ^^ string suffix)
-
-let unop_adapter (prefix, suffix) v = group (string prefix ^^ v ^^ string suffix)
-
-(* Updated config interface to use PPrint documents *)
 module type C_syntax_config = sig
   val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
@@ -43,9 +30,17 @@ module type C_syntax_config = sig
   val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
   val ident_blacklist : string list
-  val ternop_syntax : Ops.prec -> Ops.ternop -> document -> document -> document -> document
-  val binop_syntax : Ops.prec -> Ops.binop -> document -> document -> document
-  val unop_syntax : Ops.prec -> Ops.unop -> document -> document
+
+  val ternop_syntax :
+    Ops.prec ->
+    Ops.ternop ->
+    PPrint.document ->
+    PPrint.document ->
+    PPrint.document ->
+    PPrint.document
+
+  val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
+  val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 end
 
@@ -133,47 +128,47 @@ struct
     Set.to_list !functions
 
   let ternop_syntax prec op v1 v2 v3 =
-    let prefix, infix1, infix2, suffix = Ops.ternop_c_syntax prec op in
-    ternop_adapter (prefix, infix1, infix2, suffix) v1 v2 v3
+    let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
+    let open PPrint in
+    group
+      (string op_prefix ^^ v1 ^^ string op_infix1 ^^ space ^^ v2 ^^ string op_infix2 ^^ space ^^ v3
+     ^^ string op_suffix)
 
-  let binop_syntax prec op =
+  let binop_syntax prec op v1 v2 =
     match op with
     | Ops.Satur01_gate -> (
         match prec with
         | Ops.Byte_prec _ ->
-            fun v1 v2 ->
-              group
-                (parens
-                   (parens
-                      (parens (string "(float)" ^^ v1)
-                      ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
-                   ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0"))
+            let open PPrint in
+            parens
+              (parens
+                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
+              ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
         | Ops.Half_prec _ ->
-            fun v1 v2 ->
-              group
-                (parens
-                   (parens (v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16")
-                   ^^ string " ? " ^^ v2 ^^ string " : 0.0f16"))
+            let open PPrint in
+            parens
+              (parens (v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16")
+              ^^ string " ? " ^^ v2 ^^ string " : 0.0f16")
         | Ops.Single_prec _ ->
-            fun v1 v2 ->
-              group
-                (parens
-                   (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
-                   ^^ string " ? " ^^ v2 ^^ string " : 0.0f"))
+            let open PPrint in
+            parens
+              (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
+              ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
         | Ops.Double_prec _ ->
-            fun v1 v2 ->
-              group
-                (parens
-                   (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
-                   ^^ string " ? " ^^ v2 ^^ string " : 0.0"))
+            let open PPrint in
+            parens
+              (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
+              ^^ string " ? " ^^ v2 ^^ string " : 0.0")
         | Ops.Void_prec -> invalid_arg "Pure_C_config.binop_syntax: Satur01_gate on Void_prec")
     | _ ->
-        let prefix, infix, suffix = Ops.binop_c_syntax prec op in
-        fun v1 v2 -> binop_adapter (prefix, infix, suffix) v1 v2
+        let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax prec op in
+        let open PPrint in
+        group (string op_prefix ^^ v1 ^^ string op_infix ^^ space ^^ v2 ^^ string op_suffix)
 
   let unop_syntax prec op v =
-    let prefix, suffix = Ops.unop_c_syntax prec op in
-    unop_adapter (prefix, suffix) v
+    let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
+    let open PPrint in
+    group (string op_prefix ^^ v ^^ string op_suffix)
 
   let convert_precision = Ops.c_convert_precision
 end
@@ -184,234 +179,467 @@ module C_syntax (B : C_syntax_config) = struct
     @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
+  let pp_include s = PPrint.(string "#include " ^^ string s)
 
-  (* Helper to convert from Indexing types to PPrint documents *)
-  let axis_index_to_doc idx =
-    match idx with
-    | Indexing.Iterator sym -> string (Indexing.symbol_ident sym)
-    | Indexing.Fixed_idx i -> string (Int.to_string i)
+  open Indexing
+  open Doc_helpers
 
-  (* Create a document for array offsets *)
-  let array_offset_to_doc (idcs, dims) =
+  let pp_array_offset (idcs, dims) =
+    let open PPrint in
     assert (not @@ Array.is_empty idcs);
-    let rec build_nested i =
-      if i >= Array.length idcs then empty
-      else
-        let dim = dims.(i) in
-        let idx_doc = axis_index_to_doc idcs.(i) in
-        if i = 0 then idx_doc
-        else if i = Array.length idcs - 1 then
-          string " * " ^^ string (Int.to_string dim) ^^ string " + " ^^ idx_doc
-        else
-          let inner =
-            string " * " ^^ string (Int.to_string dim) ^^ string " + " ^^ build_nested (i + 1)
-          in
-          if i <= Array.length idcs - 3 then parens inner else inner
-    in
-    group (build_nested 0)
+    let rec loop i acc = if i = Array.length idcs - 1 then acc else loop (i + 1) (parens acc) in
+    let initial = pp_axis_index idcs.(0) in
+    let doc = ref initial in
+    for i = 1 to Array.length idcs - 1 do
+      let dim = dims.(i) in
+      doc := !doc ^^ string (" * " ^ Int.to_string dim ^ " + ") ^^ pp_axis_index idcs.(i)
+    done;
+    loop 1 !doc
 
-  (* Helpers to render a document to a string *)
   let doc_to_string doc =
-    let buf = Buffer.create 32 in
-    ToBuffer.pretty 0.9 80 buf doc;
+    let buf = Buffer.create 128 in
+    PPrint.ToBuffer.compact buf doc;
     Buffer.contents buf
 
-  let vsep docs = separate hardline docs
+  let array_offset_to_string (idcs, dims) = doc_to_string @@ pp_array_offset (idcs, dims)
 
-  (* Print declarations and imports *)
-  let print_declarations out =
-    let include_docs = List.map B.includes ~f:(fun s -> string "#include " ^^ string s) in
-    let declaration_docs = List.map B.extra_declarations ~f:string in
-    let doc =
-      align (vsep include_docs) ^^ hardline ^^ hardline ^^ align (vsep declaration_docs) ^^ hardline
-    in
-    ToChannel.pretty 0.9 80 out doc
+  let print_declarations () =
+    let open PPrint in
+    let includes = separate hardline (List.map B.includes ~f:pp_include) in
+    let extras = separate hardline (List.map B.extra_declarations ~f:string) in
+    group (includes ^^ hardline ^^ hardline ^^ extras ^^ hardline ^^ hardline)
 
-  (* Main code generation function *)
-  let compile_main ~traced_store:_ llc =
-    let visited = Hash_set.create (module Tn) in
-
-    (* Recursive functions to convert Low_level constructs to PPrint documents *)
-    let rec ll_to_doc c =
-      match c with
-      | Low_level.Noop -> empty
-      | Seq (c1, c2) ->
-          let docs =
-            List.filter_map [ c1; c2 ] ~f:(function Noop -> None | c -> Some (ll_to_doc c))
+  let rec pp_ll (c : Low_level.t) : PPrint.document =
+    let open PPrint in
+    match c with
+    | Low_level.Noop -> empty
+    | Seq (c1, c2) ->
+        let d1 = pp_ll c1 in
+        let d2 = pp_ll c2 in
+        (* Avoid extra hardlines if one side is empty *)
+        if PPrint.is_empty d1 then d2
+        else if PPrint.is_empty d2 then d1
+        else group (d1 ^^ hardline ^^ d2)
+    | For_loop { index = i; from_; to_; body; trace_it = _ } ->
+        let header =
+          string "for (int " ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi
+          ^^ space ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ string " ++"
+          ^^ pp_symbol i ^^ string ")"
+        in
+        let body_doc = ref (pp_ll body) in
+        (if Utils.debug_log_from_routines () then
+           let log_doc =
+             if B.logs_to_stdout then
+               let msg =
+                 Printf.sprintf "%s%%d: index %s = %%d\\n" !Utils.captured_log_prefix
+                   (symbol_ident i)
+                 |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+               in
+               group
+                 (string "printf("
+                 ^^ dquotes (string msg)
+                 ^^ comma ^^ string " log_id, " ^^ pp_symbol i ^^ rparen ^^ semi)
+             else
+               let msg =
+                 Printf.sprintf "index %s = %%d\\n" (symbol_ident i)
+                 |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+               in
+               group
+                 (string "fprintf(log_file, "
+                 ^^ dquotes (string msg)
+                 ^^ comma ^^ space ^^ pp_symbol i ^^ rparen ^^ semi)
+           in
+           body_doc := log_doc ^^ hardline ^^ !body_doc);
+        surround 2 1 (header ^^ space ^^ lbrace) !body_doc rbrace
+    | Zero_out tn ->
+        pp_ll
+          (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
+               Set { tn; idcs; llv = Constant 0.0; debug = get_ident tn ^ " := 0" }))
+    | Set { tn; idcs; llv; debug } ->
+        let ident_doc = string (get_ident tn) in
+        let dims = Lazy.force tn.dims in
+        let prec = Lazy.force tn.prec in
+        let local_defs, val_doc = pp_float prec llv in
+        let offset_doc = pp_array_offset (idcs, dims) in
+        let assignment = ident_doc ^^ brackets offset_doc ^^ string " = " ^^ val_doc ^^ semi in
+        if Utils.debug_log_from_routines () then
+          let num_typ = string (B.typ_of_prec prec) in
+          let new_var = string "new_set_v" in
+          let decl = group (num_typ ^^ space ^^ new_var ^^ string " = " ^^ val_doc ^^ semi) in
+          let debug_val_doc, debug_args_docs = debug_float prec llv in
+          let debug_val_str = doc_to_string debug_val_doc in
+          let pp_args_docs =
+            List.map debug_args_docs ~f:(function
+              | `Accessor idx -> pp_array_offset idx
+              | `Value v_doc -> v_doc)
           in
-          vsep docs
-      | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-          let idx_doc = string (Indexing.symbol_ident i) in
-          let for_header =
-            group
-              (string "for (int " ^^ idx_doc ^^ string " = "
-              ^^ string (Int.to_string from_)
-              ^^ string "; " ^^ idx_doc ^^ string " <= "
-              ^^ string (Int.to_string to_)
-              ^^ string "; ++" ^^ idx_doc ^^ string ") {")
+          let log_args =
+            offset_doc :: (ident_doc ^^ brackets offset_doc) :: new_var :: pp_args_docs
           in
-          let body_doc = ll_to_doc body in
-          group (for_header ^^ nest 2 (break 1 ^^ body_doc) ^^ break 1 ^^ string "}")
-      | Zero_out tn ->
-          ll_to_doc
-            (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
-                 Low_level.Set
-                   { tn; idcs; llv = Low_level.Constant 0.0; debug = get_ident tn ^ " := 0" }))
-      | Set { tn; idcs; llv; debug } ->
-          Hash_set.add visited tn;
-          let ident = get_ident tn in
-          let dims = Lazy.force tn.dims in
-          let value_doc = float_to_doc (Lazy.force tn.prec) llv in
-          let offset_doc = array_offset_to_doc (idcs, dims) in
-
-          let num_closing_braces, with_locals_doc = top_locals_to_doc llv in
-          let num_typ = B.typ_of_prec @@ Lazy.force tn.prec in
-
-          if Utils.debug_log_from_routines () then
-            (* ... debug logging code ... *)
-            empty (* Simplified for now *)
-          else
-            (* Regular assignment *)
-            let assign_doc =
-              group (string ident ^^ brackets offset_doc ^^ string " = " ^^ value_doc ^^ string ";")
+          let log_doc =
+            if B.logs_to_stdout then
+              let comment_msg =
+                Printf.sprintf "%s%%d: # %s\\n" !Utils.captured_log_prefix debug
+                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+              in
+              let value_msg =
+                Printf.sprintf "%s%%d: %s[%%u]{=%%g} = %%g = %s\\n" !Utils.captured_log_prefix
+                  (get_ident tn) debug_val_str
+                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+              in
+              let comment_log =
+                group
+                  (string "printf("
+                  ^^ dquotes (string comment_msg)
+                  ^^ comma ^^ string " log_id" ^^ rparen ^^ semi)
+              in
+              let value_log =
+                group
+                  (string "printf("
+                  ^^ dquotes (string value_msg)
+                  ^^ comma ^^ string " log_id, " ^^ separate comma_sep log_args ^^ rparen ^^ semi)
+              in
+              comment_log ^^ hardline ^^ value_log
+            else
+              let comment_msg =
+                Printf.sprintf "# %s\\n" debug |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+              in
+              let value_msg =
+                Printf.sprintf "%s[%%u]{=%%g} = %%g = %s\\n" (get_ident tn) debug_val_str
+                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+              in
+              let comment_log =
+                group (string "fprintf(log_file, " ^^ dquotes (string comment_msg) ^^ rparen ^^ semi)
+              in
+              let value_log =
+                group
+                  (string "fprintf(log_file, "
+                  ^^ dquotes (string value_msg)
+                  ^^ comma ^^ space ^^ separate comma_sep log_args ^^ rparen ^^ semi)
+              in
+              let flush_log =
+                if not B.logs_to_stdout then string "fflush(log_file);" ^^ semi else empty
+              in
+              comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
+          in
+          let assignment' = ident_doc ^^ brackets offset_doc ^^ string " = " ^^ new_var ^^ semi in
+          let block_content = decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment' in
+          surround 2 1 lbrace (local_defs ^^ hardline ^^ block_content) rbrace
+        else local_defs ^^ (if PPrint.is_empty local_defs then empty else hardline) ^^ assignment
+    | Comment message ->
+        if Utils.debug_log_from_routines () then
+          if B.logs_to_stdout then
+            let msg =
+              Printf.sprintf "%s%%d: COMMENT: %s\\n" !Utils.captured_log_prefix message
+              |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
             in
-            with_locals_doc ^^ assign_doc
-            ^^
-            if num_closing_braces > 0 then break 1 ^^ string (String.make num_closing_braces '}')
-            else empty
-      | Comment message ->
-          if Utils.debug_log_from_routines () then
-            (* ... debug logging code ... *)
-            empty (* Simplified for now *)
-          else string "/* " ^^ string message ^^ string " */"
-      | Staged_compilation callback ->
-          callback ();
-          empty
-      | Set_local (Low_level.{ scope_id; tn = { prec; _ } }, value) ->
-          let num_closing_braces, with_locals_doc = top_locals_to_doc value in
-          let value_doc = float_to_doc (Lazy.force prec) value in
-
-          with_locals_doc
-          ^^ group
-               (string "v"
-               ^^ string (Int.to_string scope_id)
-               ^^ string " = " ^^ value_doc ^^ string ";")
-          ^^
-          if num_closing_braces > 0 then break 1 ^^ string (String.make num_closing_braces '}')
-          else empty
-    (* Handle local scope declarations *)
-    and top_locals_to_doc (vcomp : Low_level.float_t) =
-      match vcomp with
-      | Local_scope { id = { scope_id = i; tn = { prec; _ } }; body; orig_indices = _ } ->
-          let num_typ = B.typ_of_prec @@ Lazy.force prec in
-          let body_doc = ll_to_doc body in
-
-          ( 1,
             group
-              (string "{ " ^^ string num_typ ^^ string " v"
-              ^^ string (Int.to_string i)
-              ^^ string " = 0; "
-              ^^ nest 2 (break 1 ^^ body_doc)
-              ^^ space) )
-      | Get_local _ | Get_global _ | Get _ | Constant _ | Embed_index _ -> (0, empty)
-      | Binop (Arg1, v1, _v2) -> top_locals_to_doc v1
-      | Binop (Arg2, _v1, v2) -> top_locals_to_doc v2
-      | Ternop (_, v1, v2, v3) ->
-          let n1, d1 = top_locals_to_doc v1 in
-          let n2, d2 = top_locals_to_doc v2 in
-          let n3, d3 = top_locals_to_doc v3 in
-          (n1 + n2 + n3, d1 ^^ d2 ^^ d3)
-      | Binop (_, v1, v2) ->
-          let n1, d1 = top_locals_to_doc v1 in
-          let n2, d2 = top_locals_to_doc v2 in
-          (n1 + n2, d1 ^^ d2)
-      | Unop (_, v) -> top_locals_to_doc v
-    (* Convert floating point expressions to documents *)
-    and float_to_doc (prec : Ops.prec) value =
-      match value with
-      | Local_scope { id; _ } ->
-          (* Embedding of Local_scope is done by top_locals_to_doc *)
-          float_to_doc prec @@ Low_level.Get_local id
-      | Get_local id ->
-          let prefix, postfix = B.convert_precision ~from:(Lazy.force id.tn.prec) ~to_:prec in
-          string prefix ^^ string "v" ^^ string (Int.to_string id.scope_id) ^^ string postfix
-      | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-          let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
-          let dims = Lazy.force tn.dims in
+              (string "printf("
+              ^^ dquotes (string msg)
+              ^^ comma ^^ string " log_id" ^^ rparen ^^ semi)
+          else
+            let msg =
+              Printf.sprintf "COMMENT: %s\\n" message
+              |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
+            in
+            group (string "fprintf(log_file, " ^^ dquotes (string msg) ^^ rparen ^^ semi)
+        else string "/* " ^^ string message ^^ string " */"
+    | Staged_compilation callback ->
+        (* This is tricky. PPrint needs to generate the document synchronously. We might need to
+           change how Staged_compilation works if it needs to produce dynamic documents. For now,
+           assume it produces no output. *)
+        callback ();
+        empty
+    | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
+        let local_defs, value_doc = pp_float (Lazy.force prec) value in
+        let assignment =
+          group (string ("v" ^ Int.to_string scope_id) ^^ string " = " ^^ value_doc ^^ semi)
+        in
+        local_defs ^^ (if PPrint.is_empty local_defs then empty else hardline) ^^ assignment
+
+  and pp_float (prec : Ops.prec) (vcomp : Low_level.float_t) : PPrint.document * PPrint.document =
+    (* Returns (local definitions, value expression) *)
+    let open PPrint in
+    match vcomp with
+    | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
+        let num_typ = string (B.typ_of_prec @@ Lazy.force scope_prec) in
+        let decl =
+          group (num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ string " = 0" ^^ semi)
+        in
+        let body_doc = pp_ll body in
+        let defs = group (decl ^^ hardline ^^ body_doc) in
+        let prefix, postfix = B.convert_precision ~from:(Lazy.force scope_prec) ~to_:prec in
+        let expr = string prefix ^^ string ("v" ^ Int.to_string scope_id) ^^ string postfix in
+        (defs, expr)
+    | Get_local id ->
+        let scope_prec = Lazy.force id.tn.prec in
+        let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
+        let expr = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
+        (empty, expr)
+    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
+        let from_prec = Lazy.force tn.prec in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let expr =
+          group (string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix)
+        in
+        (empty, expr)
+    | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
+    | Get (tn, idcs) ->
+        let ident_doc = string (get_ident tn) in
+        let from_prec = Lazy.force tn.prec in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let expr = group (string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix) in
+        (empty, expr)
+    | Constant c ->
+        let from_prec = Ops.double in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let c_str = Printf.sprintf "%.16g" c in
+        (* Use Printf for float formatting *)
+        let expr =
+          if String.is_empty prefix && Float.(c < 0.0) then
+            string "(" ^^ string c_str ^^ string ")" ^^ string postfix
+          else string prefix ^^ string c_str ^^ string postfix
+        in
+        (empty, expr)
+    | Embed_index idx ->
+        let from_prec = Ops.double in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let expr = string prefix ^^ pp_axis_index idx ^^ string postfix in
+        (empty, expr)
+    | Binop (Arg1, v1, _v2) -> pp_float prec v1
+    | Binop (Arg2, _v1, v2) -> pp_float prec v2
+    | Ternop (op, v1, v2, v3) ->
+        let d1, e1 = pp_float prec v1 in
+        let d2, e2 = pp_float prec v2 in
+        let d3, e3 = pp_float prec v3 in
+        let defs =
+          d1
+          ^^ (if PPrint.is_empty d1 then empty else hardline)
+          ^^ d2
+          ^^ (if PPrint.is_empty d2 then empty else hardline)
+          ^^ d3
+        in
+        let expr = B.ternop_syntax prec op e1 e2 e3 in
+        (defs, expr)
+    | Binop (op, v1, v2) ->
+        let d1, e1 = pp_float prec v1 in
+        let d2, e2 = pp_float prec v2 in
+        let defs = d1 ^^ (if PPrint.is_empty d1 then empty else hardline) ^^ d2 in
+        let expr = B.binop_syntax prec op e1 e2 in
+        (defs, expr)
+    | Unop (op, v) ->
+        let defs, expr_v = pp_float prec v in
+        let expr = B.unop_syntax prec op expr_v in
+        (defs, expr)
+
+  and debug_float (prec : Ops.prec) (value : Low_level.float_t) :
+      PPrint.document
+      * [ `Accessor of Indexing.axis_index array * int array | `Value of PPrint.document ] list =
+    (* Returns (value expression doc, list of arguments for printf) *)
+    let open PPrint in
+    match value with
+    | Local_scope { id; _ } ->
+        (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
+           logs. *)
+        debug_float prec @@ Get_local id
+    | Get_local id ->
+        let scope_prec = Lazy.force id.tn.prec in
+        let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
+        let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
+        (v_doc ^^ braces (string "=%g"), [ `Value v_doc ])
+    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
+        let from_prec = Lazy.force tn.prec in
+        let dims = Lazy.force tn.dims in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let offset_doc = pp_array_offset (idcs, dims) in
+        let access_doc =
+          group (string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix)
+        in
+        let expr_doc =
           group
             (string prefix ^^ string "merge_buffer"
-            ^^ brackets (array_offset_to_doc (idcs, dims))
-            ^^ string postfix)
-      | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
-      | Get (tn, idcs) ->
-          Hash_set.add visited tn;
-          let ident = get_ident tn in
-          let prefix, postfix = B.convert_precision ~from:(Lazy.force tn.prec) ~to_:prec in
+            ^^ brackets (string "%u")
+            ^^ string postfix
+            ^^ braces (string "=%g"))
+        in
+        (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
+    | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
+    | Get (tn, idcs) ->
+        let ident_doc = string (get_ident tn) in
+        let from_prec = Lazy.force tn.prec in
+        let dims = Lazy.force tn.dims in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let offset_doc = pp_array_offset (idcs, dims) in
+        let access_doc =
+          group (string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix)
+        in
+        let expr_doc =
           group
-            (string prefix ^^ string ident
-            ^^ brackets (array_offset_to_doc (idcs, Lazy.force tn.dims))
-            ^^ string postfix)
-      | Constant c ->
-          let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
-          let prefix, postfix =
-            if String.is_empty prefix && Float.(c < 0.0) then ("(", ")" ^ postfix)
-            else (prefix, postfix)
-          in
-          string prefix ^^ string (Float.to_string_hum ~decimals:16 c) ^^ string postfix
-      | Embed_index idx ->
-          let prefix, postfix = B.convert_precision ~from:Ops.double ~to_:prec in
-          string prefix ^^ axis_index_to_doc idx ^^ string postfix
-      | Binop (Arg1, v1, _v2) -> float_to_doc prec v1
-      | Binop (Arg2, _v1, v2) -> float_to_doc prec v2
-      | Ternop (op, v1, v2, v3) ->
-          B.ternop_syntax prec op (float_to_doc prec v1) (float_to_doc prec v2)
-            (float_to_doc prec v3)
-      | Binop (op, v1, v2) -> B.binop_syntax prec op (float_to_doc prec v1) (float_to_doc prec v2)
-      | Unop (op, v) -> B.unop_syntax prec op (float_to_doc prec v)
+            (string prefix ^^ ident_doc
+            ^^ brackets (string "%u")
+            ^^ string postfix
+            ^^ braces (string "=%g"))
+        in
+        (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
+    | Constant c ->
+        let from_prec = Ops.double in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let c_str = Printf.sprintf "%.16g" c in
+        (string prefix ^^ string c_str ^^ string postfix, [])
+    | Embed_index idx -> (pp_axis_index idx, [])
+    | Binop (Arg1, v1, _v2) -> debug_float prec v1
+    | Binop (Arg2, _v1, v2) -> debug_float prec v2
+    | Ternop (op, v1, v2, v3) ->
+        let v1_doc, idcs1 = debug_float prec v1 in
+        let v2_doc, idcs2 = debug_float prec v2 in
+        let v3_doc, idcs3 = debug_float prec v3 in
+        (B.ternop_syntax prec op v1_doc v2_doc v3_doc, idcs1 @ idcs2 @ idcs3)
+    | Binop (op, v1, v2) ->
+        let v1_doc, idcs1 = debug_float prec v1 in
+        let v2_doc, idcs2 = debug_float prec v2 in
+        (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
+    | Unop (op, v) ->
+        let v_doc, idcs = debug_float prec v in
+        (B.unop_syntax prec op v_doc, idcs)
+
+  let compile_main llc : PPrint.document = pp_ll llc
+
+  let compile_proc ~name idx_params Low_level.{ traced_store; llc; merge_node } :
+      (string * param_source) list * PPrint.document =
+    let open PPrint in
+    let params : (string * param_source) list =
+      List.rev
+      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
+             let backend_info, is_param =
+               if Tn.is_virtual_force tn 334 then ("Virt", false)
+               else if in_ctx tn then ("Ctx", true)
+               else if Tn.is_materialized_force tn 335 then ("Global", true)
+               else if Tn.known_not_materialized tn then ("Local", false)
+               else assert false
+             in
+             let backend_info = Sexp.Atom backend_info in
+             if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+               tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+             if is_param then
+               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+             else params)
     in
-
-    ll_to_doc llc
-
-  (* Similar to debug_float, now using PPrint *)
-  let debug_float_to_doc prec value =
-    (* Implementation simplified for brevity *)
-    let msg = "debug_float_to_doc not yet implemented" in
-    (string msg, [])
-
-  (* Main entry point for compilation *)
-  let compile_proc ~name out idx_params lowered =
-    let params = (* ... parameter collection logic ... *) [] in
-
-    (* Create function header *)
-    let arg_docs =
-      List.map params ~f:(fun (pname, _) ->
-          string (B.buffer_prefix ^ pname ^ B.buffer_suffix ~pos:0))
+    let idx_params =
+      List.map idx_params ~f:(fun s ->
+          (B.arg_int_prefix ^ Indexing.symbol_ident s.Indexing.static_symbol, Static_idx s))
     in
-    let extra_arg_docs = List.map B.extra_args ~f:string in
-    let all_args = arg_docs @ extra_arg_docs in
-
-    (* Create full function document *)
-    let body_doc = compile_main ~traced_store:lowered.Low_level.traced_store lowered in
-    let func_doc =
+    let log_file_param =
+      if Utils.debug_log_from_routines () then
+        [
+          ((if B.logs_to_stdout then "int log_id" else "const char* log_file_name"), Log_file_name);
+        ]
+      else []
+    in
+    let merge_param =
+      Option.(
+        to_list
+        @@ map merge_node ~f:(fun tn ->
+               ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
+    in
+    let all_params = log_file_param @ merge_param @ idx_params @ params in
+    let sorted_params =
+      List.sort all_params ~compare:(fun (p1_name, _) (p2_name, _) ->
+          compare_string p1_name p2_name)
+    in
+    let args_docs =
+      List.mapi sorted_params ~f:(fun pos (name, _) ->
+          string (B.buffer_prefix ^ name ^ B.buffer_suffix ~pos))
+      @ List.map B.extra_args ~f:string
+    in
+    let func_header =
       group
-        (string B.main_kernel_prefix
-        ^^ (if String.is_empty B.main_kernel_prefix then empty else space)
-        ^^ string "void " ^^ string name
-        ^^ group (parens (align (separate (string ", ") all_args)))
-        ^^ space
-        ^^ braces
-             (nest 2
-                (break 1
-                ^^ (if String.is_empty B.kernel_prep_line then empty
-                    else string B.kernel_prep_line ^^ break 1)
-                ^^ body_doc)
-             ^^ break 1))
+        (string B.main_kernel_prefix ^^ space ^^ string "void" ^^ space ^^ string name
+        ^^ parens (separate comma_sep args_docs))
     in
+    let body = ref empty in
+    if not (String.is_empty B.kernel_prep_line) then
+      body := !body ^^ string B.kernel_prep_line ^^ semi ^^ hardline;
 
-    (* Output the document *)
-    ToChannel.pretty 0.9 80 out func_doc;
-    hardline |> ToChannel.pretty 0.9 80 out;
+    if (not (List.is_empty log_file_param)) && not B.logs_to_stdout then
+      body := !body ^^ string {|FILE* log_file = fopen(log_file_name, "w");|} ^^ semi ^^ hardline;
 
-    params
+    (if Utils.debug_log_from_routines () then
+       let debug_init_doc =
+         string "/* Debug initial parameter state. */"
+         ^^ hardline
+         ^^ separate_map hardline
+              (function
+                | p_name, Merge_buffer ->
+                    let merge_tn = Option.value_exn merge_node in
+                    let msg =
+                      Printf.sprintf "%s &[%d] = %%p\\n" p_name (Tnode.num_elems merge_tn)
+                    in
+                    if B.logs_to_stdout then
+                      group
+                        (string "printf("
+                        ^^ dquotes (string ("%s%%d: " ^ msg))
+                        ^^ comma ^^ string " log_id, " ^^ string "(void*)merge_buffer" ^^ rparen
+                        ^^ semi)
+                    else
+                      group
+                        (string "fprintf(log_file, "
+                        ^^ dquotes (string msg)
+                        ^^ comma ^^ string "(void*)merge_buffer" ^^ rparen ^^ semi)
+                | _, Log_file_name -> empty
+                | p_name, Param_ptr tn ->
+                    let msg = Printf.sprintf "%s &[%d] = %%p\\n" p_name (Tnode.num_elems tn) in
+                    let ident_doc = string (get_ident tn) in
+                    if B.logs_to_stdout then
+                      group
+                        (string "printf("
+                        ^^ dquotes (string ("%s%%d: " ^ msg))
+                        ^^ comma ^^ string " log_id, " ^^ string "(void*)" ^^ ident_doc ^^ rparen
+                        ^^ semi)
+                    else
+                      group
+                        (string "fprintf(log_file, "
+                        ^^ dquotes (string msg)
+                        ^^ comma ^^ string "(void*)" ^^ ident_doc ^^ rparen ^^ semi)
+                | p_name, Static_idx s ->
+                    let msg = Printf.sprintf "%s = %%d\\n" p_name in
+                    let ident_doc = pp_symbol s.static_symbol in
+                    if B.logs_to_stdout then
+                      group
+                        (string "printf("
+                        ^^ dquotes (string ("%s%%d: " ^ msg))
+                        ^^ comma ^^ string " log_id, " ^^ ident_doc ^^ rparen ^^ semi)
+                    else
+                      group
+                        (string "fprintf(log_file, "
+                        ^^ dquotes (string msg)
+                        ^^ comma ^^ ident_doc ^^ rparen ^^ semi))
+              sorted_params
+       in
+       body := !body ^^ debug_init_doc ^^ hardline);
+
+    let local_decls =
+      string "/* Local declarations and initialization. */"
+      ^^ hardline
+      ^^ separate_map hardline
+           (fun (tn, node) ->
+             if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
+               let typ_doc = string (B.typ_of_prec @@ Lazy.force tn.prec) in
+               let ident_doc = string (get_ident tn) in
+               let size_doc = OCaml.int (Tn.num_elems tn) in
+               let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
+               group (typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi)
+             else empty)
+           (Hashtbl.to_alist traced_store)
+    in
+    body := !body ^^ local_decls ^^ hardline;
+
+    let main_logic = string "/* Main logic. */" ^^ hardline ^^ compile_main llc in
+    body := !body ^^ main_logic;
+
+    let func_doc = surround 2 1 (func_header ^^ space ^^ lbrace) !body rbrace in
+    (sorted_params, func_doc)
 end

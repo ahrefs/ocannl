@@ -372,6 +372,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = Input.procs
     end)
 
+    open PPrint (* Open PPrint locally *)
+    open Indexing.Doc_helpers (* Open our helpers *)
+
     let logs_to_stdout = true (* FIXME: support Metal logging *)
     let main_kernel_prefix = "kernel"
     let buffer_prefix = "device "
@@ -404,15 +407,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let ternop_syntax _prec op =
       match op with
       | Ops.Where ->
-          fun ppf pp1 v1 pp2 v2 pp3 v3 ->
-            (* Ops.Where (v1: cond, v2: if_true, v3: if_false) *)
-            (* MSL signature: select(if_false_expr, if_true_expr, condition_expr) *)
-            Stdlib.Format.fprintf ppf "@[<1>select(%a, %a, %a)@]" pp3 v3 pp2 v2 pp1 v1
-      | FMA -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
+          fun v1 v2 v3 -> group (string "select(" ^^ separate comma_sep [ v3; v2; v1 ] ^^ rparen)
+      | FMA -> fun v1 v2 v3 -> group (string "fma(" ^^ separate comma_sep [ v1; v2; v3 ] ^^ rparen)
 
     let binop_syntax prec op =
-      let f op_str = C_syntax.binop_adapter ("(", " " ^ op_str, ")") in
-      let func fn = C_syntax.binop_adapter (fn ^ "(", ",", ")") in
+      let f op_str v1 v2 =
+        group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen)
+      in
+      let func fn v1 v2 = group (string fn ^^ parens (separate comma_sep [ v1; v2 ])) in
       match (op, prec) with
       | Ops.Add, _ -> f "+"
       | Sub, _ -> f "-"
@@ -426,45 +428,56 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmplt, _ -> f "<"
       | And, _ -> f "&&"
       | Or, _ -> f "||"
-      | Relu_gate, Ops.Half_prec _ -> C_syntax.binop_adapter ("(", " > 0.0h ?", " : 0.0h)")
-      | Relu_gate, Ops.Single_prec _ -> C_syntax.binop_adapter ("(", " > 0.0f ?", " : 0.0f)")
-      | Relu_gate, Ops.Double_prec _ -> C_syntax.binop_adapter ("(", " > 0.0 ?", " : 0.0)")
-      | Relu_gate, _ (* Byte_prec, Void_prec *) -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
+      | Relu_gate, Ops.Half_prec _ ->
+          fun v1 v2 ->
+            group (parens (v1 ^^ string " > 0.0h") ^^ string " ? " ^^ v2 ^^ string " : 0.0h")
+      | Relu_gate, Ops.Single_prec _ ->
+          fun v1 v2 ->
+            group (parens (v1 ^^ string " > 0.0f") ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+      | Relu_gate, Ops.Double_prec _ ->
+          fun v1 v2 ->
+            group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+      | Relu_gate, _ (* Byte_prec, Void_prec *) ->
+          fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
       | Satur01_gate, p_res ->
           let s = metal_prec_suffix_float p_res in
-          fun fmt pp_gate_val gate_val pp_value_val value_val ->
-            Stdlib.Format.fprintf fmt "((%a > 0.0%s && %a < 1.0%s) ? %a : 0.0%s)" pp_gate_val
-              gate_val s pp_gate_val gate_val s pp_value_val value_val s
+          fun v1 v2 ->
+            group
+              (parens
+                 (parens (v1 ^^ string (" > 0.0" ^ s ^ " && ") ^^ v1 ^^ string (" < 1.0" ^ s))
+                 ^^ string " ? " ^^ v2
+                 ^^ string (" : 0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
-      let f fn = C_syntax.unop_adapter (fn ^ "(", ")") in
+      let f_doc prefix suffix v = group (string prefix ^^ v ^^ string suffix) in
+      let func_doc fn v = group (string fn ^^ parens v) in
       match (op, prec) with
-      | Ops.Identity, _ -> C_syntax.unop_adapter ("", "")
-      | Neg, _ -> C_syntax.unop_adapter ("-", "") (* Prefix negation *)
-      | Exp, _ -> f "exp"
-      | Log, _ -> f "log"
-      | Exp2, _ -> f "exp2"
-      | Log2, _ -> f "log2"
-      | Sin, _ -> f "sin"
-      | Cos, _ -> f "cos"
-      | Sqrt, _ -> f "sqrt"
-      | Relu, Ops.Half_prec _ -> C_syntax.unop_adapter ("max(0.0h, ", ")")
-      | Relu, Ops.Single_prec _ -> C_syntax.unop_adapter ("max(0.0f, ", ")")
-      | Relu, Ops.Double_prec _ -> C_syntax.unop_adapter ("max(0.0, ", ")")
-      | Relu, _ (* Byte_prec, Void_prec *) -> C_syntax.unop_adapter ("max(0, ", ")")
+      | Ops.Identity, _ -> fun v -> v
+      | Neg, _ -> fun v -> string "-" ^^ v
+      | Exp, _ -> func_doc "exp"
+      | Log, _ -> func_doc "log"
+      | Exp2, _ -> func_doc "exp2"
+      | Log2, _ -> func_doc "log2"
+      | Sin, _ -> func_doc "sin"
+      | Cos, _ -> func_doc "cos"
+      | Sqrt, _ -> func_doc "sqrt"
+      | Relu, Ops.Half_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0h"; v ])
+      | Relu, Ops.Single_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0f"; v ])
+      | Relu, Ops.Double_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0"; v ])
+      | Relu, _ (* Byte_prec, Void_prec *) ->
+          fun v -> func_doc "max" (separate comma_sep [ string "0"; v ])
       | Satur01, p ->
           let s = metal_prec_suffix_float p in
-          let suffix_str = Stdlib.Format.sprintf ", 0.0%s, 1.0%s)" s s in
-          C_syntax.unop_adapter ("clamp(", suffix_str)
+          fun v ->
+            func_doc "clamp" (separate comma_sep [ v; string ("0.0" ^ s); string ("1.0" ^ s) ])
       | Recip, p ->
           let s = metal_prec_suffix_float p in
-          let prefix_str = Stdlib.Format.sprintf "(1.0%s / " s in
-          C_syntax.unop_adapter (prefix_str, ")")
-      | Recip_sqrt, _ -> f "rsqrt"
-      | Tanh_approx, _ -> f "tanh"
-      | Not, _ -> C_syntax.unop_adapter ("!", "")
+          fun v -> f_doc ("(1.0" ^ s) ")" v
+      | Recip_sqrt, _ -> func_doc "rsqrt"
+      | Tanh_approx, _ -> func_doc "tanh"
+      | Not, _ -> fun v -> string "!" ^^ v
     (* Logical not *)
 
     let convert_precision ~from ~to_ =
@@ -495,14 +508,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_declarations ppf;
+    let declarations_doc = Syntax.print_declarations () in
     (* Add Metal address space qualifiers *)
-    let params = Syntax.compile_proc ~name ppf idx_params lowered in
+    let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+    let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
+    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
     let source = Buffer.contents b in
     {
       metal_source = source;
-      compiled_code = Array.create ~len:1 None;
+      compiled_code = Array.create ~len:num_devs None;
+      (* One slot per device *)
       func_name = name;
       params;
       bindings;
@@ -515,20 +530,24 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_declarations ppf;
-    let funcs =
+    let declarations_doc = Syntax.print_declarations () in
+    let funcs_and_docs =
       Array.map2_exn names lowereds
         ~f:
           (Option.map2 ~f:(fun name lowered ->
-               let params = Syntax.compile_proc ~name ppf idx_params lowered in
-               (name, params)))
+               let params, doc = Syntax.compile_proc ~name idx_params lowered in
+               ((name, params), doc)))
     in
+    let all_proc_docs = List.filter_map (Array.to_list funcs_and_docs) ~f:(Option.map ~f:snd) in
+    let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
+    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
     let source = Buffer.contents b in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
+    let funcs = Array.map funcs_and_docs ~f:(Option.map ~f:fst) in
     {
       metal_source = source;
-      compiled_code = Array.create ~len:(Array.length lowereds) None;
+      compiled_code = Array.create ~len:num_devs None;
+      (* One slot per device *)
       funcs;
       bindings;
       traced_stores;

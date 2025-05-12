@@ -214,3 +214,24 @@ module Pp_helpers = struct
   let pp_indices ppf idcs =
     Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_axis_index ppf @@ Array.to_list idcs
 end
+
+module Doc_helpers = struct
+  let ( ^^ ) = PPrint.( ^^ )
+  let ( !^ ) = PPrint.( !^ )
+  let int = PPrint.OCaml.int
+  let comma_sep = PPrint.(comma ^^ space)
+  let pp_comma () = comma_sep
+  let pp_symbol sym = PPrint.string @@ symbol_ident sym
+
+  let pp_static_symbol { static_symbol; static_range } =
+    match static_range with
+    | None -> pp_symbol static_symbol
+    | Some range ->
+        PPrint.infix 4 1 PPrint.colon (pp_symbol static_symbol)
+          (PPrint.brackets (PPrint.string "0.." ^^ int (range - 1)))
+
+  let pp_axis_index idx =
+    match idx with Iterator sym -> pp_symbol sym | Fixed_idx i -> PPrint.OCaml.int i
+
+  let pp_indices idcs = PPrint.separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)
+end

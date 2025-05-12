@@ -83,7 +83,7 @@ let%track7_sexp c_compile_and_load ~f_name =
   Stdlib.Gc.finalise finalize result;
   result
 
-let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) =
+let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
   let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
 
@@ -92,14 +92,20 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
-  let pp_file = Utils.pp_file ~base_name:name ~extension:".c" in
-  Syntax.print_declarations pp_file.ppf;
-  let params = Syntax.compile_proc ~name pp_file.ppf idx_params lowered in
-  pp_file.finalize ();
-  let result = c_compile_and_load ~f_name:pp_file.f_name in
-  { result; params; bindings; name }
+  let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
+  let declarations_doc = Syntax.print_declarations () in
+  let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+  let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
+  (* Use ribbon = 1.0 for usual code formatting, width 110 *)
+  PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
+  build_file.finalize ();
+  (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
 
-let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) =
+  let result_library = c_compile_and_load ~f_name:build_file.f_name in
+  { result = result_library; params; bindings; name }
+
+let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) :
+    procedure option array =
   let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
 
@@ -113,19 +119,28 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
       strip ~drop:(equal_char '_')
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
-  let pp_file = Utils.pp_file ~base_name ~extension:".c" in
-  Syntax.print_declarations pp_file.ppf;
-  let params =
-    Array.mapi lowereds ~f:(fun i lowered ->
-        Option.map2 names.(i) lowered ~f:(fun name lowered ->
-            Syntax.compile_proc ~name pp_file.ppf idx_params lowered))
+  let build_file = Utils.open_build_file ~base_name ~extension:".c" in
+  let declarations_doc = Syntax.print_declarations () in
+  let params_and_docs = 
+    Array.map2_exn names lowereds ~f:(fun name_opt lowered_opt ->
+        Option.map2 name_opt lowered_opt ~f:(fun name lowered ->
+            Syntax.compile_proc ~name idx_params lowered))
   in
-  pp_file.finalize ();
-  let result = c_compile_and_load ~f_name:pp_file.f_name in
+  let all_proc_docs = 
+    List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd)
+  in
+  let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
+  PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
+  build_file.finalize ();
+  let result_library = c_compile_and_load ~f_name:build_file.f_name in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
-  Array.mapi params ~f:(fun i params ->
+  Array.mapi params_and_docs ~f:(fun i opt_params_and_doc ->
+    Option.bind opt_params_and_doc ~f:(fun (params, _doc) ->
       Option.map names.(i) ~f:(fun name ->
-          { result; params = Option.value_exn ~here:[%here] params; bindings; name }))
+        { result = result_library; params; bindings; name }
+      )
+    )
+  )
 
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in

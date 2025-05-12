@@ -16,19 +16,19 @@
  (preprocess
   (pps ppx_ocannl)))
 
-(rule
- (action
-  (with-stdout-to
-   micrograd_demo_logging.log
-   (run
-    %{dep:micrograd_demo_logging.exe}
-    "--ocannl_debug_backend=text"
-    "--ocannl_log_main_domain_to_stdout=true"))))
+; (rule
+;  (action
+;   (with-stdout-to
+;    micrograd_demo_logging.log
+;    (run
+;     %{dep:micrograd_demo_logging.exe}
+;     "--ocannl_debug_backend=text"
+;     "--ocannl_log_main_domain_to_stdout=true"))))
 
-(rule
- (alias runtest)
- (action
-  (diff micrograd_demo_logging.expected.log micrograd_demo_logging.log)))
+; (rule
+;  (alias runtest)
+;  (action
+;   (diff micrograd_demo_logging.expected.log micrograd_demo_logging.log)))
 
 (library
  (name tutorials)

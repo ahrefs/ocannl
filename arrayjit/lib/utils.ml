@@ -571,25 +571,21 @@ let tl_exn = function
   | Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn")
   | Cons { tl; _ } -> tl
 
-type pp_file = { f_name : string; ppf : Stdlib.Format.formatter; finalize : unit -> unit }
+type build_file_channel = { f_name : string; oc : Stdlib.out_channel; finalize : unit -> unit }
 
-let pp_file ~base_name ~extension =
-  let column_width = 110 in
+let open_build_file ~base_name ~extension :
+    build_file_channel =
   let f_name =
     if settings.output_debug_files_in_build_directory then build_file @@ base_name ^ extension
     else Stdlib.Filename.temp_file (base_name ^ "_") extension
   in
   (* (try Stdlib.Sys.remove f_name with _ -> ()); *)
   let oc = Out_channel.open_text f_name in
-  (* FIXME(#32): is the truncated source problem (missing the last line) solved? *)
-  let ppf = Stdlib.Format.formatter_of_out_channel oc in
-  Stdlib.Format.pp_set_geometry ppf ~max_indent:(column_width / 2) ~margin:column_width;
   let finalize () =
-    Stdlib.Format.pp_print_newline ppf ();
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc
   in
-  { f_name; ppf; finalize }
+  { f_name; oc; finalize }
 
 let captured_log_prefix = ref "!@#"
 

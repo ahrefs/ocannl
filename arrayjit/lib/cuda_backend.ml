@@ -230,10 +230,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
     let name_cu = name ^ ".cu" in
     if Utils.settings.output_debug_files_in_build_directory then (
-      let oc = Out_channel.open_text @@ Utils.build_file name_cu in
-      Stdio.Out_channel.output_string oc cu_src;
-      Stdio.Out_channel.flush oc;
-      Stdio.Out_channel.close oc);
+      let build_file = Utils.open_build_file ~base_name:name ~extension:".cu" in
+      Stdio.Out_channel.output_string build_file.oc cu_src; (* Keep direct string output for source *)
+      build_file.finalize ());
     [%log "compiling to PTX"];
     let with_debug =
       Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
@@ -256,7 +255,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Stdio.Out_channel.close oc);
     ptx
 
-  module C_syntax_config (Input : sig
+  module Cuda_syntax_config (Input : sig
     val procs : Low_level.optimized array
   end) =
   struct
@@ -283,8 +282,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Void_prec -> "void"
 
     let binop_syntax prec v =
-      let f op_str = C_syntax.binop_adapter ("(", " " ^ op_str, ")") in
-      let func fn = C_syntax.binop_adapter (fn ^ "(", ",", ")") in
+      let open PPrint in
+      let f op_str v1 v2 = group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen) in
+      let func fn v1 v2 = group (string fn ^^ parens (separate comma_sep [ v1; v2 ])) in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
       | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
@@ -302,31 +302,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Half_prec _ -> C_syntax.binop_adapter ("hexp2(hlog2(", "),", ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
-      | Relu_gate, Byte_prec _ -> C_syntax.binop_adapter ("(", " > 0 ?", " : 0)")
-      | Relu_gate, Half_prec _ ->
-          C_syntax.binop_adapter
-            ( "(__hgt(",
-              ", __ushort_as_half((unsigned short)0x0000U)) ?",
-              " : __ushort_as_half((unsigned short)0x0000U))" )
-      | Relu_gate, _ -> C_syntax.binop_adapter ("(", " > 0.0 ?", " : 0.0)")
-      | Satur01_gate, Byte_prec _ ->
-          fun ppf pp1 v1 pp2 v2 ->
-            Stdlib.Format.fprintf ppf
-              "(((float)%a > 0.0f && (float)%a < 1.0f) ? %a : (unsigned char)0)" pp1 v1 pp1 v1 pp2
-              v2
-      | Satur01_gate, Half_prec _ ->
-          fun ppf pp1 v1 pp2 v2 ->
-            Stdlib.Format.fprintf ppf
-              "((__hgt(%a, __ushort_as_half((unsigned short)0x0000U)) && __hlt(%a, \
-               __ushort_as_half((unsigned short)0x3C00U))) ? %a : __ushort_as_half((unsigned \
-               short)0x0000U))"
-              pp1 v1 pp1 v1 pp2 v2
-      | Satur01_gate, Single_prec _ ->
-          fun ppf pp1 v1 pp2 v2 ->
-            Stdlib.Format.fprintf ppf "((%a > 0.0f && %a < 1.0f) ? %a : 0.0f)" pp1 v1 pp1 v1 pp2 v2
-      | Satur01_gate, Double_prec _ ->
-          fun ppf pp1 v1 pp2 v2 ->
-            Stdlib.Format.fprintf ppf "((%a > 0.0 && %a < 1.0) ? %a : 0.0)" pp1 v1 pp1 v1 pp2 v2
+      | Relu_gate, Byte_prec _ -> fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
+      | Relu_gate, Half_prec _ -> fun v1 v2 -> group (parens (string "__hgt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x0000U))") ^^ string " ? " ^^ v2 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+      | Relu_gate, _ -> fun v1 v2 -> group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+      | Satur01_gate, Byte_prec _ -> fun v1 v2 ->
+          parens (parens (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f") ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
+      | Satur01_gate, Half_prec _ -> fun v1 v2 ->
+          parens (parens (string "__hgt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x3C00U)))") ^^ string " ? " ^^ v2 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+      | Satur01_gate, Single_prec _ -> fun v1 v2 ->
+          parens (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f") ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+      | Satur01_gate, Double_prec _ -> fun v1 v2 ->
+          parens (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"
@@ -344,8 +330,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | And, _ -> f "&&"
 
     let unop_syntax prec v =
-      let f prefix suffix = C_syntax.unop_adapter (prefix, suffix) in
-      let func fn = C_syntax.unop_adapter (fn ^ "(", ")") in
+      let open PPrint in
+      let f prefix suffix expr = group (string prefix ^^ expr ^^ string suffix) in
+      let func fn expr = group (string fn ^^ parens expr) in
       match (v, prec) with
       | Ops.Identity, _ -> f "" ""
       | Relu, Ops.Single_prec _ -> f "fmaxf(0.0, " ")"
@@ -392,22 +379,22 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
       | Recip_sqrt, _ -> f "(1.0 / sqrtf(" "))"
       | Neg, _ -> f "(-(" "))"
-      | Tanh_approx, Byte_prec _ ->
-          invalid_arg
-            "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
+      | Tanh_approx, Byte_prec _ -> invalid_arg "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
       | Tanh_approx, Half_prec _ -> func "htanh_approx"
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
 
     let ternop_syntax prec v =
+      let open PPrint in
       match (v, prec) with
-      | Ops.Where, _ -> C_syntax.ternop_adapter ("(", " ?", " :", ")")
+      | Ops.Where, _ -> fun v1 v2 v3 -> group (parens v1 ^^ string " ? " ^^ v2 ^^ string " : " ^^ v3)
       | FMA, Ops.Half_prec _ -> C_syntax.ternop_adapter ("__hfma(", ",", ",", ")")
       | FMA, Ops.Single_prec _ -> C_syntax.ternop_adapter ("fmaf(", ",", ",", ")")
       | FMA, _ -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
 
     let convert_precision ~from ~to_ =
+      let open PPrint in
       match (from, to_) with
       | Ops.Double_prec _, Ops.Double_prec _
       | Single_prec _, Single_prec _
@@ -421,43 +408,49 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
   end
 
-  let compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
+  let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
     (* TODO: The following link seems to claim it's better to expand into loops than use memset.
        https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+    let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
       let procs = [| lowered |]
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    let ppf = Stdlib.Format.formatter_of_buffer b in
     if Utils.debug_log_from_routines () then
-      Stdlib.Format.fprintf ppf "@,__device__ int printf (const char * format, ... );@,";
-    Syntax.print_declarations ppf;
-    let params = Syntax.compile_proc ~name ppf idx_params lowered in
-    let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
+      Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
+    let declarations_doc = Syntax.print_declarations () in
+    let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+    let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
+    PPrint.ToBuffer.pretty 1.0 110 b final_doc; (* Use ToBuffer *) 
+    let ptx = cuda_to_ptx ~name (Buffer.contents b) in
     { traced_store; ptx; params; bindings; name }
 
-  let compile_batch ~names bindings lowereds =
-    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+  let%diagn2_sexp compile_batch ~names bindings lowereds =
+    let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
       let procs = Array.filter_opt lowereds
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    let ppf = Stdlib.Format.formatter_of_buffer b in
-    Syntax.print_declarations ppf;
-    let params_and_names =
+    let declarations_doc = Syntax.print_declarations () in
+    let params_and_docs = 
       Array.map2_exn names lowereds
         ~f:
           (Option.map2 ~f:(fun name lowered ->
-               (Syntax.compile_proc ~name ppf idx_params lowered, name)))
+               let params, doc = Syntax.compile_proc ~name idx_params lowered in 
+               ((params, name), doc)))
     in
+    let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
+    let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
+    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
+
     let name : string =
       String.(
         strip ~drop:(equal_char '_')
         @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
     in
-    let ptx = cuda_to_ptx ~name @@ Buffer.contents b in
+    let ptx = cuda_to_ptx ~name (Buffer.contents b) in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
+    let params_and_names = Array.map params_and_docs ~f:(Option.map ~f:fst) in
     { traced_stores; ptx; params_and_names; bindings }
 
   let get_global_run_id =
