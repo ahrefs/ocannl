@@ -47,6 +47,7 @@
    (>= 0.12))
   (printbox-text
    (>= 0.12))
+  pprint
   stdio
   sexplib
   num

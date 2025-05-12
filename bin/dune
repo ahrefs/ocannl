@@ -96,3 +96,10 @@
  (preprocess
   (pps ppx_ocannl))
  (modes exe))
+
+(executable
+ (name micrograd_demo_logging)
+ (modules micrograd_demo_logging)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
