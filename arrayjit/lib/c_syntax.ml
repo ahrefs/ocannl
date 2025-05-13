@@ -187,14 +187,12 @@ module C_syntax (B : C_syntax_config) = struct
   let pp_array_offset (idcs, dims) =
     let open PPrint in
     assert (not @@ Array.is_empty idcs);
-    let rec loop i acc = if i = Array.length idcs - 1 then acc else loop (i + 1) (parens acc) in
-    let initial = pp_axis_index idcs.(0) in
-    let doc = ref initial in
+    let doc = ref (pp_axis_index idcs.(0)) in
     for i = 1 to Array.length idcs - 1 do
-      let dim = dims.(i) in
-      doc := !doc ^^ string (" * " ^ Int.to_string dim ^ " + ") ^^ pp_axis_index idcs.(i)
+      doc :=
+        parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
     done;
-    loop 1 !doc
+    !doc
 
   let doc_to_string doc =
     let buf = Buffer.create 128 in
