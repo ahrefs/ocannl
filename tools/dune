@@ -1,0 +1,4 @@
+(executable
+ (name minised)
+ (modules minised)
+ (libraries str))

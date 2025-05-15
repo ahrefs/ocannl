@@ -3,6 +3,7 @@
 ### Added
 
 - The Metal framework backend (Apple Silicon).
+- Tools directory and the `minised` tool: regexp replacement file rewrite.
 
 ### Changed
 
