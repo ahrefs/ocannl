@@ -410,10 +410,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
           fun v1 v2 v3 -> group (string "select(" ^^ separate comma_sep [ v3; v2; v1 ] ^^ rparen)
       | FMA -> fun v1 v2 v3 -> group (string "fma(" ^^ separate comma_sep [ v1; v2; v3 ] ^^ rparen)
 
+    let infix_binop op_str v1 v2 = parens (infix 2 1 (string op_str) v1 v2)
+
     let binop_syntax prec op =
-      let f op_str v1 v2 =
-        group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen)
-      in
+      let f = infix_binop in
       let func fn v1 v2 = group (string fn ^^ parens (separate comma_sep [ v1; v2 ])) in
       match (op, prec) with
       | Ops.Add, _ -> f "+"
@@ -430,28 +430,31 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Or, _ -> f "||"
       | Relu_gate, Ops.Half_prec _ ->
           fun v1 v2 ->
-            group (parens (v1 ^^ string " > 0.0h") ^^ string " ? " ^^ v2 ^^ string " : 0.0h")
+            parens
+            @@ group (parens (v1 ^^ string " > 0.0h") ^^ string " ? " ^^ v2 ^^ string " : 0.0h")
       | Relu_gate, Ops.Single_prec _ ->
           fun v1 v2 ->
-            group (parens (v1 ^^ string " > 0.0f") ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+            parens
+            @@ group (parens (v1 ^^ string " > 0.0f") ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
       | Relu_gate, Ops.Double_prec _ ->
           fun v1 v2 ->
-            group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+            parens @@ group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
       | Relu_gate, _ (* Byte_prec, Void_prec *) ->
-          fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
+          fun v1 v2 ->
+            parens @@ group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
       | Satur01_gate, p_res ->
           let s = metal_prec_suffix_float p_res in
           fun v1 v2 ->
-            group
-              (parens
-                 (parens (v1 ^^ string (" > 0.0" ^ s ^ " && ") ^^ v1 ^^ string (" < 1.0" ^ s))
+            parens
+              (group
+                 (parens
+                 @@ group (v1 ^^ string (" > 0.0" ^ s ^ " && ") ^^ v1 ^^ string (" < 1.0" ^ s))
                  ^^ string " ? " ^^ v2
                  ^^ string (" : 0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
-      let f_doc prefix suffix v = group (string prefix ^^ v ^^ string suffix) in
       let func_doc fn v = group (string fn ^^ parens v) in
       match (op, prec) with
       | Ops.Identity, _ -> fun v -> v
@@ -474,7 +477,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
             func_doc "clamp" (separate comma_sep [ v; string ("0.0" ^ s); string ("1.0" ^ s) ])
       | Recip, p ->
           let s = metal_prec_suffix_float p in
-          fun v -> f_doc ("(1.0" ^ s) ")" v
+          fun v -> infix_binop "/" (string @@ "1.0" ^ s) v
       | Recip_sqrt, _ -> func_doc "rsqrt"
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
