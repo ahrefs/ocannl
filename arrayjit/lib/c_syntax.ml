@@ -19,7 +19,6 @@ module type C_syntax_config = sig
   type buffer_ptr
 
   val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
-  val logs_to_stdout : bool
   val main_kernel_prefix : string
   val kernel_prep_line : string
   val buffer_prefix : string
@@ -42,6 +41,28 @@ module type C_syntax_config = sig
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
+
+  val kernel_log_param : (string * string) option
+  (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
+      "log_file_name")). *)
+
+  val log_involves_file_management : bool
+  (** Whether the logging setup involves opening/closing a FILE* (e.g., for fprintf). *)
+
+  val pp_log_statement :
+    log_param_c_expr_doc:PPrint.document option ->
+    base_message_literal:string ->
+    args_docs:PPrint.document list ->
+    PPrint.document
+  (** Generates a C log statement.
+      - [log_param_c_expr_doc]: Document for the C expression of the log parameter (e.g.,
+        [string "log_id"] or [string "log_file_name"]), if [kernel_log_param] is Some).
+      - [base_message_literal]: The raw, unescaped, unquoted base printf-style format string (e.g.,
+        "index %s = %d\n").
+      - [args_docs]: Documents for the C expressions of the arguments to the format string. The
+        implementation should handle quoting [base_message_literal], choosing the log function
+        (printf, fprintf, os_log), and prepending any necessary prefixes (like a log_id or
+        captured_log_prefix) to the format string and arguments. *)
 end
 
 module Pure_C_config (Input : sig
@@ -56,7 +77,6 @@ struct
   type nonrec buffer_ptr = Input.buffer_ptr
 
   let use_host_memory = Input.use_host_memory
-  let logs_to_stdout = false
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
   let buffer_prefix = ""
@@ -171,6 +191,34 @@ struct
     group (string op_prefix ^^ v ^^ string op_suffix)
 
   let convert_precision = Ops.c_convert_precision
+  let kernel_log_param = Some ("const char*", "log_file_name")
+  let log_involves_file_management = true
+
+  let for_log_trace_tree =
+    String.equal (Utils.get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no") "no"
+
+  let pp_log_statement ~log_param_c_expr_doc:_ ~base_message_literal ~args_docs =
+    let open PPrint in
+    let log_file_check =
+      match kernel_log_param with
+      | Some (_, lname) -> string ("if (" ^ lname ^ " && log_file) ")
+      | None ->
+          string "if (log_file) " (* Should not happen if log_involves_file_management is true *)
+    in
+    let base_message_literal =
+      let with_ = if for_log_trace_tree then "$" else "\\n" in
+      let res = String.substr_replace_all base_message_literal ~pattern:"\n" ~with_ in
+      if for_log_trace_tree && String.is_suffix res ~suffix:"$" then
+        String.drop_suffix res 1 ^ "\\n"
+      else res
+    in
+    log_file_check
+    ^^ group
+         (string "fprintf(log_file, "
+         ^^ dquotes (string base_message_literal)
+         ^^ (if List.is_empty args_docs then empty else comma ^^ space)
+         ^^ separate (PPrint.comma ^^ PPrint.space) args_docs
+         ^^ rparen ^^ semi)
 end
 
 module C_syntax (B : C_syntax_config) = struct
@@ -227,25 +275,11 @@ module C_syntax (B : C_syntax_config) = struct
         let body_doc = ref (pp_ll body) in
         (if Utils.debug_log_from_routines () then
            let log_doc =
-             if B.logs_to_stdout then
-               let msg =
-                 Printf.sprintf "%s%%d: index %s = %%d\\n" !Utils.captured_log_prefix
-                   (symbol_ident i)
-                 |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-               in
-               group
-                 (string "printf("
-                 ^^ dquotes (string msg)
-                 ^^ comma ^^ string " log_id, " ^^ pp_symbol i ^^ rparen ^^ semi)
-             else
-               let msg =
-                 Printf.sprintf "index %s = %%d\\n" (symbol_ident i)
-                 |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-               in
-               group
-                 (string "fprintf(log_file, "
-                 ^^ dquotes (string msg)
-                 ^^ comma ^^ space ^^ pp_symbol i ^^ rparen ^^ semi)
+             let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
+             let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
+             B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+               ~base_message_literal:base_message
+               ~args_docs:[ pp_symbol i ]
            in
            body_doc := log_doc ^^ hardline ^^ !body_doc);
         surround 2 1 (header ^^ space ^^ lbrace) !body_doc rbrace
@@ -271,54 +305,27 @@ module C_syntax (B : C_syntax_config) = struct
               | `Accessor idx -> pp_array_offset idx
               | `Value v_doc -> v_doc)
           in
-          let log_args =
+          let log_args_for_printf =
             offset_doc :: (ident_doc ^^ brackets offset_doc) :: new_var :: pp_args_docs
           in
           let log_doc =
-            if B.logs_to_stdout then
-              let comment_msg =
-                Printf.sprintf "%s%%d: # %s\\n" !Utils.captured_log_prefix debug
-                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-              in
-              let value_msg =
-                Printf.sprintf "%s%%d: %s[%%u]{=%%g} = %%g = %s\\n" !Utils.captured_log_prefix
-                  (get_ident tn) debug_val_str
-                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-              in
-              let comment_log =
-                group
-                  (string "printf("
-                  ^^ dquotes (string comment_msg)
-                  ^^ comma ^^ string " log_id" ^^ rparen ^^ semi)
-              in
-              let value_log =
-                group
-                  (string "printf("
-                  ^^ dquotes (string value_msg)
-                  ^^ comma ^^ string " log_id, " ^^ separate comma_sep log_args ^^ rparen ^^ semi)
-              in
-              comment_log ^^ hardline ^^ value_log
-            else
-              let comment_msg =
-                Printf.sprintf "# %s\\n" debug |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-              in
-              let value_msg =
-                Printf.sprintf "%s[%%u]{=%%g} = %%g = %s\\n" (get_ident tn) debug_val_str
-                |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-              in
-              let comment_log =
-                group (string "fprintf(log_file, " ^^ dquotes (string comment_msg) ^^ rparen ^^ semi)
-              in
-              let value_log =
-                group
-                  (string "fprintf(log_file, "
-                  ^^ dquotes (string value_msg)
-                  ^^ comma ^^ space ^^ separate comma_sep log_args ^^ rparen ^^ semi)
-              in
-              let flush_log =
-                if not B.logs_to_stdout then string "fflush(log_file);" ^^ semi else empty
-              in
-              comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
+            let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
+            let comment_base_msg = Printf.sprintf "# %s\n" debug in
+            let value_base_msg =
+              Printf.sprintf "%s[%%u]{=%%g} = %%g = %s\n" (get_ident tn) debug_val_str
+            in
+            let comment_log =
+              B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                ~base_message_literal:comment_base_msg ~args_docs:[]
+            in
+            let value_log =
+              B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                ~base_message_literal:value_base_msg ~args_docs:log_args_for_printf
+            in
+            let flush_log =
+              if B.log_involves_file_management then string "fflush(log_file);" ^^ semi else empty
+            in
+            comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
           in
           let assignment' = ident_doc ^^ brackets offset_doc ^^ string " = " ^^ new_var ^^ semi in
           let block_content = decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment' in
@@ -326,21 +333,10 @@ module C_syntax (B : C_syntax_config) = struct
         else local_defs ^^ (if PPrint.is_empty local_defs then empty else hardline) ^^ assignment
     | Comment message ->
         if Utils.debug_log_from_routines () then
-          if B.logs_to_stdout then
-            let msg =
-              Printf.sprintf "%s%%d: COMMENT: %s\\n" !Utils.captured_log_prefix message
-              |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-            in
-            group
-              (string "printf("
-              ^^ dquotes (string msg)
-              ^^ comma ^^ string " log_id" ^^ rparen ^^ semi)
-          else
-            let msg =
-              Printf.sprintf "COMMENT: %s\\n" message
-              |> String.substr_replace_all ~pattern:"\n" ~with_:"$"
-            in
-            group (string "fprintf(log_file, " ^^ dquotes (string msg) ^^ rparen ^^ semi)
+          let base_message = Printf.sprintf "COMMENT: %s\n" message in
+          let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
+          B.pp_log_statement ~log_param_c_expr_doc:log_param_doc ~base_message_literal:base_message
+            ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback ->
         (* This is tricky. PPrint needs to generate the document synchronously. We might need to
@@ -532,9 +528,9 @@ module C_syntax (B : C_syntax_config) = struct
     in
     let log_file_param =
       if Utils.debug_log_from_routines () then
-        [
-          ((if B.logs_to_stdout then "int log_id" else "const char* log_file_name"), Log_file_name);
-        ]
+        match B.kernel_log_param with
+        | Some (typ, name) -> [ (typ ^ " " ^ name, Log_file_name) ]
+        | None -> []
       else []
     in
     let merge_param =
@@ -562,19 +558,24 @@ module C_syntax (B : C_syntax_config) = struct
     if not (String.is_empty B.kernel_prep_line) then
       body := !body ^^ string B.kernel_prep_line ^^ semi ^^ hardline;
 
-    if (not (List.is_empty log_file_param)) && not B.logs_to_stdout then
+    if Utils.debug_log_from_routines () && B.log_involves_file_management then
+      let log_file_var_name =
+        match B.kernel_log_param with
+        | Some (_, name) -> name
+        | None -> "log_file_name" (* Should ideally not be reached if management is true *)
+      in
       let for_append =
         String.equal
           (Utils.get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no")
           "append"
       in
       body :=
-        !body
-        ^^ string
-             ({|FILE* log_file = fopen(log_file_name, "|}
-             ^ (if for_append then "a" else "w")
-             ^ {|");|})
-        ^^ semi ^^ hardline
+        !body ^^ string "FILE* log_file = NULL;" ^^ hardline
+        ^^ string ("if (" ^ log_file_var_name ^ ") {")
+        ^^ hardline
+        ^^ string ("  log_file = fopen(" ^ log_file_var_name ^ ", \"")
+        ^^ string (if for_append then "a" else "w")
+        ^^ string "\");" ^^ hardline ^^ string "}" ^^ hardline
     else body := !body ^^ hardline;
 
     (if Utils.debug_log_from_routines () then
@@ -582,51 +583,33 @@ module C_syntax (B : C_syntax_config) = struct
          string "/* Debug initial parameter state. */"
          ^^ hardline
          ^^ separate_map hardline
-              (function
-                | p_name, Merge_buffer ->
+              (fun (p_name_and_type, source) ->
+                let log_param_doc =
+                  Option.map B.kernel_log_param ~f:(fun (_, name) -> string name)
+                in
+                match source with
+                | Merge_buffer ->
                     let merge_tn = Option.value_exn merge_node in
-                    let msg =
-                      Printf.sprintf "%s &[%d] = %%p\\n" p_name (Tnode.num_elems merge_tn)
+                    let base_msg =
+                      Printf.sprintf "%s &[%d] = %%p\n" p_name_and_type (Tnode.num_elems merge_tn)
                     in
-                    if B.logs_to_stdout then
-                      group
-                        (string "printf("
-                        ^^ dquotes (string ("%s%%d: " ^ msg))
-                        ^^ comma ^^ string " log_id, " ^^ string "(void*)merge_buffer" ^^ rparen
-                        ^^ semi)
-                    else
-                      group
-                        (string "fprintf(log_file, "
-                        ^^ dquotes (string msg)
-                        ^^ comma ^^ string "(void*)merge_buffer" ^^ rparen ^^ semi)
-                | _, Log_file_name -> empty
-                | p_name, Param_ptr tn ->
-                    let msg = Printf.sprintf "%s &[%d] = %%p\\n" p_name (Tnode.num_elems tn) in
+                    B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                      ~base_message_literal:base_msg
+                      ~args_docs:[ string "(void*)merge_buffer" ]
+                | Log_file_name -> empty (* Already handled by fopen or if it's just an ID *)
+                | Param_ptr tn ->
+                    let base_msg =
+                      Printf.sprintf "%s &[%d] = %%p\n" p_name_and_type (Tnode.num_elems tn)
+                    in
                     let ident_doc = string (get_ident tn) in
-                    if B.logs_to_stdout then
-                      group
-                        (string "printf("
-                        ^^ dquotes (string ("%s%%d: " ^ msg))
-                        ^^ comma ^^ string " log_id, " ^^ string "(void*)" ^^ ident_doc ^^ rparen
-                        ^^ semi)
-                    else
-                      group
-                        (string "fprintf(log_file, "
-                        ^^ dquotes (string msg)
-                        ^^ comma ^^ string "(void*)" ^^ ident_doc ^^ rparen ^^ semi)
-                | p_name, Static_idx s ->
-                    let msg = Printf.sprintf "%s = %%d\\n" p_name in
+                    B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                      ~base_message_literal:base_msg
+                      ~args_docs:[ string "(void*)" ^^ ident_doc ]
+                | Static_idx s ->
+                    let base_msg = Printf.sprintf "%s = %%d\n" p_name_and_type in
                     let ident_doc = pp_symbol s.static_symbol in
-                    if B.logs_to_stdout then
-                      group
-                        (string "printf("
-                        ^^ dquotes (string ("%s%%d: " ^ msg))
-                        ^^ comma ^^ string " log_id, " ^^ ident_doc ^^ rparen ^^ semi)
-                    else
-                      group
-                        (string "fprintf(log_file, "
-                        ^^ dquotes (string msg)
-                        ^^ comma ^^ ident_doc ^^ rparen ^^ semi))
+                    B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                      ~base_message_literal:base_msg ~args_docs:[ ident_doc ])
               sorted_params
        in
        body := !body ^^ debug_init_doc ^^ hardline);
@@ -649,6 +632,12 @@ module C_syntax (B : C_syntax_config) = struct
 
     let main_logic = string "/* Main logic. */" ^^ hardline ^^ compile_main llc in
     body := !body ^^ main_logic;
+
+    if Utils.debug_log_from_routines () && B.log_involves_file_management then
+      body :=
+        !body ^^ hardline
+        ^^ string "if (log_file) { fclose(log_file); log_file = NULL; }"
+        ^^ hardline;
 
     let func_doc = surround 2 1 (func_header ^^ space ^^ lbrace) !body rbrace in
     (sorted_params, func_doc)

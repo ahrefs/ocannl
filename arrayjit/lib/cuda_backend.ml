@@ -406,6 +406,24 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Single_prec _, Half_prec _ -> ("__float2half(", ")")
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
+
+    let kernel_log_param = Some ("int", "log_id")
+    let log_involves_file_management = false
+
+    let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
+      let open PPrint in
+      let format_string_literal =
+        !Utils.captured_log_prefix ^ "%d: " ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$"
+      in
+      let all_args =
+        match log_param_c_expr_doc with
+        | Some doc -> doc :: args_docs
+        | None -> args_docs (* Should not happen if kernel_log_param is Some *)
+      in
+      group
+        (string "printf("
+        ^^ dquotes (string format_string_literal)
+        ^^ comma ^^ space ^^ separate (comma ^^ space) all_args ^^ rparen ^^ semi)
   end
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =

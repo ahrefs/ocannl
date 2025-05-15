@@ -375,7 +375,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     open PPrint (* Open PPrint locally *)
     open Indexing.Doc_helpers (* Open our helpers *)
 
-    let logs_to_stdout = true (* FIXME: support Metal logging *)
     let main_kernel_prefix = "kernel"
     let buffer_prefix = "device "
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
@@ -387,7 +386,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ]
 
     let includes = [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
-    let extra_declarations = [ "using namespace metal;" ]
+    
+    let metal_log_object_name = "custom_log" (* As used in logging_tests.ml *)
+    let extra_declarations = 
+      [ "using namespace metal;"; 
+        "constant os_log " ^ metal_log_object_name ^ "(\"com.custom_log.subsystem\", \"custom_category\");"
+      ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "uint8_t"
@@ -485,6 +489,25 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let convert_precision ~from ~to_ =
       if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")
+
+    let kernel_log_param = Some ("int", "log_id")
+    let log_involves_file_management = false
+
+    let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
+      let open PPrint in
+      (* Metal os_log handles newlines directly. Prefix with captured_log_prefix and log_id for consistency. *)
+      let format_string_literal =
+        !Utils.captured_log_prefix ^ "%d: " ^ base_message_literal
+      in
+      let all_args =
+        match log_param_c_expr_doc with
+        | Some doc -> doc :: args_docs
+        | None -> args_docs (* Should not happen if kernel_log_param is Some *)
+      in
+      group
+        (string metal_log_object_name ^^ string ".log("
+        ^^ dquotes (string format_string_literal)
+        ^^ comma ^^ space ^^ separate (comma ^^ space) all_args ^^ rparen ^^ semi)
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =
