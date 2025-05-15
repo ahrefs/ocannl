@@ -211,11 +211,20 @@ let filename_concat p1 p2 =
   in
   collapse_trailing p1 ^ "/" ^ collapse_leading p2
 
+let clean_filename fname =
+  let fname = String.strip fname in
+  let fname =
+    String.map
+      ~f:(fun c -> if List.exists ~f:(equal_char c) [ '/'; '\\'; ':' ] then '-' else c)
+      fname
+  in
+  fname
+
 let build_file fname =
   let build_files_dir = "build_files" in
   (try assert (Stdlib.Sys.is_directory build_files_dir)
    with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir build_files_dir 0o777);
-  filename_concat build_files_dir fname
+  filename_concat build_files_dir @@ clean_filename fname
 
 let diagn_log_file fname =
   let log_files_dir = "log_files" in
@@ -223,7 +232,7 @@ let diagn_log_file fname =
    with Stdlib.Sys_error _ -> (
      (* FIXME: is this called concurrently or what? *)
      try Stdlib.Sys.mkdir log_files_dir 0o777 with Stdlib.Sys_error _ -> ()));
-  filename_concat log_files_dir fname
+  filename_concat log_files_dir @@ clean_filename fname
 
 let get_local_debug_runtime =
   let snapshot_every_sec =
@@ -263,14 +272,14 @@ let get_local_debug_runtime =
         @@ "ocannl_location_format setting should be one of: no_location, file_only, beg_line, \
             beg_pos, range_line, range_pos; found: " ^ s
   in
-  let flushing, backend =
+  let flushing, toc_flame_graph, backend =
     match
       String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend"
     with
-    | "text" -> (false, `Text)
-    | "html" -> (false, `Html Minidebug_runtime.default_html_config)
-    | "markdown" -> (false, `Markdown Minidebug_runtime.default_md_config)
-    | "flushing" -> (true, `Text)
+    | "text" -> (false, false, `Text)
+    | "html" -> (false, true, `Html Minidebug_runtime.default_html_config)
+    | "markdown" -> (false, false, `Markdown Minidebug_runtime.default_md_config)
+    | "flushing" -> (true, false, `Text)
     | s ->
         invalid_arg
         @@ "ocannl_debug_backend setting should be text, html, markdown or flushing; found: " ^ s
@@ -366,7 +375,7 @@ let get_local_debug_runtime =
         ~log_level:original_log_level ?snapshot_every_sec ()
   | false, Some filename ->
       Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-        ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph:true ~flame_graph_separation:50
+        ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
         ~toc_specific_hyperlink:"" ~highlight_terms
         ~exclude_on_path:Re.(str "env")
@@ -573,8 +582,7 @@ let tl_exn = function
 
 type build_file_channel = { f_name : string; oc : Stdlib.out_channel; finalize : unit -> unit }
 
-let open_build_file ~base_name ~extension :
-    build_file_channel =
+let open_build_file ~base_name ~extension : build_file_channel =
   let f_name =
     if settings.output_debug_files_in_build_directory then build_file @@ base_name ^ extension
     else Stdlib.Filename.temp_file (base_name ^ "_") extension
