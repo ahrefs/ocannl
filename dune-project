@@ -2,6 +2,8 @@
 
 (using ctypes 0.3)
 
+(using directory-targets 0.1)
+
 (name ocannl)
 
 (version 0.5.3)
