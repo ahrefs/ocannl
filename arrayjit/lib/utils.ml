@@ -668,6 +668,11 @@ let capture_stdout_logs arg =
         captured_log_processors := []);
     result)
 
+let log_debug_routine_file log_file_name =
+  if String.equal (get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no") "no" then (
+    log_trace_tree (Stdio.In_channel.read_lines log_file_name);
+    Stdlib.Sys.remove log_file_name)
+
 type 'a weak_dynarray = 'a Stdlib.Weak.t ref
 
 let weak_create () : 'a weak_dynarray = ref @@ Stdlib.Weak.create 0

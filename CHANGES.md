@@ -3,6 +3,7 @@
 ### Added
 
 - The Metal framework backend (Apple Silicon).
+- Setting `debug_log_to_routine_files` to neatly keep logs from routine execution in their separate files.
 - Tools directory and the `minised` tool: regexp replacement file rewrite.
 
 ### Changed

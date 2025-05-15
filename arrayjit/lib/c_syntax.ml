@@ -563,7 +563,19 @@ module C_syntax (B : C_syntax_config) = struct
       body := !body ^^ string B.kernel_prep_line ^^ semi ^^ hardline;
 
     if (not (List.is_empty log_file_param)) && not B.logs_to_stdout then
-      body := !body ^^ string {|FILE* log_file = fopen(log_file_name, "w");|} ^^ semi ^^ hardline;
+      let for_append =
+        String.equal
+          (Utils.get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no")
+          "append"
+      in
+      body :=
+        !body
+        ^^ string
+             ({|FILE* log_file = fopen(log_file_name, "|}
+             ^ (if for_append then "a" else "w")
+             ^ {|");|})
+        ^^ semi ^^ hardline
+    else body := !body ^^ hardline;
 
     (if Utils.debug_log_from_routines () then
        let debug_init_doc =
