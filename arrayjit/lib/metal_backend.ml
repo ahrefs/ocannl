@@ -113,6 +113,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let metal_devices : Me.Device.t array = Me.Device.copy_all_devices ()
   let () = assert (Array.length metal_devices > 0)
 
+  (* Store for captured logs per stream_id *)
+  let stream_logs : (int, string list ref) Hashtbl.t = Hashtbl.create (module Int)
+
   (* Metal has unified memory on Apple Silicon, so we can use host memory *)
   let get_buffer_for_ptr device ~size_in_bytes bytes =
     Me.Buffer.on_device_with_bytes_no_copy device ~bytes ~length:size_in_bytes
@@ -142,12 +145,47 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
   let new_stream (device_wrapper : device) : stream =
     let metal_device = device_wrapper.dev in
-    let queue = Me.CommandQueue.on_device metal_device in
+    let queue =
+      if Utils.debug_log_from_routines () then (
+        let log_entries_ref = ref [] in
+        (* This ref will be captured by the log handler *)
+        let log_desc = Me.LogStateDescriptor.create () in
+        Me.LogStateDescriptor.set_level log_desc Me.LogLevel.Debug;
+        (* Capture all debug logs and above *)
+        Me.LogStateDescriptor.set_buffer_size log_desc (1024 * 100);
+        (* 100KB buffer *)
+        let log_state = Me.LogState.on_device_with_descriptor metal_device log_desc in
+        Me.LogState.add_log_handler log_state (fun ~sub_system:_ ~category:_ ~level:_ ~message ->
+            (* Strip the !Utils.captured_log_prefix and the run_id prefix *)
+            match String.chop_prefix ~prefix:!Utils.captured_log_prefix message with
+            | None -> () (* Not a log line we are interested in, or malformed *)
+            | Some rest_of_message -> (
+                match String.lsplit2 ~on:':' rest_of_message with
+                | Some (_run_id_str, actual_log_line_with_space) ->
+                    let actual_log_line = String.strip actual_log_line_with_space in
+                    log_entries_ref := actual_log_line :: !log_entries_ref
+                | None -> () (* Malformed after prefix *)));
+        let queue_desc = Me.CommandQueueDescriptor.create () in
+        Me.CommandQueueDescriptor.set_log_state queue_desc (Some log_state);
+        (* The log_state and its handler (capturing log_entries_ref) are kept alive by the
+           queue_desc / queue itself. *)
+        let created_q = Me.CommandQueue.on_device_with_descriptor metal_device queue_desc in
+        (* Store the log_entries_ref for later retrieval, associated with the stream_id which will
+           be assigned by make_stream shortly. We\'ll add it after make_stream. *)
+        (created_q, Some log_entries_ref))
+      else (Me.CommandQueue.on_device metal_device, None)
+    in
+    let actual_queue, opt_log_entries_ref = queue in
     let shared_event_obj = Me.SharedEvent.on_device metal_device in
     let counter = Unsigned.ULLong.one in
     (* Next value = 1 *)
-    let runner = { queue; event = shared_event_obj; counter } in
-    make_stream device_wrapper runner
+    let runner = { queue = actual_queue; event = shared_event_obj; counter } in
+    let stream_obj = make_stream device_wrapper runner in
+    (* Finalize linking log_entries_ref to stream_id and set up GC finalizer *)
+    Option.iter opt_log_entries_ref ~f:(fun log_ref ->
+        Hashtbl.add_exn stream_logs ~key:stream_obj.stream_id ~data:log_ref);
+    Stdlib.Gc.finalise (fun s -> Hashtbl.remove stream_logs s.stream_id) stream_obj;
+    stream_obj
 
   (* --- Event Handling --- *)
   let is_done event =
@@ -186,7 +224,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let queue = stream.runner.queue in
     let command_buffer = Me.CommandBuffer.on_queue queue in
     Me.CommandBuffer.commit command_buffer;
-    Me.CommandBuffer.wait_until_completed command_buffer
+    Me.CommandBuffer.wait_until_completed command_buffer;
+    (* Process captured logs if any *)
+    if Utils.debug_log_from_routines () then
+      match Hashtbl.find stream_logs stream.stream_id with
+      | Some log_entries_ref ->
+          let logs_to_process = List.rev !log_entries_ref in
+          if not (List.is_empty logs_to_process) then Utils.log_trace_tree logs_to_process;
+          log_entries_ref := [] (* Clear processed logs *)
+      | None -> () (* No log bucket for this stream, logging likely not enabled for it *)
 
   let is_idle stream =
     (* FIXME: store the latest CommandBuffer with the stream runner and check that it's completed *)
@@ -263,7 +309,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
 
   let get_debug_info stream =
-    Sexp.message "Metal stream debug info NYI" [ ("stream_id", sexp_of_int stream.stream_id) ]
+    let num_pending_logs =
+      match Hashtbl.find stream_logs stream.stream_id with None -> 0 | Some r -> List.length !r
+    in
+    Sexp.message "Metal stream debug info"
+      [
+        ("stream_id", sexp_of_int stream.stream_id);
+        ("pending_shader_logs", sexp_of_int num_pending_logs);
+      ]
 
   (* --- Copy Operations --- *)
   let from_host ~dst_ptr ~dst hosted =
@@ -385,12 +438,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
       ]
 
-    let includes = [ "<metal_stdlib>"; "<metal_math>"; "<metal_compute>"; "<metal_atomic>" ]
-    
+    let includes =
+      [ "<metal_stdlib>"; "<metal_math>"; "<metal_logging>"; "<metal_compute>"; "<metal_atomic>" ]
+
     let metal_log_object_name = "custom_log" (* As used in logging_tests.ml *)
-    let extra_declarations = 
-      [ "using namespace metal;"; 
-        "constant os_log " ^ metal_log_object_name ^ "(\"com.custom_log.subsystem\", \"custom_category\");"
+
+    let extra_declarations =
+      [
+        "using namespace metal;";
+        "constant os_log " ^ metal_log_object_name
+        ^ "(\"com.custom_log.subsystem\", \"custom_category\");";
       ]
 
     let typ_of_prec = function
@@ -490,15 +547,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let convert_precision ~from ~to_ =
       if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")
 
-    let kernel_log_param = Some ("int", "log_id")
+    let kernel_log_param = Some ("const int&", "log_id")
     let log_involves_file_management = false
 
     let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
       let open PPrint in
-      (* Metal os_log handles newlines directly. Prefix with captured_log_prefix and log_id for consistency. *)
-      let format_string_literal =
-        !Utils.captured_log_prefix ^ "%d: " ^ base_message_literal
+      (* Metal os_log handles newlines directly. Prefix with captured_log_prefix and log_id for
+         consistency. *)
+      let base_message_literal =
+        let with_ = if for_log_trace_tree then "$" else "\\n" in
+        let res = String.substr_replace_all base_message_literal ~pattern:"\n" ~with_ in
+        if for_log_trace_tree && String.is_suffix res ~suffix:"$" then
+          String.drop_suffix res 1 ^ "\\n"
+        else res
       in
+      let format_string_literal = !Utils.captured_log_prefix ^ "%d: " ^ base_message_literal in
       let all_args =
         match log_param_c_expr_doc with
         | Some doc -> doc :: args_docs
@@ -507,13 +570,20 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       group
         (string metal_log_object_name ^^ string ".log("
         ^^ dquotes (string format_string_literal)
-        ^^ comma ^^ space ^^ separate (comma ^^ space) all_args ^^ rparen ^^ semi)
+        ^^ comma ^^ space
+        ^^ separate (comma ^^ space) all_args
+        ^^ rparen ^^ semi)
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =
     let options = Me.CompileOptions.init () in
-    Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_0;
-    if Utils.debug_log_from_routines () then Me.CompileOptions.set_enable_logging options true;
+    if Utils.debug_log_from_routines () then (
+      Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_2;
+      Me.CompileOptions.set_enable_logging options true
+    ) else (
+      Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_0
+      (* Logging is disabled by default in CompileOptions, so no need to explicitly set it to false *)
+    );
 
     if Utils.with_runtime_debug () then (
       let metal_file = Utils.build_file (name ^ ".metal") in
@@ -587,9 +657,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let runner_label = get_name stream in
     let func = Me.Library.new_function_with_name library func_name in
     let pso, _ = Me.ComputePipelineState.on_device_with_function device func in
+    (* let log_id_prefix_for_util = if Utils.debug_log_from_routines () then Int.to_string
+       run_log_id ^ ": " else "" in *)
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label, (run_log_id : int)];
+      (* Unlike CUDA, we don\'t use Utils.add_log_processor here. Logs are captured by the LogState
+         handler installed on the CommandQueue. They will be processed by Utils.log_trace_tree in
+         `await`. *)
       try
         let command_buffer = Me.CommandBuffer.on_queue queue in
         let encoder = Me.ComputeCommandEncoder.on_buffer command_buffer in
