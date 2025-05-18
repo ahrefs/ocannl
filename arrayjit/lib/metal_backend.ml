@@ -156,15 +156,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         (* 100KB buffer *)
         let log_state = Me.LogState.on_device_with_descriptor metal_device log_desc in
         Me.LogState.add_log_handler log_state (fun ~sub_system:_ ~category:_ ~level:_ ~message ->
-            (* Strip the !Utils.captured_log_prefix and the run_id prefix *)
-            match String.chop_prefix ~prefix:!Utils.captured_log_prefix message with
-            | None -> () (* Not a log line we are interested in, or malformed *)
-            | Some rest_of_message -> (
-                match String.lsplit2 ~on:':' rest_of_message with
-                | Some (_run_id_str, actual_log_line_with_space) ->
-                    let actual_log_line = String.strip actual_log_line_with_space in
-                    log_entries_ref := actual_log_line :: !log_entries_ref
-                | None -> () (* Malformed after prefix *)));
+            log_entries_ref := message :: !log_entries_ref);
         let queue_desc = Me.CommandQueueDescriptor.create () in
         Me.CommandQueueDescriptor.set_log_state queue_desc (Some log_state);
         (* The log_state and its handler (capturing log_entries_ref) are kept alive by the
@@ -441,14 +433,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let includes =
       [ "<metal_stdlib>"; "<metal_math>"; "<metal_logging>"; "<metal_compute>"; "<metal_atomic>" ]
 
-    let metal_log_object_name = "custom_log" (* As used in logging_tests.ml *)
-
-    let extra_declarations =
-      [
-        "using namespace metal;";
-        "constant os_log " ^ metal_log_object_name
-        ^ "(\"com.custom_log.subsystem\", \"custom_category\");";
-      ]
+    let metal_log_object_name = "os_log_default"
+    let extra_declarations = [ "using namespace metal;" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "uint8_t"
@@ -650,18 +636,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     }
 
   let%diagn2_sexp link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays
-      run_log_id =
+      =
     let stream = prior_context.stream in
     let device = stream.device.dev in
     let queue = stream.runner.queue in
     let runner_label = get_name stream in
     let func = Me.Library.new_function_with_name library func_name in
     let pso, _ = Me.ComputePipelineState.on_device_with_function device func in
-    (* let log_id_prefix_for_util = if Utils.debug_log_from_routines () then Int.to_string
-       run_log_id ^ ": " else "" in *)
 
     let work () : unit =
-      [%log3_result "Launching", func_name, "on", runner_label, (run_log_id : int)];
+      [%log3_result "Launching", func_name, "on", runner_label];
       (* Unlike CUDA, we don\'t use Utils.add_log_processor here. Logs are captured by the LogState
          handler installed on the CommandQueue. They will be processed by Utils.log_trace_tree in
          `await`. *)
@@ -699,7 +683,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
                 let size = Ctypes.sizeof Ctypes.int in
-                let bytes_ptr = Ctypes.(allocate int run_log_id |> to_voidp) in
+                let bytes_ptr = Ctypes.(allocate int stream.stream_id |> to_voidp) in
                 Me.ComputeCommandEncoder.set_bytes encoder ~bytes:bytes_ptr ~length:size ~index);
 
         (* Dispatch - TODO: Determine grid/group sizes properly *)
@@ -728,23 +712,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         work;
       }
 
-  let get_global_run_id =
-    let next_id = ref 0 in
-    fun () ->
-      Int.incr next_id;
-      if !next_id < 0 then next_id := 0;
-      !next_id
-
   let link prior_context code ctx_arrays =
     let device = prior_context.stream.device.dev in
     let library = compile_metal_source ~name:code.func_name ~source:code.metal_source ~device in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
-    let run_log_id = if Utils.debug_log_from_routines () then get_global_run_id () else 0 in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~params:code.params
-        ~lowered_bindings ~ctx_arrays run_log_id
+        ~lowered_bindings ~ctx_arrays
     in
     (lowered_bindings, task)
 
@@ -754,14 +730,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
     in
-    let run_log_id = if Utils.debug_log_from_routines () then get_global_run_id () else 0 in
 
     let tasks =
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, params) ->
               Option.map ctx_arrays_opts.(i) ~f:(fun ctx_arrays ->
-                  link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays
-                    run_log_id)))
+                  link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays)))
     in
     (lowered_bindings, tasks)
 end
