@@ -538,40 +538,45 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let kernel_log_param = Some ("const int&", "log_id")
     let log_involves_file_management = false
 
-    let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
+    let pp_log_statement ~log_param_c_expr_doc ~base_message_literal:base ~args_docs =
       let open PPrint in
       (* Metal os_log handles newlines directly. Prefix with captured_log_prefix and log_id for
          consistency. *)
-      let base_message_literal =
-        let with_ = if for_log_trace_tree then "$" else "\\n" in
-        let res = String.substr_replace_all base_message_literal ~pattern:"\n" ~with_ in
-        if for_log_trace_tree && String.is_suffix res ~suffix:"$" then
-          String.drop_suffix res 1 ^ "\\n"
-        else res
+      let base = if String.is_suffix base ~suffix:"\n" then String.drop_suffix base 1 else base in
+      let base =
+        let with_ =
+          (* if for_log_trace_tree then *) "$"
+          (* else "\\n" *)
+        in
+        String.substr_replace_all base ~pattern:"\n" ~with_
       in
-      let format_string_literal = !Utils.captured_log_prefix ^ "%d: " ^ base_message_literal in
-      let all_args =
-        match log_param_c_expr_doc with
-        | Some doc -> doc :: args_docs
-        | None -> args_docs (* Should not happen if kernel_log_param is Some *)
-      in
-      group
-        (string metal_log_object_name ^^ string ".log("
-        ^^ dquotes (string format_string_literal)
-        ^^ comma ^^ space
-        ^^ separate (comma ^^ space) all_args
-        ^^ rparen ^^ semi)
+      let format_string_literal = "%d: " ^ base in
+      let all_args = Option.value_exn ~here:[%here] log_param_c_expr_doc :: args_docs in
+      if List.length all_args > 7 then
+        (* TODO: failsafe for "newComputePipelineStateWithFunction:options:reflection:error:
+           failed: Compiler encountered an internal error" *)
+        group
+          (string metal_log_object_name
+          ^^ string ".log_debug(\"Exceeded max of 7 logging args\")"
+          ^^ semi)
+      else
+        group
+          (string metal_log_object_name ^^ string ".log_debug("
+          ^^ dquotes (string format_string_literal)
+          ^^ comma ^^ space
+          ^^ separate (comma ^^ space) all_args
+          ^^ rparen ^^ semi)
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =
     let options = Me.CompileOptions.init () in
     if Utils.debug_log_from_routines () then (
       Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_2;
-      Me.CompileOptions.set_enable_logging options true
-    ) else (
+      Me.CompileOptions.set_enable_logging options true)
+    else
       Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_0
-      (* Logging is disabled by default in CompileOptions, so no need to explicitly set it to false *)
-    );
+      (* Logging is disabled by default in CompileOptions, so no need to explicitly set it to
+         false *);
 
     if Utils.with_runtime_debug () then (
       let metal_file = Utils.build_file (name ^ ".metal") in
