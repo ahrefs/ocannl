@@ -5,8 +5,7 @@ let () =
   let input_filename = ref "" in
   let output_filename = ref "" in
 
-  let speclist = [
-  ] in
+  let speclist = [] in
 
   let anon_fun arg =
     if !regexp_str = "" then regexp_str := arg
@@ -18,10 +17,13 @@ let () =
 
   Arg.parse speclist anon_fun usage_msg;
 
-  if !regexp_str = "" || !replacement_str = "" || !input_filename = "" || !output_filename = "" then begin
+  if !regexp_str = "" || !replacement_str = "" || !input_filename = "" || !output_filename = "" then (
+    print_endline
+      ("Provided arguments: <"
+      ^ String.concat ">, <" [ !regexp_str; !replacement_str; !input_filename; !output_filename ]
+      ^ ">");
     Arg.usage speclist usage_msg;
-    exit 1
-  end;
+    exit 1);
 
   let ic = open_in !input_filename in
   let content =
@@ -42,4 +44,4 @@ let () =
   let oc = open_out !output_filename in
   output_string oc new_content;
   close_out oc;
-  print_endline ("Successfully wrote to " ^ !output_filename) 
+  print_endline ("Successfully wrote to " ^ !output_filename)
