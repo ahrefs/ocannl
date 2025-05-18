@@ -230,9 +230,32 @@ let diagn_log_file fname =
   let log_files_dir = "log_files" in
   (try assert (Stdlib.Sys.is_directory log_files_dir)
    with Stdlib.Sys_error _ -> (
-     (* FIXME: is this called concurrently or what? *)
+     (* NOTE: is this can be called concurrently. *)
      try Stdlib.Sys.mkdir log_files_dir 0o777 with Stdlib.Sys_error _ -> ()));
   filename_concat log_files_dir @@ clean_filename fname
+
+let () =
+  (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
+  let clean_up_artifacts_on_startup =
+    Bool.of_string @@ get_global_arg ~arg_name:"clean_up_artifacts_on_startup" ~default:"true"
+  in
+  if clean_up_artifacts_on_startup then (
+    let remove_dir_if_exists dirname =
+      if Stdlib.Sys.file_exists dirname && Stdlib.Sys.is_directory dirname then
+        try
+          Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
+              Stdlib.Sys.remove (Stdlib.Filename.concat dirname fname));
+          Stdlib.Sys.rmdir dirname
+        with exn ->
+          Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn)
+      else if Stdlib.Sys.file_exists dirname then
+        try Stdlib.Sys.remove dirname
+        with exn ->
+          Stdio.eprintf "Failed to delete file %s (expected a directory): %s\n%!" dirname
+            (Exn.to_string exn)
+    in
+    remove_dir_if_exists "log_files";
+    remove_dir_if_exists "build_files")
 
 let get_local_debug_runtime =
   let snapshot_every_sec =

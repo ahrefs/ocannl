@@ -47,6 +47,9 @@ check_half_prec_constants_cutoff=16384.0
 #   recent modification.
 automatic_host_transfers=true
 
+# If true (the default), the directories log_files and build_files are deleted on startup.
+clean_up_artifacts_on_startup=true
+
 # Other configurations:
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
