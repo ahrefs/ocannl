@@ -222,7 +222,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       match Hashtbl.find stream_logs stream.stream_id with
       | Some log_entries_ref ->
           let logs_to_process = List.rev !log_entries_ref in
-          if not (List.is_empty logs_to_process) then Utils.log_trace_tree logs_to_process;
+          if not (List.is_empty logs_to_process) then
+            Utils.log_debug_routine_logs ~log_contents:logs_to_process
+              ~stream_name:(get_name stream);
           log_entries_ref := [] (* Clear processed logs *)
       | None -> () (* No log bucket for this stream, logging likely not enabled for it *)
 

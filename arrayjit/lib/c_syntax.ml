@@ -195,7 +195,7 @@ struct
   let log_involves_file_management = true
 
   let for_log_trace_tree =
-    String.equal (Utils.get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no") "no"
+    Bool.of_string (Utils.get_global_arg ~arg_name:"debug_log_to_stream_files" ~default:"false")
 
   let pp_log_statement ~log_param_c_expr_doc:_ ~base_message_literal ~args_docs =
     let open PPrint in
@@ -564,19 +564,17 @@ module C_syntax (B : C_syntax_config) = struct
         | Some (_, name) -> name
         | None -> "log_file_name" (* Should ideally not be reached if management is true *)
       in
-      let for_append =
-        String.equal
-          (Utils.get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no")
-          "append"
-      in
       body :=
         !body ^^ string "FILE* log_file = NULL;" ^^ hardline
-        ^^ string ("if (" ^ log_file_var_name ^ ") {")
-        ^^ hardline
-        ^^ string ("  log_file = fopen(" ^ log_file_var_name ^ ", \"")
-        ^^ string (if for_append then "a" else "w")
-        ^^ string "\");" ^^ hardline ^^ string "}" ^^ hardline
-    else body := !body ^^ hardline;
+        ^^ group (
+             string ("if (" ^ log_file_var_name ^ ")") ^^ space
+             ^^ braces (
+                  nest 2 (
+                    string ("log_file = fopen(" ^ log_file_var_name ^ ", \"w\");")
+                  )
+                )
+           ) ^^ hardline
+      else body := !body ^^ hardline;
 
     (if Utils.debug_log_from_routines () then
        let debug_init_doc =

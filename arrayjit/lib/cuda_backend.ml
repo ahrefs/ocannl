@@ -529,6 +529,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       [%log "launching the kernel"];
       (* Stdio.printf "launching %s\n" name; *)
       (if Utils.debug_log_from_routines () then
+        (* FIXME: this needs to use Utils.log_debug_routine_logs. *)
          Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
          [%log_block
            runner_label;

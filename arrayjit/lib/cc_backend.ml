@@ -99,8 +99,8 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
-  (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
 
+  (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
   let result_library = c_compile_and_load ~f_name:build_file.f_name in
   { result = result_library; params; bindings; name }
 
@@ -121,26 +121,20 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
   in
   let build_file = Utils.open_build_file ~base_name ~extension:".c" in
   let declarations_doc = Syntax.print_declarations () in
-  let params_and_docs = 
+  let params_and_docs =
     Array.map2_exn names lowereds ~f:(fun name_opt lowered_opt ->
         Option.map2 name_opt lowered_opt ~f:(fun name lowered ->
             Syntax.compile_proc ~name idx_params lowered))
   in
-  let all_proc_docs = 
-    List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd)
-  in
+  let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
   let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
   let result_library = c_compile_and_load ~f_name:build_file.f_name in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
   Array.mapi params_and_docs ~f:(fun i opt_params_and_doc ->
-    Option.bind opt_params_and_doc ~f:(fun (params, _doc) ->
-      Option.map names.(i) ~f:(fun name ->
-        { result = result_library; params; bindings; name }
-      )
-    )
-  )
+      Option.bind opt_params_and_doc ~f:(fun (params, _doc) ->
+          Option.map names.(i) ~f:(fun name -> { result = result_library; params; bindings; name })))
 
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
@@ -190,7 +184,8 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
     [%log_result name];
     (* Stdio.printf "launching %s\n" name; *)
     Indexing.apply run_variadic ();
-    if Utils.debug_log_from_routines () then Utils.log_debug_routine_file log_file_name
+    if Utils.debug_log_from_routines () then
+      Utils.log_debug_routine_file ~log_file_name ~stream_name:runner_label
   in
   ( Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task

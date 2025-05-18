@@ -676,10 +676,17 @@ let capture_stdout_logs arg =
         captured_log_processors := []);
     result)
 
-let log_debug_routine_file log_file_name =
-  if String.equal (get_global_arg ~arg_name:"debug_log_to_routine_files" ~default:"no") "no" then (
-    log_trace_tree (Stdio.In_channel.read_lines log_file_name);
-    Stdlib.Sys.remove log_file_name)
+let log_debug_routine_logs ~log_contents ~stream_name =
+  if Bool.of_string (get_global_arg ~arg_name:"debug_log_to_stream_files" ~default:"false") then
+    let stream_file_name = diagn_log_file @@ stream_name ^ ".log" in
+    Stdio.Out_channel.with_file stream_file_name ~append:true ~f:(fun oc ->
+        List.iter log_contents ~f:(fun line -> Stdio.Out_channel.output_line oc line))
+  else log_trace_tree log_contents
+
+let log_debug_routine_file ~log_file_name ~stream_name =
+  let log_contents = Stdio.In_channel.read_lines log_file_name in
+  log_debug_routine_logs ~log_contents ~stream_name;
+  Stdlib.Sys.remove log_file_name
 
 type 'a weak_dynarray = 'a Stdlib.Weak.t ref
 

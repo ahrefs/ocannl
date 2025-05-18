@@ -17,36 +17,44 @@
   (pps ppx_ocannl)))
 
 (rule
+ (alias runtest)
  (target
   (dir log_files))
  (action
+  (run
+   %{dep:micrograd_demo_logging.exe}
+   "--ocannl_debug_backend=text"
+   "--ocannl_log_file_stem=micrograd_demo_logging"
+   "--ocannl_log_main_domain_to_stdout=false"
+   "--ocannl_debug_log_to_stream_files=true")))
+
+(rule
+ (alias runtest)
+ (target micrograd_demo_logging-stream-0-0.log)
+ (deps
+  (:kernel_log
+   (glob_files log_files/*-0-0.log)))
+ (action
   (progn
-   (run
-    %{dep:micrograd_demo_logging.exe}
-    "--ocannl_debug_backend=text"
-    "--ocannl_log_file_stem=micrograd_demo_logging"
-    "--ocannl_log_main_domain_to_stdout=false"
-    "--ocannl_debug_log_to_routine_files=overwrite")
    (run
     %{dep:../tools/minised.exe}
     "0x[0-9a-f]+"
     "0xNNNN"
-    "log_files/debug-multicore_cc-0-0-g_gradient_update.log"
-    "log_files/micrograd_demo_logging-g_gradient_update.log")
-    (run
+    %{kernel_log}
+    "micrograd_demo_logging-stream-0-0.log")
+   (run
     %{dep:../tools/minised.exe}
     "\\([a-z0-9_]+\\)\\[0\\]{=[-.e0-9]+} = "
     "\\1[0]{=MAYBE UNINITIALIZED} = "
-    "log_files/micrograd_demo_logging-g_gradient_update.log"
-    "log_files/micrograd_demo_logging-g_gradient_update.log"))))
+    "micrograd_demo_logging-stream-0-0.log"
+    "micrograd_demo_logging-stream-0-0.log"))))
 
 (rule
  (alias runtest)
- (deps log_files/debug-multicore_cc-0-0-g_gradient_update.log)
  (action
   (diff
-   micrograd_demo_logging-g_gradient_update.expected.log
-   log_files/micrograd_demo_logging-g_gradient_update.log)))
+   micrograd_demo_logging-stream-0-0.expected.log
+   micrograd_demo_logging-stream-0-0.log)))
 
 (library
  (name tutorials)

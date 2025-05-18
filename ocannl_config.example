@@ -57,10 +57,9 @@ automatic_host_transfers=true
 # sufficient information in the logs files.
 never_capture_stdout=false
 
-# If `no`, debug logs from routines are re-logged via the ppx_minidebug framework.
-# If `overwrite`, the logs from the most recent run of a routine are in a file named
-# after the routine. If `append`, the file is opened for appending instead.
-debug_log_to_routine_files=no
+# If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
+# If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
+debug_log_to_stream_files=false
 
 # If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.
 cuda_printf_fifo_size=
