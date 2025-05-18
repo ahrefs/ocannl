@@ -595,7 +595,7 @@ module C_syntax (B : C_syntax_config) = struct
                     in
                     B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
                       ~base_message_literal:base_msg
-                      ~args_docs:[ string "(void*)merge_buffer" ]
+                      ~args_docs:[ string @@ "(" ^ B.buffer_prefix ^ "void*)merge_buffer" ]
                 | Log_file_name -> empty (* Already handled by fopen or if it's just an ID *)
                 | Param_ptr tn ->
                     let base_msg =
@@ -604,7 +604,7 @@ module C_syntax (B : C_syntax_config) = struct
                     let ident_doc = string (get_ident tn) in
                     B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
                       ~base_message_literal:base_msg
-                      ~args_docs:[ string "(void*)" ^^ ident_doc ]
+                      ~args_docs:[ string ("(" ^ B.buffer_prefix ^ "void*)") ^^ ident_doc ]
                 | Static_idx s ->
                     let base_msg = Printf.sprintf "%s = %%d\n" p_name_and_type in
                     let ident_doc = pp_symbol s.static_symbol in
