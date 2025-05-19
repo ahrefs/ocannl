@@ -66,7 +66,6 @@ IMPORTANT: debug logging from CUDA in complex settings currently only works as i
 
 This is very tentative.
 
-* 0.5.x/0.6.x: Apple Metal backend.
 * 0.6: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
@@ -96,6 +95,7 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.5.3: Apple Metal backend.**
 * **0.5.2: More primitive operations.**
   * Supports a lot of primitive operations (including ternary ops), and ternary tensor operations.
   * `%cd` and `%op` support both curried and uncurried operator application syntax.
