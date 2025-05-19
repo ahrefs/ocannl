@@ -89,6 +89,9 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
 
     let use_host_memory = use_host_memory
     let procs = [| lowered |]
+    let full_printf_support =
+      not @@ Bool.of_string
+      @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -111,6 +114,10 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
 
     let use_host_memory = use_host_memory
     let procs = Array.filter_opt lowereds
+
+    let full_printf_support =
+      not @@ Bool.of_string
+      @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in

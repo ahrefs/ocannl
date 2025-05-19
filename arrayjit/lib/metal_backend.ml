@@ -417,6 +417,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
       let use_host_memory = use_host_memory
       let procs = Input.procs
+      let full_printf_support = false
     end)
 
     open PPrint (* Open PPrint locally *)
@@ -553,15 +554,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         String.substr_replace_all base ~pattern:"\n" ~with_
       in
       let base_doc = dquotes (string base) in
-      if List.length args_docs > 6 then
-        (* Failsafe for "newComputePipelineStateWithFunction:options:reflection:error: failed:
-           Compiler encountered an internal error". We could break up big log statements in
-           C_syntax, but that's too much complexity. *)
-        group
-          (string metal_log_object_name
-          ^^ string ".log_debug(\"Exceeded max of 6 logging args\")"
-          ^^ semi)
-      else if List.is_empty args_docs then
+      if List.is_empty args_docs then
         group (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ rparen ^^ semi)
       else
         group

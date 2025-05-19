@@ -264,6 +264,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
       let use_host_memory = None
       let procs = Input.procs
+      let full_printf_support =
+        not @@ Bool.of_string
+        @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
     end)
 
     let logs_to_stdout = true

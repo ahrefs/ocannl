@@ -4,7 +4,7 @@
 
 - The Metal framework backend (Apple Silicon).
 - Setting `debug_log_to_stream_files` to neatly keep logs from routine execution in their separate files.
-- Setting `clean_up_artifacts_on_startup`.
+- Settings `clean_up_artifacts_on_startup`, `prefer_backend_uniformity`.
 - Tools directory and the `minised` tool: regexp replacement file rewrite.
 
 ### Changed

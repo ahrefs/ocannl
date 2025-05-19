@@ -30,6 +30,12 @@ module type C_syntax_config = sig
   val typ_of_prec : Ops.prec -> string
   val ident_blacklist : string list
 
+  val float_log_style : string
+  (** Format specifier for printing floating point numbers in debug logs. *)
+
+  val styled_log_arg : PPrint.document -> PPrint.document
+  (** Function to convert potentially floating-point numeric values for logging. *)
+
   val ternop_syntax :
     Ops.prec ->
     Ops.ternop ->
@@ -70,6 +76,7 @@ module Pure_C_config (Input : sig
 
   val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   val procs : Low_level.optimized array
+  val full_printf_support : bool
 end) =
 struct
   let procs = Input.procs
@@ -86,6 +93,13 @@ struct
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
   let extra_declarations = []
   let typ_of_prec = Ops.c_typ_of_prec
+  let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
+
+  let styled_log_arg doc =
+    if Input.full_printf_support then doc
+    else
+      let open PPrint in
+      string "(int)(" ^^ doc ^^ string " * 1000.0)"
 
   let ident_blacklist =
     let remove_paren s = String.substr_replace_all s ~pattern:"(" ~with_:"" in
@@ -303,16 +317,19 @@ module C_syntax (B : C_syntax_config) = struct
           let pp_args_docs =
             List.map debug_args_docs ~f:(function
               | `Accessor idx -> pp_array_offset idx
-              | `Value v_doc -> v_doc)
+              | `Value v_doc -> B.styled_log_arg v_doc)
           in
           let log_args_for_printf =
-            offset_doc :: (ident_doc ^^ brackets offset_doc) :: new_var :: pp_args_docs
+            offset_doc
+            :: B.styled_log_arg (ident_doc ^^ brackets offset_doc)
+            :: B.styled_log_arg new_var :: pp_args_docs
           in
           let log_doc =
             let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
             let comment_base_msg = Printf.sprintf "# %s\n" debug in
             let value_base_msg =
-              Printf.sprintf "%s[%%u]{=%%g} = %%g = %s\n" (get_ident tn) debug_val_str
+              Printf.sprintf "%s[%%u]{=%s} = %s = %s\n" (get_ident tn) B.float_log_style
+                B.float_log_style debug_val_str
             in
             let comment_log =
               B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
@@ -443,7 +460,7 @@ module C_syntax (B : C_syntax_config) = struct
         let scope_prec = Lazy.force id.tn.prec in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
-        (v_doc ^^ braces (string "=%g"), [ `Value v_doc ])
+        (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let from_prec = Lazy.force tn.prec in
@@ -458,7 +475,7 @@ module C_syntax (B : C_syntax_config) = struct
             (string prefix ^^ string "merge_buffer"
             ^^ brackets (string "%u")
             ^^ string postfix
-            ^^ braces (string "=%g"))
+            ^^ braces (string ("=" ^ B.float_log_style)))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
     | Get_global _ -> failwith "Exec_as_cuda: Get_global / FFI NOT IMPLEMENTED YET"
@@ -476,7 +493,7 @@ module C_syntax (B : C_syntax_config) = struct
             (string prefix ^^ ident_doc
             ^^ brackets (string "%u")
             ^^ string postfix
-            ^^ braces (string "=%g"))
+            ^^ braces (string ("=" ^ B.float_log_style)))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
     | Constant c ->
@@ -566,15 +583,12 @@ module C_syntax (B : C_syntax_config) = struct
       in
       body :=
         !body ^^ string "FILE* log_file = NULL;" ^^ hardline
-        ^^ group (
-             string ("if (" ^ log_file_var_name ^ ")") ^^ space
-             ^^ braces (
-                  nest 2 (
-                    string ("log_file = fopen(" ^ log_file_var_name ^ ", \"w\");")
-                  )
-                )
-           ) ^^ hardline
-      else body := !body ^^ hardline;
+        ^^ group
+             (string ("if (" ^ log_file_var_name ^ ")")
+             ^^ space
+             ^^ braces (nest 2 (string ("log_file = fopen(" ^ log_file_var_name ^ ", \"w\");"))))
+        ^^ hardline
+    else body := !body ^^ hardline;
 
     (if Utils.debug_log_from_routines () then
        let debug_init_doc =
