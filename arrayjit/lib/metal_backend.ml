@@ -535,10 +535,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let convert_precision ~from ~to_ =
       if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")
 
-    let kernel_log_param = Some ("const int&", "log_id")
+    (* If we wanted to reintroduce the log_id parameter: [Some ("const int&", "log_id")]. *)
+    let kernel_log_param = None
     let log_involves_file_management = false
 
     let pp_log_statement ~log_param_c_expr_doc ~base_message_literal:base ~args_docs =
+      assert (Option.is_none log_param_c_expr_doc);
       let open PPrint in
       (* Metal os_log handles newlines directly. Prefix with captured_log_prefix and log_id for
          consistency. *)
@@ -550,21 +552,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         in
         String.substr_replace_all base ~pattern:"\n" ~with_
       in
-      let format_string_literal = "%d: " ^ base in
-      let all_args = Option.value_exn ~here:[%here] log_param_c_expr_doc :: args_docs in
-      if List.length all_args > 7 then
-        (* TODO: failsafe for "newComputePipelineStateWithFunction:options:reflection:error:
-           failed: Compiler encountered an internal error" *)
+      let base_doc = dquotes (string base) in
+      if List.length args_docs > 6 then
+        (* Failsafe for "newComputePipelineStateWithFunction:options:reflection:error: failed:
+           Compiler encountered an internal error". We could break up big log statements in
+           C_syntax, but that's too much complexity. *)
         group
           (string metal_log_object_name
-          ^^ string ".log_debug(\"Exceeded max of 7 logging args\")"
+          ^^ string ".log_debug(\"Exceeded max of 6 logging args\")"
           ^^ semi)
+      else if List.is_empty args_docs then
+        group (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ rparen ^^ semi)
       else
         group
-          (string metal_log_object_name ^^ string ".log_debug("
-          ^^ dquotes (string format_string_literal)
-          ^^ comma ^^ space
-          ^^ separate (comma ^^ space) all_args
+          (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma ^^ space
+          ^^ separate (comma ^^ space) args_docs
           ^^ rparen ^^ semi)
   end
 
@@ -689,9 +691,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                 | Some merge_buf -> Me.ComputeCommandEncoder.set_buffer encoder ~index merge_buf.ptr
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
-                let size = Ctypes.sizeof Ctypes.int in
-                let bytes_ptr = Ctypes.(allocate int stream.stream_id |> to_voidp) in
-                Me.ComputeCommandEncoder.set_bytes encoder ~bytes:bytes_ptr ~length:size ~index);
+                (* TODO:We could tag logs with a run id. *)
+                assert false);
 
         (* Dispatch - TODO: Determine grid/group sizes properly *)
         let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
