@@ -696,7 +696,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
         (* Dispatch - TODO: Determine grid/group sizes properly *)
         let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
-        let width = Int.min max_threads 32 in
+        let width = Int.min max_threads (* 32 *) 1 in
         (* Example: Use a small group size *)
         (* Example: single group *)
         Me.ComputeCommandEncoder.dispatch_threadgroups encoder
