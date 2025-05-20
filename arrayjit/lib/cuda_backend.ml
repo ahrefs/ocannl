@@ -231,7 +231,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let name_cu = name ^ ".cu" in
     if Utils.settings.output_debug_files_in_build_directory then (
       let build_file = Utils.open_build_file ~base_name:name ~extension:".cu" in
-      Stdio.Out_channel.output_string build_file.oc cu_src; (* Keep direct string output for source *)
+      Stdio.Out_channel.output_string build_file.oc cu_src;
       build_file.finalize ());
     [%log "compiling to PTX"];
     let with_debug =
@@ -286,8 +286,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let binop_syntax prec v =
       let open PPrint in
-      let f op_str v1 v2 = group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen) in
-      let func fn v1 v2 = group (string fn ^^ parens (separate comma_sep [ v1; v2 ])) in
+      let f op_str v1 v2 =
+        group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen)
+      in
+      let func fn v1 v2 = group (string fn ^^ parens (separate comma [ v1; v2 ])) in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
       | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
@@ -302,20 +304,49 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Div, _ -> f "/"
       | ToPowOf, Double_prec _ -> func "pow"
       | ToPowOf, Single_prec _ -> func "powf"
-      | ToPowOf, Half_prec _ -> C_syntax.binop_adapter ("hexp2(hlog2(", "),", ")")
+      | ToPowOf, Half_prec _ ->
+          fun v1 v2 -> group (string "hexp2(hlog2(" ^^ v1 ^^ string ")," ^^ v2 ^^ string ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
-      | Relu_gate, Byte_prec _ -> fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
-      | Relu_gate, Half_prec _ -> fun v1 v2 -> group (parens (string "__hgt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x0000U))") ^^ string " ? " ^^ v2 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
-      | Relu_gate, _ -> fun v1 v2 -> group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
-      | Satur01_gate, Byte_prec _ -> fun v1 v2 ->
-          parens (parens (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f") ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
-      | Satur01_gate, Half_prec _ -> fun v1 v2 ->
-          parens (parens (string "__hgt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt(" ^^ v1 ^^ comma ^^ string " __ushort_as_half((unsigned short)0x3C00U)))") ^^ string " ? " ^^ v2 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
-      | Satur01_gate, Single_prec _ -> fun v1 v2 ->
-          parens (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f") ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
-      | Satur01_gate, Double_prec _ -> fun v1 v2 ->
-          parens (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+      | Relu_gate, Byte_prec _ ->
+          fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
+      | Relu_gate, Half_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (string "__hgt(" ^^ v1 ^^ comma
+                 ^^ string " __ushort_as_half((unsigned short)0x0000U))")
+              ^^ string " ? " ^^ v2
+              ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+      | Relu_gate, _ ->
+          fun v1 v2 ->
+            group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+      | Satur01_gate, Byte_prec _ ->
+          fun v1 v2 ->
+            parens
+              (parens
+                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
+              ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
+      | Satur01_gate, Half_prec _ ->
+          fun v1 v2 ->
+            parens
+              (parens
+                 (string "__hgt(" ^^ v1 ^^ comma
+                 ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
+                 ^^ v1 ^^ comma
+                 ^^ string " __ushort_as_half((unsigned short)0x3C00U)))")
+              ^^ string " ? " ^^ v2
+              ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+      | Satur01_gate, Single_prec _ ->
+          fun v1 v2 ->
+            parens
+              (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
+              ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+      | Satur01_gate, Double_prec _ ->
+          fun v1 v2 ->
+            parens
+              (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
+              ^^ string " ? " ^^ v2 ^^ string " : 0.0")
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"
@@ -382,7 +413,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
       | Recip_sqrt, _ -> f "(1.0 / sqrtf(" "))"
       | Neg, _ -> f "(-(" "))"
-      | Tanh_approx, Byte_prec _ -> invalid_arg "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
+      | Tanh_approx, Byte_prec _ ->
+          invalid_arg
+            "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
       | Tanh_approx, Half_prec _ -> func "htanh_approx"
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
@@ -390,14 +423,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let ternop_syntax prec v =
       let open PPrint in
+      let func fn v1 v2 v3 = group (string fn ^^ parens (separate comma [ v1; v2; v3 ])) in
       match (v, prec) with
       | Ops.Where, _ -> fun v1 v2 v3 -> group (parens v1 ^^ string " ? " ^^ v2 ^^ string " : " ^^ v3)
-      | FMA, Ops.Half_prec _ -> C_syntax.ternop_adapter ("__hfma(", ",", ",", ")")
-      | FMA, Ops.Single_prec _ -> C_syntax.ternop_adapter ("fmaf(", ",", ",", ")")
-      | FMA, _ -> C_syntax.ternop_adapter ("fma(", ",", ",", ")")
+      | FMA, Ops.Half_prec _ -> func "__hfma"
+      | FMA, Ops.Single_prec _ -> func "fmaf"
+      | FMA, _ -> func "fma"
 
     let convert_precision ~from ~to_ =
-      let open PPrint in
       match (from, to_) with
       | Ops.Double_prec _, Ops.Double_prec _
       | Single_prec _, Single_prec _
@@ -416,7 +449,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
       let open PPrint in
       let format_string_literal =
-        !Utils.captured_log_prefix ^ "%d: " ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$"
+        !Utils.captured_log_prefix ^ "%d: "
+        ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$"
       in
       let all_args =
         match log_param_c_expr_doc with
@@ -426,7 +460,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       group
         (string "printf("
         ^^ dquotes (string format_string_literal)
-        ^^ comma ^^ space ^^ separate (comma ^^ space) all_args ^^ rparen ^^ semi)
+        ^^ comma ^^ space
+        ^^ separate (comma ^^ space) all_args
+        ^^ rparen ^^ semi)
   end
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
@@ -442,7 +478,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let declarations_doc = Syntax.print_declarations () in
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
-    PPrint.ToBuffer.pretty 1.0 110 b final_doc; (* Use ToBuffer *) 
+    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
     let ptx = cuda_to_ptx ~name (Buffer.contents b) in
     { traced_store; ptx; params; bindings; name }
 
@@ -453,11 +489,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     let declarations_doc = Syntax.print_declarations () in
-    let params_and_docs = 
+    let params_and_docs =
       Array.map2_exn names lowereds
         ~f:
           (Option.map2 ~f:(fun name lowered ->
-               let params, doc = Syntax.compile_proc ~name idx_params lowered in 
+               let params, doc = Syntax.compile_proc ~name idx_params lowered in
                ((params, name), doc)))
     in
     let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
@@ -485,7 +521,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name in
     let stream = prior_context.stream in
-    let runner_label = get_name stream in
+    let stream_name = get_name stream in
     let%diagn3_sexp work () : unit =
       let log_id = get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -493,7 +529,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         "Launching",
         name,
         "on",
-        runner_label,
+        stream_name,
         (log_id : int),
         (params : (string * param_source) list)];
       let module S = Cu.Stream in
@@ -532,18 +568,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       [%log "launching the kernel"];
       (* Stdio.printf "launching %s\n" name; *)
       (if Utils.debug_log_from_routines () then
-        (* FIXME: this needs to use Utils.log_debug_routine_logs. *)
-         Utils.add_log_processor ~prefix:log_id_prefix @@ fun _output ->
-         [%log_block
-           runner_label;
-           Utils.log_trace_tree _output]);
+         (* FIXME: this needs to use Utils.log_debug_routine_logs. *)
+         Utils.add_log_processor ~prefix:log_id_prefix @@ fun log_contents ->
+         Utils.log_debug_routine_logs ~log_contents ~stream_name);
       S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
       [%log "kernel launched"]
     in
     Task.Task
       {
         context_lifetime = (run_module, ctx_arrays);
-        description = "launches " ^ name ^ " on " ^ runner_label;
+        description = "launches " ^ name ^ " on " ^ stream_name;
         work;
       }
 
@@ -590,27 +624,27 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       [ ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ()) ]
 
   let static_properties =
-    let device_properties = 
+    let device_properties =
       Array.init (num_devices ()) ~f:(fun ordinal ->
-        let dev = Cu.Device.get ~ordinal in
-        let attributes = Cu.Device.get_attributes dev in
-        let props = [
-          ("device_name", Sexp.Atom (Cu.Device.get_name dev));
-          ("device_ordinal", [%sexp_of: int] ordinal);
-          ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
-          ("total_global_memory", [%sexp_of: int] (Cu.Device.get_total_memory dev));
-          ("clock_rate", [%sexp_of: int] attributes.clock_rate);
-          ("async_engine_count", [%sexp_of: int] attributes.async_engine_count);
-          ("compute_capability_major", [%sexp_of: int] attributes.compute_capability_major);
-          ("compute_capability_minor", [%sexp_of: int] attributes.compute_capability_minor);
-          ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
-          ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
-        ] in
-        Sexp.List [Sexp.Atom "device"; Sexp.List props]
-      )
+          let dev = Cu.Device.get ~ordinal in
+          let attributes = Cu.Device.get_attributes dev in
+          let props =
+            [
+              ("device_name", Sexp.Atom attributes.name);
+              ("device_ordinal", [%sexp_of: int] ordinal);
+              ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
+              ("clock_rate", [%sexp_of: int] attributes.clock_rate);
+              ("async_engine_count", [%sexp_of: int] attributes.async_engine_count);
+              ("compute_capability_major", [%sexp_of: int] attributes.compute_capability_major);
+              ("compute_capability_minor", [%sexp_of: int] attributes.compute_capability_minor);
+              ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
+              ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
+            ]
+          in
+          Sexp.message "device" props)
     in
-    Sexp.List (Sexp.Atom "cuda_devices" :: device_properties)
-  
+    Sexp.List (Sexp.Atom "cuda_devices" :: Array.to_list device_properties)
+
   let get_debug_info (stream : stream) =
     let tot, unr, unf = Cu.Stream.total_unreleased_unfinished_delimited_events stream.runner in
     let i2s = [%sexp_of: int] in
