@@ -88,7 +88,7 @@ let%expect_test "Micrograd half-moons example" =
   Rand.init 5;
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
-  let module Backend = (val Backends.fresh_backend ~backend_name:"cc" ()) in
+  let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in

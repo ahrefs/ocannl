@@ -52,6 +52,9 @@ clean_up_artifacts_on_startup=true
 
 # Other configurations:
 
+# The default backend for computations, if `Backends.fresh_backend` isn't passed `backend_name`.
+bacend=multicore_cc
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #
@@ -67,10 +70,11 @@ debug_log_to_stream_files=false
 # If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.
 cuda_printf_fifo_size=
 
-# The `-O` argument to the compiler executable for the `cc` backend.
+# The `-O` argument to the compiler executable for the `multicore_cc` and `sync_cc` backends.
 cc_backend_optimization_level=3
 
-# The `cc` backend compiler executable name. By default, `ocamlc -config` field `c_compiler` is used.
+# The `multicore_cc` and `sync_cc` backends compiler executable name.
+# By default, `ocamlc -config` field `c_compiler` is used.
 cc_backend_compiler_command=
 
 # The `-O` argument to `gcc` for the `gcc` backend (using gccjit).

@@ -79,7 +79,7 @@ let benchmark_overhead backend () =
 let benchmarks =
   [
     (* benchmark_overhead (fresh_backend "gccjit" ()); *)
-    benchmark_overhead (fresh_backend ~backend_name:"cc" ());
+    benchmark_overhead (fresh_backend ~backend_name:"multicore_cc" ());
     benchmark_overhead (fresh_backend ~backend_name:"cuda" ());
   ]
 

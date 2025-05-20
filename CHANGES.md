@@ -11,6 +11,7 @@
 
 - Removed `initialize` and `is_initialized` from the backend API; instead, backends should be initialized on functor application. The functors now take `config` as argument.
 - More descriptive identifier names in C-syntax code in case of name conflicts.
+- Changed the backend config name `cc` to `multicore_cc` for consistency.
 
 ### Fixed
 

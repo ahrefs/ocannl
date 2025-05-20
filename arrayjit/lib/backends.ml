@@ -524,10 +524,10 @@ let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () 
   end in
   match
     Option.value_or_thunk backend_name ~default:(fun () ->
-        Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+        Utils.get_global_arg ~arg_name:"backend" ~default:"multicore_cc")
     |> String.lowercase
   with
-  | "cc" ->
+  | "multicore_cc" ->
       (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) (Config)
       : Backend)
   | "gccjit" ->

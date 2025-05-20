@@ -217,7 +217,7 @@ let _cuda_benchmarks =
         ~f:(fun batch_size ->
           List.concat_map [ (* 0; 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; "cuda";"sync_cc" ; *) "cc" ]
+                  List.concat_map [ (* "gccjit" ; "cuda";"sync_cc" ; *) "multicore_cc" ]
                     ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
@@ -244,7 +244,7 @@ let _cuda_parallel_benchmarks =
         ~f:(fun batch_size ->
           List.concat_map [ 0 (* 1; 2; 3 *) ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit"; "cuda" ;"cc"; *) "sync_cc" ]
+                  List.concat_map [ (* "gccjit"; "cuda" ;"multicore_cc"; *) "sync_cc" ]
                     ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single (* ; CDSL.half *) ]
                         ~f:(fun value_prec ->
@@ -264,7 +264,7 @@ let _mem_benchmarks =
         ~f:(fun batch_size ->
           List.concat_map [ 0; (* 1; 2; *) 3 ] ~f:(fun inlining_cutoff ->
               List.concat_map [ (* 1; 3; *) 7 (* *) ] ~f:(fun seed ->
-                  List.concat_map [ (* "gccjit" ; *) "cc"; "cuda" ] ~f:(fun backend_name ->
+                  List.concat_map [ (* "gccjit" ; *) "multicore_cc"; "cuda" ] ~f:(fun backend_name ->
                       List.concat_map [ (* CDSL.double; *) CDSL.single; CDSL.half ]
                         ~f:(fun value_prec ->
                           [
@@ -290,7 +290,7 @@ let _suspended () =
 let _suspended () =
   [
     classify_moons ~seed:7 ~on_device:true ~inlining_cutoff:0 ~num_streams:3 ~batch_size:240
-      ~backend_name:"cc" ~value_prec:CDSL.half ~grad_prec:CDSL.half ();
+      ~backend_name:"multicore_cc" ~value_prec:CDSL.half ~grad_prec:CDSL.half ();
   ]
   |> PrintBox_utils.table |> PrintBox_text.output Stdio.stdout
 

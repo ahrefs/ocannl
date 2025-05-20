@@ -130,12 +130,12 @@ let experiment ~seed ~backend_name ~config () =
   in
   PrintBox_text.output Stdio.stdout plot_lr
 
-let () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()
-let _suspended () = experiment ~seed:1 ~backend_name:"cc" ~config:Only_devices_parallel ()
+let () = experiment ~seed:1 ~backend_name:"multicore_cc" ~config:Only_devices_parallel ()
+let _suspended () = experiment ~seed:1 ~backend_name:"multicore_cc" ~config:Only_devices_parallel ()
 let _suspended () = experiment ~seed:1 ~backend_name:"cuda" ~config:Most_parallel_streams ()
 
 let _suspended () =
   for seed = 0 to 19 do
     Stdio.printf "\n*************** EXPERIMENT SEED %d ******************\n%!" seed;
-    experiment ~seed ~backend_name:"cc" ~config:Only_devices_parallel ()
+    experiment ~seed ~backend_name:"multicore_cc" ~config:Only_devices_parallel ()
   done

@@ -9,7 +9,7 @@ module Rand = Ir.Rand.Lib
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let%diagn_sexp () =
-  let module Backend = (val Backends.fresh_backend ~backend_name:"cc" ()) in
+  let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   Utils.settings.output_debug_files_in_build_directory <- true;
