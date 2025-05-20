@@ -33,6 +33,7 @@ _opam/
 # Local configuration
 ocannl_config
 !test/ocannl_config
+!test/config/ocannl_config
 !test_ppx/ocannl_config
 # Convenience for storing particular configurations, not used by OCANNL
 ocannl_config-*

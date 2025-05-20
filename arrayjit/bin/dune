@@ -1,0 +1,7 @@
+(executable
+ (name read_config)
+ (modules read_config)
+ (libraries utils)
+ (preprocess
+  (pps ppx_minidebug ppx_sexp_conv))
+ (modes exe))

@@ -6,6 +6,7 @@
 - Setting `debug_log_to_stream_files` to neatly keep logs from routine execution in their separate files.
 - Settings `clean_up_artifacts_on_startup`, `prefer_backend_uniformity`.
 - Tools directory and the `minised` tool: regexp replacement file rewrite.
+- Directory arrayjit/bin and executable `read_config` for extracting OCANNL configuration into txt files.
 
 ### Changed
 

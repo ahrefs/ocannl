@@ -16,6 +16,17 @@
  (preprocess
   (pps ppx_ocannl)))
 
+(subdir
+ config
+ (rule
+  (target ocannl_backend.txt)
+  (deps ocannl_config)
+  (action
+   (run %{dep:../../arrayjit/bin/read_config.exe} "--read=backend"))))
+
+(copy_files
+ (files config/ocannl_config))
+
 (rule
  (alias runtest)
  (target
@@ -29,32 +40,28 @@
    "--ocannl_debug_log_to_stream_files=true")))
 
 (rule
- (alias runtest)
- (target micrograd_demo_logging-stream-0-0.log)
- (deps
-  (:kernel_log
-   (glob_files log_files/*-0-0.log)))
+ (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
  (action
   (progn
    (run
     %{dep:../tools/minised.exe}
     "0x[0-9a-f]+"
     "0xNNNN"
-    %{kernel_log}
-    "micrograd_demo_logging-stream-0-0.log")
+    "log_files/%{read:config/ocannl_backend.txt}-0-0.log"
+    "%{read:config/ocannl_backend.txt}-0-0.log.actual")
    (run
     %{dep:../tools/minised.exe}
     "\\([a-z0-9_]+\\)\\[0\\]{=[-.e0-9]+} = "
     "\\1[0]{=MAYBE UNINITIALIZED} = "
-    "micrograd_demo_logging-stream-0-0.log"
-    "micrograd_demo_logging-stream-0-0.log"))))
+    "%{read:config/ocannl_backend.txt}-0-0.log.actual"
+    "%{read:config/ocannl_backend.txt}-0-0.log.actual"))))
 
 (rule
  (alias runtest)
  (action
   (diff
-   micrograd_demo_logging-stream-0-0.expected.log
-   micrograd_demo_logging-stream-0-0.log)))
+   "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
+   "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
 (library
  (name tutorials)
