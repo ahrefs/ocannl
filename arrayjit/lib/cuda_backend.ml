@@ -264,12 +264,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
       let use_host_memory = None
       let procs = Input.procs
+
       let full_printf_support =
         not @@ Bool.of_string
         @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
     end)
 
-    let logs_to_stdout = true
     let main_kernel_prefix = "extern \"C\" __global__"
 
     let kernel_prep_line =
@@ -450,7 +450,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let open PPrint in
       let format_string_literal =
         !Utils.captured_log_prefix ^ "%d: "
-        ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$"
+        ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$" ^ "\\n"
       in
       let all_args =
         match log_param_c_expr_doc with
@@ -568,7 +568,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       [%log "launching the kernel"];
       (* Stdio.printf "launching %s\n" name; *)
       (if Utils.debug_log_from_routines () then
-         (* FIXME: this needs to use Utils.log_debug_routine_logs. *)
          Utils.add_log_processor ~prefix:log_id_prefix @@ fun log_contents ->
          Utils.log_debug_routine_logs ~log_contents ~stream_name);
       S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
