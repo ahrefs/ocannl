@@ -449,8 +449,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
       let open PPrint in
       let format_string_literal =
-        !Utils.captured_log_prefix ^ "%d: "
-        ^ String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$" ^ "\\n"
+        let res = String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$" in
+        let res =
+          if for_log_trace_tree && String.is_suffix res ~suffix:"$" then
+            String.drop_suffix res 1 ^ "\\n"
+          else res
+        in
+        !Utils.captured_log_prefix ^ "%d: " ^ res
       in
       let all_args =
         match log_param_c_expr_doc with

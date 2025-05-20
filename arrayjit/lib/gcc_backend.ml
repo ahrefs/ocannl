@@ -785,7 +785,8 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
   let%diagn_sexp work () : unit =
     [%log_result name];
     Indexing.apply run_variadic ();
-    if Utils.debug_log_from_routines () then Utils.log_debug_routine_file log_file_name
+    if Utils.debug_log_from_routines () then
+      Utils.log_debug_routine_file ~log_file_name ~stream_name:runner_label
   in
   ( Indexing.lowered_bindings code.bindings run_variadic,
     Task.Task
