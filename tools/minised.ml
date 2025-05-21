@@ -43,5 +43,4 @@ let () =
 
   let oc = open_out !output_filename in
   output_string oc new_content;
-  close_out oc;
-  print_endline ("Successfully wrote to " ^ !output_filename)
+  close_out oc

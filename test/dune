@@ -46,9 +46,15 @@
   (progn
    (run
     %{dep:../tools/minised.exe}
-    "0x[0-9a-f]+"
-    "0xNNNN"
+    " = 0x[0-9a-fA-F]+"
+    " = 0xNNNN"
     "log_files/%{read:config/ocannl_backend.txt}-0-0.log"
+    "%{read:config/ocannl_backend.txt}-0-0.log.actual")
+    (run
+    %{dep:../tools/minised.exe}
+    " = 00[0-9a-fA-F]+"
+    " = 0xNNNN"
+    "%{read:config/ocannl_backend.txt}-0-0.log.actual"
     "%{read:config/ocannl_backend.txt}-0-0.log.actual")
    (run
     %{dep:../tools/minised.exe}
