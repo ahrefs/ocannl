@@ -185,7 +185,7 @@ module Multicore (Backend : For_add_scheduler) :
         })
 
   let num_devices () = 1
-  let suggested_num_streams _device = Domain.recommended_domain_count () - 1
+  let suggested_num_streams _device = Domain.recommended_domain_count () - 2
 
   let static_properties =
     Sexp.List [
