@@ -113,7 +113,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let%track4_sexp finalize_device (device : device) =
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
-    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ());
     (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
     Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
         Cu.Deviceptr.mem_free buffer_ptr)
@@ -168,8 +167,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
   let await stream : unit =
     set_ctx stream.device.dev.primary_context;
-    Cu.Stream.synchronize stream.runner;
-    Option.iter !Utils.advance_captured_logs ~f:(fun callback -> callback ())
+    Cu.Stream.synchronize stream.runner
 
   let is_idle stream = Cu.Stream.is_ready stream.runner
 

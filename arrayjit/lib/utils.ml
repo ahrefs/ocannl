@@ -622,7 +622,7 @@ let captured_log_prefix = ref "!@#"
 
 (** To avoid the complication of a concurrent thread, we expose a callback for collaborative log
     processing. *)
-let advance_captured_logs = ref None
+let advance_captured_logs : (unit -> unit) option ref = ref None
 
 type captured_log_processor = { log_processor_prefix : string; process_logs : string list -> unit }
 
@@ -644,59 +644,101 @@ let input_line chan =
 let capture_stdout_logs arg =
   if never_capture_stdout () || not (debug_log_from_routines ()) then arg ()
   else (
-    Stdlib.flush Stdlib.stdout;
-    let ls = ref [] in
-    let lastl = ref "" in
-    let backup = ref (Unix.dup Unix.stdout) in
-    let exit_entrance = ref (Unix.pipe ()) in
-    let pre_advance () =
-      Unix.dup2 (snd !exit_entrance) Unix.stdout;
-      Unix.set_nonblock (snd !exit_entrance)
+    Stdlib.flush Stdlib.stdout; (* Ensure previous stdout is flushed *)
+    let original_stdout_fd = Unix.dup Unix.stdout in
+    let old_advance_captured_logs_val = !advance_captured_logs in
+    advance_captured_logs := None;
+
+    let pipe_read_fd, pipe_write_fd = Unix.pipe ~cloexec:true () in
+    Unix.dup2 pipe_write_fd Unix.stdout;
+    (* pipe_write_fd is now the new Stdlib.stdout, do not close it in parent until done. *)
+    (* The reader domain will close pipe_read_fd. *)
+
+    let collected_logs_ref = ref [] in
+    let passthrough_lines_ref = ref [] in (* Buffer for non-log lines *)
+    let reader_domain_failed = Atomic.make false in
+
+    let reader_domain_logic () =
+      let in_channel = Unix.in_channel_of_descr pipe_read_fd in
+      try
+        while true do
+          let _is_endlined, line = input_line in_channel in
+          match String.chop_prefix ~prefix:!captured_log_prefix line with
+          | Some logline -> collected_logs_ref := logline :: !collected_logs_ref
+          | None -> passthrough_lines_ref := line :: !passthrough_lines_ref (* Buffer the line *)
+        done;
+        Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
+      with
+      | End_of_file -> () (* Normal termination of the reader *)
+      | exn ->
+          Atomic.set reader_domain_failed true;
+          Stdio.eprintf "Exception in stdout reader domain: %s\\nBacktrace:\\n%s\\n%!"
+            (Exn.to_string exn) (Stdlib.Printexc.get_backtrace ());
+            Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *);
+          Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
     in
-    let advance is_last () =
-      Stdlib.flush Stdlib.stdout;
-      Unix.close (snd !exit_entrance);
-      Unix.dup2 !backup Unix.stdout;
-      let channel = Unix.in_channel_of_descr (fst !exit_entrance) in
-      (try
-         while true do
-           let is_endlined, line = input_line channel in
-           let line = !lastl ^ line in
-           if is_endlined then (
-             (match String.chop_prefix ~prefix:!captured_log_prefix line with
-             | None -> Stdlib.print_endline line
-             (* ls := line :: !ls *)
-             | Some logline -> ls := logline :: !ls);
-             lastl := "")
-           else lastl := line
-         done
-       with End_of_file -> ());
-      if not is_last then (
-        backup := Unix.dup Unix.stdout;
-        exit_entrance := Unix.pipe ();
-        pre_advance ())
-    in
-    advance_captured_logs := Some (advance false);
-    pre_advance ();
+
+    let reader_domain = Domain.spawn reader_domain_logic in
+
     let result =
       try arg ()
-      with Sys_blocked_io ->
-        advance_captured_logs := None;
-        invalid_arg
-          "capture_stdout_logs: unfortunately, flushing stdout inside captured code is prohibited"
+      with exn ->
+        (* Ensure cleanup even if arg() fails *)
+        Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
+        Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
+        (try Domain.join reader_domain
+         with e ->
+           Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!"
+             (Exn.to_string e));
+        
+        Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
+        Unix.close original_stdout_fd;
+        advance_captured_logs := old_advance_captured_logs_val;
+
+        if not (Atomic.get reader_domain_failed) then (
+          let captured_output = List.rev !collected_logs_ref in
+          List.iter (List.rev !captured_log_processors)
+            ~f:(fun { log_processor_prefix; process_logs } ->
+              process_logs
+              @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix));
+          (* Print passthrough lines even if arg() failed, if reader was ok *)
+          List.iter (List.rev !passthrough_lines_ref) ~f:Stdlib.print_endline;
+        );
+        captured_log_processors := []; (* Clear processors *)
+        Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
     in
-    advance true ();
-    let output = List.rev !ls in
-    Exn.protect
-      ~f:(fun () ->
-        (* Preserve the order in which kernels were launched. *)
-        List.iter (List.rev !captured_log_processors)
-          ~f:(fun { log_processor_prefix; process_logs } ->
-            process_logs
-            @@ List.filter_map output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
-      ~finally:(fun () ->
-        advance_captured_logs := None;
-        captured_log_processors := []);
+
+    (* Normal path: arg() completed successfully *)
+    Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
+    Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
+
+    (try Domain.join reader_domain
+     with e ->
+       Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!"
+         (Exn.to_string e);
+       if Atomic.get reader_domain_failed then
+         Stdlib.Printexc.raise_with_backtrace e (Stdlib.Printexc.get_raw_backtrace ()));
+
+    Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
+    Unix.close original_stdout_fd;
+    advance_captured_logs := old_advance_captured_logs_val;
+
+    if not (Atomic.get reader_domain_failed) then (
+      let captured_output = List.rev !collected_logs_ref in
+      Exn.protect
+        ~f:(fun () ->
+          (* Process captured logs by processors first. *)
+          List.iter (List.rev !captured_log_processors)
+            ~f:(fun { log_processor_prefix; process_logs } ->
+              process_logs
+              @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
+        ~finally:(fun () -> captured_log_processors := []);
+      
+      (* Then print passthrough lines to the now-restored original stdout *)
+      List.iter (List.rev !passthrough_lines_ref) ~f:Stdlib.print_endline;
+    ) else (
+        captured_log_processors := []; (* Clear processors if reader failed *)
+    );
     result)
 
 let log_debug_routine_logs ~log_contents ~stream_name =
