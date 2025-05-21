@@ -620,10 +620,6 @@ let open_build_file ~base_name ~extension : build_file_channel =
 
 let captured_log_prefix = ref "!@#"
 
-(** To avoid the complication of a concurrent thread, we expose a callback for collaborative log
-    processing. *)
-let advance_captured_logs : (unit -> unit) option ref = ref None
-
 type captured_log_processor = { log_processor_prefix : string; process_logs : string list -> unit }
 
 let captured_log_processors : captured_log_processor list ref = ref []
@@ -646,8 +642,6 @@ let capture_stdout_logs arg =
   else (
     Stdlib.flush Stdlib.stdout; (* Ensure previous stdout is flushed *)
     let original_stdout_fd = Unix.dup Unix.stdout in
-    let old_advance_captured_logs_val = !advance_captured_logs in
-    advance_captured_logs := None;
 
     let pipe_read_fd, pipe_write_fd = Unix.pipe ~cloexec:true () in
     Unix.dup2 pipe_write_fd Unix.stdout;
@@ -705,7 +699,6 @@ let capture_stdout_logs arg =
         (try Domain.join reader_domain
          with e ->
            Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!" (Exn.to_string e));
-        advance_captured_logs := old_advance_captured_logs_val;
 
         if not (Atomic.get reader_domain_failed) then (
           let captured_output = List.rev !collected_logs_ref in
@@ -733,7 +726,6 @@ let capture_stdout_logs arg =
        Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!" (Exn.to_string e);
        if Atomic.get reader_domain_failed then
          Stdlib.Printexc.raise_with_backtrace e (Stdlib.Printexc.get_raw_backtrace ()));
-    advance_captured_logs := old_advance_captured_logs_val;
 
     if not (Atomic.get reader_domain_failed) then (
       let captured_output = List.rev !collected_logs_ref in
