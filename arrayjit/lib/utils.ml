@@ -686,13 +686,19 @@ let capture_stdout_logs arg =
         (* Ensure cleanup even if arg() fails *)
         Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
         Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
-        (try Domain.join reader_domain
-         with e ->
-           Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!"
-             (Exn.to_string e));
-        
+        (* Restore stdout before waiting for the reader domain so that the
+           write end of the pipe is effectively closed (both the explicit
+           [pipe_write_fd] descriptor above _and_ the descriptor 1 obtained
+           via [dup2] earlier).  Otherwise the reader domain would never see
+           an EOF and [Domain.join] would block indefinitely. *)
         Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
         Unix.close original_stdout_fd;
+
+        (* Now that all write descriptors for the pipe are closed, we can
+           wait for the reader domain to finish. *)
+        (try Domain.join reader_domain
+         with e ->
+           Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!" (Exn.to_string e));
         advance_captured_logs := old_advance_captured_logs_val;
 
         if not (Atomic.get reader_domain_failed) then (
@@ -712,15 +718,17 @@ let capture_stdout_logs arg =
     Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
     Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
 
-    (try Domain.join reader_domain
-     with e ->
-       Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!"
-         (Exn.to_string e);
-       if Atomic.get reader_domain_failed then
-         Stdlib.Printexc.raise_with_backtrace e (Stdlib.Printexc.get_raw_backtrace ()));
-
+    (* Restore stdout before waiting for the reader domain so that the
+       write end of the pipe is effectively closed and the reader can finish
+       properly. *)
     Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
     Unix.close original_stdout_fd;
+
+    (try Domain.join reader_domain
+     with e ->
+       Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!" (Exn.to_string e);
+       if Atomic.get reader_domain_failed then
+         Stdlib.Printexc.raise_with_backtrace e (Stdlib.Printexc.get_raw_backtrace ()));
     advance_captured_logs := old_advance_captured_logs_val;
 
     if not (Atomic.get reader_domain_failed) then (
