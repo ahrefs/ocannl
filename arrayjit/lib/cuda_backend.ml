@@ -67,7 +67,11 @@ module Alloc_buffer = struct
       (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
     in
     set_ctx stream.device.dev.primary_context;
-    Cu.Deviceptr.mem_alloc ~size_in_bytes
+    let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in
+    (* TODO: consider using memset_d8 to zero-initialize the memory. *)
+    (* if size_in_bytes > 0 then
+      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes stream.runner; *)
+    ptr
 
   let free_buffer = Some (fun _stream ptr -> Cu.Deviceptr.mem_free ptr)
 end
@@ -283,10 +287,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Void_prec -> "void"
 
     let binop_syntax prec v =
+      (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only
+         where different. *)
       let open PPrint in
-      let f op_str v1 v2 =
-        group (lparen ^^ v1 ^^ space ^^ string op_str ^^ space ^^ v2 ^^ rparen)
-      in
+      let f op_str v1 v2 = group @@ parens (v1 ^^ space ^^ string op_str ^^ space ^^ v2) in
       let func fn v1 v2 = group (string fn ^^ parens (separate comma [ v1; v2 ])) in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
@@ -307,44 +311,50 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
       | Relu_gate, Byte_prec _ ->
-          fun v1 v2 -> group (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
+          fun v1 v2 ->
+            group @@ parens (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
       | Relu_gate, Half_prec _ ->
           fun v1 v2 ->
             group
-              (parens
-                 (string "__hgt(" ^^ v1 ^^ comma
-                 ^^ string " __ushort_as_half((unsigned short)0x0000U))")
-              ^^ string " ? " ^^ v2
-              ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+            @@ parens
+                 (parens
+                    (string "__hgt(" ^^ v1 ^^ comma
+                    ^^ string " __ushort_as_half((unsigned short)0x0000U))")
+                 ^^ string " ? " ^^ v2
+                 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
       | Relu_gate, _ ->
           fun v1 v2 ->
-            group (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+            group @@ parens (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
-            parens
-              (parens
-                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
-              ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
+            group
+            @@ parens
+                 (parens
+                    (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
+                 ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
       | Satur01_gate, Half_prec _ ->
           fun v1 v2 ->
-            parens
-              (parens
-                 (string "__hgt(" ^^ v1 ^^ comma
-                 ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
-                 ^^ v1 ^^ comma
-                 ^^ string " __ushort_as_half((unsigned short)0x3C00U)))")
-              ^^ string " ? " ^^ v2
-              ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+            group
+            @@ parens
+                 (parens
+                    (string "__hgt(" ^^ v1 ^^ comma
+                    ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
+                    ^^ v1 ^^ comma
+                    ^^ string " __ushort_as_half((unsigned short)0x3C00U)))")
+                 ^^ string " ? " ^^ v2
+                 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
       | Satur01_gate, Single_prec _ ->
           fun v1 v2 ->
-            parens
-              (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
-              ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+            group
+            @@ parens
+                 (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
+                 ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
       | Satur01_gate, Double_prec _ ->
           fun v1 v2 ->
-            parens
-              (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
-              ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+            group
+            @@ parens
+                 (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
+                 ^^ string " ? " ^^ v2 ^^ string " : 0.0")
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"
@@ -403,13 +413,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip, Byte_prec _ ->
           invalid_arg "Cuda_backend.unop_syntax: Recip not supported for byte/integer precisions"
       | Recip, Half_prec _ -> func "hrcp"
-      | Recip, _ -> f "(1.0 / (" "))"
+      | Recip, Single_prec _ -> f "(1.0f / (" "))"
+      | Recip, Double_prec _ -> f "(1.0 / (" "))"
+      | Recip, _ -> f "(1 / (" "))"
       | Recip_sqrt, Byte_prec _ ->
           invalid_arg
             "Cuda_backend.unop_syntax: Recip_sqrt not supported for byte/integer precisions"
       | Recip_sqrt, Half_prec _ -> func "hrsqrt"
       | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
-      | Recip_sqrt, _ -> f "(1.0 / sqrtf(" "))"
+      | Recip_sqrt, Single_prec _ -> f "(1.0f / sqrtf(" "))"
+      | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
       | Neg, _ -> f "(-(" "))"
       | Tanh_approx, Byte_prec _ ->
           invalid_arg

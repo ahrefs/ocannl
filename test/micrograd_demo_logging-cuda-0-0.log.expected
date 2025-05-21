@@ -60,13 +60,13 @@ b_grad[0]{=MAYBE UNINITIALIZED} = -333201e-3 = fmaf(a[0]{=-4000e-3},n14_d_grad[0
 # b.grad[0] := fma((3 * (b[0] * b[0])), n14_d.grad[0], b.grad[0]);
 b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = fmaf(((float)(3) * (b[0]{=2000e-3} * b[0]{=2000e-3})),n14_d_grad[0]{=83300e-3},b_grad[0]{=-333201e-3})
 # b.grad[0] := (b.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
-b_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (b_grad[0]{=666402e-3} + (n31[0]{=-2000e-3} > 0.0) ? n40_d_grad[0]{=27766e-3} : 0.0)
+b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = (b_grad[0]{=666402e-3} + ((n31[0]{=-2000e-3} > 0.0) ? n40_d_grad[0]{=27766e-3} : 0.0))
 # a.grad[0] := (a.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
-a_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (a_grad[0]{=166600e-3} + (n31[0]{=-2000e-3} > 0.0) ? n40_d_grad[0]{=27766e-3} : 0.0)
+a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = (a_grad[0]{=166600e-3} + ((n31[0]{=-2000e-3} > 0.0) ? n40_d_grad[0]{=27766e-3} : 0.0))
 # b.grad[0] :=$  (b.grad[0] + relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
-b_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (b_grad[0]{=27766e-3} + (n42[0]{=6000e-3} > 0.0) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0)
+b_grad[0]{=MAYBE UNINITIALIZED} = 673344e-3 = (b_grad[0]{=666402e-3} + ((n42[0]{=6000e-3} > 0.0) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0))
 # a.grad[0] :=$  (a.grad[0] - relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
-a_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (a_grad[0]{=27766e-3} - (n42[0]{=6000e-3} > 0.0) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0)
+a_grad[0]{=MAYBE UNINITIALIZED} = 159658e-3 = (a_grad[0]{=166600e-3} - ((n42[0]{=6000e-3} > 0.0) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0))
 # n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
 n19_c_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = fmaf(((float)(2) * e[0]{=-7000e-3}),f_grad[0]{=495e-3},n19_c_grad[0]{=0e-3})
 # n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
@@ -76,10 +76,10 @@ n4_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n4_c_grad[0]{=0e-3} + n19_c_gr
 # n4_c.grad[0] := (n4_c.grad[0] + n19_c.grad[0]);
 n4_c_grad[0]{=MAYBE UNINITIALIZED} = -27766e-3 = (n4_c_grad[0]{=-13883e-3} + n19_c_grad[0]{=-13883e-3})
 # a.grad[0] := (a.grad[0] + n4_c.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = -20825e-3 = (a_grad[0]{=6941e-3} + n4_c_grad[0]{=-27766e-3})
+a_grad[0]{=MAYBE UNINITIALIZED} = 131892e-3 = (a_grad[0]{=159658e-3} + n4_c_grad[0]{=-27766e-3})
 # b.grad[0] := (b.grad[0] + n4_c.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = -20825e-3 = (b_grad[0]{=6941e-3} + n4_c_grad[0]{=-27766e-3})
+b_grad[0]{=MAYBE UNINITIALIZED} = 645577e-3 = (b_grad[0]{=673344e-3} + n4_c_grad[0]{=-27766e-3})
 # a.grad[0] := fma(-1, ((2 * e[0]) * f.grad[0]), a.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = fmaf((float)(-1),(((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}),a_grad[0]{=-20825e-3})
+a_grad[0]{=MAYBE UNINITIALIZED} = 138833e-3 = fmaf((float)(-1),(((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}),a_grad[0]{=131892e-3})
 COMMENT: end
 COMMENT: end
