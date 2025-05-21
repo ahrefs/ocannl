@@ -655,27 +655,33 @@ let capture_stdout_logs arg =
     (* The reader domain will close pipe_read_fd. *)
 
     let collected_logs_ref = ref [] in
-    let passthrough_lines_ref = ref [] in (* Buffer for non-log lines *)
     let reader_domain_failed = Atomic.make false in
 
     let reader_domain_logic () =
       let in_channel = Unix.in_channel_of_descr pipe_read_fd in
+      (* Create an output channel to the original stdout for immediate passthrough *)
+      let orig_out = Unix.out_channel_of_descr (Unix.dup original_stdout_fd) in
       try
         while true do
           let _is_endlined, line = input_line in_channel in
           match String.chop_prefix ~prefix:!captured_log_prefix line with
           | Some logline -> collected_logs_ref := logline :: !collected_logs_ref
-          | None -> passthrough_lines_ref := line :: !passthrough_lines_ref (* Buffer the line *)
+          | None -> 
+              (* Forward non-log lines to original stdout immediately *)
+              Stdlib.output_string orig_out (line ^ "\n");
+              Stdlib.flush orig_out
         done;
+        Stdlib.close_out_noerr orig_out;
         Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
       with
-      | End_of_file -> () (* Normal termination of the reader *)
-      | exn ->
-          Atomic.set reader_domain_failed true;
-          Stdio.eprintf "Exception in stdout reader domain: %s\\nBacktrace:\\n%s\\n%!"
-            (Exn.to_string exn) (Stdlib.Printexc.get_backtrace ());
+        | End_of_file -> () (* Normal termination of the reader *)
+        | exn ->
+            Stdlib.close_out_noerr orig_out;
+            Atomic.set reader_domain_failed true;
+            Stdio.eprintf "Exception in stdout reader domain: %s\\nBacktrace:\\n%s\\n%!"
+              (Exn.to_string exn) (Stdlib.Printexc.get_backtrace ());
             Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *);
-          Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
+            Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
     in
 
     let reader_domain = Domain.spawn reader_domain_logic in
@@ -707,8 +713,6 @@ let capture_stdout_logs arg =
             ~f:(fun { log_processor_prefix; process_logs } ->
               process_logs
               @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix));
-          (* Print passthrough lines even if arg() failed, if reader was ok *)
-          List.iter (List.rev !passthrough_lines_ref) ~f:Stdlib.print_endline;
         );
         captured_log_processors := []; (* Clear processors *)
         Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
@@ -740,10 +744,7 @@ let capture_stdout_logs arg =
             ~f:(fun { log_processor_prefix; process_logs } ->
               process_logs
               @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
-        ~finally:(fun () -> captured_log_processors := []);
-      
-      (* Then print passthrough lines to the now-restored original stdout *)
-      List.iter (List.rev !passthrough_lines_ref) ~f:Stdlib.print_endline;
+        ~finally:(fun () -> captured_log_processors := [])
     ) else (
         captured_log_processors := []; (* Clear processors if reader failed *)
     );

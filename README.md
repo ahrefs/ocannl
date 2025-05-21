@@ -60,7 +60,7 @@ A possible route to learning OCANNL:
 
 To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` backend, you need to wrap the code scheduling tasks and synchronizing `cuda` devices with `Utils.capture_stdout_logs`. The reason is that CUDA kernels are allowed to use `printf`, but not `fprintf` -- the driver dumps the printing buffer of a device to `stdout` at certain times (e.g. when synchronizing the device). For an example, see the implementation of `Train.example_train_loop`. Specifically, it wraps two sections: the call to `Train.parallel_update`, and the body of the returned `infer_callback`.
 
-IMPORTANT: debug logging from CUDA in complex settings currently only works as intended for _very_ small computation sizes. If facing issues, try the setting `never_capture_stdout=true` (see [ocannl_config.example](ocannl_config.example)).
+NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves another thread (domain) intercepting and filtering `stdout`. If facing issues, try the setting `never_capture_stdout=true` (see [ocannl_config.example](ocannl_config.example)).
 
 ## Upcoming milestones
 
