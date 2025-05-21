@@ -1,8 +1,8 @@
-float *a &[1] = 0000022c648e3570
-float *a_grad &[1] = 0000022c648e3580
-float *b &[1] = 0000022c648e3590
-float *b_grad &[1] = 0000022c648e3560
-float *g &[1] = 0000022c648e3540
+float *a &[1] = 0xNNNN
+float *a_grad &[1] = 0xNNNN
+float *b &[1] = 0xNNNN
+float *b_grad &[1] = 0xNNNN
+float *g &[1] = 0xNNNN
 COMMENT: g gradient update
 COMMENT: g fwd
 # n4_c[0] := (a[0] + b[0]);
