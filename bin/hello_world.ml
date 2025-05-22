@@ -58,12 +58,12 @@ let hello3 () =
   Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
   Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
-  Stdlib.Format.print_newline ();
+  Stdio.printf "\n%!";
   Train.run routine;
   Tensor.print ~with_code:true ~with_grad:false `Default y;
-  Stdlib.Format.force_newline ();
+  Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 y;
-  Stdlib.Format.force_newline ()
+  Stdio.printf "\n%!"
 
 let hello4 () =
   let module Backend = (val Backends.fresh_backend ()) in

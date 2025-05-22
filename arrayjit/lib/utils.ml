@@ -540,151 +540,6 @@ type requirement =
 
 let default_indent = ref 2
 
-let pp_sexp ppf sexp =
-  let open Sexp in
-  let open Int in
-  let module Bytes = Stdlib.Bytes in
-  let must_escape str =
-    let len = String.length str in
-    len = 0
-    ||
-    let rec loop str ix =
-      match str.[ix] with
-      | '"' | '(' | ')' | ';' | '\\' -> true
-      | '|' ->
-          ix > 0
-          &&
-          let next = ix - 1 in
-          Char.equal str.[next] '#' || loop str next
-      | '#' ->
-          ix > 0
-          &&
-          let next = ix - 1 in
-          Char.equal str.[next] '|' || loop str next
-      | '\000' .. '\032' | '\127' .. '\255' -> true
-      | _ -> ix > 0 && loop str (ix - 1)
-    in
-    loop str (len - 1)
-  in
-
-  let escaped s =
-    let n = ref 0 in
-    for i = 0 to String.length s - 1 do
-      n :=
-        !n
-        +
-        match String.unsafe_get s i with
-        | '\"' | '\\' | '\n' | '\t' | '\r' | '\b' -> 2
-        | ' ' .. '~' -> 1
-        | _ -> 4
-    done;
-    if !n = String.length s then s
-    else
-      let s' = Bytes.create !n in
-      n := 0;
-      for i = 0 to String.length s - 1 do
-        (match String.unsafe_get s i with
-        | ('\"' | '\\') as c ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n c
-        | '\n' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'n'
-        | '\t' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 't'
-        | '\r' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'r'
-        | '\b' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'b'
-        | ' ' .. '~' as c -> Bytes.unsafe_set s' !n c
-        | c ->
-            let a = Stdlib.Char.code c in
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 100)));
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 10 % 10)));
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a % 10))));
-        incr n
-      done;
-      Bytes.unsafe_to_string s'
-  in
-
-  let esc_str str =
-    let estr = escaped str in
-    let elen = String.length estr in
-    let res = Bytes.create (elen + 2) in
-    Bytes.blit_string estr 0 res 1 elen;
-    Bytes.unsafe_set res 0 '"';
-    Bytes.unsafe_set res (elen + 1) '"';
-    Bytes.unsafe_to_string res
-  in
-
-  let index_of_newline str start = Stdlib.String.index_from_opt str start '\n' in
-
-  let get_substring str index end_pos_opt =
-    let end_pos = match end_pos_opt with None -> String.length str | Some end_pos -> end_pos in
-    String.sub str ~pos:index ~len:(end_pos - index)
-  in
-
-  let is_one_line str =
-    match index_of_newline str 0 with
-    | None -> true
-    | Some index -> Int.(index + 1 = String.length str)
-  in
-
-  let open Stdlib.Format in
-  let pp_hum_maybe_esc_str ppf str =
-    if not (must_escape str) then pp_print_string ppf str
-    else if is_one_line str then pp_print_string ppf (esc_str str)
-    else
-      let rec loop index =
-        let next_newline = index_of_newline str index in
-        let next_line = get_substring str index next_newline in
-        pp_print_string ppf (escaped next_line);
-        match next_newline with
-        | None -> ()
-        | Some newline_index ->
-            pp_print_string ppf "\\";
-            pp_force_newline ppf ();
-            pp_print_string ppf "\\n";
-            loop (newline_index + 1)
-      in
-      pp_open_box ppf 0;
-      (* the leading space is to line up the lines *)
-      pp_print_string ppf " \"";
-      loop 0;
-      pp_print_string ppf "\"";
-      pp_close_box ppf ()
-  in
-  let rec pp_hum_indent indent ppf = function
-    | Atom str -> pp_hum_maybe_esc_str ppf str
-    | List (h :: t) ->
-        pp_open_box ppf indent;
-        pp_print_string ppf "(";
-        pp_hum_indent indent ppf h;
-        pp_hum_rest indent ppf t
-    | List [] -> pp_print_string ppf "()"
-  and pp_hum_rest indent ppf = function
-    | h :: t ->
-        pp_print_space ppf ();
-        pp_hum_indent indent ppf h;
-        pp_hum_rest indent ppf t
-    | [] ->
-        pp_print_string ppf ")";
-        pp_close_box ppf ()
-  in
-  pp_hum_indent !default_indent ppf sexp
-
 let doc_of_sexp sexp =
   let open Sexp in
   let open Int in
@@ -804,29 +659,24 @@ let doc_of_sexp sexp =
       (* the leading space is to line up the lines *)
       string " \"" ^^ loop 0 empty ^^ string "\""
   in
-  
+
   let rec doc_of_sexp_indent indent = function
     | Atom str -> doc_maybe_esc_str str
-    | List (h :: t) -> 
-        group (
-          string "(" ^^ 
-          nest indent (doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t) 
-        )
+    | List (h :: t) ->
+        group (string "(" ^^ nest indent (doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t))
     | List [] -> string "()"
-  
   and doc_of_sexp_rest indent = function
-    | h :: t ->
-        space ^^ doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t
+    | h :: t -> space ^^ doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t
     | [] -> string ")"
   in
-  
+
   doc_of_sexp_indent !default_indent sexp
 
-let get_debug_formatter ~fname =
+let output_to_build_file ~fname =
   if settings.output_debug_files_in_build_directory then
     let f = Stdio.Out_channel.create @@ build_file fname in
-    let ppf = Stdlib.Format.formatter_of_out_channel f in
-    Some ppf
+    let print doc = PPrint.ToChannel.pretty 0.7 100 f doc in
+    Some print
   else None
 
 let get_debug_output_channel ~fname =

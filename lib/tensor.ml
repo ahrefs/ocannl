@@ -350,17 +350,18 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let output_ds = to_dim_list output_dims output_axes in
   let input_ds = to_dim_list input_dims input_axes in
   let op_label =
-    Stdlib.Format.pp_set_geometry Stdlib.Format.str_formatter ~max_indent:!max_sublabel_length
-      ~margin:(!max_sublabel_length * 2);
+    (* TODO:~max_indent:!max_sublabel ~margin:(!max_sublabel_length * 2); *)
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let debug = "Temporary array for pretty-printing" in
     let ndarr =
       Nd.create_array ~debug Ir.Ops.double ~dims (Ir.Ops.Constant_fill { values; strict })
     in
     let ( ! ) = List.length in
-    Nd.pp_array_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds
-      ~num_input_axes:!input_ds Stdlib.Format.str_formatter ndarr;
-    Stdlib.Format.flush_str_formatter ()
+    let b = Buffer.create 1024 in
+    Nd.to_doc_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
+      ndarr
+    |> PPrint.ToBuffer.pretty 0.7 100 b;
+    Buffer.contents b
   in
   let op_label =
     if String.contains op_label '\n' then
@@ -579,8 +580,8 @@ let log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style)
-    t =
+let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
+    (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix_str =
@@ -630,113 +631,106 @@ let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style 
   let num_batch_axes = List.length sh.batch.dims in
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
-  
+
   let open PPrint in
-  let fmt = Stdlib.Format.get_std_formatter () in
-  
   (* Create document for tensor value *)
   let value_doc =
-    if spy && not (Lazy.is_val t.value.array) then 
+    if spy && not (Lazy.is_val t.value.array) then
       string prefix_str ^^ string " <not-in-yet>" ^^ space
     else
       match (style, Lazy.force t.value.array) with
-      | (_, None) -> string prefix_str ^^ string " <virtual>" ^^ space
-      | (`Inline, Some arr) ->
+      | _, None -> string prefix_str ^^ string " <virtual>" ^^ space
+      | `Inline, Some arr ->
           Tn.do_read t.value;
-          string prefix_str ^^ space ^^
-          (let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
-           doc_fmt fmt empty; (* Ensure buffer is clear *)
-           Nd.pp_array_inline fmt ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
-           empty)
-      | (_, Some arr) ->
+          string prefix_str ^^ space
+          ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
+      | _, Some arr ->
           Tn.do_read t.value;
-          let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
-          doc_fmt fmt empty; (* Ensure buffer is clear *)
-          Nd.pp_array fmt ~prefix:prefix_str ~labels ~indices arr;
-          string "\n"
+          Nd.to_doc ~prefix:prefix_str ~labels ~indices arr
   in
-  
+
   (* Create document for gradient *)
-  let grad_doc = 
+  let grad_doc =
     if with_grad then
       match t.diff with
-      | Some diff ->
+      | Some diff -> (
           if spy && not (Lazy.is_val diff.grad.array) then
             string (grad_txt diff) ^^ string " <not-in-yet>" ^^ space
           else
-            (match Lazy.force diff.grad.array with 
+            match Lazy.force diff.grad.array with
             | None -> string (grad_txt diff) ^^ string " <virtual>" ^^ space
-            | Some arr ->
-                (match style with
-                | `Inline -> 
-                  Tn.do_read diff.grad;
-                  string (grad_txt diff) ^^ space ^^
-                  (let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
-                   doc_fmt fmt empty; (* Ensure buffer is clear *)
-                   Nd.pp_array_inline fmt ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
-                   empty) ^^ string "\n"
+            | Some arr -> (
+                match style with
+                | `Inline ->
+                    Tn.do_read diff.grad;
+                    string (grad_txt diff)
+                    ^^ space
+                    ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec
+                         arr
+                    ^^ string "\n"
                 | `Default | `N5_layout _ | `Label_layout _ ->
-                  Tn.do_read diff.grad;
-                  let prefix = prefix_str ^ " " ^ grad_txt diff in
-                  let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
-                  doc_fmt fmt empty; (* Ensure buffer is clear *)
-                  Nd.pp_array fmt ~prefix ~labels ~indices arr;
-                  string "\n"))
+                    Tn.do_read diff.grad;
+                    let prefix = prefix_str ^ " " ^ grad_txt diff in
+                    Nd.to_doc ~prefix ~labels ~indices arr ^^ string "\n"))
       | None -> empty
     else empty
   in
-  
+
   (* Create document for code *)
   let code_doc =
     if with_code then
-      let fwd_doc = 
+      let fwd_doc =
         match t.forward.asgns with
         | Noop -> empty
         | fwd_code ->
-            string "@[<v 2>Current forward body:" ^^ hardline ^^
-            Asgns.doc_hum () fwd_code ^^ 
-            string "@]" ^^ hardline
+            string "@[<v 2>Current forward body:"
+            ^^ hardline ^^ Asgns.doc_hum () fwd_code ^^ string "@]" ^^ hardline
       in
-      let bwd_doc = 
+      let bwd_doc =
         match t.diff with
         | Some { backprop = { asgns = Noop; _ }; _ } -> empty
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
-            string "@[<v 2>Current backprop body:" ^^ hardline ^^
-            Asgns.doc_hum () bwd_code ^^ 
-            string "@]" ^^ hardline
+            string "@[<v 2>Current backprop body:"
+            ^^ hardline ^^ Asgns.doc_hum () bwd_code ^^ string "@]" ^^ hardline
         | None -> empty
       in
       fwd_doc ^^ bwd_doc
     else empty
   in
-  
+
   (* Create document for low-level code *)
   let low_level_doc =
     if with_low_level then
-      let fwd_doc = 
+      let fwd_doc =
         match t.forward.asgns with
         | Noop -> empty
         | fwd_code ->
-            string "@[<v 2>Current forward low-level body:" ^^ hardline ^^
-            Ir.Low_level.doc_hum () (Asgns.to_low_level fwd_code) ^^ 
-            string "@]" ^^ hardline
+            string "@[<v 2>Current forward low-level body:"
+            ^^ hardline
+            ^^ Ir.Low_level.doc_hum () (Asgns.to_low_level fwd_code)
+            ^^ string "@]" ^^ hardline
       in
-      let bwd_doc = 
+      let bwd_doc =
         match t.diff with
         | Some { backprop = { asgns = Noop; _ }; _ } -> empty
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
-            string "@[<v 2>Current backprop low-level body:" ^^ hardline ^^
-            Ir.Low_level.doc_hum () (Asgns.to_low_level bwd_code) ^^ 
-            string "@]" ^^ hardline
+            string "@[<v 2>Current backprop low-level body:"
+            ^^ hardline
+            ^^ Ir.Low_level.doc_hum () (Asgns.to_low_level bwd_code)
+            ^^ string "@]" ^^ hardline
         | None -> empty
       in
       fwd_doc ^^ bwd_doc
     else empty
   in
-  
+
   (* Combine all documents and print *)
-  let final_doc = value_doc ^^ grad_doc ^^ code_doc ^^ low_level_doc ^^ string "\n" in
-  PPrint.ToFormatter.pretty 0.9 80 fmt final_doc
+  value_doc ^^ grad_doc ^^ code_doc ^^ low_level_doc ^^ string "\n"
+
+let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style)
+    t =
+  PPrint.ToChannel.pretty 0.7 100 Stdio.stdout
+    (to_doc ~spy ~with_grad ~with_code ~with_low_level style t)
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->

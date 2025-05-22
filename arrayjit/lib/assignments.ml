@@ -279,98 +279,6 @@ let get_ident_within_code ?no_dots c =
     Tn.update_code_name tn ident;
     ident
 
-let fprint_hum ?name ?static_indices () ppf c =
-  let ident = get_ident_within_code c in
-  let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> ident tn ^ ".merge" in
-  
-  let open PPrint in
-  let doc_of_fetch_op (op : fetch_op) =
-    match op with
-    | Constant f -> string (Float.to_string f)
-    | Imported (Ops.C_function c) -> string (c ^ "()")
-    | Imported (Merge_buffer { source_node_id }) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        string (ident tn ^ ".merge")
-    | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) ->
-        string (Ops.ptr_to_string_hum ptr prec)
-    | Slice { batch_idx; sliced } ->
-        string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
-    | Embed_symbol { static_symbol; static_range = _ } ->
-        string ("!@" ^ Indexing.symbol_ident static_symbol)
-  in
-  
-  let rec doc_of_code = function
-    | Noop -> empty
-    | Seq (c1, c2) ->
-        doc_of_code c1 ^^ doc_of_code c2
-    | Block_comment (s, Noop) -> string ("# \"" ^ s ^ "\";") ^^ break 1
-    | Block_comment (s, c) ->
-        string ("# \"" ^ s ^ "\";") ^^ break 1 ^^ doc_of_code c
-    | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        (* Uncurried syntax for ternary operations. *)
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        string (Ops.ternop_cd_syntax op) ^^ 
-        string "(" ^^ string (buffer_ident rhs1) ^^ string ", " ^^ 
-        string (buffer_ident rhs2) ^^ string ", " ^^ 
-        string (buffer_ident rhs3) ^^ string ")" ^^ 
-        (if not (String.equal proj_spec ".") then 
-           string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
-    | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        string (buffer_ident rhs1) ^^ space ^^ 
-        string (Ops.binop_cd_syntax op) ^^ space ^^ 
-        string (buffer_ident rhs2) ^^ 
-        (if (not (String.equal proj_spec ".")) || 
-            List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op 
-         then string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
-    | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        (if not @@ Ops.equal_unop op Ops.Identity then 
-           string (Ops.unop_cd_syntax op ^ " ") 
-         else empty) ^^ 
-        string (buffer_ident rhs) ^^ 
-        (if not (String.equal proj_spec ".") then 
-           string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
-    | Fetch { array; fetch_op; dims = _ } ->
-        string (ident array) ^^ string " := " ^^ doc_of_fetch_op fetch_op ^^ string ";" ^^ break 1
-  in
-  
-  (* Create the header document using Low_level.fprint_function_header which will be converted later *)
-  let header_doc = 
-    match name, static_indices with
-    | Some n, Some si -> 
-        string (n ^ " (") ^^ 
-        separate (comma ^^ space) 
-          (List.map si ~f:Indexing.Doc_helpers.pp_static_symbol) ^^ 
-        string "):" ^^ space
-    | Some n, None -> string (n ^ ":") ^^ space
-    | _ -> empty
-  in
-  
-  let doc = header_doc ^^ nest 2 (doc_of_code c) in
-  ToFormatter.pretty 1.0 80 ppf doc
-
 let doc_hum ?name ?static_indices () c =
   let ident = get_ident_within_code c in
   let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> ident tn ^ ".merge" in
@@ -468,6 +376,5 @@ let%track6_sexp lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indi
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with
   | None -> ()
-  | Some ppf ->
-      fprint_hum ~name ~static_indices () ppf proc);
+  | Some callback -> callback (doc_hum ~name ~static_indices () proc));
   Low_level.optimize ~unoptim_ll_source ~ll_source ~name static_indices llc

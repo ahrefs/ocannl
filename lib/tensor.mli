@@ -290,7 +290,16 @@ val to_printbox :
   t ->
   PrintBox.t
 
-val print :
+val to_doc :
+  ?spy:bool ->
+  with_grad:bool ->
+  with_code:bool ->
+  ?with_low_level:bool ->
+  array_print_style ->
+  t ->
+  PPrint.document
+
+  val print :
   ?spy:bool ->
   with_grad:bool ->
   with_code:bool ->

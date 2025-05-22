@@ -92,8 +92,8 @@ type optimized = { traced_store : traced_store; llc : t; merge_node : Tnode.t op
 [@@deriving sexp_of]
 
 val optimize :
-  unoptim_ll_source:Stdlib.Format.formatter option ->
-  ll_source:Stdlib.Format.formatter option ->
+  unoptim_ll_source:(PPrint.document -> unit) option ->
+  ll_source:(PPrint.document -> unit) option ->
   name:string ->
   Indexing.static_symbol list ->
   t ->
@@ -110,35 +110,14 @@ val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tn
 val code_hum_margin : int ref
 
 val function_header_doc :
-  ?name:string ->
-  ?static_indices:Indexing.static_symbol list ->
-  unit ->
-  PPrint.document
+  ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> PPrint.document
 
 val get_ident_within_code : ?no_dots:bool -> ?blacklist:string list -> t array -> Tnode.t -> string
 
-val fprint_cstyle :
-  ?name:string ->
-  ?static_indices:Indexing.static_symbol list ->
-  unit ->
-  Stdlib.Format.formatter ->
-  t ->
-  unit
+val to_doc_cstyle :
+  ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 (** Adheres more to the C syntax, outputs implicit type casts. *)
 
-val fprint_hum :
-  ?name:string ->
-  ?static_indices:Indexing.static_symbol list ->
-  unit ->
-  Stdlib.Format.formatter ->
-  t ->
-  unit
-(** Adheres more to the %cd syntax, does not output implicit type casts. *)
-
 val doc_hum :
-  ?name:string ->
-  ?static_indices:Indexing.static_symbol list ->
-  unit ->
-  t ->
-  PPrint.document
-(** Returns a PPrint document for the given low-level code. Adheres to the %cd syntax. *)
+  ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
+(** Adheres to the %cd syntax. *)

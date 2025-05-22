@@ -26,8 +26,9 @@ let _suspended () =
   Train.run routine;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
-  Stdlib.Format.printf "\nHigh-level code:\n%!";
-  Stdlib.Format.printf "%a\n%!" (Ir.Assignments.fprint_hum ()) code.fwd_bprop.asgns
+  Stdio.printf "\nHigh-level code:\n%!";
+  Ir.Assignments.doc_hum () code.fwd_bprop.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
+  Stdio.printf "\n%!"
 
 let _suspended () =
   Rand.init 0;

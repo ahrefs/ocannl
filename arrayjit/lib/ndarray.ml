@@ -589,59 +589,53 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     (if brief then Fn.id else B.frame ~stretch:false)
     @@ B.vlist ~bars:false [ B.text header; screens ]
 
-let pp_array fmt ?prefix ?entries_per_axis ?labels ~indices arr =
-  PrintBox_text.pp fmt @@ render_array ?prefix ?entries_per_axis ?labels ~indices arr
+let to_doc ?prefix ?entries_per_axis ?labels ~indices arr =
+  let box = render_array ?prefix ?entries_per_axis ?labels ~indices arr in
+  PPrint.(separate hardline @@ lines (PrintBox_text.to_string box))
 
 (** Prints the whole array in an inline syntax. *)
-let pp_array_inline fmt ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
+let to_doc_inline ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec arr =
   let dims = dims arr in
   let num_all_axes = num_batch_axes + num_output_axes + num_input_axes in
   let open PPrint in
-  let doc = 
-    let ind = Array.copy dims in
-    let spec_doc = match axes_spec with 
-      | None -> empty 
-      | Some spec -> dquotes (string spec) ^^ space
-    in
-    let rec loop axis =
-      let sep =
-        if axis < num_batch_axes then string ";"
-        else if axis < num_batch_axes + num_output_axes then string ";"
-        else string ","
-      in
-      let open_delim =
-        if axis < num_batch_axes then string "[|"
-        else if axis < num_batch_axes + num_output_axes then string "["
-        else if axis = num_batch_axes + num_output_axes then empty
-        else string "("
-      in
-      let close_delim =
-        if axis < num_batch_axes then string "|]"
-        else if axis < num_batch_axes + num_output_axes then string "]"
-        else if axis = num_batch_axes + num_output_axes then empty
-        else string ")"
-      in
-      if axis = num_all_axes then
-        string (Printf.sprintf "%.*f" Utils.settings.print_decimals_precision (get_as_float arr ind))
-      else
-        group (
-          open_delim ^^ 
-          nest 2 (
-            break 1 ^^
-            separate_map (break 1 ^^ sep ^^ space) 
-              (fun i -> 
-                ind.(axis) <- i;
-                loop (axis + 1)
-              ) 
-              (List.init dims.(axis) ~f:(fun i -> i))
-          ) ^^
-          break 1 ^^
-          close_delim
-        )
-    in
-    spec_doc ^^ loop 0
+  let ind = Array.copy dims in
+  let spec_doc =
+    match axes_spec with None -> empty | Some spec -> dquotes (string spec) ^^ space
   in
-  PPrint.ToFormatter.pretty 0.9 80 fmt doc
+  let rec loop axis =
+    let sep =
+      if axis < num_batch_axes then string ";"
+      else if axis < num_batch_axes + num_output_axes then string ";"
+      else string ","
+    in
+    let open_delim =
+      if axis < num_batch_axes then string "[|"
+      else if axis < num_batch_axes + num_output_axes then string "["
+      else if axis = num_batch_axes + num_output_axes then empty
+      else string "("
+    in
+    let close_delim =
+      if axis < num_batch_axes then string "|]"
+      else if axis < num_batch_axes + num_output_axes then string "]"
+      else if axis = num_batch_axes + num_output_axes then empty
+      else string ")"
+    in
+    if axis = num_all_axes then
+      string (Printf.sprintf "%.*f" Utils.settings.print_decimals_precision (get_as_float arr ind))
+    else
+      group
+        (open_delim
+        ^^ nest 2
+             (break 1
+             ^^ separate_map
+                  (break 1 ^^ sep ^^ space)
+                  (fun i ->
+                    ind.(axis) <- i;
+                    loop (axis + 1))
+                  (List.init dims.(axis) ~f:(fun i -> i)))
+        ^^ break 1 ^^ close_delim)
+  in
+  spec_doc ^^ loop 0
 
 (* TODO: restore npy support or alternative. *)
 

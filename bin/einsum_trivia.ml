@@ -20,7 +20,7 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:false `Default @@ a;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ b;
   Tensor.print ~with_code:false ~with_grad:false `Default @@ c;
-  Stdlib.Format.force_newline ()
+  Stdio.printf "\n%!"
 
 let _suspended () =
   Utils.set_log_level 2;

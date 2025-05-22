@@ -186,9 +186,9 @@ let%track6_sexp lower_assignments ?name bindings asgns =
   let name : string =
     Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns)
   in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(name ^ "-unoptimized.ll") in
-  let ll_source = Utils.get_debug_formatter ~fname:(name ^ ".ll") in
-  let cd_source = Utils.get_debug_formatter ~fname:(name ^ ".cd") in
+  let unoptim_ll_source = Utils.output_to_build_file ~fname:(name ^ "-unoptimized.ll") in
+  let ll_source = Utils.output_to_build_file ~fname:(name ^ ".ll") in
+  let cd_source = Utils.output_to_build_file ~fname:(name ^ ".cd") in
   ( name,
     Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name
       (Indexing.bound_symbols bindings) asgns )
@@ -199,9 +199,9 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
         Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
   in
   let prefix_name = String.(strip ~drop:(equal_char '_') @@ common_prefix @@ Array.to_list names) in
-  let unoptim_ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ "-unoptimized.ll") in
-  let ll_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".ll") in
-  let cd_source = Utils.get_debug_formatter ~fname:(prefix_name ^ ".cd") in
+  let unoptim_ll_source = Utils.output_to_build_file ~fname:(prefix_name ^ "-unoptimized.ll") in
+  let ll_source = Utils.output_to_build_file ~fname:(prefix_name ^ ".ll") in
+  let cd_source = Utils.output_to_build_file ~fname:(prefix_name ^ ".cd") in
   let bound = Indexing.bound_symbols bindings in
   let occupancy = Option.value occupancy ~default:(fun ~name:_ ~src_n:_ -> true) in
   Array.unzip
