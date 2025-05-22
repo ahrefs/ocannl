@@ -31,7 +31,7 @@ let get_scope =
 type t =
   | Noop
   | Comment of string
-  | Staged_compilation of ((unit -> unit)[@equal.ignore] [@compare.ignore])
+  | Staged_compilation of ((unit -> PPrint.document)[@equal.ignore] [@compare.ignore])
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
@@ -917,7 +917,9 @@ let fprint_cstyle ?name ?static_indices () ppf llc =
           (pp_float @@ Lazy.force p.tn.prec)
           p.llv
     | Comment message -> fprintf ppf "/* %s */" message
-    | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
+    | Staged_compilation callback ->
+      let doc = callback () in
+      PPrint.ToFormatter.pretty 1.0 100 ppf doc
     | Set_local (id, llv) ->
         fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float @@ Lazy.force id.tn.prec) llv
   and pp_float prec ppf value =
@@ -977,7 +979,9 @@ let fprint_hum ?name ?static_indices () ppf llc =
         p.debug <- asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs pp_float p.llv;
         fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs pp_float p.llv
     | Comment message -> fprintf ppf "/* %s */" message
-    | Staged_compilation _ -> fprintf ppf "STAGED_COMPILATION_CALLBACK()"
+    | Staged_compilation callback ->
+        let doc = callback () in
+        PPrint.ToFormatter.pretty 1.0 100 ppf doc
     | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
   and pp_float ppf value =
     match value with

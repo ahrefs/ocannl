@@ -47,7 +47,7 @@ The low-level representation is a C-like mini-language operating on scalars.
 type t =
   | Noop
   | Comment of string
-  | Staged_compilation of (unit -> unit)
+  | Staged_compilation of (unit -> PPrint.document)
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
@@ -70,7 +70,7 @@ and float_t =
   | Embed_index of Indexing.axis_index
 ```
 
-The odd part is the `Staged_compilation` element. Backends with an imperative compilation procedure, e.g. using the `Stdlib.Format` module, can use `Staged_compilation` to embed some emitted code within on-the-fly generated `Low_level.t` code.
+The odd part is the `Staged_compilation` element. Backends can use `Staged_compilation` to embed some emitted code within on-the-fly generated `Low_level.t` code. Currently this works only for `PPrint.document` based backends like `C_syntax` derivatives, but this covers almost all backends.
 
 TODO: flesh out explanation.
 

@@ -439,7 +439,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let value = loop_float ~name ~env ~num_typ local_prec llv in
         Block.assign !current_block lhs value
     | Comment c -> log_comment c
-    | Staged_compilation exp -> exp ()
+    | Staged_compilation _exp -> failwith "gccjit_backend: Staged_compilation not implemented"
   and loop_float ~name ~env ~num_typ prec v_code =
     let loop = loop_float ~name ~env ~num_typ prec in
     match v_code with

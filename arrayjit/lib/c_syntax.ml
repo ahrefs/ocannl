@@ -356,11 +356,7 @@ module C_syntax (B : C_syntax_config) = struct
             ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback ->
-        (* This is tricky. PPrint needs to generate the document synchronously. We might need to
-           change how Staged_compilation works if it needs to produce dynamic documents. For now,
-           assume it produces no output. *)
-        callback ();
-        empty
+        callback ()
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
         let local_defs, value_doc = pp_float (Lazy.force prec) value in
         let assignment =

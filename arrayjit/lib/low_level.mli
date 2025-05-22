@@ -18,7 +18,7 @@ type scope_id = Scope_id.t = { tn : Tnode.t; scope_id : int }
 type t =
   | Noop
   | Comment of string
-  | Staged_compilation of (unit -> unit)
+  | Staged_compilation of (unit -> PPrint.document)
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
