@@ -136,7 +136,7 @@ let is_constexpr_comp traced_store llv =
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
     | Get_global (_, _) -> false
-    | Get (tn, _idcs) ->
+    | Get (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
     | Ternop (_, v1, v2, v3) -> loop v1 && loop v2 && loop v3
@@ -820,17 +820,18 @@ let%diagn2_sexp optimize_proc static_indices llc =
 
 let code_hum_margin = ref 100
 
-open Indexing.Pp_helpers
+open Indexing.Doc_helpers
 
-let fprint_function_header ?name ?static_indices () ppf =
-  let open Stdlib.Format in
+let function_header_doc ?name ?static_indices () =
+  let open PPrint in
   match (name, static_indices) with
   | Some name, Some static_indices ->
-      fprintf ppf "%s @[(%a)@]:@ " name
-        (pp_print_list ~pp_sep:pp_comma pp_static_symbol)
-        static_indices
-  | Some name, None -> fprintf ppf "%s:@ " name
-  | _ -> ()
+      !^name ^^ space ^^ 
+      parens (separate comma_sep (List.map ~f:pp_static_symbol static_indices)) ^^
+      colon ^^ space
+  | Some name, None -> 
+      !^name ^^ colon ^^ space
+  | _ -> empty
 
 let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
   let ident_style = Tn.get_style ~arg_name:"ll_ident_style" ?no_dots () in
@@ -895,142 +896,327 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
 
 let fprint_cstyle ?name ?static_indices () ppf llc =
   let ident_label = get_ident_within_code [| llc |] in
-  let open Stdlib.Format in
-  pp_set_margin ppf !code_hum_margin;
-  let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
-  let pp_local ppf { tn; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident tn in
-  let rec pp_ll ppf c : unit =
+  let open PPrint in
+  
+  let doc_ident la = string (ident_label la) in
+  let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
+  
+  let rec doc_of_code c =
     match c with
-    | Noop -> ()
+    | Noop -> empty
     | Seq (c1, c2) ->
-        fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-          (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
+        let docs = List.filter_map [c1; c2] ~f:(function
+            | Noop -> None 
+            | c -> Some (doc_of_code c))
+        in
+        separate hardline docs
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@,}" pp_symbol i from_ to_ pp_ll body
-    | Zero_out tn -> fprintf ppf "zero_out %a;" pp_ident tn
+        let header = string "for " ^^ pp_symbol i ^^ string " = " ^^ 
+                     int from_ ^^ string " to " ^^ int to_ ^^ string " {" in
+        let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
+        group (header ^^ body_doc ^^ break 1 ^^ string "}")
+    | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
     | Set p ->
-        p.debug <-
-          asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs
-            (pp_float @@ Lazy.force p.tn.prec)
-            p.llv;
-        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs
-          (pp_float @@ Lazy.force p.tn.prec)
-          p.llv
-    | Comment message -> fprintf ppf "/* %s */" message
-    | Staged_compilation callback ->
-      let doc = callback () in
-      PPrint.ToFormatter.pretty 1.0 100 ppf doc
+        p.debug <- "";  (* We don't use debug string in PPrint version *)
+        let prec = Lazy.force p.tn.prec in
+        group (
+          doc_ident p.tn ^^ 
+          brackets (pp_indices p.idcs) ^^ 
+          string " := " ^^ 
+          doc_of_float prec p.llv ^^ 
+          string ";"
+        )
+    | Comment message -> string ("/* " ^ message ^ " */")
+    | Staged_compilation callback -> callback ()
     | Set_local (id, llv) ->
-        fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id (pp_float @@ Lazy.force id.tn.prec) llv
-  and pp_float prec ppf value =
+        let prec = Lazy.force id.tn.prec in
+        group (doc_local id ^^ string " := " ^^ doc_of_float prec llv ^^ string ";")
+  
+  and doc_of_float prec value =
     match value with
-    | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
-    | Get_local id -> pp_local ppf id
-    | Get_global (Ops.C_function s, None) -> fprintf ppf "%s()" s
-    | Get_global (Ops.C_function s, Some idcs) -> fprintf ppf "%s(%a)" s pp_indices idcs
+    | Local_scope { id; body; _ } -> 
+        group (
+          doc_local id ^^ string " {" ^^ 
+          nest 2 (break 1 ^^ doc_of_code body) ^^ 
+          break 1 ^^ string "}"
+        )
+    | Get_local id -> doc_local id
+    | Get_global (Ops.C_function s, None) -> string (s ^ "()")
+    | Get_global (Ops.C_function s, Some idcs) -> 
+        string s ^^ parens (pp_indices idcs)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
-        fprintf ppf "%s" @@ Ops.ptr_to_string_hum ptr prec
+        string (Ops.ptr_to_string_hum ptr prec)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
-        fprintf ppf "%s[%a]" (Ops.ptr_to_string_hum ptr prec) pp_indices idcs
+        string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
     | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "%a.merge" pp_ident tn
+        doc_ident tn ^^ string ".merge"
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "@[<2>%a.merge[@,%a]@]" pp_ident tn pp_indices idcs
-    | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
-    | Constant c -> fprintf ppf "%.16g" c
-    | Embed_index idx -> pp_axis_index ppf idx
+        group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Get (tn, idcs) -> 
+        group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Constant c -> string (Printf.sprintf "%.16g" c)
+    | Embed_index idx -> pp_axis_index idx
     | Ternop (op, v1, v2, v3) ->
         let prefix, comma1, comma2, postfix = Ops.ternop_c_syntax prec op in
-        fprintf ppf "@[<1>%s%a%s@ %a%s@ %a@]%s" prefix (pp_float prec) v1 comma1 (pp_float prec) v2
-          comma2 (pp_float prec) v3 postfix
-    | Binop (Arg1, v1, _v2) -> pp_float prec ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_float prec ppf v2
+        group (
+          string prefix ^^ 
+          doc_of_float prec v1 ^^ 
+          string comma1 ^^ space ^^ 
+          doc_of_float prec v2 ^^ 
+          string comma2 ^^ space ^^ 
+          doc_of_float prec v3 ^^ 
+          string postfix
+        )
+    | Binop (Arg1, v1, _v2) -> doc_of_float prec v1
+    | Binop (Arg2, _v1, v2) -> doc_of_float prec v2
     | Binop (op, v1, v2) ->
         let prefix, infix, postfix = Ops.binop_c_syntax prec op in
-        fprintf ppf "@[<1>%s%a%s@ %a@]%s" prefix (pp_float prec) v1 infix (pp_float prec) v2 postfix
-    | Unop (Identity, v) -> (pp_float prec) ppf v
+        group (
+          string prefix ^^ 
+          doc_of_float prec v1 ^^ 
+          string infix ^^ space ^^ 
+          doc_of_float prec v2 ^^ 
+          string postfix
+        )
+    | Unop (Identity, v) -> doc_of_float prec v
     | Unop (op, v) ->
         let prefix, postfix = Ops.unop_c_syntax prec op in
-        fprintf ppf "%s%a%s" prefix (pp_float prec) v postfix
+        string prefix ^^ doc_of_float prec v ^^ string postfix
   in
-  fprintf ppf "@,@[<v 2>";
-  fprint_function_header ?name ?static_indices () ppf;
-  pp_ll ppf llc;
-  fprintf ppf "@]"
+  
+  let doc = 
+    hardline ^^ 
+    nest 2 (
+      function_header_doc ?name ?static_indices () ^^
+      doc_of_code llc
+    )
+  in
+  
+  ToFormatter.pretty 1.0 !code_hum_margin ppf doc
 
 let fprint_hum ?name ?static_indices () ppf llc =
   let ident_label = get_ident_within_code [| llc |] in
-  let open Stdlib.Format in
-  pp_set_margin ppf !code_hum_margin;
-  let pp_ident ppf la = fprintf ppf "%s" @@ ident_label la in
-  let pp_local ppf { tn; scope_id } = fprintf ppf "v%d_%a" scope_id pp_ident tn in
-  let rec pp_ll ppf c : unit =
+  let open PPrint in
+  
+  let doc_ident la = string (ident_label la) in
+  let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
+  
+  let rec doc_of_code c =
     match c with
-    | Noop -> ()
+    | Noop -> empty
     | Seq (c1, c2) ->
-        fprintf ppf "@[<v 0>%a@]" (pp_print_list pp_ll)
-          (List.filter [ c1; c2 ] ~f:(function Noop -> false | _ -> true))
+        let docs = List.filter_map [c1; c2] ~f:(function
+            | Noop -> None 
+            | c -> Some (doc_of_code c))
+        in
+        separate hardline docs
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        fprintf ppf "@[<v 2>for %a = %d to %d {@ %a@]@,}" pp_symbol i from_ to_ pp_ll body
-    | Zero_out tn -> fprintf ppf "zero_out %a;" pp_ident tn
+        let header = string "for " ^^ pp_symbol i ^^ string " = " ^^ 
+                     int from_ ^^ string " to " ^^ int to_ ^^ string " {" in
+        let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
+        group (header ^^ body_doc ^^ break 1 ^^ string "}")
+    | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
     | Set p ->
-        p.debug <- asprintf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs pp_float p.llv;
-        fprintf ppf "@[<2>%a[@,%a] :=@ %a;@]" pp_ident p.tn pp_indices p.idcs pp_float p.llv
-    | Comment message -> fprintf ppf "/* %s */" message
-    | Staged_compilation callback ->
-        let doc = callback () in
-        PPrint.ToFormatter.pretty 1.0 100 ppf doc
-    | Set_local (id, llv) -> fprintf ppf "@[<2>%a :=@ %a;@]" pp_local id pp_float llv
-  and pp_float ppf value =
+        p.debug <- "";  (* We don't use debug string in PPrint version *)
+        group (
+          doc_ident p.tn ^^ 
+          brackets (pp_indices p.idcs) ^^ 
+          string " := " ^^ 
+          doc_of_float p.llv ^^ 
+          string ";"
+        )
+    | Comment message -> string ("/* " ^ message ^ " */")
+    | Staged_compilation callback -> callback ()
+    | Set_local (id, llv) ->
+        group (doc_local id ^^ string " := " ^^ doc_of_float llv ^^ string ";")
+  
+  and doc_of_float value =
     match value with
-    | Local_scope { id; body; _ } -> fprintf ppf "@[<2>%a {@ %a@]@ }@," pp_local id pp_ll body
-    | Get_local id -> pp_local ppf id
-    | Get_global (Ops.C_function s, None) -> fprintf ppf "%s()" s
-    | Get_global (Ops.C_function s, Some idcs) -> fprintf ppf "%s(%a)" s pp_indices idcs
+    | Local_scope { id; body; _ } -> 
+        group (
+          doc_local id ^^ string " {" ^^ 
+          nest 2 (break 1 ^^ doc_of_code body) ^^ 
+          break 1 ^^ string "}"
+        )
+    | Get_local id -> doc_local id
+    | Get_global (Ops.C_function s, None) -> string (s ^ "()")
+    | Get_global (Ops.C_function s, Some idcs) -> 
+        string s ^^ parens (pp_indices idcs)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
-        fprintf ppf "%s" @@ Ops.ptr_to_string_hum ptr prec
+        string (Ops.ptr_to_string_hum ptr prec)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
-        fprintf ppf "%s[%a]" (Ops.ptr_to_string_hum ptr prec) pp_indices idcs
+        string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
     | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "%a.merge" pp_ident tn
+        doc_ident tn ^^ string ".merge"
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        fprintf ppf "@[<2>%a.merge[@,%a]@]" pp_ident tn pp_indices idcs
-    | Get (tn, idcs) -> fprintf ppf "@[<2>%a[@,%a]@]" pp_ident tn pp_indices idcs
-    | Constant c -> fprintf ppf "%.16g" c
-    | Embed_index idx -> pp_axis_index ppf idx
+        group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Get (tn, idcs) -> 
+        group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Constant c -> string (Printf.sprintf "%.16g" c)
+    | Embed_index idx -> pp_axis_index idx
     | Ternop (op, v1, v2, v3) ->
         let prefix = Ops.ternop_cd_syntax op in
-        fprintf ppf "@[<1>%s(%a,@ %a,@ %a@])" prefix pp_float v1 pp_float v2 pp_float v3
-    | Binop (Arg1, v1, _v2) -> pp_float ppf v1
-    | Binop (Arg2, _v1, v2) -> pp_float ppf v2
+        group (
+          string prefix ^^ 
+          parens (
+            doc_of_float v1 ^^ string "," ^^ space ^^
+            doc_of_float v2 ^^ string "," ^^ space ^^
+            doc_of_float v3
+          )
+        )
+    | Binop (Arg1, v1, _v2) -> doc_of_float v1
+    | Binop (Arg2, _v1, v2) -> doc_of_float v2
     | Binop (op, v1, v2) ->
         if Ops.is_binop_nice_infix op then
           let infix = Ops.binop_cd_syntax op in
-          fprintf ppf "@[<1>(%a %s@ %a@])" pp_float v1 infix pp_float v2
+          group (
+            parens (
+              doc_of_float v1 ^^ space ^^ 
+              string infix ^^ space ^^ 
+              doc_of_float v2
+            )
+          )
         else
           let prefix = Ops.binop_cd_fallback_syntax op in
-          fprintf ppf "@[<1>%s(%a,@ %a@])" prefix pp_float v1 pp_float v2
-    | Unop (Identity, v) -> pp_float ppf v
+          group (
+            string prefix ^^ 
+            parens (
+              doc_of_float v1 ^^ string "," ^^ space ^^
+              doc_of_float v2
+            )
+          )
+    | Unop (Identity, v) -> doc_of_float v
     | Unop (op, v) ->
         let prefix = Ops.unop_cd_syntax op in
-        fprintf ppf "%s(%a)" prefix pp_float v
+        string prefix ^^ parens (doc_of_float v)
   in
-  fprintf ppf "@,@[<v 2>";
-  fprint_function_header ?name ?static_indices () ppf;
-  pp_ll ppf llc;
-  fprintf ppf "@]"
+  
+  let doc = 
+    hardline ^^ 
+    nest 2 (
+      function_header_doc ?name ?static_indices () ^^
+      doc_of_code llc
+    )
+  in
+  
+  ToFormatter.pretty 1.0 !code_hum_margin ppf doc
+
+let doc_hum ?name ?static_indices () llc =
+  let ident_label = get_ident_within_code [| llc |] in
+  let open PPrint in
+  
+  let doc_ident la = string (ident_label la) in
+  let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
+  
+  let rec doc_of_code c =
+    match c with
+    | Noop -> empty
+    | Seq (c1, c2) ->
+        let docs = List.filter_map [c1; c2] ~f:(function
+            | Noop -> None 
+            | c -> Some (doc_of_code c))
+        in
+        separate hardline docs
+    | For_loop { index = i; from_; to_; body; trace_it = _ } ->
+        let header = string "for " ^^ pp_symbol i ^^ string " = " ^^ 
+                     int from_ ^^ string " to " ^^ int to_ ^^ string " {" in
+        let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
+        group (header ^^ body_doc ^^ break 1 ^^ string "}")
+    | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
+    | Set p ->
+        (* We don't use debug string in PPrint version *)
+        group (
+          doc_ident p.tn ^^ 
+          brackets (pp_indices p.idcs) ^^ 
+          string " := " ^^ 
+          doc_of_float p.llv ^^ 
+          string ";"
+        )
+    | Comment message -> string ("/* " ^ message ^ " */")
+    | Staged_compilation callback -> callback ()
+    | Set_local (id, llv) ->
+        group (doc_local id ^^ string " := " ^^ doc_of_float llv ^^ string ";")
+  
+  and doc_of_float value =
+    match value with
+    | Local_scope { id; body; _ } -> 
+        group (
+          doc_local id ^^ string " {" ^^ 
+          nest 2 (break 1 ^^ doc_of_code body) ^^ 
+          break 1 ^^ string "}"
+        )
+    | Get_local id -> doc_local id
+    | Get_global (Ops.C_function s, None) -> string (s ^ "()")
+    | Get_global (Ops.C_function s, Some idcs) -> 
+        string s ^^ parens (pp_indices idcs)
+    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+        string (Ops.ptr_to_string_hum ptr prec)
+    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+        string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
+    | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
+        doc_ident tn ^^ string ".merge"
+    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
+        group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Get (tn, idcs) -> 
+        group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Constant c -> string (Printf.sprintf "%.16g" c)
+    | Embed_index idx -> pp_axis_index idx
+    | Ternop (op, v1, v2, v3) ->
+        let prefix = Ops.ternop_cd_syntax op in
+        group (
+          string prefix ^^ 
+          parens (
+            doc_of_float v1 ^^ string "," ^^ space ^^
+            doc_of_float v2 ^^ string "," ^^ space ^^
+            doc_of_float v3
+          )
+        )
+    | Binop (Arg1, v1, _v2) -> doc_of_float v1
+    | Binop (Arg2, _v1, v2) -> doc_of_float v2
+    | Binop (op, v1, v2) ->
+        if Ops.is_binop_nice_infix op then
+          let infix = Ops.binop_cd_syntax op in
+          group (
+            parens (
+              doc_of_float v1 ^^ space ^^ 
+              string infix ^^ space ^^ 
+              doc_of_float v2
+            )
+          )
+        else
+          let prefix = Ops.binop_cd_fallback_syntax op in
+          group (
+            string prefix ^^ 
+            parens (
+              doc_of_float v1 ^^ string "," ^^ space ^^
+              doc_of_float v2
+            )
+          )
+    | Unop (Identity, v) -> doc_of_float v
+    | Unop (op, v) ->
+        let prefix = Ops.unop_cd_syntax op in
+        string prefix ^^ parens (doc_of_float v)
+  in
+  
+  hardline ^^ 
+  nest 2 (
+    function_header_doc ?name ?static_indices () ^^
+    doc_of_code llc
+  )
 
 let%diagn2_sexp optimize ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) llc);
+      fprint_hum ~name ~static_indices () ppf llc);
   let result = optimize_proc static_indices llc in
   Option.iter ll_source ~f:(fun ppf ->
-      Stdlib.Format.fprintf ppf "%a%!" (fprint_hum ~name ~static_indices ()) result.llc);
+      fprint_hum ~name ~static_indices () ppf result.llc);
   result
 
 let loop_over_dims dims ~body =

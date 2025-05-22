@@ -4,7 +4,7 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (modules utils)
- (libraries base stdio ppx_minidebug.runtime)
+ (libraries base stdio pprint ppx_minidebug.runtime)
  (preprocess
   (pps
    ppx_compare

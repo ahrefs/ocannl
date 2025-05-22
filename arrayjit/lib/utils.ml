@@ -538,11 +538,300 @@ type requirement =
   | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] [@compare.ignore] }
 [@@deriving compare, sexp]
 
+let default_indent = ref 2
+
+let pp_sexp ppf sexp =
+  let open Sexp in
+  let open Int in
+  let module Bytes = Stdlib.Bytes in
+  let must_escape str =
+    let len = String.length str in
+    len = 0
+    ||
+    let rec loop str ix =
+      match str.[ix] with
+      | '"' | '(' | ')' | ';' | '\\' -> true
+      | '|' ->
+          ix > 0
+          &&
+          let next = ix - 1 in
+          Char.equal str.[next] '#' || loop str next
+      | '#' ->
+          ix > 0
+          &&
+          let next = ix - 1 in
+          Char.equal str.[next] '|' || loop str next
+      | '\000' .. '\032' | '\127' .. '\255' -> true
+      | _ -> ix > 0 && loop str (ix - 1)
+    in
+    loop str (len - 1)
+  in
+
+  let escaped s =
+    let n = ref 0 in
+    for i = 0 to String.length s - 1 do
+      n :=
+        !n
+        +
+        match String.unsafe_get s i with
+        | '\"' | '\\' | '\n' | '\t' | '\r' | '\b' -> 2
+        | ' ' .. '~' -> 1
+        | _ -> 4
+    done;
+    if !n = String.length s then s
+    else
+      let s' = Bytes.create !n in
+      n := 0;
+      for i = 0 to String.length s - 1 do
+        (match String.unsafe_get s i with
+        | ('\"' | '\\') as c ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n c
+        | '\n' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'n'
+        | '\t' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 't'
+        | '\r' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'r'
+        | '\b' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'b'
+        | ' ' .. '~' as c -> Bytes.unsafe_set s' !n c
+        | c ->
+            let a = Stdlib.Char.code c in
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 100)));
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 10 % 10)));
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a % 10))));
+        incr n
+      done;
+      Bytes.unsafe_to_string s'
+  in
+
+  let esc_str str =
+    let estr = escaped str in
+    let elen = String.length estr in
+    let res = Bytes.create (elen + 2) in
+    Bytes.blit_string estr 0 res 1 elen;
+    Bytes.unsafe_set res 0 '"';
+    Bytes.unsafe_set res (elen + 1) '"';
+    Bytes.unsafe_to_string res
+  in
+
+  let index_of_newline str start = Stdlib.String.index_from_opt str start '\n' in
+
+  let get_substring str index end_pos_opt =
+    let end_pos = match end_pos_opt with None -> String.length str | Some end_pos -> end_pos in
+    String.sub str ~pos:index ~len:(end_pos - index)
+  in
+
+  let is_one_line str =
+    match index_of_newline str 0 with
+    | None -> true
+    | Some index -> Int.(index + 1 = String.length str)
+  in
+
+  let open Stdlib.Format in
+  let pp_hum_maybe_esc_str ppf str =
+    if not (must_escape str) then pp_print_string ppf str
+    else if is_one_line str then pp_print_string ppf (esc_str str)
+    else
+      let rec loop index =
+        let next_newline = index_of_newline str index in
+        let next_line = get_substring str index next_newline in
+        pp_print_string ppf (escaped next_line);
+        match next_newline with
+        | None -> ()
+        | Some newline_index ->
+            pp_print_string ppf "\\";
+            pp_force_newline ppf ();
+            pp_print_string ppf "\\n";
+            loop (newline_index + 1)
+      in
+      pp_open_box ppf 0;
+      (* the leading space is to line up the lines *)
+      pp_print_string ppf " \"";
+      loop 0;
+      pp_print_string ppf "\"";
+      pp_close_box ppf ()
+  in
+  let rec pp_hum_indent indent ppf = function
+    | Atom str -> pp_hum_maybe_esc_str ppf str
+    | List (h :: t) ->
+        pp_open_box ppf indent;
+        pp_print_string ppf "(";
+        pp_hum_indent indent ppf h;
+        pp_hum_rest indent ppf t
+    | List [] -> pp_print_string ppf "()"
+  and pp_hum_rest indent ppf = function
+    | h :: t ->
+        pp_print_space ppf ();
+        pp_hum_indent indent ppf h;
+        pp_hum_rest indent ppf t
+    | [] ->
+        pp_print_string ppf ")";
+        pp_close_box ppf ()
+  in
+  pp_hum_indent !default_indent ppf sexp
+
+let doc_of_sexp sexp =
+  let open Sexp in
+  let open Int in
+  let module Bytes = Stdlib.Bytes in
+  let must_escape str =
+    let len = String.length str in
+    len = 0
+    ||
+    let rec loop str ix =
+      match str.[ix] with
+      | '"' | '(' | ')' | ';' | '\\' -> true
+      | '|' ->
+          ix > 0
+          &&
+          let next = ix - 1 in
+          Char.equal str.[next] '#' || loop str next
+      | '#' ->
+          ix > 0
+          &&
+          let next = ix - 1 in
+          Char.equal str.[next] '|' || loop str next
+      | '\000' .. '\032' | '\127' .. '\255' -> true
+      | _ -> ix > 0 && loop str (ix - 1)
+    in
+    loop str (len - 1)
+  in
+
+  let escaped s =
+    let n = ref 0 in
+    for i = 0 to String.length s - 1 do
+      n :=
+        !n
+        +
+        match String.unsafe_get s i with
+        | '\"' | '\\' | '\n' | '\t' | '\r' | '\b' -> 2
+        | ' ' .. '~' -> 1
+        | _ -> 4
+    done;
+    if !n = String.length s then s
+    else
+      let s' = Bytes.create !n in
+      n := 0;
+      for i = 0 to String.length s - 1 do
+        (match String.unsafe_get s i with
+        | ('\"' | '\\') as c ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n c
+        | '\n' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'n'
+        | '\t' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 't'
+        | '\r' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'r'
+        | '\b' ->
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n 'b'
+        | ' ' .. '~' as c -> Bytes.unsafe_set s' !n c
+        | c ->
+            let a = Stdlib.Char.code c in
+            Bytes.unsafe_set s' !n '\\';
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 100)));
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 10 % 10)));
+            incr n;
+            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a % 10))));
+        incr n
+      done;
+      Bytes.unsafe_to_string s'
+  in
+
+  let esc_str str =
+    let estr = escaped str in
+    let elen = String.length estr in
+    let res = Bytes.create (elen + 2) in
+    Bytes.blit_string estr 0 res 1 elen;
+    Bytes.unsafe_set res 0 '"';
+    Bytes.unsafe_set res (elen + 1) '"';
+    Bytes.unsafe_to_string res
+  in
+
+  let index_of_newline str start = Stdlib.String.index_from_opt str start '\n' in
+
+  let get_substring str index end_pos_opt =
+    let end_pos = match end_pos_opt with None -> String.length str | Some end_pos -> end_pos in
+    String.sub str ~pos:index ~len:(end_pos - index)
+  in
+
+  let is_one_line str =
+    match index_of_newline str 0 with
+    | None -> true
+    | Some index -> Int.(index + 1 = String.length str)
+  in
+
+  let open PPrint in
+  let doc_maybe_esc_str str =
+    if not (must_escape str) then string str
+    else if is_one_line str then string (esc_str str)
+    else
+      let rec loop index acc =
+        let next_newline = index_of_newline str index in
+        let next_line = get_substring str index next_newline in
+        let acc = acc ^^ string (escaped next_line) in
+        match next_newline with
+        | None -> acc
+        | Some newline_index ->
+            loop (newline_index + 1) (acc ^^ string "\\" ^^ hardline ^^ string "\\n")
+      in
+      (* the leading space is to line up the lines *)
+      string " \"" ^^ loop 0 empty ^^ string "\""
+  in
+  
+  let rec doc_of_sexp_indent indent = function
+    | Atom str -> doc_maybe_esc_str str
+    | List (h :: t) -> 
+        group (
+          string "(" ^^ 
+          nest indent (doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t) 
+        )
+    | List [] -> string "()"
+  
+  and doc_of_sexp_rest indent = function
+    | h :: t ->
+        space ^^ doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t
+    | [] -> string ")"
+  in
+  
+  doc_of_sexp_indent !default_indent sexp
+
 let get_debug_formatter ~fname =
   if settings.output_debug_files_in_build_directory then
     let f = Stdio.Out_channel.create @@ build_file fname in
     let ppf = Stdlib.Format.formatter_of_out_channel f in
     Some ppf
+  else None
+
+let get_debug_output_channel ~fname =
+  if settings.output_debug_files_in_build_directory then
+    Some (Stdio.Out_channel.create @@ build_file fname)
   else None
 
 exception User_error of string
@@ -640,14 +929,15 @@ let input_line chan =
 let capture_stdout_logs arg =
   if never_capture_stdout () || not (debug_log_from_routines ()) then arg ()
   else (
-    Stdlib.flush Stdlib.stdout; (* Ensure previous stdout is flushed *)
+    Stdlib.flush Stdlib.stdout;
+    (* Ensure previous stdout is flushed *)
     let original_stdout_fd = Unix.dup Unix.stdout in
 
     let pipe_read_fd, pipe_write_fd = Unix.pipe ~cloexec:true () in
     Unix.dup2 pipe_write_fd Unix.stdout;
+
     (* pipe_write_fd is now the new Stdlib.stdout, do not close it in parent until done. *)
     (* The reader domain will close pipe_read_fd. *)
-
     let collected_logs_ref = ref [] in
     let reader_domain_failed = Atomic.make false in
 
@@ -660,7 +950,7 @@ let capture_stdout_logs arg =
           let _is_endlined, line = input_line in_channel in
           match String.chop_prefix ~prefix:!captured_log_prefix line with
           | Some logline -> collected_logs_ref := logline :: !collected_logs_ref
-          | None -> 
+          | None ->
               (* Forward non-log lines to original stdout immediately *)
               Stdlib.output_string orig_out (line ^ "\n");
               Stdlib.flush orig_out
@@ -668,14 +958,15 @@ let capture_stdout_logs arg =
         Stdlib.close_out_noerr orig_out;
         Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
       with
-        | End_of_file -> () (* Normal termination of the reader *)
-        | exn ->
-            Stdlib.close_out_noerr orig_out;
-            Atomic.set reader_domain_failed true;
-            Stdio.eprintf "Exception in stdout reader domain: %s\\nBacktrace:\\n%s\\n%!"
-              (Exn.to_string exn) (Stdlib.Printexc.get_backtrace ());
-            Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *);
-            Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
+      | End_of_file -> () (* Normal termination of the reader *)
+      | exn ->
+          Stdlib.close_out_noerr orig_out;
+          Atomic.set reader_domain_failed true;
+          Stdio.eprintf "Exception in stdout reader domain: %s\\nBacktrace:\\n%s\\n%!"
+            (Exn.to_string exn)
+            (Stdlib.Printexc.get_backtrace ());
+          Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *);
+          Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
     in
 
     let reader_domain = Domain.spawn reader_domain_logic in
@@ -684,50 +975,58 @@ let capture_stdout_logs arg =
       try arg ()
       with exn ->
         (* Ensure cleanup even if arg() fails *)
-        Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
-        Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
-        (* Restore stdout before waiting for the reader domain so that the
-           write end of the pipe is effectively closed (both the explicit
-           [pipe_write_fd] descriptor above _and_ the descriptor 1 obtained
-           via [dup2] earlier).  Otherwise the reader domain would never see
-           an EOF and [Domain.join] would block indefinitely. *)
-        Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
+        Stdlib.flush Stdlib.stdout;
+        (* Flush to pipe_write_fd *)
+        Unix.close pipe_write_fd;
+        (* Signal EOF to reader domain *)
+        (* Restore stdout before waiting for the reader domain so that the write end of the pipe is
+           effectively closed (both the explicit [pipe_write_fd] descriptor above _and_ the
+           descriptor 1 obtained via [dup2] earlier). Otherwise the reader domain would never see an
+           EOF and [Domain.join] would block indefinitely. *)
+        Unix.dup2 original_stdout_fd Unix.stdout;
+        (* Restore stdout *)
         Unix.close original_stdout_fd;
 
-        (* Now that all write descriptors for the pipe are closed, we can
-           wait for the reader domain to finish. *)
+        (* Now that all write descriptors for the pipe are closed, we can wait for the reader domain
+           to finish. *)
         (try Domain.join reader_domain
          with e ->
-           Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!" (Exn.to_string e));
+           Stdio.eprintf "Exception while joining reader domain (arg failed): %s\\n%!"
+             (Exn.to_string e));
 
-        if not (Atomic.get reader_domain_failed) then (
-          let captured_output = List.rev !collected_logs_ref in
-          List.iter (List.rev !captured_log_processors)
-            ~f:(fun { log_processor_prefix; process_logs } ->
-              process_logs
-              @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix));
-        );
-        captured_log_processors := []; (* Clear processors *)
+        (if not (Atomic.get reader_domain_failed) then
+           let captured_output = List.rev !collected_logs_ref in
+           List.iter (List.rev !captured_log_processors)
+             ~f:(fun { log_processor_prefix; process_logs } ->
+               process_logs
+               @@ List.filter_map captured_output
+                    ~f:(String.chop_prefix ~prefix:log_processor_prefix)));
+        captured_log_processors := [];
+        (* Clear processors *)
         Stdlib.Printexc.raise_with_backtrace exn (Stdlib.Printexc.get_raw_backtrace ())
     in
 
     (* Normal path: arg() completed successfully *)
-    Stdlib.flush Stdlib.stdout; (* Flush to pipe_write_fd *)
-    Unix.close pipe_write_fd; (* Signal EOF to reader domain *)
+    Stdlib.flush Stdlib.stdout;
+    (* Flush to pipe_write_fd *)
+    Unix.close pipe_write_fd;
 
-    (* Restore stdout before waiting for the reader domain so that the
-       write end of the pipe is effectively closed and the reader can finish
-       properly. *)
-    Unix.dup2 original_stdout_fd Unix.stdout; (* Restore stdout *)
+    (* Signal EOF to reader domain *)
+
+    (* Restore stdout before waiting for the reader domain so that the write end of the pipe is
+       effectively closed and the reader can finish properly. *)
+    Unix.dup2 original_stdout_fd Unix.stdout;
+    (* Restore stdout *)
     Unix.close original_stdout_fd;
 
     (try Domain.join reader_domain
      with e ->
-       Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!" (Exn.to_string e);
+       Stdio.eprintf "Exception while joining reader domain (arg succeeded): %s\\n%!"
+         (Exn.to_string e);
        if Atomic.get reader_domain_failed then
          Stdlib.Printexc.raise_with_backtrace e (Stdlib.Printexc.get_raw_backtrace ()));
 
-    if not (Atomic.get reader_domain_failed) then (
+    if not (Atomic.get reader_domain_failed) then
       let captured_output = List.rev !collected_logs_ref in
       Exn.protect
         ~f:(fun () ->
@@ -735,11 +1034,10 @@ let capture_stdout_logs arg =
           List.iter (List.rev !captured_log_processors)
             ~f:(fun { log_processor_prefix; process_logs } ->
               process_logs
-              @@ List.filter_map captured_output ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
+              @@ List.filter_map captured_output
+                   ~f:(String.chop_prefix ~prefix:log_processor_prefix)))
         ~finally:(fun () -> captured_log_processors := [])
-    ) else (
-        captured_log_processors := []; (* Clear processors if reader failed *)
-    );
+    else captured_log_processors := [] (* Clear processors if reader failed *);
     result)
 
 let log_debug_routine_logs ~log_contents ~stream_name =

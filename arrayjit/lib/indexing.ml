@@ -198,21 +198,26 @@ let derive_index ~product_syms ~(projection : axis_index array) =
   fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
 
 module Pp_helpers = struct
-  let pp_comma ppf () = Stdlib.Format.fprintf ppf ",@ "
-  let pp_symbol ppf sym = Stdlib.Format.fprintf ppf "%s" @@ symbol_ident sym
+  open PPrint
+  
+  let pp_comma () = comma ^^ space
+  let pp_symbol sym = string (symbol_ident sym)
 
-  let pp_static_symbol ppf { static_symbol; static_range } =
+  let pp_static_symbol { static_symbol; static_range } =
     match static_range with
-    | None -> pp_symbol ppf static_symbol
-    | Some range -> Stdlib.Format.fprintf ppf "%a : [0..%d]" pp_symbol static_symbol (range - 1)
+    | None -> pp_symbol static_symbol
+    | Some range -> 
+        infix 4 1 colon (pp_symbol static_symbol)
+          (brackets (string "0.." ^^ OCaml.int (range - 1)))
 
-  let pp_axis_index ppf idx =
-    match idx with
-    | Iterator sym -> pp_symbol ppf sym
-    | Fixed_idx i -> Stdlib.Format.fprintf ppf "%d" i
+  let pp_axis_index = function
+    | Iterator sym -> pp_symbol sym
+    | Fixed_idx i -> OCaml.int i
 
-  let pp_indices ppf idcs =
-    Stdlib.Format.pp_print_list ~pp_sep:pp_comma pp_axis_index ppf @@ Array.to_list idcs
+  let pp_indices idcs = 
+    separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)
+    
+  let print ppf doc = ToFormatter.pretty 1.0 80 ppf doc
 end
 
 module Doc_helpers = struct

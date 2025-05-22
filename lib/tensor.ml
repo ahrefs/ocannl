@@ -583,7 +583,7 @@ let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style 
     t =
   let sh = t.shape in
   let label = Tn.label t.value in
-  let prefix =
+  let prefix_str =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ " shape "
     ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
     ^ " "
@@ -630,67 +630,113 @@ let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style 
   let num_batch_axes = List.length sh.batch.dims in
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
-  (* TODO: code sharing with [to_dag] *)
-  (if spy && not (Lazy.is_val t.value.array) then Stdlib.Format.printf "%s <not-in-yet>@ " prefix
-   else
-     match (style, t.value.array) with
-     | `Inline, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
-     | `Inline, (lazy (Some arr)) ->
-         Tn.do_read t.value;
-         Nd.pp_array_inline
-           (Stdlib.Format.get_std_formatter ())
-           ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
-     | _, (lazy None) -> Stdlib.Format.printf "<virtual>@ "
-     | _, (lazy (Some arr)) ->
-         Tn.do_read t.value;
-         Nd.pp_array (Stdlib.Format.get_std_formatter ()) ~prefix ~labels ~indices arr;
-         Stdlib.Format.print_char '\n');
-  if with_grad then
-    Option.iter t.diff ~f:(fun diff ->
-        if spy && not (Lazy.is_val diff.grad.array) then
-          Stdlib.Format.printf "%s <not-in-yet>@ " (grad_txt diff)
-        else
-          match (style, diff.grad.array) with
-          | `Inline, (lazy (Some arr)) ->
-              Tn.do_read diff.grad;
-              Nd.pp_array_inline
-                (Stdlib.Format.get_std_formatter ())
-                ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
-              Stdlib.Format.print_char '\n'
-          | _, (lazy (Some arr)) ->
-              Tn.do_read diff.grad;
-              Nd.pp_array
-                (Stdlib.Format.get_std_formatter ())
-                ~prefix:(prefix ^ " " ^ grad_txt diff)
-                ~labels ~indices arr;
-              Stdlib.Format.print_char '\n'
-          | _, (lazy None) -> Stdlib.Format.printf "%s <virtual>@ " (grad_txt diff));
-  if with_code then (
-    (match t.forward.asgns with
-    | Noop -> ()
-    | fwd_code ->
-        Stdlib.Format.printf "@[<v 2>Current forward body:%a@]@," (Asgns.fprint_hum ()) fwd_code);
-    match t.diff with
-    | Some { backprop = { asgns = Noop; _ }; _ } -> ()
-    | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "@[<v 2>Current backprop body:%a@]@," (Asgns.fprint_hum ())
-          bwd_code.asgns
-    | None -> ());
-  if with_low_level then (
-    (match t.forward.asgns with
-    | Noop -> ()
-    | fwd_code ->
-        Stdlib.Format.printf "@[<v 2>Current forward low-level body:%a@]@,"
-          (Ir.Low_level.fprint_hum ())
-        @@ Asgns.to_low_level fwd_code);
-    match t.diff with
-    | Some { backprop = { asgns = Noop; _ }; _ } -> ()
-    | Some { backprop = bwd_code; _ } ->
-        Stdlib.Format.printf "@[<v 2>Current backprop low-level body:%a@]@,"
-          (Ir.Low_level.fprint_hum ())
-        @@ Asgns.to_low_level bwd_code.asgns
-    | None -> ());
-  Stdlib.Format.printf "\n"
+  
+  let open PPrint in
+  let fmt = Stdlib.Format.get_std_formatter () in
+  
+  (* Create document for tensor value *)
+  let value_doc =
+    if spy && not (Lazy.is_val t.value.array) then 
+      string prefix_str ^^ string " <not-in-yet>" ^^ space
+    else
+      match (style, Lazy.force t.value.array) with
+      | (_, None) -> string prefix_str ^^ string " <virtual>" ^^ space
+      | (`Inline, Some arr) ->
+          Tn.do_read t.value;
+          string prefix_str ^^ space ^^
+          (let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
+           doc_fmt fmt empty; (* Ensure buffer is clear *)
+           Nd.pp_array_inline fmt ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
+           empty)
+      | (_, Some arr) ->
+          Tn.do_read t.value;
+          let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
+          doc_fmt fmt empty; (* Ensure buffer is clear *)
+          Nd.pp_array fmt ~prefix:prefix_str ~labels ~indices arr;
+          string "\n"
+  in
+  
+  (* Create document for gradient *)
+  let grad_doc = 
+    if with_grad then
+      match t.diff with
+      | Some diff ->
+          if spy && not (Lazy.is_val diff.grad.array) then
+            string (grad_txt diff) ^^ string " <not-in-yet>" ^^ space
+          else
+            (match Lazy.force diff.grad.array with 
+            | None -> string (grad_txt diff) ^^ string " <virtual>" ^^ space
+            | Some arr ->
+                (match style with
+                | `Inline -> 
+                  Tn.do_read diff.grad;
+                  string (grad_txt diff) ^^ space ^^
+                  (let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
+                   doc_fmt fmt empty; (* Ensure buffer is clear *)
+                   Nd.pp_array_inline fmt ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr;
+                   empty) ^^ string "\n"
+                | `Default | `N5_layout _ | `Label_layout _ ->
+                  Tn.do_read diff.grad;
+                  let prefix = prefix_str ^ " " ^ grad_txt diff in
+                  let doc_fmt = PPrint.ToFormatter.pretty 0.9 80 in
+                  doc_fmt fmt empty; (* Ensure buffer is clear *)
+                  Nd.pp_array fmt ~prefix ~labels ~indices arr;
+                  string "\n"))
+      | None -> empty
+    else empty
+  in
+  
+  (* Create document for code *)
+  let code_doc =
+    if with_code then
+      let fwd_doc = 
+        match t.forward.asgns with
+        | Noop -> empty
+        | fwd_code ->
+            string "@[<v 2>Current forward body:" ^^ hardline ^^
+            Asgns.doc_hum () fwd_code ^^ 
+            string "@]" ^^ hardline
+      in
+      let bwd_doc = 
+        match t.diff with
+        | Some { backprop = { asgns = Noop; _ }; _ } -> empty
+        | Some { backprop = { asgns = bwd_code; _ }; _ } ->
+            string "@[<v 2>Current backprop body:" ^^ hardline ^^
+            Asgns.doc_hum () bwd_code ^^ 
+            string "@]" ^^ hardline
+        | None -> empty
+      in
+      fwd_doc ^^ bwd_doc
+    else empty
+  in
+  
+  (* Create document for low-level code *)
+  let low_level_doc =
+    if with_low_level then
+      let fwd_doc = 
+        match t.forward.asgns with
+        | Noop -> empty
+        | fwd_code ->
+            string "@[<v 2>Current forward low-level body:" ^^ hardline ^^
+            Ir.Low_level.doc_hum () (Asgns.to_low_level fwd_code) ^^ 
+            string "@]" ^^ hardline
+      in
+      let bwd_doc = 
+        match t.diff with
+        | Some { backprop = { asgns = Noop; _ }; _ } -> empty
+        | Some { backprop = { asgns = bwd_code; _ }; _ } ->
+            string "@[<v 2>Current backprop low-level body:" ^^ hardline ^^
+            Ir.Low_level.doc_hum () (Asgns.to_low_level bwd_code) ^^ 
+            string "@]" ^^ hardline
+        | None -> empty
+      in
+      fwd_doc ^^ bwd_doc
+    else empty
+  in
+  
+  (* Combine all documents and print *)
+  let final_doc = value_doc ^^ grad_doc ^^ code_doc ^^ low_level_doc ^^ string "\n" in
+  PPrint.ToFormatter.pretty 0.9 80 fmt final_doc
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->

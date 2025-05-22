@@ -109,12 +109,11 @@ val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tn
 
 val code_hum_margin : int ref
 
-val fprint_function_header :
+val function_header_doc :
   ?name:string ->
   ?static_indices:Indexing.static_symbol list ->
   unit ->
-  Stdlib.Format.formatter ->
-  unit
+  PPrint.document
 
 val get_ident_within_code : ?no_dots:bool -> ?blacklist:string list -> t array -> Tnode.t -> string
 
@@ -135,3 +134,11 @@ val fprint_hum :
   t ->
   unit
 (** Adheres more to the %cd syntax, does not output implicit type casts. *)
+
+val doc_hum :
+  ?name:string ->
+  ?static_indices:Indexing.static_symbol list ->
+  unit ->
+  t ->
+  PPrint.document
+(** Returns a PPrint document for the given low-level code. Adheres to the %cd syntax. *)
