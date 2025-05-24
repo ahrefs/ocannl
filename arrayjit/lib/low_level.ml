@@ -463,10 +463,10 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual traced static_indices llc;
         llc
-    | Set { tn; idcs; llv; debug = _ } ->
+    | Set { tn; idcs; llv; debug } ->
         let traced : traced_array = get_node traced_store tn in
         let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
-        let result = Set { tn; idcs; llv = loop_float ~process_for:next llv; debug = "" } in
+        let result = Set { tn; idcs; llv = loop_float ~process_for:next llv; debug } in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual traced static_indices result;
         result
@@ -535,7 +535,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Tn.update_memory_mode tn Virtual 151;
           None)
         else Some llc
-    | Set { tn; idcs; llv; debug = _ } ->
+    | Set { tn; idcs; llv; debug } ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
           Tn.update_memory_mode tn Virtual 152;
@@ -543,7 +543,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         else (
           assert (
             Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
-          Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug = "" }))
+          Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug }))
     | Set_local (id, llv) ->
         assert (not @@ Tn.known_non_virtual id.tn);
         Tn.update_memory_mode id.tn Virtual 16;
@@ -616,7 +616,7 @@ and substitute_proc ~var ~value llc =
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
-  | Set { tn; idcs; llv; debug = _ } -> Set { tn; idcs; llv = loop_float llv; debug = "" }
+  | Set { tn; idcs; llv; debug } -> Set { tn; idcs; llv = loop_float llv; debug }
   | Set_local (id, llv) -> Set_local (id, loop_float llv)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -633,7 +633,7 @@ let simplify_llc llc =
         Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
-    | Set { tn; idcs; llv; debug = _ } -> Set { tn; idcs; llv = loop_float llv; debug = "" }
+    | Set { tn; idcs; llv; debug } -> Set { tn; idcs; llv = loop_float llv; debug }
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -826,11 +826,10 @@ let function_header_doc ?name ?static_indices () =
   let open PPrint in
   match (name, static_indices) with
   | Some name, Some static_indices ->
-      !^name ^^ space ^^ 
-      parens (separate comma_sep (List.map ~f:pp_static_symbol static_indices)) ^^
-      colon ^^ space
-  | Some name, None -> 
-      !^name ^^ colon ^^ space
+      !^name ^^ space
+      ^^ parens (separate comma_sep (List.map ~f:pp_static_symbol static_indices))
+      ^^ colon ^^ space
+  | Some name, None -> !^name ^^ colon ^^ space
   | _ -> empty
 
 let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
@@ -897,53 +896,53 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
 let to_doc_cstyle ?name ?static_indices () llc =
   let ident_label = get_ident_within_code [| llc |] in
   let open PPrint in
-  
   let doc_ident la = string (ident_label la) in
   let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
-  
+
   let rec doc_of_code c =
     match c with
     | Noop -> empty
     | Seq (c1, c2) ->
-        let docs = List.filter_map [c1; c2] ~f:(function
-            | Noop -> None 
-            | c -> Some (doc_of_code c))
+        let docs =
+          List.filter_map [ c1; c2 ] ~f:(function Noop -> None | c -> Some (doc_of_code c))
         in
         separate hardline docs
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        let header = string "for " ^^ pp_symbol i ^^ string " = " ^^ 
-                     int from_ ^^ string " to " ^^ int to_ ^^ string " {" in
+        let header =
+          string "for " ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_
+          ^^ string " {"
+        in
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
     | Set p ->
-        p.debug <- "";  (* We don't use debug string in PPrint version *)
         let prec = Lazy.force p.tn.prec in
-        group (
-          doc_ident p.tn ^^ 
-          brackets (pp_indices p.idcs) ^^ 
-          string " := " ^^ 
-          doc_of_float prec p.llv ^^ 
-          string ";"
-        )
+        let result =
+          group
+            (doc_ident p.tn
+            ^^ brackets (pp_indices p.idcs)
+            ^^ string " := " ^^ doc_of_float prec p.llv ^^ string ";")
+        in
+        if not (String.is_empty p.debug) then (
+          let b = Buffer.create 100 in
+          PPrint.ToBuffer.pretty 0.7 100 b result;
+          p.debug <- Buffer.contents b);
+        result
     | Comment message -> string ("/* " ^ message ^ " */")
     | Staged_compilation callback -> callback ()
     | Set_local (id, llv) ->
         let prec = Lazy.force id.tn.prec in
         group (doc_local id ^^ string " := " ^^ doc_of_float prec llv ^^ string ";")
-  
   and doc_of_float prec value =
     match value with
-    | Local_scope { id; body; _ } -> 
-        group (
-          doc_local id ^^ string " {" ^^ 
-          nest 2 (break 1 ^^ doc_of_code body) ^^ 
-          break 1 ^^ string "}"
-        )
+    | Local_scope { id; body; _ } ->
+        group
+          (doc_local id ^^ string " {"
+          ^^ nest 2 (break 1 ^^ doc_of_code body)
+          ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
     | Get_global (Ops.C_function s, None) -> string (s ^ "()")
-    | Get_global (Ops.C_function s, Some idcs) -> 
-        string s ^^ parens (pp_indices idcs)
+    | Get_global (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
@@ -954,91 +953,74 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Get (tn, idcs) -> 
-        group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
     | Ternop (op, v1, v2, v3) ->
         let prefix, comma1, comma2, postfix = Ops.ternop_c_syntax prec op in
-        group (
-          string prefix ^^ 
-          doc_of_float prec v1 ^^ 
-          string comma1 ^^ space ^^ 
-          doc_of_float prec v2 ^^ 
-          string comma2 ^^ space ^^ 
-          doc_of_float prec v3 ^^ 
-          string postfix
-        )
+        group
+          (string prefix ^^ doc_of_float prec v1 ^^ string comma1 ^^ space ^^ doc_of_float prec v2
+         ^^ string comma2 ^^ space ^^ doc_of_float prec v3 ^^ string postfix)
     | Binop (Arg1, v1, _v2) -> doc_of_float prec v1
     | Binop (Arg2, _v1, v2) -> doc_of_float prec v2
     | Binop (op, v1, v2) ->
         let prefix, infix, postfix = Ops.binop_c_syntax prec op in
-        group (
-          string prefix ^^ 
-          doc_of_float prec v1 ^^ 
-          string infix ^^ space ^^ 
-          doc_of_float prec v2 ^^ 
-          string postfix
-        )
+        group
+          (string prefix ^^ doc_of_float prec v1 ^^ string infix ^^ space ^^ doc_of_float prec v2
+         ^^ string postfix)
     | Unop (Identity, v) -> doc_of_float prec v
     | Unop (op, v) ->
         let prefix, postfix = Ops.unop_c_syntax prec op in
         string prefix ^^ doc_of_float prec v ^^ string postfix
-  in 
-    hardline ^^ 
-    nest 2 (
-      function_header_doc ?name ?static_indices () ^^
-      doc_of_code llc
-    )
+  in
+  hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
 let doc_hum ?name ?static_indices () llc =
   let ident_label = get_ident_within_code [| llc |] in
   let open PPrint in
-  
   let doc_ident la = string (ident_label la) in
   let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
-  
+
   let rec doc_of_code c =
     match c with
     | Noop -> empty
     | Seq (c1, c2) ->
-        let docs = List.filter_map [c1; c2] ~f:(function
-            | Noop -> None 
-            | c -> Some (doc_of_code c))
+        let docs =
+          List.filter_map [ c1; c2 ] ~f:(function Noop -> None | c -> Some (doc_of_code c))
         in
         separate hardline docs
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
-        let header = string "for " ^^ pp_symbol i ^^ string " = " ^^ 
-                     int from_ ^^ string " to " ^^ int to_ ^^ string " {" in
+        let header =
+          string "for " ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_
+          ^^ string " {"
+        in
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
     | Set p ->
-        (* We don't use debug string in PPrint version *)
-        group (
-          doc_ident p.tn ^^ 
-          brackets (pp_indices p.idcs) ^^ 
-          string " := " ^^ 
-          doc_of_float p.llv ^^ 
-          string ";"
-        )
+        let result =
+          group
+            (doc_ident p.tn
+            ^^ brackets (pp_indices p.idcs)
+            ^^ string " := " ^^ doc_of_float p.llv ^^ string ";")
+        in
+        let b = Buffer.create 100 in
+        PPrint.ToBuffer.pretty 0.7 100 b result;
+        p.debug <- Buffer.contents b;
+        result
     | Comment message -> string ("/* " ^ message ^ " */")
     | Staged_compilation callback -> callback ()
-    | Set_local (id, llv) ->
-        group (doc_local id ^^ string " := " ^^ doc_of_float llv ^^ string ";")
-  
+    | Set_local (id, llv) -> group (doc_local id ^^ string " := " ^^ doc_of_float llv ^^ string ";")
   and doc_of_float value =
     match value with
-    | Local_scope { id; body; _ } -> 
-        group (
-          doc_local id ^^ string " {" ^^ 
-          nest 2 (break 1 ^^ doc_of_code body) ^^ 
-          break 1 ^^ string "}"
-        )
+    | Local_scope { id; body; _ } ->
+        group
+          (doc_local id ^^ string " {"
+          ^^ nest 2 (break 1 ^^ doc_of_code body)
+          ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
     | Get_global (Ops.C_function s, None) -> string (s ^ "()")
-    | Get_global (Ops.C_function s, Some idcs) -> 
-        string s ^^ parens (pp_indices idcs)
+    | Get_global (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
     | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
@@ -1049,60 +1031,38 @@ let doc_hum ?name ?static_indices () llc =
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Get (tn, idcs) -> 
-        group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
     | Ternop (op, v1, v2, v3) ->
         let prefix = Ops.ternop_cd_syntax op in
-        group (
-          string prefix ^^ 
-          parens (
-            doc_of_float v1 ^^ string "," ^^ space ^^
-            doc_of_float v2 ^^ string "," ^^ space ^^
-            doc_of_float v3
-          )
-        )
+        group
+          (string prefix
+          ^^ parens
+               (doc_of_float v1 ^^ string "," ^^ space ^^ doc_of_float v2 ^^ string "," ^^ space
+              ^^ doc_of_float v3))
     | Binop (Arg1, v1, _v2) -> doc_of_float v1
     | Binop (Arg2, _v1, v2) -> doc_of_float v2
     | Binop (op, v1, v2) ->
         if Ops.is_binop_nice_infix op then
           let infix = Ops.binop_cd_syntax op in
-          group (
-            parens (
-              doc_of_float v1 ^^ space ^^ 
-              string infix ^^ space ^^ 
-              doc_of_float v2
-            )
-          )
+          group (parens (doc_of_float v1 ^^ space ^^ string infix ^^ space ^^ doc_of_float v2))
         else
           let prefix = Ops.binop_cd_fallback_syntax op in
-          group (
-            string prefix ^^ 
-            parens (
-              doc_of_float v1 ^^ string "," ^^ space ^^
-              doc_of_float v2
-            )
-          )
+          group (string prefix ^^ parens (doc_of_float v1 ^^ string "," ^^ space ^^ doc_of_float v2))
     | Unop (Identity, v) -> doc_of_float v
     | Unop (op, v) ->
         let prefix = Ops.unop_cd_syntax op in
         string prefix ^^ parens (doc_of_float v)
   in
-  
-  hardline ^^ 
-  nest 2 (
-    function_header_doc ?name ?static_indices () ^^
-    doc_of_code llc
-  )
+
+  hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
 let%diagn2_sexp optimize ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
-  Option.iter unoptim_ll_source ~f:(fun callback ->
-      callback (doc_hum ~name ~static_indices () llc));
+  Option.iter unoptim_ll_source ~f:(fun callback -> callback (doc_hum ~name ~static_indices () llc));
   let result = optimize_proc static_indices llc in
-  Option.iter ll_source ~f:(fun callback ->
-      callback (doc_hum ~name ~static_indices () result.llc));
+  Option.iter ll_source ~f:(fun callback -> callback (doc_hum ~name ~static_indices () result.llc));
   result
 
 let loop_over_dims dims ~body =

@@ -326,7 +326,7 @@ module C_syntax (B : C_syntax_config) = struct
           in
           let log_doc =
             let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
-            let comment_base_msg = Printf.sprintf "# %s\n" debug in
+            let comment_base_msg = "# " ^ debug ^ "\n" in
             let value_base_msg =
               Printf.sprintf "%s[%%u]{=%s} = %s = %s\n" (get_ident tn) B.float_log_style
                 B.float_log_style debug_val_str
@@ -350,7 +350,7 @@ module C_syntax (B : C_syntax_config) = struct
         else local_defs ^^ (if PPrint.is_empty local_defs then empty else hardline) ^^ assignment
     | Comment message ->
         if Utils.debug_log_from_routines () then
-          let base_message = Printf.sprintf "COMMENT: %s\n" message in
+          let base_message = "COMMENT: " ^ message ^ "\n" in
           let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
           B.pp_log_statement ~log_param_c_expr_doc:log_param_doc ~base_message_literal:base_message
             ~args_docs:[]
