@@ -27,7 +27,7 @@ let _suspended () =
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdio.printf "\nHigh-level code:\n%!";
-  Ir.Assignments.doc_hum () code.fwd_bprop.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
+  Ir.Assignments.to_doc () code.fwd_bprop.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
   Stdio.printf "\n%!"
 
 let _suspended () =

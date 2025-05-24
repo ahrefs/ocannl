@@ -118,6 +118,6 @@ val to_doc_cstyle :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 (** Adheres more to the C syntax, outputs implicit type casts. *)
 
-val doc_hum :
+val to_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
 (** Adheres to the %cd syntax. *)

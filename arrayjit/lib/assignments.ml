@@ -279,7 +279,7 @@ let get_ident_within_code ?no_dots c =
     Tn.update_code_name tn ident;
     ident
 
-let doc_hum ?name ?static_indices () c =
+let to_doc ?name ?static_indices () c =
   let ident = get_ident_within_code c in
   let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> ident tn ^ ".merge" in
   
@@ -376,5 +376,5 @@ let%track6_sexp lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indi
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with
   | None -> ()
-  | Some callback -> callback (doc_hum ~name ~static_indices () proc));
+  | Some callback -> callback (to_doc ~name ~static_indices () proc));
   Low_level.optimize ~unoptim_ll_source ~ll_source ~name static_indices llc

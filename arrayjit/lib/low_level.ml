@@ -975,7 +975,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
   in
   hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
-let doc_hum ?name ?static_indices () llc =
+let to_doc ?name ?static_indices () llc =
   let ident_label = get_ident_within_code [| llc |] in
   let open PPrint in
   let doc_ident la = string (ident_label la) in
@@ -1060,9 +1060,9 @@ let doc_hum ?name ?static_indices () llc =
 
 let%diagn2_sexp optimize ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
-  Option.iter unoptim_ll_source ~f:(fun callback -> callback (doc_hum ~name ~static_indices () llc));
+  Option.iter unoptim_ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () llc));
   let result = optimize_proc static_indices llc in
-  Option.iter ll_source ~f:(fun callback -> callback (doc_hum ~name ~static_indices () result.llc));
+  Option.iter ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () result.llc));
   result
 
 let loop_over_dims dims ~body =

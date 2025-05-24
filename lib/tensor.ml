@@ -684,14 +684,14 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
         | Noop -> empty
         | fwd_code ->
             string "@[<v 2>Current forward body:"
-            ^^ hardline ^^ Asgns.doc_hum () fwd_code ^^ string "@]" ^^ hardline
+            ^^ hardline ^^ Asgns.to_doc () fwd_code ^^ string "@]" ^^ hardline
       in
       let bwd_doc =
         match t.diff with
         | Some { backprop = { asgns = Noop; _ }; _ } -> empty
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
             string "@[<v 2>Current backprop body:"
-            ^^ hardline ^^ Asgns.doc_hum () bwd_code ^^ string "@]" ^^ hardline
+            ^^ hardline ^^ Asgns.to_doc () bwd_code ^^ string "@]" ^^ hardline
         | None -> empty
       in
       fwd_doc ^^ bwd_doc
@@ -707,7 +707,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
         | fwd_code ->
             string "@[<v 2>Current forward low-level body:"
             ^^ hardline
-            ^^ Ir.Low_level.doc_hum () (Asgns.to_low_level fwd_code)
+            ^^ Ir.Low_level.to_doc () (Asgns.to_low_level fwd_code)
             ^^ string "@]" ^^ hardline
       in
       let bwd_doc =
@@ -716,7 +716,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
             string "@[<v 2>Current backprop low-level body:"
             ^^ hardline
-            ^^ Ir.Low_level.doc_hum () (Asgns.to_low_level bwd_code)
+            ^^ Ir.Low_level.to_doc () (Asgns.to_low_level bwd_code)
             ^^ string "@]" ^^ hardline
         | None -> empty
       in
