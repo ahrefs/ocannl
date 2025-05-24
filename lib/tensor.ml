@@ -725,7 +725,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
   in
 
   (* Combine all documents and print *)
-  value_doc ^^ grad_doc ^^ code_doc ^^ low_level_doc ^^ string "\n"
+  group (value_doc ^^ break 1 ^^ grad_doc ^^ break 1 ^^ code_doc ^^ break 1 ^^ low_level_doc)
 
 let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style)
     t =
