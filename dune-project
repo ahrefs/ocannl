@@ -47,6 +47,7 @@
   ;  :with-dev-setup)
   (printbox
    (>= 0.12))
+  ; FIXME: Depend on printbox-text > 0.12.0 when it is released.
   (printbox-text
    (>= 0.12))
   pprint
@@ -101,6 +102,7 @@
    (>= 0.5.3))
   (printbox
    (>= 0.12))
+  ; FIXME: Depend on printbox-text > 0.12.0 when it is released.
   (printbox-text
    (>= 0.12))
   (printbox-ext-plot

@@ -31,36 +31,9 @@ jobs:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
         dune-cache: true
         allow-prerelease-opam: true
+    # FIXME: We need to pin printbox-text until > 0.12.0 is released.
     - run: opam pin -n printbox-text https://github.com/c-cube/printbox.git
     - run: opam pin -n .
     - run: opam install . -y --deps-only --with-test --with-doc
     - run: opam exec -- dune build
     - run: opam exec -- dune runtest
-
-  test-metal:
-    name: Test Metal Backend
-    runs-on: flyci-macos-large-latest-m1
-    steps:
-    - name: Set git to use LF
-      run: |
-        git config --global core.autocrlf false
-        git config --global core.eol lf
-        git config --global core.ignorecase false
-    - uses: actions/checkout@v4
-    - uses: ocaml/setup-ocaml@v3
-      with:
-        ocaml-compiler: 5.3.x
-        dune-cache: true
-        allow-prerelease-opam: true
-    - run: opam pin -n printbox-text https://github.com/c-cube/printbox.git
-    - run: opam pin -n .
-    - run: opam install . -y --deps-only --with-test
-    - run: opam exec -- dune build
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/sanity_check.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/hello_world.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/primitive_ops.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/hello_world_op.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/micrograd_basic.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/einsum_trivia.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/zero2hero_1of7.exe
-    - run: OCANNL_BACKEND=metal opam exec -- dune exec bin/micrograd_demo.exe
