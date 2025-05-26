@@ -1,0 +1,295 @@
+{0 PPrint}
+
+[PPrint] is an OCaml library for {b pretty-printing textual
+documents}. It takes care of {b indentation and line breaks}, and is
+typically used to {b pretty-print code}.
+
+{1 API Reference}
+
+An experienced user may wish to jump directly to a section of the
+API documentation:
+- {{!PPrint.building}building documents,}
+- {{!PPrint.inspecting}inspecting documents,}
+- {{!PPrint.rendering}rendering documents,}
+- {{!PPrint.defining}defining custom documents,}
+- {{!PPrint.combinators}high-level combinators,}
+- combinators for {{!PPrint.OCaml}printing OCaml values};
+  these reside in the submodule {!PPrint.OCaml}.
+
+{1 Core Combinators}
+
+At the heart of [PPrint] is a little {b domain-specific language of
+documents}. This language has a well-defined semantics, which the printing
+engine implements. The language and its semantics rest upon a small number
+of fundamental concepts.
+
+There are combinators for creating {b atomic documents}. For instance, the
+{{!PPrint.string}string} combinator turns an OCaml string (which must not
+contain any newline character) into a document. Thus,
+
+{[
+string "hello"
+]}
+
+is a simple, unbreakable document. The {{!PPrint.utf8string}utf8string}
+combinator is analogous, and should be preferred when working with non-ASCII
+strings. The {{!PPrint.utf8format}utf8format} combinator provides a
+convenient [sprintf]-style API for constructing a complex string and
+turning it into an atomic document.
+
+There is a {b concatenation} operator {{!PPrint.(^^)}(^^)}, which joins
+two documents. For instance,
+
+{[
+string "hello" ^^ string "world"
+]}
+
+is a composite document. It is in fact equivalent to [string "helloworld"].
+
+A somewhat more interesting combinator is the {b breakable blank} combinator
+{{!PPrint.break}break}. This combinator expects a nonnegative integer
+argument, the width of the desired breakable blank. If [break n] is printed
+in flat mode, it produces [n] blank characters; if it is printed in normal
+mode, it produces one newline character.
+
+As suggested by the previous sentence, there are {b two printing modes},
+namely {b flat mode} and {b normal mode}. The printing engine goes back and
+forth between these two modes. Exactly where and how the printing engine
+switches from one mode to the other is controlled by the next combinator.
+
+The {b grouping combinator}, {{!PPrint.group}group}, introduces {b a choice
+between flat mode and normal mode}. It is a document transformer: if [d] is
+a document, then [group d] is a document. When the printing engine
+encounters [group d], two possibilities arise. The first possibility is to
+print all of [d] on a single line. This is known as flat mode. The engine
+tries this first (ignoring all {{!PPrint.group}group} combinators inside
+[d]). If it succeeds, great. If it fails, by lack of space on the current
+line, then the engine reverts to the second possibility, which is to
+dissolve the group and print the bare document [d] in normal mode. This has
+subtle consequences: there might be further groups inside [d], and each of
+these groups gives rise to further choices.
+
+At each group, the choice is resolved in an efficient way. No backtracking
+is required. The ideal width of every document is computed (in a bottom-up
+manner) when documents are constructed. This allows every choice to be
+resolved in constant time. The time complexity of building and rendering
+documents is linear in the size of the document.
+
+{1 Examples}
+
+The interplay of {{!PPrint.break}break} and {{!PPrint.group}group} gives
+rise to an interesting language, where {{!PPrint.group}group} is used to
+indicate a choice point, and the appearance of {{!PPrint.break}break} is
+dependent upon the choice points that appear higher up in the hierarchical
+structure of the document. For instance, the document:
+
+{[
+group (string "This" ^^ break 1 ^^ string "is" ^^ break 1 ^^ string "pretty.")
+]}
+
+is printed either on a single line, if it fits, or on three lines. It cannot
+be printed on two lines: there is just one choice point, so either the two
+breakable blanks are broken, or none of them is. By the way, this document
+can be abbreviated as follows:
+
+{[
+group (string "This" ^/^ string "is" ^/^ string "pretty.")
+]}
+
+On the other hand, the document:
+
+{[
+string "This" ^^
+group (break 1 ^^ string "is") ^^
+group (break 1 ^^ string "pretty.")
+]}
+
+can be printed on one, two, or three lines. There are two choice points,
+each of which influences one of the two breakable blanks. The two choices
+are independent of one another. Each of the words in the sentence [This is
+pretty.] is printed on the current line if it fits, and on a new line
+otherwise. By the way, this document can be abbreviated as follows:
+
+{[
+flow (break 1) [
+  string "This";
+  string "is";
+  string "pretty."
+]
+]}
+
+or as follows:
+
+{[
+flow_map (break 1) string [ "This"; "is"; "pretty." ]
+]}
+
+{1 More Core Combinators}
+
+As noted earlier, the string that is supplied to {{!PPrint.string}string},
+{{!PPrint.utf8string}utf8string}, or {{!PPrint.utf8format}utf8format} must
+not contain any newline characters. If one wishes to impose a line break,
+one must use the {b forced newline} combinator {{!PPrint.hardline}hardline}.
+
+Whereas {{!PPrint.group}group} introduces a choice between flat mode and
+normal mode, the {b conditional construct} {{!PPrint.ifflat}ifflat} allows
+testing whether the printing engine is currently in flat mode or in normal
+mode. The document [ifflat doc1 doc2] is rendered as [doc1] if the engine is
+currently in flat mode, and as [doc2] if the engine is currently in normal
+mode. This is a powerful combinator; however, one must be aware that
+{i both branches are evaluated and constructed in memory} during the
+document construction phase. So, if used naively,
+{{!PPrint.ifflat}ifflat} can cause exponential time and space usage.
+To avoid this danger, {{!PPrint.ifflat}ifflat} should
+typically be applied to documents of constant size.
+
+The {b blank combinator} {{!PPrint.blank}blank} is analogous to
+{{!PPrint.break}break}, but produces non-breakable blank characters. A blank
+character is like an ordinary ASCII space character [string " "], except
+that blank characters at the end of a line are automatically suppressed.
+Thus, the printing engine guarantees that no trailing blank characters are
+ever produced.
+
+To illustrate the power of these combinators, let us reveal that
+{{!PPrint.break}break} is in reality not a primitive combinator: it is
+defined in terms of {{!PPrint.hardline}hardline}, {{!PPrint.blank}blank},
+and {{!PPrint.ifflat}ifflat}. A possible definition of [break 1] is [ifflat
+(blank 1) hardline].
+
+The {b nesting} combinator {{!PPrint.nest}nest} deals with indentation. At
+every time, the printing engine maintains a {b current indentation level},
+which is a nonnegative integer. The current indentation level is initially
+zero. To render the document [nest 2 d], the printing engine temporarily
+increases the current indentation level by 2, renders the document [d], then
+restores the previous indentation level. The effect of the current
+indentation level is as follows: {b every time a newline character is
+emitted, it is immediately followed by [n] blank characters}, where [n] is
+the current indentation level.
+
+To illustrate the use of indentation, let us look at this document:
+
+{[
+  group (
+    string "begin" ^^
+    nest 2 (break 1 ^^ string "work") ^^
+    break 1 ^^ string "end"
+  )
+]}
+
+Although this document looks somewhat complicated, understanding its
+behavior is relatively easy, because there is only one
+{{!PPrint.group}group} combinator in it. This document can be printed in one
+of two ways. If it fits on the current line, then the content of the group
+is rendered in flat mode: [break 1] becomes equivalent to [blank 1], and
+(because no newline characters are emitted) [nest 2] has no effect. The
+document is then rendered as follows:
+
+{[
+begin work end
+]}
+
+If the document does {i not} fit on the current line, then the group is
+dissolved, and [break 1] becomes equivalent to [hardline]. Thus, the
+document becomes equivalent to:
+
+{[
+    string "begin" ^^
+    nest 2 (hardline ^^ string "work") ^^
+    hardline ^^ string "end"
+]}
+
+Thanks to the {{!PPrint.nest}nest} combinator, the first
+{{!PPrint.hardline}hardline} is immediately followed with two blank
+characters, whereas the second {{!PPrint.hardline}hardline} is not.
+The document is then rendered as follows:
+
+{[
+begin
+  work
+end
+]}
+
+The {b alignment} combinator {{!PPrint.align}align} can be used to change
+the current indentation level in a more subtle way. The effect of this
+combinator is to set the current indentation level to the current column. To
+understand what this means, let us look at this document:
+
+{[
+  string "please" ^/^ align (group (string "align" ^/^ string "here"))
+]}
+
+If this document fits on the current line, then neither
+{{!PPrint.align}align} nor {{!PPrint.group}group} have any effect, so the
+document is rendered as follows:
+
+{[
+please align here
+]}
+
+If the document does {i not} fit on the current line, then the group is
+dissolved. The second concatenation operator {{!PPrint.(^/^)}(^/^)} inserts
+a breakable blank [break 1], which is in this case is equivalent to
+[hardline]. Because the current indentation level is set by
+{{!PPrint.align}align} to the column that follows "[please ]", the document
+is rendered as follows:
+
+{[
+please align
+       here
+]}
+
+This concludes our review of [PPrint]'s core combinators. Not every
+combinator has been mentioned here; for further details, please consult
+{{!PPrint.building}the complete list} of the core combinators for building
+documents.
+
+On top of the core combinators, it is up to the user of the library to
+define higher-level combinators that are more convenient or better suited to
+a particular use case. [PPrint] itself comes with {{!PPrint.combinators}a
+collection of high-level combinators}, and the submodule {!PPrint.OCaml}
+offers a collection of combinators for {{!PPrint.OCaml}printing OCaml
+values}. These collections are not as complete and thoughtfully designed as
+they could be. They are subject to change in the future.
+
+{1 Rendering Documents}
+
+The submodules {!PPrint.ToChannel}, {!PPrint.ToBuffer}, and
+{!PPrint.ToFormatter} give access to the printing engine,
+and send their output respectively to an output channel
+of type [out_channel], to a buffer of type [Buffer.t],
+and to a formatter channel of type [Format.formatter].
+
+Each of these submodules offers a choice between two printing engines. The
+{{!PPrint.ToChannel.pretty}pretty} printing engine should be preferred in
+most situations; it attempts to respects the maximum line width and ribbon
+width specified by the user. The {{!PPrint.ToChannel.compact}compact}
+printing engine can be used when the readability of the output does not
+matter: it assumes a maximum line width of zero (so it never flattens a
+group) and does not emit any indentation characters.
+
+{1 Defining Custom Documents}
+
+It is possible to extend [PPrint] with custom document constructors,
+provided they meet the expectations of the printing engine. In short, the {b
+custom document} combinator {{!PPrint.val-custom}custom} expects an object
+of class {{!PPrint.class-type-custom}custom}. This object must provide three
+methods. The method [requirement] must compute the ideal width of the custom
+document. The methods [pretty] and [compact] must render the custom
+document. For this purpose, they have access to the {{!PPrint.output}output
+channel} and to the {{!PPrint.state}state} of the printing engine. For more
+details, see {{!PPrint.defining}Defining Custom Documents}.
+
+{1 History and Acknowledgements}
+
+The document language and the printing engine are inspired by Daan Leijen's
+{{:https://hackage.haskell.org/package/wl-pprint}wl-pprint} library, which
+itself is based on the ideas developed by Philip Wadler in the paper
+{{:http://homepages.inf.ed.ac.uk/wadler/papers/prettier/prettier.pdf}A
+Prettier Printer}. This Haskell library exploits laziness to achieve a very
+low memory requirement: the entire document never needs to reside in memory.
+[PPrint] achieves greater simplicity and possibly higher throughput by
+requiring the entire document to be built in memory before it is printed.
+
+[PPrint] was written by {{:http://cambium.inria.fr/~fpottier/}François
+Pottier} and Nicolas Pouillard, with contributions by Yann Régis-Gianas,
+Gabriel Scherer, Jonathan Protzenko, and Thomas Refis.

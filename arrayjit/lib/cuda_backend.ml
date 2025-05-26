@@ -290,8 +290,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only
          where different. *)
       let open PPrint in
-      let f op_str v1 v2 = group @@ parens (v1 ^^ space ^^ string op_str ^^ space ^^ v2) in
-      let func fn v1 v2 = group (string fn ^^ parens (separate comma [ v1; v2 ])) in
+      let f op_str v1 v2 = group (parens (v1 ^^ string (" " ^ op_str) ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)))) in
+      let func fn v1 v2 = group (string fn ^^ parens (v1 ^^ comma ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)))) in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
       | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
@@ -307,54 +307,55 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Double_prec _ -> func "pow"
       | ToPowOf, Single_prec _ -> func "powf"
       | ToPowOf, Half_prec _ ->
-          fun v1 v2 -> group (string "hexp2(hlog2(" ^^ v1 ^^ string ")," ^^ v2 ^^ string ")")
+          fun v1 v2 -> group (string "hexp2(hlog2(" ^^ v1 ^^ string ")," ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)) ^^ string ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
       | Relu_gate, Byte_prec _ ->
           fun v1 v2 ->
-            group @@ parens (parens (v1 ^^ string " > 0") ^^ string " ? " ^^ v2 ^^ string " : 0")
+            group (parens (group (parens (v1 ^^ string " > 0")) 
+                  ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0")
+                           (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0"))))
       | Relu_gate, Half_prec _ ->
           fun v1 v2 ->
-            group
-            @@ parens
-                 (parens
+            group (parens
+                 (group (parens
                     (string "__hgt(" ^^ v1 ^^ comma
-                    ^^ string " __ushort_as_half((unsigned short)0x0000U))")
-                 ^^ string " ? " ^^ v2
-                 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+                    ^^ string " __ushort_as_half((unsigned short)0x0000U))"))
+                 ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)")
+                          (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
       | Relu_gate, _ ->
           fun v1 v2 ->
-            group @@ parens (parens (v1 ^^ string " > 0.0") ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+            group (parens (group (parens (v1 ^^ string " > 0.0")) 
+                  ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0")
+                           (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0"))))
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
-            group
-            @@ parens
-                 (parens
-                    (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f")
-                 ^^ string " ? " ^^ v2 ^^ string " : (unsigned char)0")
+            group (parens
+              (group (parens
+                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f"))
+              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "(unsigned char)0")
+                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "(unsigned char)0"))))
       | Satur01_gate, Half_prec _ ->
           fun v1 v2 ->
-            group
-            @@ parens
-                 (parens
-                    (string "__hgt(" ^^ v1 ^^ comma
-                    ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
-                    ^^ v1 ^^ comma
-                    ^^ string " __ushort_as_half((unsigned short)0x3C00U)))")
-                 ^^ string " ? " ^^ v2
-                 ^^ string " : __ushort_as_half((unsigned short)0x0000U)")
+            group (parens
+              (group (parens (string "__hgt(" ^^ v1 ^^ comma
+                 ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
+                 ^^ v1 ^^ comma
+                 ^^ string " __ushort_as_half((unsigned short)0x3C00U))"))
+              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)")
+                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
       | Satur01_gate, Single_prec _ ->
           fun v1 v2 ->
-            group
-            @@ parens
-                 (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f")
-                 ^^ string " ? " ^^ v2 ^^ string " : 0.0f")
+            group (parens
+              (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
+              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0f")
+                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0f"))))
       | Satur01_gate, Double_prec _ ->
           fun v1 v2 ->
-            group
-            @@ parens
-                 (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0")
-                 ^^ string " ? " ^^ v2 ^^ string " : 0.0")
+            group (parens
+              (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
+              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0")
+                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0"))))
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"
@@ -473,12 +474,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         | Some doc -> doc :: args_docs
         | None -> args_docs (* Should not happen if kernel_log_param is Some *)
       in
-      group
-        (string "printf("
-        ^^ dquotes (string format_string_literal)
-        ^^ comma ^^ space
-        ^^ separate (comma ^^ space) all_args
-        ^^ rparen ^^ semi)
+      string "printf("
+      ^^ dquotes (string format_string_literal)
+      ^^ comma ^^ space
+      ^^ separate (comma ^^ space) all_args
+      ^^ rparen ^^ semi
   end
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =

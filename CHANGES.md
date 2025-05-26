@@ -1,4 +1,4 @@
-## [0.5.3] -- 2025-05-19
+## [0.5.3] -- 2025-05-24
 
 ### Added
 
@@ -13,6 +13,8 @@
 - Removed `initialize` and `is_initialized` from the backend API; instead, backends should be initialized on functor application. The functors now take `config` as argument.
 - More descriptive identifier names in C-syntax code in case of name conflicts.
 - Changed the backend config name `cc` to `multicore_cc` for consistency.
+- Migrated out of `Stdlib.Format` to `PPrint` for all structured formatting.
+- Migrated stdout capture to thread-based (domain-based actually); for Windows compatibility but also much more robust for large logs.
 
 ### Fixed
 
