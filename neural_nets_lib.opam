@@ -18,7 +18,7 @@ depends: [
   "base" {>= "v0.17.0"}
   "arrayjit" {>= "0.5.3"}
   "printbox" {>= "0.12"}
-  "printbox-text" {>= "0.12"}
+  "printbox-text"
   "printbox-ext-plot" {>= "0.12"}
   "angstrom" {>= "0.15"}
   "stdio"

@@ -23,6 +23,10 @@
 
 (documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
 
+(pin
+ (url "git+https://github.com/c-cube/printbox.git")
+ (package (name printbox-text)))
+
 ; We give up on npy / ocannl_npy for now.
 
 (package
@@ -47,8 +51,8 @@
   ;  :with-dev-setup)
   (printbox
    (>= 0.12))
-  (printbox-text
-   (>= 0.12))
+  ; We need to pin printbox-text until > 0.12.0 is released.
+  printbox-text
   pprint
   stdio
   sexplib
@@ -101,8 +105,8 @@
    (>= 0.5.3))
   (printbox
    (>= 0.12))
-  (printbox-text
-   (>= 0.12))
+  ; We need to pin printbox-text until > 0.12.0 is released.
+  printbox-text
   (printbox-ext-plot
    (>= 0.12))
   (angstrom
@@ -120,7 +124,6 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
-  ; ppx_minidebug 2.2.0 will be a breaking change.
   (ppx_minidebug
    (>= 2.2.0))
   (odoc :with-doc)

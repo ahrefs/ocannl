@@ -19,7 +19,7 @@ depends: [
   "ctypes" {>= "0.23"}
   "ctypes-foreign" {>= "0.23"}
   "printbox" {>= "0.12"}
-  "printbox-text" {>= "0.12"}
+  "printbox-text"
   "pprint"
   "stdio"
   "sexplib"
