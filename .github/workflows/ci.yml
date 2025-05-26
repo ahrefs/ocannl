@@ -31,6 +31,7 @@ jobs:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
         dune-cache: true
         allow-prerelease-opam: true
+    - run: opam pin -n printbox-text https://github.com/c-cube/printbox.git
     - run: opam pin -n .
     - run: opam install . -y --deps-only --with-test --with-doc
     - run: opam exec -- dune build
@@ -51,6 +52,7 @@ jobs:
         ocaml-compiler: 5.3.x
         dune-cache: true
         allow-prerelease-opam: true
+    - run: opam pin -n printbox-text https://github.com/c-cube/printbox.git
     - run: opam pin -n .
     - run: opam install . -y --deps-only --with-test
     - run: opam exec -- dune build
