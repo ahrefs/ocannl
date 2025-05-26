@@ -102,7 +102,8 @@ let%expect_test "Print constant tensor" =
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
   Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
-  [%expect {|
+  [%expect
+    {|
     [0]: [  1.00 , 2.00 , 3.00  ;  4.00 , 5.00 , 6.00  ]_hey shape 1:3->0:2  [
        1.00 , 2.00 , 3.00
       ;  4.00 , 5.00 , 6.00
@@ -124,7 +125,8 @@ let%expect_test "Print constant tensor" =
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   Train.forward_and_forget backend ctx hoo;
   Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
-  [%expect {|
+  [%expect
+    {|
     [1]: [| [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] |]_hoo shape 0:2|1:3  [|
       [ 1.00 ; 2.00 ; 3.00 ]
       ; [ 4.00 ; 5.00 ; 6.00 ]

@@ -164,11 +164,12 @@ struct
   let ternop_syntax prec op v1 v2 v3 =
     let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
     let open PPrint in
-    group (string op_prefix ^^ v1 ^^ string op_infix1 
-           ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
-           ^^ string op_infix2 
-           ^^ ifflat (space ^^ v3) (nest 2 (break 1 ^^ v3))
-           ^^ string op_suffix)
+    group
+      (string op_prefix ^^ v1 ^^ string op_infix1
+      ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
+      ^^ string op_infix2
+      ^^ ifflat (space ^^ v3) (nest 2 (break 1 ^^ v3))
+      ^^ string op_suffix)
 
   let binop_syntax prec op v1 v2 =
     match op with
@@ -176,36 +177,59 @@ struct
         match prec with
         | Ops.Byte_prec _ ->
             let open PPrint in
-            group (parens
-              (group (parens
-                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "(unsigned char)0")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "(unsigned char)0"))))
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "(unsigned char)0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "(unsigned char)0"))))
         | Ops.Half_prec _ ->
             let open PPrint in
-            group (parens
-              (group (parens (v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0f16")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0f16"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0f16")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0f16"))))
         | Ops.Single_prec _ ->
             let open PPrint in
-            group (parens
-              (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0f")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0f"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0f")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0f"))))
         | Ops.Double_prec _ ->
             let open PPrint in
-            group (parens
-              (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0"))))
         | Ops.Void_prec -> invalid_arg "Pure_C_config.binop_syntax: Satur01_gate on Void_prec")
     | _ ->
         let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax prec op in
         let open PPrint in
-        group (string op_prefix ^^ v1 ^^ string op_infix 
-               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)) 
-               ^^ string op_suffix)
+        group
+          (string op_prefix ^^ v1 ^^ string op_infix
+          ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
+          ^^ string op_suffix)
 
   let unop_syntax prec op v =
     let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
@@ -234,8 +258,7 @@ struct
         String.drop_suffix res 1 ^ "\\n"
       else res
     in
-    log_file_check
-    ^^ string "fprintf(log_file, "
+    log_file_check ^^ string "fprintf(log_file, "
     ^^ dquotes (string base_message_literal)
     ^^ (if List.is_empty args_docs then empty else comma ^^ space)
     ^^ separate (comma ^^ space) args_docs
@@ -284,14 +307,12 @@ module C_syntax (B : C_syntax_config) = struct
         let d1 = pp_ll c1 in
         let d2 = pp_ll c2 in
         (* Avoid extra hardlines if one side is empty *)
-        if PPrint.is_empty d1 then d2
-        else if PPrint.is_empty d2 then d1
-        else d1 ^^ hardline ^^ d2
+        if PPrint.is_empty d1 then d2 else if PPrint.is_empty d2 then d1 else d1 ^^ hardline ^^ d2
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         let header =
           string "for (int " ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi
-          ^^ space ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi
-          ^^ space ^^ string "++" ^^ pp_symbol i ^^ string ")"
+          ^^ space ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space
+          ^^ string "++" ^^ pp_symbol i ^^ string ")"
         in
         let body_doc = ref (pp_ll body) in
         (if Utils.debug_log_from_routines () then
@@ -314,9 +335,11 @@ module C_syntax (B : C_syntax_config) = struct
         let prec = Lazy.force tn.prec in
         let local_defs, val_doc = pp_float prec llv in
         let offset_doc = pp_array_offset (idcs, dims) in
-        let assignment = 
-          group (ident_doc ^^ brackets offset_doc ^^ string " =" 
-          ^^ ifflat (space ^^ val_doc) (nest 4 (hardline ^^ val_doc)) ^^ semi)
+        let assignment =
+          group
+            (ident_doc ^^ brackets offset_doc ^^ string " ="
+            ^^ ifflat (space ^^ val_doc) (nest 4 (hardline ^^ val_doc))
+            ^^ semi)
         in
         if Utils.debug_log_from_routines () then
           let num_typ = string (B.typ_of_prec prec) in
@@ -355,14 +378,14 @@ module C_syntax (B : C_syntax_config) = struct
             comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
           in
           let assignment' = ident_doc ^^ brackets offset_doc ^^ string " = " ^^ new_var ^^ semi in
-          let block_content = 
-            if PPrint.is_empty local_defs then decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
+          let block_content =
+            if PPrint.is_empty local_defs then
+              decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
             else local_defs ^^ hardline ^^ decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-        else 
-          if PPrint.is_empty local_defs then assignment
-          else local_defs ^^ hardline ^^ assignment
+        else if PPrint.is_empty local_defs then assignment
+        else local_defs ^^ hardline ^^ assignment
     | Comment message ->
         if Utils.debug_log_from_routines () then
           let base_message = "COMMENT: " ^ message ^ "\n" in
@@ -370,13 +393,13 @@ module C_syntax (B : C_syntax_config) = struct
           B.pp_log_statement ~log_param_c_expr_doc:log_param_doc ~base_message_literal:base_message
             ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
-    | Staged_compilation callback ->
-        callback ()
+    | Staged_compilation callback -> callback ()
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
         let local_defs, value_doc = pp_float (Lazy.force prec) value in
-        let assignment = string ("v" ^ Int.to_string scope_id) ^^ string " = " ^^ value_doc ^^ semi in
-        if PPrint.is_empty local_defs then assignment
-        else local_defs ^^ hardline ^^ assignment
+        let assignment =
+          string ("v" ^ Int.to_string scope_id) ^^ string " = " ^^ value_doc ^^ semi
+        in
+        if PPrint.is_empty local_defs then assignment else local_defs ^^ hardline ^^ assignment
 
   and pp_float (prec : Ops.prec) (vcomp : Low_level.float_t) : PPrint.document * PPrint.document =
     (* Returns (local definitions, value expression) *)
@@ -384,7 +407,9 @@ module C_syntax (B : C_syntax_config) = struct
     match vcomp with
     | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
         let num_typ = string (B.typ_of_prec @@ Lazy.force scope_prec) in
-        let decl = num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ string " = 0" ^^ semi in
+        let decl =
+          num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ string " = 0" ^^ semi
+        in
         let body_doc = pp_ll body in
         let defs = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:(Lazy.force scope_prec) ~to_:prec in
@@ -400,7 +425,9 @@ module C_syntax (B : C_syntax_config) = struct
         let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
-        let expr = string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix in
+        let expr =
+          string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
+        in
         (empty, expr)
     | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
@@ -431,7 +458,7 @@ module C_syntax (B : C_syntax_config) = struct
         let d1, e1 = pp_float prec v1 in
         let d2, e2 = pp_float prec v2 in
         let d3, e3 = pp_float prec v3 in
-        let defs = 
+        let defs =
           List.filter_map [ d1; d2; d3 ] ~f:(fun d -> if PPrint.is_empty d then None else Some d)
           |> separate hardline
         in
@@ -440,7 +467,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Binop (op, v1, v2) ->
         let d1, e1 = pp_float prec v1 in
         let d2, e2 = pp_float prec v2 in
-        let defs = 
+        let defs =
           List.filter_map [ d1; d2 ] ~f:(fun d -> if PPrint.is_empty d then None else Some d)
           |> separate hardline
         in
@@ -472,7 +499,9 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
-        let access_doc = string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix in
+        let access_doc =
+          string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
+        in
         let expr_doc =
           string prefix ^^ string "merge_buffer"
           ^^ brackets (string "%u")
@@ -582,11 +611,10 @@ module C_syntax (B : C_syntax_config) = struct
       body :=
         !body ^^ string "FILE* log_file = NULL;" ^^ hardline
         ^^ string ("if (" ^ log_file_var_name ^ ") ")
-        ^^ lbrace ^^ nest 2 (hardline
-        ^^ string ("log_file = fopen(" ^ log_file_var_name ^ ", \"w\");"))
+        ^^ lbrace
+        ^^ nest 2 (hardline ^^ string ("log_file = fopen(" ^ log_file_var_name ^ ", \"w\");"))
         ^^ hardline ^^ rbrace ^^ hardline
-    else 
-      body := !body ^^ hardline;
+    else body := !body ^^ hardline;
 
     (if Utils.debug_log_from_routines () then
        let debug_init_doc =
@@ -649,6 +677,8 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ string "if (log_file) { fclose(log_file); log_file = NULL; }"
         ^^ hardline;
 
-    let func_doc = func_header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace in
+    let func_doc =
+      func_header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
+    in
     (sorted_params, func_doc)
 end

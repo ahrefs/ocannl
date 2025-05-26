@@ -188,17 +188,21 @@ module Multicore (Backend : For_add_scheduler) :
   let suggested_num_streams _device = Domain.recommended_domain_count () - 2
 
   let static_properties =
-    Sexp.List [
-      Sexp.Atom "multicore_devices";
-      Sexp.List [
-        Sexp.Atom "device";
-        Sexp.List [
-          Sexp.List [Sexp.Atom "device_name"; Sexp.Atom "CPU"];
-          Sexp.List [Sexp.Atom "device_ordinal"; [%sexp_of: int] 0];
-          Sexp.List [Sexp.Atom "num_domains"; [%sexp_of: int] (Domain.recommended_domain_count ())];
-        ]
+    Sexp.List
+      [
+        Sexp.Atom "multicore_devices";
+        Sexp.List
+          [
+            Sexp.Atom "device";
+            Sexp.List
+              [
+                Sexp.List [ Sexp.Atom "device_name"; Sexp.Atom "CPU" ];
+                Sexp.List [ Sexp.Atom "device_ordinal"; [%sexp_of: int] 0 ];
+                Sexp.List
+                  [ Sexp.Atom "num_domains"; [%sexp_of: int] (Domain.recommended_domain_count ()) ];
+              ];
+          ];
       ]
-    ]
 
   let%track7_sexp cleanup_stream (stream : stream) : unit =
     (* Allow running in parallel. *)
@@ -274,17 +278,20 @@ module Sync (Backend : For_add_scheduler) = struct
   let await _stream = ()
 
   let static_properties =
-    Sexp.List [
-      Sexp.Atom "sync_devices";
-      Sexp.List [
-        Sexp.Atom "device";
-        Sexp.List [
-          Sexp.List [Sexp.Atom "device_name"; Sexp.Atom "CPU"];
-          Sexp.List [Sexp.Atom "device_ordinal"; Sexp.Atom "0"];
-          Sexp.List [Sexp.Atom "threads"; Sexp.Atom "1"];
-        ]
+    Sexp.List
+      [
+        Sexp.Atom "sync_devices";
+        Sexp.List
+          [
+            Sexp.Atom "device";
+            Sexp.List
+              [
+                Sexp.List [ Sexp.Atom "device_name"; Sexp.Atom "CPU" ];
+                Sexp.List [ Sexp.Atom "device_ordinal"; Sexp.Atom "0" ];
+                Sexp.List [ Sexp.Atom "threads"; Sexp.Atom "1" ];
+              ];
+          ];
       ]
-    ]
 
   (* let global_run_no = ref 0 *)
   let schedule_task _stream task = Ir.Task.run task

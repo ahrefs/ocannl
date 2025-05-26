@@ -89,6 +89,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
 
     let use_host_memory = use_host_memory
     let procs = [| lowered |]
+
     let full_printf_support =
       not @@ Bool.of_string
       @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"

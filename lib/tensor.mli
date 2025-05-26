@@ -299,7 +299,7 @@ val to_doc :
   t ->
   PPrint.document
 
-  val print :
+val print :
   ?spy:bool ->
   with_grad:bool ->
   with_code:bool ->

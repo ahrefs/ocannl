@@ -287,11 +287,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Void_prec -> "void"
 
     let binop_syntax prec v =
-      (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only
-         where different. *)
+      (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only where
+         different. *)
       let open PPrint in
-      let f op_str v1 v2 = group (parens (v1 ^^ string (" " ^ op_str) ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)))) in
-      let func fn v1 v2 = group (string fn ^^ parens (v1 ^^ comma ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)))) in
+      let f op_str v1 v2 =
+        group
+          (parens (v1 ^^ string (" " ^ op_str) ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))))
+      in
+      let func fn v1 v2 =
+        group (string fn ^^ parens (v1 ^^ comma ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))))
+      in
       match (v, prec) with
       | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
       | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
@@ -307,55 +312,101 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Double_prec _ -> func "pow"
       | ToPowOf, Single_prec _ -> func "powf"
       | ToPowOf, Half_prec _ ->
-          fun v1 v2 -> group (string "hexp2(hlog2(" ^^ v1 ^^ string ")," ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2)) ^^ string ")")
+          fun v1 v2 ->
+            group
+              (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
+              ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
+              ^^ string ")")
       | ToPowOf, Byte_prec _ ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
       | Relu_gate, Byte_prec _ ->
           fun v1 v2 ->
-            group (parens (group (parens (v1 ^^ string " > 0")) 
-                  ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0")
-                           (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0"))))
       | Relu_gate, Half_prec _ ->
           fun v1 v2 ->
-            group (parens
-                 (group (parens
-                    (string "__hgt(" ^^ v1 ^^ comma
-                    ^^ string " __ushort_as_half((unsigned short)0x0000U))"))
-                 ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)")
-                          (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "__hgt(" ^^ v1 ^^ comma
+                       ^^ string " __ushort_as_half((unsigned short)0x0000U))"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                      ^^ string "__ushort_as_half((unsigned short)0x0000U)")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                         ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
       | Relu_gate, _ ->
           fun v1 v2 ->
-            group (parens (group (parens (v1 ^^ string " > 0.0")) 
-                  ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0")
-                           (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0"))))
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
-            group (parens
-              (group (parens
-                 (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1 ^^ string " < 1.0f"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "(unsigned char)0")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "(unsigned char)0"))))
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "(unsigned char)0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "(unsigned char)0"))))
       | Satur01_gate, Half_prec _ ->
           fun v1 v2 ->
-            group (parens
-              (group (parens (string "__hgt(" ^^ v1 ^^ comma
-                 ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
-                 ^^ v1 ^^ comma
-                 ^^ string " __ushort_as_half((unsigned short)0x3C00U))"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "__hgt(" ^^ v1 ^^ comma
+                       ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
+                       ^^ v1 ^^ comma
+                       ^^ string " __ushort_as_half((unsigned short)0x3C00U))"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                      ^^ string "__ushort_as_half((unsigned short)0x0000U)")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                         ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
       | Satur01_gate, Single_prec _ ->
           fun v1 v2 ->
-            group (parens
-              (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0f")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0f"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0f")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0f"))))
       | Satur01_gate, Double_prec _ ->
           fun v1 v2 ->
-            group (parens
-              (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
-              ^^ ifflat (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0.0")
-                       (nest 2 (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space ^^ string "0.0"))))
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0"))))
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"

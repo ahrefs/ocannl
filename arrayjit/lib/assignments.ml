@@ -282,7 +282,7 @@ let get_ident_within_code ?no_dots c =
 let to_doc ?name ?static_indices () c =
   let ident = get_ident_within_code c in
   let buffer_ident = function Node tn -> ident tn | Merge_buffer tn -> ident tn ^ ".merge" in
-  
+
   let open PPrint in
   let doc_of_fetch_op (op : fetch_op) =
     match op with
@@ -298,76 +298,83 @@ let to_doc ?name ?static_indices () c =
     | Embed_symbol { static_symbol; static_range = _ } ->
         string ("!@" ^ Indexing.symbol_ident static_symbol)
   in
-  
+
   let rec doc_of_code = function
     | Noop -> empty
-    | Seq (c1, c2) ->
-        doc_of_code c1 ^^ doc_of_code c2
+    | Seq (c1, c2) -> doc_of_code c1 ^^ doc_of_code c2
     | Block_comment (s, Noop) -> string ("# \"" ^ s ^ "\";") ^^ break 1
-    | Block_comment (s, c) ->
-        string ("# \"" ^ s ^ "\";") ^^ break 1 ^^ doc_of_code c
+    | Block_comment (s, c) -> string ("# \"" ^ s ^ "\";") ^^ break 1 ^^ doc_of_code c
     | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
           else "<not-in-yet>"
         in
         (* Uncurried syntax for ternary operations. *)
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        string (Ops.ternop_cd_syntax op) ^^ 
-        string "(" ^^ string (buffer_ident rhs1) ^^ string ", " ^^ 
-        string (buffer_ident rhs2) ^^ string ", " ^^ 
-        string (buffer_ident rhs3) ^^ string ")" ^^ 
-        (if not (String.equal proj_spec ".") then 
-           string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
+        string (ident lhs)
+        ^^ space
+        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+        ^^ space
+        ^^ string (Ops.ternop_cd_syntax op)
+        ^^ string "("
+        ^^ string (buffer_ident rhs1)
+        ^^ string ", "
+        ^^ string (buffer_ident rhs2)
+        ^^ string ", "
+        ^^ string (buffer_ident rhs3)
+        ^^ string ")"
+        ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+            else empty)
+        ^^ string ";" ^^ break 1
     | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
           else "<not-in-yet>"
         in
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        string (buffer_ident rhs1) ^^ space ^^ 
-        string (Ops.binop_cd_syntax op) ^^ space ^^ 
-        string (buffer_ident rhs2) ^^ 
-        (if (not (String.equal proj_spec ".")) || 
-            List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op 
-         then string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
+        string (ident lhs)
+        ^^ space
+        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+        ^^ space
+        ^^ string (buffer_ident rhs1)
+        ^^ space
+        ^^ string (Ops.binop_cd_syntax op)
+        ^^ space
+        ^^ string (buffer_ident rhs2)
+        ^^ (if
+              (not (String.equal proj_spec "."))
+              || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op
+            then string (" ~logic:\"" ^ proj_spec ^ "\"")
+            else empty)
+        ^^ string ";" ^^ break 1
     | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
         let proj_spec =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
           else "<not-in-yet>"
         in
-        string (ident lhs) ^^ space ^^ 
-        string (Ops.assign_op_cd_syntax ~initialize_neutral accum) ^^ space ^^ 
-        (if not @@ Ops.equal_unop op Ops.Identity then 
-           string (Ops.unop_cd_syntax op ^ " ") 
-         else empty) ^^ 
-        string (buffer_ident rhs) ^^ 
-        (if not (String.equal proj_spec ".") then 
-           string (" ~logic:\"" ^ proj_spec ^ "\"") 
-         else empty) ^^ 
-        string ";" ^^ break 1
+        string (ident lhs)
+        ^^ space
+        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+        ^^ space
+        ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
+            else empty)
+        ^^ string (buffer_ident rhs)
+        ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+            else empty)
+        ^^ string ";" ^^ break 1
     | Fetch { array; fetch_op; dims = _ } ->
         string (ident array) ^^ string " := " ^^ doc_of_fetch_op fetch_op ^^ string ";" ^^ break 1
   in
-  
+
   (* Create the header document *)
-  let header_doc = 
-    match name, static_indices with
-    | Some n, Some si -> 
-        string (n ^ " (") ^^ 
-        separate (comma ^^ space) 
-          (List.map si ~f:Indexing.Doc_helpers.pp_static_symbol) ^^ 
-        string "):" ^^ space
+  let header_doc =
+    match (name, static_indices) with
+    | Some n, Some si ->
+        string (n ^ " (")
+        ^^ separate (comma ^^ space) (List.map si ~f:Indexing.Doc_helpers.pp_static_symbol)
+        ^^ string "):" ^^ space
     | Some n, None -> string (n ^ ":") ^^ space
     | _ -> empty
   in
-  
+
   header_doc ^^ nest 2 (doc_of_code c)
 
 let%track6_sexp lower ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :

@@ -8,7 +8,7 @@ module Rand = Ir.Rand.Lib
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-let%diagn_sexp _suspended() =
+let%diagn_sexp _suspended () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -33,7 +33,7 @@ let%diagn_sexp _suspended() =
   Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
   Tensor.print ~with_code:false ~with_grad:true `Default @@ b
 
-let%diagn_sexp  () : unit =
+let%diagn_sexp () : unit =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
