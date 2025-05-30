@@ -169,3 +169,7 @@ log_file_stem=debug
 # some backends. Currently, this setting only affects logging from routines to accomodate Metal's
 # shortcoming.
 prefer_backend_uniformity=false
+
+# The initial value for the default precisions for tensors. The default precisions for values and
+# gradients can be changed separately via the `Tensor` API.
+default_prec=single

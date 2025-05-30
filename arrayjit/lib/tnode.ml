@@ -562,12 +562,15 @@ let create ?default_prec ~id ~label ~dims init_op =
   Registry.add registry tn;
   tn
 
+let initial_default_prec =
+  Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
+
 let find =
   let mock =
     {
       array = lazy None;
-      prec = lazy Ops.single;
-      delayed_prec_unsafe = Specified Ops.single;
+      prec = lazy initial_default_prec;
+      delayed_prec_unsafe = Specified initial_default_prec;
       dims = lazy [||];
       size_in_bytes = lazy 0;
       id = -1;

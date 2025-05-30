@@ -99,8 +99,11 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
-let default_value_prec = ref Ir.Ops.single
-let default_grad_prec = ref Ir.Ops.single
+let initial_default_prec =
+  Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
+
+let default_value_prec = ref initial_default_prec
+let default_grad_prec = ref initial_default_prec
 
 exception Session_error of string * t option [@@deriving sexp]
 

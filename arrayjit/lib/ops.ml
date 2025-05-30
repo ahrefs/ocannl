@@ -90,6 +90,9 @@ let prec_string = function
   | Single_prec _ -> "single"
   | Double_prec _ -> "double"
 
+let prec_of_string s =
+  prec_of_sexp (Sexp.Atom (String.(capitalize @@ lowercase s) ^ "_prec"))
+
 let equal_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> true
