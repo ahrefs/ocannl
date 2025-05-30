@@ -519,6 +519,34 @@ let c_convert_precision ~from ~to_ =
   | Fp8_prec _, Fp8_prec _
   | Void_prec, Void_prec ->
       ("", "")
+  (* BFloat16 conversions *)
+  | Bfloat16_prec _, Single_prec _ -> ("bfloat16_to_float(", ")")
+  | Single_prec _, Bfloat16_prec _ -> ("float_to_bfloat16(", ")")
+  | Bfloat16_prec _, Double_prec _ -> ("(double)bfloat16_to_float(", ")")
+  | Double_prec _, Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  (* FP8 conversions *)
+  | Fp8_prec _, Single_prec _ -> ("fp8_to_float(", ")")
+  | Single_prec _, Fp8_prec _ -> ("float_to_fp8(", ")")
+  | Fp8_prec _, Double_prec _ -> ("(double)fp8_to_float(", ")")
+  | Double_prec _, Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  (* Conversions involving BFloat16 and other types *)
+  | Bfloat16_prec _, Half_prec _ -> ("(_Float16)bfloat16_to_float(", ")")
+  | Half_prec _, Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  | Bfloat16_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) -> 
+      ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_float(", ")")
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Bfloat16_prec _ -> 
+      ("float_to_bfloat16((float)", ")")
+  (* Conversions involving FP8 and other types *)
+  | Fp8_prec _, Half_prec _ -> ("(_Float16)fp8_to_float(", ")")
+  | Half_prec _, Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) -> 
+      ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_float(", ")")
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Fp8_prec _ -> 
+      ("float_to_fp8((float)", ")")
+  (* BFloat16 <-> FP8 conversions *)
+  | Bfloat16_prec _, Fp8_prec _ -> ("float_to_fp8(bfloat16_to_float(", "))")
+  | Fp8_prec _, Bfloat16_prec _ -> ("float_to_bfloat16(fp8_to_float(", "))")
+  (* Default case for all other conversions *)
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 
 (** {2 *** Global references ***} *)

@@ -91,7 +91,62 @@ struct
   let arg_int_prefix = "const int "
   let extra_args = []
   let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
-  let extra_declarations = []
+  let extra_declarations = [
+    (* BFloat16 conversion functions *)
+    "static inline float bfloat16_to_float(unsigned short bf16) {";
+    "  unsigned int f32 = ((unsigned int)bf16) << 16;";
+    "  return *((float*)&f32);";
+    "}";
+    "";
+    "static inline unsigned short float_to_bfloat16(float f) {";
+    "  unsigned int f32 = *((unsigned int*)&f);";
+    "  unsigned int rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);";
+    "  return (unsigned short)(rounded >> 16);";
+    "}";
+    "";
+    (* FP8 E5M2 conversion functions *)
+    "static inline float fp8_to_float(unsigned char fp8) {";
+    "  if (fp8 == 0) return 0.0f;";
+    "  unsigned int sign = (fp8 >> 7) & 1;";
+    "  unsigned int exp = (fp8 >> 2) & 0x1F;";
+    "  unsigned int mant = fp8 & 0x3;";
+    "  if (exp == 0x1F) {";
+    "    if (mant == 0) return sign ? -INFINITY : INFINITY;";
+    "    else return NAN;";
+    "  }";
+    "  if (exp == 0) {";
+    "    float result = ldexpf((float)mant / 4.0f, -14);";
+    "    if (sign) result = -result;";
+    "    return result;";
+    "  }";
+    "  float result = (1.0f + (float)mant * 0.25f) * ldexpf(1.0f, (int)exp - 15);";
+    "  if (sign) result = -result;";
+    "  return result;";
+    "}";
+    "";
+    "static inline unsigned char float_to_fp8(float f) {";
+    "  if (f == 0.0f) return 0;";
+    "  unsigned int sign = (f < 0) ? 1 : 0;";
+    "  f = fabsf(f);";
+    "  if (isinf(f)) return (sign << 7) | 0x7C;";
+    "  if (isnan(f)) return (sign << 7) | 0x7F;";
+    "  int exp_val;";
+    "  float mant_f = frexpf(f, &exp_val);";
+    "  int exp = exp_val + 14;";
+    "  if (exp < 0) return sign << 7;";
+    "  if (exp > 30) return (sign << 7) | 0x7C;";
+    "  if (exp == 0) {";
+    "    float denorm_mant = f * ldexpf(1.0f, 14) * 4.0f;";
+    "    unsigned int mant_bits = (unsigned int)(denorm_mant + 0.5f);";
+    "    if (mant_bits > 3) mant_bits = 3;";
+    "    return (sign << 7) | mant_bits;";
+    "  }";
+    "  mant_f = (mant_f - 0.5f) * 4.0f;";
+    "  unsigned int mant_bits = (unsigned int)(mant_f + 0.5f);";
+    "  if (mant_bits > 3) mant_bits = 3;";
+    "  return (unsigned char)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));";
+    "}";
+  ]
   let typ_of_prec = Ops.c_typ_of_prec
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 

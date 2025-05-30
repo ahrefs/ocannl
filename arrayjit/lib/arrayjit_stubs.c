@@ -4,44 +4,34 @@
 #include <math.h>
 #include <stdint.h>
 
-/* BFloat16 to Float conversion */
-CAMLprim value arrayjit_bfloat16_to_float(value v_bf16)
+/* Pure C conversion functions for use in C backends */
+
+/* BFloat16 to Float conversion (C function) */
+static inline float bfloat16_to_float(uint16_t bf16)
 {
-  CAMLparam1(v_bf16);
-  uint16_t bf16 = (uint16_t)Int_val(v_bf16);
-  
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
   uint32_t f32 = ((uint32_t)bf16) << 16;
-  float result = *((float*)&f32);
-  
-  CAMLreturn(caml_copy_double((double)result));
+  return *((float*)&f32);
 }
 
-/* Float to BFloat16 conversion */
-CAMLprim value arrayjit_float_to_bfloat16(value v_float) 
+/* Float to BFloat16 conversion (C function) */
+static inline uint16_t float_to_bfloat16(float f)
 {
-  CAMLparam1(v_float);
-  float f = (float)Double_val(v_float);
   uint32_t f32 = *((uint32_t*)&f);
   
   /* Round to nearest even */
   uint32_t rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);
-  uint16_t bf16 = (uint16_t)(rounded >> 16);
-  
-  CAMLreturn(Val_int(bf16));
+  return (uint16_t)(rounded >> 16);
 }
 
-/* FP8 E5M2 format to Float conversion 
+/* FP8 E5M2 format to Float conversion (C function)
    Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
-CAMLprim value arrayjit_fp8_to_float(value v_fp8)
+static inline float fp8_to_float(uint8_t fp8)
 {
-  CAMLparam1(v_fp8);
-  uint8_t fp8 = (uint8_t)Int_val(v_fp8);
-  
   /* Handle zero */
   if (fp8 == 0) {
-    CAMLreturn(caml_copy_double(0.0));
+    return 0.0f;
   }
   
   uint32_t sign = (fp8 >> 7) & 1;
@@ -51,10 +41,9 @@ CAMLprim value arrayjit_fp8_to_float(value v_fp8)
   /* Handle special cases */
   if (exp == 0x1F) {  /* Infinity or NaN */
     if (mant == 0) {
-      float inf = sign ? -INFINITY : INFINITY;
-      CAMLreturn(caml_copy_double((double)inf));
+      return sign ? -INFINITY : INFINITY;
     } else {
-      CAMLreturn(caml_copy_double((double)NAN));
+      return NAN;
     }
   }
   
@@ -62,25 +51,22 @@ CAMLprim value arrayjit_fp8_to_float(value v_fp8)
   if (exp == 0) {
     float result = ldexpf((float)mant / 4.0f, -14);
     if (sign) result = -result;
-    CAMLreturn(caml_copy_double((double)result));
+    return result;
   }
   
   /* Normalized numbers */
   float result = (1.0f + (float)mant * 0.25f) * ldexpf(1.0f, (int)exp - 15);
   if (sign) result = -result;
   
-  CAMLreturn(caml_copy_double((double)result));
+  return result;
 }
 
-/* Float to FP8 E5M2 conversion */
-CAMLprim value arrayjit_float_to_fp8(value v_float)
+/* Float to FP8 E5M2 conversion (C function) */
+static inline uint8_t float_to_fp8(float f)
 {
-  CAMLparam1(v_float);
-  float f = (float)Double_val(v_float);
-  
   /* Handle zero */
   if (f == 0.0f) {
-    CAMLreturn(Val_int(0));
+    return 0;
   }
   
   uint32_t sign = (f < 0) ? 1 : 0;
@@ -88,10 +74,10 @@ CAMLprim value arrayjit_float_to_fp8(value v_float)
   
   /* Handle special cases */
   if (isinf(f)) {
-    CAMLreturn(Val_int((sign << 7) | 0x7C));  /* Infinity: exp=0x1F, mant=0 */
+    return (sign << 7) | 0x7C;  /* Infinity: exp=0x1F, mant=0 */
   }
   if (isnan(f)) {
-    CAMLreturn(Val_int((sign << 7) | 0x7F));  /* NaN: exp=0x1F, mant!=0 */
+    return (sign << 7) | 0x7F;  /* NaN: exp=0x1F, mant!=0 */
   }
   
   /* Get exponent and mantissa */
@@ -102,11 +88,11 @@ CAMLprim value arrayjit_float_to_fp8(value v_float)
   /* Clamp to representable range */
   if (exp < 0) {
     /* Underflow to zero */
-    CAMLreturn(Val_int(sign << 7));
+    return sign << 7;
   }
   if (exp > 30) {
     /* Overflow to infinity */
-    CAMLreturn(Val_int((sign << 7) | 0x7C));
+    return (sign << 7) | 0x7C;
   }
   
   /* Handle denormalized numbers */
@@ -114,7 +100,7 @@ CAMLprim value arrayjit_float_to_fp8(value v_float)
     float denorm_mant = f * ldexpf(1.0f, 14) * 4.0f;
     uint32_t mant_bits = (uint32_t)(denorm_mant + 0.5f);
     if (mant_bits > 3) mant_bits = 3;
-    CAMLreturn(Val_int((sign << 7) | mant_bits));
+    return (sign << 7) | mant_bits;
   }
   
   /* Normalized numbers: convert mantissa from [0.5, 1) to [0, 0.75] */
@@ -122,6 +108,43 @@ CAMLprim value arrayjit_float_to_fp8(value v_float)
   uint32_t mant_bits = (uint32_t)(mant_f + 0.5f);  /* Round to nearest */
   if (mant_bits > 3) mant_bits = 3;
   
-  uint8_t result = (uint8_t)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));
-  CAMLreturn(Val_int(result));
+  return (uint8_t)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));
+}
+
+/* OCaml wrapper functions */
+
+/* BFloat16 to Float conversion (OCaml wrapper) */
+CAMLprim value arrayjit_bfloat16_to_float(value v_bf16)
+{
+  CAMLparam1(v_bf16);
+  uint16_t bf16 = (uint16_t)Int_val(v_bf16);
+  float result = bfloat16_to_float(bf16);
+  CAMLreturn(caml_copy_double((double)result));
+}
+
+/* Float to BFloat16 conversion (OCaml wrapper) */
+CAMLprim value arrayjit_float_to_bfloat16(value v_float) 
+{
+  CAMLparam1(v_float);
+  float f = (float)Double_val(v_float);
+  uint16_t bf16 = float_to_bfloat16(f);
+  CAMLreturn(Val_int(bf16));
+}
+
+/* FP8 E5M2 format to Float conversion (OCaml wrapper) */
+CAMLprim value arrayjit_fp8_to_float(value v_fp8)
+{
+  CAMLparam1(v_fp8);
+  uint8_t fp8 = (uint8_t)Int_val(v_fp8);
+  float result = fp8_to_float(fp8);
+  CAMLreturn(caml_copy_double((double)result));
+}
+
+/* Float to FP8 E5M2 conversion (OCaml wrapper) */
+CAMLprim value arrayjit_float_to_fp8(value v_float)
+{
+  CAMLparam1(v_float);
+  float f = (float)Double_val(v_float);
+  uint8_t fp8 = float_to_fp8(f);
+  CAMLreturn(Val_int(fp8));
 } 
