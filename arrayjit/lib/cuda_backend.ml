@@ -281,10 +281,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"
-      | Half_prec _ -> "__half"
-      | Single_prec _ -> "float"
-      | Double_prec _ -> "double"
-      | Void_prec -> "void"
+      | Ops.Uint16_prec _ -> "unsigned short"
+      | Ops.Int32_prec _ -> "int"
+      | Ops.Half_prec _ -> "__half"
+      | Ops.Bfloat16_prec _ -> "__nv_bfloat16"  (* CUDA bfloat16 type *)
+      | Ops.Fp8_prec _ -> "__nv_fp8_e5m2"  (* CUDA FP8 type (E5M2 format) *)
+      | Ops.Single_prec _ -> "float"
+      | Ops.Double_prec _ -> "double"
+      | Ops.Void_prec -> "void"
 
     let binop_syntax prec v =
       (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only where
@@ -317,9 +321,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string ")")
-      | ToPowOf, Byte_prec _ ->
-          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for byte/integer precisions"
-      | Relu_gate, Byte_prec _ ->
+      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
+      | ToPowOf, Bfloat16_prec _ ->
+          fun v1 v2 ->
+            group
+              (string "__float2bfloat16(powf(__bfloat162float(" ^^ v1 ^^ string "), __bfloat162float("
+              ^^ v2 ^^ string ")))")
+      | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
           fun v1 v2 ->
             group
               (parens
@@ -330,31 +339,19 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                         ^^ string "0"))))
-      | Relu_gate, Half_prec _ ->
+      | Relu_gate, Bfloat16_prec _ ->
           fun v1 v2 ->
             group
               (parens
                  (group
                     (parens
-                       (string "__hgt(" ^^ v1 ^^ comma
-                       ^^ string " __ushort_as_half((unsigned short)0x0000U))"))
+                       (string "__bfloat162float(" ^^ v1 ^^ string ") > 0.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                      ^^ string "__ushort_as_half((unsigned short)0x0000U)")
+                      ^^ string "__float2bfloat16(0.0f)")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                         ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
-      | Relu_gate, _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0"))))
+                         ^^ string "__float2bfloat16(0.0f)"))))
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
             group

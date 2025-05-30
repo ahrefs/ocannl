@@ -6,13 +6,19 @@ module Lazy = Utils.Lazy
 (** {2 *** Precision ***} *)
 
 type uint8_elt = Bigarray.int8_unsigned_elt
+type uint16_elt = Bigarray.int16_unsigned_elt
+type int32_elt = Bigarray.int32_elt
 type float16_elt = Bigarray.float16_elt
 type float32_elt = Bigarray.float32_elt
 type float64_elt = Bigarray.float64_elt
 
 type ('ocaml, 'impl) precision =
   | Byte : (char, uint8_elt) precision
+  | Uint16 : (int, uint16_elt) precision
+  | Int32 : (int32, int32_elt) precision
   | Half : (float, float16_elt) precision
+  | Bfloat16 : (int, uint16_elt) precision  (* Using uint16 representation for now *)
+  | Fp8 : (char, uint8_elt) precision  (* Using uint8 representation *)
   | Single : (float, float32_elt) precision
   | Double : (float, float64_elt) precision
 [@@deriving sexp_of]
@@ -20,39 +26,67 @@ type ('ocaml, 'impl) precision =
 type prec =
   | Void_prec
   | Byte_prec of (char, uint8_elt) precision
+  | Uint16_prec of (int, uint16_elt) precision
+  | Int32_prec of (int32, int32_elt) precision
   | Half_prec of (float, float16_elt) precision
+  | Bfloat16_prec of (int, uint16_elt) precision
+  | Fp8_prec of (char, uint8_elt) precision
   | Single_prec of (float, float32_elt) precision
   | Double_prec of (float, float64_elt) precision
 
 let byte = Byte_prec Byte
+let uint16 = Uint16_prec Uint16
+let int32 = Int32_prec Int32
 let half = Half_prec Half
+let bfloat16 = Bfloat16_prec Bfloat16
+let fp8 = Fp8_prec Fp8
 let single = Single_prec Single
 let double = Double_prec Double
-let is_up_to_fp16 = function Half_prec _ | Byte_prec _ -> true | _ -> false
+let is_up_to_fp16 = function Half_prec _ | Byte_prec _ | Bfloat16_prec _ | Fp8_prec _ -> true | _ -> false
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
   | Byte_prec _ -> Sexp.Atom "Byte_prec"
+  | Uint16_prec _ -> Sexp.Atom "Uint16_prec"
+  | Int32_prec _ -> Sexp.Atom "Int32_prec"
   | Half_prec _ -> Sexp.Atom "Half_prec"
+  | Bfloat16_prec _ -> Sexp.Atom "Bfloat16_prec"
+  | Fp8_prec _ -> Sexp.Atom "Fp8_prec"
   | Single_prec _ -> Sexp.Atom "Single_prec"
   | Double_prec _ -> Sexp.Atom "Double_prec"
 
 let prec_of_sexp = function
   | Sexp.Atom "Void_prec" -> Void_prec
   | Sexp.Atom "Byte_prec" -> byte
+  | Sexp.Atom "Uint16_prec" -> uint16
+  | Sexp.Atom "Int32_prec" -> int32
   | Sexp.Atom "Half_prec" -> half
+  | Sexp.Atom "Bfloat16_prec" -> bfloat16
+  | Sexp.Atom "Fp8_prec" -> fp8
   | Sexp.Atom "Single_prec" -> single
   | Sexp.Atom "Double_prec" -> double
   | Sexp.List _ -> invalid_arg "prec_of_sexp: expected atom, found list"
   | Sexp.Atom s -> invalid_arg @@ "prec_of_sexp: unknown precision " ^ s
 
 let precision_to_string (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
-  match prec with Byte -> "byte" | Half -> "half" | Single -> "single" | Double -> "double"
+  match prec with 
+  | Byte -> "byte" 
+  | Uint16 -> "uint16"
+  | Int32 -> "int32"
+  | Half -> "half" 
+  | Bfloat16 -> "bfloat16"
+  | Fp8 -> "fp8"
+  | Single -> "single" 
+  | Double -> "double"
 
 let prec_string = function
   | Void_prec -> "void"
   | Byte_prec _ -> "byte"
+  | Uint16_prec _ -> "uint16"
+  | Int32_prec _ -> "int32"
   | Half_prec _ -> "half"
+  | Bfloat16_prec _ -> "bfloat16"
+  | Fp8_prec _ -> "fp8"
   | Single_prec _ -> "single"
   | Double_prec _ -> "double"
 
@@ -60,15 +94,23 @@ let equal_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> true
   | Byte_prec _, Byte_prec _ -> true
+  | Uint16_prec _, Uint16_prec _ -> true
+  | Int32_prec _, Int32_prec _ -> true
   | Half_prec _, Half_prec _ -> true
+  | Bfloat16_prec _, Bfloat16_prec _ -> true
+  | Fp8_prec _, Fp8_prec _ -> true
   | Single_prec _, Single_prec _ -> true
   | Double_prec _, Double_prec _ -> true
-  | Void_prec, _ | Byte_prec _, _ | Half_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
+  | Void_prec, _ | Byte_prec _, _ | Uint16_prec _, _ | Int32_prec _, _ | Half_prec _, _ | Bfloat16_prec _, _ | Fp8_prec _, _ | Single_prec _, _ | Double_prec _, _ -> false
 
 let prec_in_bytes = function
   | Void_prec -> 0
   | Byte_prec _ -> 1
+  | Uint16_prec _ -> 2
+  | Int32_prec _ -> 4
   | Half_prec _ -> 2
+  | Bfloat16_prec _ -> 2
+  | Fp8_prec _ -> 1
   | Single_prec _ -> 4
   | Double_prec _ -> 8
 
@@ -78,14 +120,30 @@ let promote_prec p1 p2 =
   | _, Double_prec _ -> p2
   | Single_prec _, _ -> p1
   | _, Single_prec _ -> p2
+  | Int32_prec _, _ -> p1
+  | _, Int32_prec _ -> p2
   | Half_prec _, _ -> p1
   | _, Half_prec _ -> p2
+  | Bfloat16_prec _, _ -> p1
+  | _, Bfloat16_prec _ -> p2
+  | Uint16_prec _, _ -> p1
+  | _, Uint16_prec _ -> p2
   | Byte_prec _, _ -> p1
   | _, Byte_prec _ -> p2
+  | Fp8_prec _, _ -> p1
+  | _, Fp8_prec _ -> p2
   | Void_prec, Void_prec -> Void_prec
 
 let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
-  match prec with Byte -> byte | Half -> half | Single -> single | Double -> double
+  match prec with 
+  | Byte -> byte 
+  | Uint16 -> uint16
+  | Int32 -> int32
+  | Half -> half 
+  | Bfloat16 -> bfloat16
+  | Fp8 -> fp8
+  | Single -> single 
+  | Double -> double
 
 type 'r map_prec = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) precision -> 'r }
 
@@ -93,21 +151,34 @@ let map_prec ?default { f } = function
   | Void_prec ->
       Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
   | Byte_prec Byte -> f Byte
+  | Uint16_prec Uint16 -> f Uint16
+  | Int32_prec Int32 -> f Int32
   | Half_prec Half -> f Half
+  | Bfloat16_prec Bfloat16 -> f Bfloat16
+  | Fp8_prec Fp8 -> f Fp8
   | Single_prec Single -> f Single
   | Double_prec Double -> f Double
-  | _ -> .
+  (* FIXME: this is a hack to get the code to compile. *)
+  | _ -> invalid_arg "map_prec: unknown precision" 
 
 let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
+  | Uint16_prec _ -> "unsigned short"
+  | Int32_prec _ -> "int"
   | Half_prec _ -> "_Float16"
+  | Bfloat16_prec _ -> "unsigned short"  (* Bfloat16 represented as uint16 *)
+  | Fp8_prec _ -> "unsigned char"  (* FP8 represented as uint8 *)
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
   | Void_prec -> "void"
 
 let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
+  | Uint16_prec _ -> "uint16"
+  | Int32_prec _ -> "int32"
   | Half_prec _ -> "half"
+  | Bfloat16_prec _ -> "bfloat16"
+  | Fp8_prec _ -> "fp8"
   | Single_prec _ -> "float"
   | Double_prec _ -> "double"
   | Void_prec -> "void"
@@ -308,19 +379,19 @@ let binop_c_syntax prec v =
   | Mul, _ -> ("(", " *", ")")
   | Div, _ -> ("(", " /", ")")
   | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-  | ToPowOf, Byte_prec _ ->
-      invalid_arg "Ops.binop_c_syntax: ToPowOf not supported for byte/integer precisions"
+  | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      invalid_arg "Ops.binop_c_syntax: ToPowOf not supported for integer precisions"
   | ToPowOf, _ -> ("powf(", ",", ")")
-  | Relu_gate, Byte_prec _ -> ("(", " > 0 ?", " : 0)")
+  | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("(", " > 0 ?", " : 0)")
   | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-  | Satur01_gate, Byte_prec _ -> ("(abs(", " ) > 0 ? 0 : (", "))")
+  | Satur01_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("(abs(", " ) > 0 ? 0 : (", "))")
   | Satur01_gate, Single_prec _ ->
       (* This disagrees at 0 with the semantics. *)
       ("(fabsf(floorf(", ")) > 0.0 ? 0.0 : (", "))")
   | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
-  | Max, (Double_prec _ | Byte_prec _) -> ("fmax(", ",", ")")
+  | Max, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("fmax(", ",", ")")
   | Max, _ -> ("fmaxf(", ",", ")")
-  | Min, (Double_prec _ | Byte_prec _) -> ("fmin(", ",", ")")
+  | Min, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("fmin(", ",", ")")
   | Min, _ -> ("fminf(", ",", ")")
   | Mod, _ -> ("(", " %", ")")
   | Cmplt, _ -> ("(", " <", ")")
@@ -386,40 +457,40 @@ let unop_c_syntax prec op =
   let fmax () =
     (* See: https://en.cppreference.com/w/c/numeric/math/fmax option (4) *)
     match prec with
-    | Double_prec _ | Byte_prec _ -> "fmax"
+    | Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _ -> "fmax"
     | _ -> "fmaxf"
   in
-  let fmin () = match prec with Double_prec _ | Byte_prec _ -> "fmin" | _ -> "fminf" in
+  let fmin () = match prec with Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _ -> "fmin" | _ -> "fminf" in
   match (op, prec) with
   | Identity, _ -> ("", "")
-  | Relu, Byte_prec _ -> ("fmax(0, ", ")")
+  | Relu, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("fmax(0, ", ")")
   | Relu, _ -> (fmax () ^ "(0.0, ", ")")
-  | Satur01, Byte_prec _ -> ("fmax(0, fmin(1, ", "))")
+  | Satur01, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("fmax(0, fmin(1, ", "))")
   | Satur01, _ -> (fmax () ^ "(0.0, " ^ fmin () ^ "(1.0, ", "))")
-  | Exp, (Double_prec _ | Byte_prec _) -> ("exp(", ")")
+  | Exp, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("exp(", ")")
   | Exp, _ -> ("expf(", ")")
-  | Log, (Double_prec _ | Byte_prec _) -> ("log(", ")")
+  | Log, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("log(", ")")
   | Log, _ -> ("logf(", ")")
-  | Exp2, (Double_prec _ | Byte_prec _) -> ("exp2(", ")")
+  | Exp2, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("exp2(", ")")
   | Exp2, _ -> ("exp2f(", ")")
-  | Log2, (Double_prec _ | Byte_prec _) -> ("log2(", ")")
+  | Log2, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("log2(", ")")
   | Log2, _ -> ("log2f(", ")")
-  | Sin, (Double_prec _ | Byte_prec _) -> ("sin(", ")")
+  | Sin, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("sin(", ")")
   | Sin, _ -> ("sinf(", ")")
-  | Cos, (Double_prec _ | Byte_prec _) -> ("cos(", ")")
+  | Cos, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("cos(", ")")
   | Cos, _ -> ("cosf(", ")")
-  | Sqrt, (Double_prec _ | Byte_prec _) -> ("sqrt(", ")")
+  | Sqrt, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("sqrt(", ")")
   | Sqrt, _ -> ("sqrtf(", ")")
-  | Recip, Byte_prec _ ->
-      invalid_arg "Ops.unop_c_syntax: Recip not supported for byte/integer precisions"
+  | Recip, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      invalid_arg "Ops.unop_c_syntax: Recip not supported for integer precisions"
   | Recip, _ -> ("(1.0 / (", "))")
-  | Recip_sqrt, Byte_prec _ ->
-      invalid_arg "Ops.unop_c_syntax: Recip_sqrt not supported for byte/integer precisions"
+  | Recip_sqrt, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      invalid_arg "Ops.unop_c_syntax: Recip_sqrt not supported for integer precisions"
   | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
   | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
   | Neg, _ -> ("(-(", "))")
-  | Tanh_approx, Byte_prec _ ->
-      invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for byte/integer precisions"
+  | Tanh_approx, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
@@ -428,9 +499,9 @@ let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
 
 let ternop_c_syntax prec op =
   match (op, prec) with
-  | Where, Byte_prec _ -> ("((", ") != 0 ? (", ") : (", "))")
+  | Where, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("((", ") != 0 ? (", ") : (", "))")
   | Where, _ -> ("((", ") != 0.0 ? (", ") : (", "))")
-  | FMA, (Double_prec _ | Byte_prec _) -> ("fma(", ",", ",", ")")
+  | FMA, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) -> ("fma(", ",", ",", ")")
   | FMA, _ -> ("fmaf(", ",", ",", ")")
 
 let c_convert_precision ~from ~to_ =
@@ -439,6 +510,10 @@ let c_convert_precision ~from ~to_ =
   | Single_prec _, Single_prec _
   | Half_prec _, Half_prec _
   | Byte_prec _, Byte_prec _
+  | Uint16_prec _, Uint16_prec _
+  | Int32_prec _, Int32_prec _
+  | Bfloat16_prec _, Bfloat16_prec _
+  | Fp8_prec _, Fp8_prec _
   | Void_prec, Void_prec ->
       ("", "")
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")

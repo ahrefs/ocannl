@@ -83,16 +83,30 @@ let%track7_sexp c_compile_and_load ~f_name =
   Stdlib.Gc.finalise finalize result;
   result
 
-let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
-  let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
+module CC_syntax_config (Procs : sig
+  val procs : Low_level.optimized array
+end) =
+struct
+  include C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
 
     let use_host_memory = use_host_memory
-    let procs = [| lowered |]
+    let procs = Procs.procs
 
     let full_printf_support =
       not @@ Bool.of_string
       @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
+  end)
+
+  (* Override to add our custom type and conversion support *)
+  let typ_of_prec = typ_of_prec
+  let extra_declarations = extra_declarations  (* Our bfloat16/fp8 conversion functions *)
+  let convert_precision = convert_precision
+end
+
+let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
+  let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
+    let procs = [| lowered |]
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -110,15 +124,8 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) :
     procedure option array =
-  let module Syntax = C_syntax.C_syntax (C_syntax.Pure_C_config (struct
-    type nonrec buffer_ptr = buffer_ptr
-
-    let use_host_memory = use_host_memory
+  let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
     let procs = Array.filter_opt lowereds
-
-    let full_printf_support =
-      not @@ Bool.of_string
-      @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
   end)) in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
@@ -203,3 +210,71 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       } )
+(*
+let typ_of_prec = function
+  | Ops.Byte_prec _ -> "unsigned char"
+  | Ops.Uint16_prec _ -> "unsigned short"
+  | Ops.Int32_prec _ -> "int"
+  | Ops.Half_prec _ -> "_Float16"
+  | Ops.Bfloat16_prec _ -> "unsigned short"  (* Stored as uint16, emulated as float *)
+  | Ops.Fp8_prec _ -> "unsigned char"  (* Stored as uint8, emulated as float *)
+  | Ops.Single_prec _ -> "float"
+  | Ops.Double_prec _ -> "double"
+  | Ops.Void_prec -> "void"
+
+(* Helper functions for bfloat16 and fp8 conversions *)
+let extra_declarations =
+  [
+    "/* Emulation functions for special float types */";
+    "static inline float bfloat16_to_float(unsigned short bf16) {";
+    "    unsigned int f32 = ((unsigned int)bf16) << 16;";
+    "    return *(float*)&f32;";
+    "}";
+    "";
+    "static inline unsigned short float_to_bfloat16(float f) {";
+    "    unsigned int f32 = *(unsigned int*)&f;";
+    "    unsigned int rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);";
+    "    return (unsigned short)(rounded >> 16);";
+    "}";
+    "";
+    "/* Simplified FP8 E5M2 format emulation */";
+    "static inline float fp8_to_float(unsigned char fp8) {";
+    "    if (fp8 == 0) return 0.0f;";
+    "    unsigned int sign = (fp8 >> 7) & 1;";
+    "    unsigned int exp = (fp8 >> 2) & 0x1F;";
+    "    unsigned int mant = fp8 & 0x3;";
+    "    float result = (1.0f + mant * 0.25f) * powf(2.0f, (float)exp - 15.0f);";
+    "    return sign ? -result : result;";
+    "}";
+    "";
+    "static inline unsigned char float_to_fp8(float f) {";
+    "    if (f == 0.0f) return 0;";
+    "    unsigned int sign = (f < 0) ? 1 : 0;";
+    "    f = fabsf(f);";
+    "    int exp = (int)floorf(log2f(f)) + 15;";
+    "    if (exp < 0) return 0;";
+    "    if (exp > 31) return sign ? 0xFF : 0x7F;";
+    "    float mant = f / powf(2.0f, (float)exp - 15.0f) - 1.0f;";
+    "    unsigned int mant_bits = (unsigned int)(mant * 4.0f + 0.5f);";
+    "    if (mant_bits > 3) mant_bits = 3;";
+    "    return (unsigned char)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));";
+    "}";
+  ]
+
+let convert_precision ~from ~to_ =
+  match (from, to_) with
+  | p1, p2 when Ops.equal_prec p1 p2 -> ("", "")
+  | Ops.Bfloat16_prec _, Ops.Single_prec _ -> ("bfloat16_to_float(", ")")
+  | Ops.Bfloat16_prec _, Ops.Double_prec _ -> ("(double)bfloat16_to_float(", ")")
+  | Ops.Single_prec _, Ops.Bfloat16_prec _ -> ("float_to_bfloat16(", ")")
+  | Ops.Double_prec _, Ops.Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  | Ops.Fp8_prec _, Ops.Single_prec _ -> ("fp8_to_float(", ")")
+  | Ops.Fp8_prec _, Ops.Double_prec _ -> ("(double)fp8_to_float(", ")")
+  | Ops.Single_prec _, Ops.Fp8_prec _ -> ("float_to_fp8(", ")")
+  | Ops.Double_prec _, Ops.Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  | Ops.Bfloat16_prec _, _ -> ("(float)bfloat16_to_float(", ")")  (* Convert via float *)
+  | _, Ops.Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  | Ops.Fp8_prec _, _ -> ("(float)fp8_to_float(", ")")  (* Convert via float *)
+  | _, Ops.Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  | _ -> Ops.c_convert_precision ~from ~to_
+*)

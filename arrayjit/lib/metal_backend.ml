@@ -163,7 +163,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
            queue_desc / queue itself. *)
         let created_q = Me.CommandQueue.on_device_with_descriptor metal_device queue_desc in
         (* Store the log_entries_ref for later retrieval, associated with the stream_id which will
-           be assigned by make_stream shortly. We\'ll add it after make_stream. *)
+           be assigned by make_stream shortly. We'll add it after make_stream. *)
         (created_q, Some log_entries_ref))
       else (Me.CommandQueue.on_device metal_device, None)
     in
@@ -440,18 +440,25 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let extra_declarations = [ "using namespace metal;" ]
 
     let typ_of_prec = function
-      | Ops.Byte_prec _ -> "uint8_t"
-      | Half_prec _ -> "half"
-      | Single_prec _ -> "float"
-      | Double_prec _ -> "double"
-      | Void_prec -> "void"
+      | Ops.Byte_prec _ -> "uchar"
+      | Ops.Uint16_prec _ -> "ushort"
+      | Ops.Int32_prec _ -> "int"
+      | Ops.Half_prec _ -> "half"
+      | Ops.Bfloat16_prec _ -> "bfloat"  (* Metal supports bfloat16 natively *)
+      | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
+      | Ops.Single_prec _ -> "float"
+      | Ops.Double_prec _ -> "double"
+      | Ops.Void_prec -> "void"
 
     let metal_prec_suffix_float = function
-      (* Suffix for float literals like 0.0, 1.0 *)
-      | Ops.Half_prec _ -> "h"
-      | Ops.Single_prec _ -> "f"
-      | Ops.Double_prec _ -> "" (* No suffix for double literals *)
       | Ops.Byte_prec _ -> ""
+      | Ops.Uint16_prec _ -> ""
+      | Ops.Int32_prec _ -> ""
+      | Ops.Half_prec _ -> "h"
+      | Ops.Bfloat16_prec _ -> "bf"  (* TODO: Verify actual Metal suffix for bfloat16 *)
+      | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
+      | Ops.Single_prec _ -> "f"
+      | Ops.Double_prec _ -> ""
       | Ops.Void_prec -> ""
 
     let ternop_syntax _prec op =
@@ -661,7 +668,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label];
-      (* Unlike CUDA, we don\'t use Utils.add_log_processor here. Logs are captured by the LogState
+      (* Unlike CUDA, we don't use Utils.add_log_processor here. Logs are captured by the LogState
          handler installed on the CommandQueue. They will be processed by Utils.log_trace_tree in
          `await`. *)
       try

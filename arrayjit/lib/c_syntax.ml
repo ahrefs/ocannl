@@ -175,7 +175,7 @@ struct
     match op with
     | Ops.Satur01_gate -> (
         match prec with
-        | Ops.Byte_prec _ ->
+        | Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Fp8_prec _ ->
             let open PPrint in
             group
               (parens
@@ -185,10 +185,25 @@ struct
                       ^^ string " < 1.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "(unsigned char)0")
+                     ^^ string "(" ^^ string (typ_of_prec prec) ^^ string ")0")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "(unsigned char)0"))))
+                        ^^ string "(" ^^ string (typ_of_prec prec) ^^ string ")0"))))
+        | Ops.Bfloat16_prec _ ->
+            (* For CC backend, convert to float for computation *)
+            let open PPrint in
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "(unsigned short)0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "(unsigned short)0"))))
         | Ops.Half_prec _ ->
             let open PPrint in
             group
