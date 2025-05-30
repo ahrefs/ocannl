@@ -1,5 +1,14 @@
 open Base
+
+module Lazy = Utils.Lazy
+
 (** N-dimensional arrays: a precision-handling wrapper for [Bigarray.Genarray] and its utilities. *)
+
+(* External conversion functions for special float types *)
+external bfloat16_to_float : int -> float = "arrayjit_bfloat16_to_float"
+external float_to_bfloat16 : float -> int = "arrayjit_float_to_bfloat16"
+external fp8_to_float : int -> float = "arrayjit_fp8_to_float"
+external float_to_fp8 : float -> int = "arrayjit_float_to_fp8"
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -160,15 +169,15 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Ops.Half, Standard_uniform ->
       init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Bfloat16, Constant_fill { values; strict } -> constant_fill_f Int.of_float values strict  (* TODO: proper bfloat16 conversion *)
+  | Ops.Bfloat16, Constant_fill { values; strict } -> constant_fill_f float_to_bfloat16 values strict
   | Ops.Bfloat16, Range_over_offsets ->
-      init_bigarray_of_prec prec dims ~f:(fun idcs -> indices_to_offset ~dims ~idcs)  (* TODO: proper bfloat16 conversion *)
-  | Ops.Bfloat16, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Random.int 65536)  (* TODO: proper bfloat16 conversion *)
-  | Ops.Fp8, Constant_fill { values; strict } -> constant_fill_f (Fn.compose Char.of_int_exn Int.of_float) values strict  (* TODO: proper fp8 conversion *)
+      init_bigarray_of_prec prec dims ~f:(fun idcs -> float_to_bfloat16 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Bfloat16, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> float_to_bfloat16 @@ Rand.Lib.float_range 0.0 1.0)
+  | Ops.Fp8, Constant_fill { values; strict } -> constant_fill_f (Fn.compose Char.of_int_exn float_to_fp8) values strict
   | Ops.Fp8, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs ->
-          Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Ops.Fp8, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Rand.Lib.char ())
+          Char.of_int_exn @@ float_to_fp8 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Fp8, Standard_uniform -> init_bigarray_of_prec prec dims ~f:(fun _ -> Char.of_int_exn @@ float_to_fp8 @@ Rand.Lib.float_range 0.0 1.0)
   | Ops.Single, Constant_fill { values; strict } -> constant_fill_float values strict
   | Ops.Single, Range_over_offsets ->
       init_bigarray_of_prec prec dims ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
@@ -255,8 +264,8 @@ let set_from_float arr idx v =
   | Uint16_nd arr -> A.set arr idx @@ Int.of_float v
   | Int32_nd arr -> A.set arr idx @@ Int32.of_float v
   | Half_nd arr -> A.set arr idx v
-  | Bfloat16_nd arr -> A.set arr idx @@ Int.of_float v  (* TODO: proper bfloat16 conversion *)
-  | Fp8_nd arr -> A.set arr idx @@ Char.of_int_exn @@ Int.of_float v  (* TODO: proper fp8 conversion *)
+  | Bfloat16_nd arr -> A.set arr idx @@ float_to_bfloat16 v
+  | Fp8_nd arr -> A.set arr idx @@ Char.of_int_exn @@ float_to_fp8 v
   | Single_nd arr -> A.set arr idx v
   | Double_nd arr -> A.set arr idx v
 
@@ -266,8 +275,8 @@ let fill_from_float arr v =
   | Uint16_nd arr -> A.fill arr @@ Int.of_float v
   | Int32_nd arr -> A.fill arr @@ Int32.of_float v
   | Half_nd arr -> A.fill arr v
-  | Bfloat16_nd arr -> A.fill arr @@ Int.of_float v  (* TODO: proper bfloat16 conversion *)
-  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ Int.of_float v  (* TODO: proper fp8 conversion *)
+  | Bfloat16_nd arr -> A.fill arr @@ float_to_bfloat16 v
+  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ float_to_fp8 v
   | Single_nd arr -> A.fill arr v
   | Double_nd arr -> A.fill arr v
 
@@ -319,14 +328,15 @@ let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precisi
   | Ops.Half, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
   | Ops.Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Bfloat16, Constant_fill { values; strict } -> constant_set_f Int.of_float values strict  (* TODO: proper bfloat16 conversion *)
+  | Ops.Bfloat16, Constant_fill { values; strict } -> constant_set_f float_to_bfloat16 values strict
   | Ops.Bfloat16, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> indices_to_offset ~dims ~idcs)  (* TODO: proper bfloat16 conversion *)
-  | Ops.Bfloat16, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.int 65536)  (* TODO: proper bfloat16 conversion *)
-  | Ops.Fp8, Constant_fill { values; strict } -> constant_set_f (Fn.compose Char.of_int_exn Int.of_float) values strict  (* TODO: proper fp8 conversion *)
+      set_bigarray arr ~f:(fun idcs -> float_to_bfloat16 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Bfloat16, Standard_uniform -> set_bigarray arr ~f:(fun _ -> float_to_bfloat16 @@ Rand.Lib.float_range 0.0 1.0)
+  | Ops.Fp8, Constant_fill { values; strict } -> constant_set_f (Fn.compose Char.of_int_exn float_to_fp8) values strict
   | Ops.Fp8, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Ops.Fp8, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.char ())
+      set_bigarray arr ~f:(fun idcs ->
+          Char.of_int_exn @@ float_to_fp8 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
+  | Ops.Fp8, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Char.of_int_exn @@ float_to_fp8 @@ Rand.Lib.float_range 0.0 1.0)
   | Ops.Single, Constant_fill { values; strict } -> constant_set_float values strict
   | Ops.Single, Range_over_offsets ->
       set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
@@ -363,8 +373,8 @@ let fold_as_float ~init ~f arr =
   | Uint16_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
   | Int32_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
   | Half_nd arr -> fold_bigarray ~init ~f arr
-  | Bfloat16_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr  (* TODO: proper bfloat16 conversion *)
-  | Fp8_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr  (* TODO: proper fp8 conversion *)
+  | Bfloat16_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
+  | Fp8_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c) arr
   | Single_nd arr -> fold_bigarray ~init ~f arr
   | Double_nd arr -> fold_bigarray ~init ~f arr
 
@@ -380,8 +390,8 @@ let get_as_float arr idx =
   | Uint16_nd arr -> Float.of_int @@ A.get arr idx
   | Int32_nd arr -> Int32.to_float @@ A.get arr idx
   | Half_nd arr -> A.get arr idx
-  | Bfloat16_nd arr -> Float.of_int @@ A.get arr idx  (* TODO: proper bfloat16 conversion *)
-  | Fp8_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx  (* TODO: proper fp8 conversion *)
+  | Bfloat16_nd arr -> bfloat16_to_float @@ A.get arr idx
+  | Fp8_nd arr -> fp8_to_float @@ Char.to_int @@ A.get arr idx
   | Single_nd arr -> A.get arr idx
   | Double_nd arr -> A.get arr idx
 

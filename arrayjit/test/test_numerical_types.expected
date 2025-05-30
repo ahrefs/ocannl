@@ -1,0 +1,92 @@
+Hmmm.....
+Welcome to OCANNL! Reading configuration defaults from /Users/lukstafi/ocannl/ocannl_config.
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 1, in the config file
+Retrieving commandline, environment, or config file variable ocannl_clean_up_artifacts_on_startup
+Not found, using default true
+Retrieving commandline, environment, or config file variable ocannl_snapshot_every_sec
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_time_tagged
+Found elapsed, in the config file
+Retrieving commandline, environment, or config file variable ocannl_elapsed_times
+Found not_reported, in the config file
+Retrieving commandline, environment, or config file variable ocannl_location_format
+Found beg_pos, in the config file
+Retrieving commandline, environment, or config file variable ocannl_debug_backend
+Found html, in the config file
+Retrieving commandline, environment, or config file variable ocannl_hyperlink_prefix
+Found ./, in the config file
+Retrieving commandline, environment, or config file variable ocannl_logs_print_entry_ids
+Found false, in the config file
+Retrieving commandline, environment, or config file variable ocannl_logs_verbose_entry_ids
+Found false, in the config file
+Retrieving commandline, environment, or config file variable ocannl_log_main_domain_to_stdout
+Found false, in the config file
+Retrieving commandline, environment, or config file variable ocannl_log_file_stem
+Not found, using default debug
+Retrieving commandline, environment, or config file variable ocannl_prev_run_prefix
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_toc_entry_minimal_depth
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_toc_entry_minimal_size
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_toc_entry_minimal_span
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_debug_highlights
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_debug_highlight_pcre
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_diff_ignore_pattern_pcre
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_diff_max_distance_factor
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_debug_entry_id_pairs
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_debug_log_from_routines
+Found false, in the config file
+Retrieving commandline, environment, or config file variable ocannl_output_debug_files_in_build_directory
+Found false, in the config file
+Retrieving commandline, environment, or config file variable ocannl_fixed_state_for_init
+Not found, using default 
+Retrieving commandline, environment, or config file variable ocannl_print_decimals_precision
+Found 2, in the config file
+Retrieving commandline, environment, or config file variable ocannl_check_half_prec_constants_cutoff
+Found 16384.0, in the config file
+Retrieving commandline, environment, or config file variable ocannl_automatic_host_transfers
+Found true, in the config file
+Retrieving commandline, environment, or config file variable ocannl_randomness_lib
+Found stdlib, in the config file
+Testing BFloat16 conversions:
+  0.000000 -> 0x0000 -> 0.000000
+  1.000000 -> 0x3f80 -> 1.000000
+  -1.000000 -> 0xbf80 -> -1.000000
+  3.141590 -> 0x4049 -> 3.140625
+  0.001000 -> 0x3a83 -> 0.000999
+  1000.000000 -> 0x447a -> 1000.000000
+  inf -> 0x7f80 -> inf
+  -inf -> 0xff80 -> -inf
+
+BFloat16 array values:
+  [0] = 1.000000
+  [1] = 2.000000
+  [2] = 3.140625
+  [3] = -1.500000
+  [4] = 0.125000
+  [5] = 1000.000000
+
+
+Testing FP8 conversions:
+  0.000000 -> 0x00 -> 0.000000
+  1.000000 -> 0x3c -> 1.000000
+  -1.000000 -> 0xbc -> -1.000000
+  0.500000 -> 0x38 -> 0.500000
+  2.000000 -> 0x40 -> 2.000000
+  0.125000 -> 0x30 -> 0.125000
+  16.000000 -> 0x4c -> 16.000000
+  -0.250000 -> 0xb4 -> -0.250000
+
+FP8 array values:
+  [0] = 1.000000
+  [1] = 0.500000
+  [2] = 2.000000
+  [3] = -1.000000

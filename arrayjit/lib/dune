@@ -33,6 +33,9 @@
   saturn_lockfree
   utils
   ppx_minidebug.runtime)
+ (foreign_stubs
+  (language c)
+  (names arrayjit_stubs))
  (preprocess
   (pps
    ppx_compare

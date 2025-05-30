@@ -1,0 +1,18 @@
+(executable
+ (name test_numerical_types)
+ (modules test_numerical_types)
+ (libraries base stdio arrayjit.ir)
+ (preprocess
+  (pps ppx_jane)))
+
+(rule
+ (target test_numerical_types.output)
+ (deps test_numerical_types.exe)
+ (action
+  (with-stdout-to %{target}
+   (run %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff test_numerical_types.expected test_numerical_types.output)))
