@@ -284,8 +284,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Uint16_prec _ -> "unsigned short"
       | Ops.Int32_prec _ -> "int"
       | Ops.Half_prec _ -> "__half"
-      | Ops.Bfloat16_prec _ -> "__nv_bfloat16"  (* CUDA bfloat16 type *)
-      | Ops.Fp8_prec _ -> "__nv_fp8_e5m2"  (* CUDA FP8 type (E5M2 format) *)
+      | Ops.Bfloat16_prec _ -> "__nv_bfloat16" (* CUDA bfloat16 type *)
+      | Ops.Fp8_prec _ -> "__nv_fp8_e5m2" (* CUDA FP8 type (E5M2 format) *)
       | Ops.Single_prec _ -> "float"
       | Ops.Double_prec _ -> "double"
       | Ops.Void_prec -> "void"
@@ -326,8 +326,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | ToPowOf, Bfloat16_prec _ ->
           fun v1 v2 ->
             group
-              (string "__float2bfloat16(powf(__bfloat162float(" ^^ v1 ^^ string "), __bfloat162float("
-              ^^ v2 ^^ string ")))")
+              (string "__float2bfloat16(powf(__bfloat162float("
+              ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
       | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
           fun v1 v2 ->
             group
@@ -343,15 +343,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
           fun v1 v2 ->
             group
               (parens
-                 (group
-                    (parens
-                       (string "__bfloat162float(" ^^ v1 ^^ string ") > 0.0f"))
+                 (group (parens (string "__bfloat162float(" ^^ v1 ^^ string ") > 0.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                      ^^ string "__float2bfloat16(0.0f)")
+                     ^^ string "__float2bfloat16(0.0f)")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                         ^^ string "__float2bfloat16(0.0f)"))))
+                        ^^ string "__float2bfloat16(0.0f)"))))
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
             group

@@ -444,7 +444,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Uint16_prec _ -> "ushort"
       | Ops.Int32_prec _ -> "int"
       | Ops.Half_prec _ -> "half"
-      | Ops.Bfloat16_prec _ -> "bfloat"  (* Metal supports bfloat16 natively *)
+      | Ops.Bfloat16_prec _ -> "bfloat" (* Metal supports bfloat16 natively *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
       | Ops.Single_prec _ -> "float"
       | Ops.Double_prec _ -> "double"
@@ -455,7 +455,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Uint16_prec _ -> ""
       | Ops.Int32_prec _ -> ""
       | Ops.Half_prec _ -> "h"
-      | Ops.Bfloat16_prec _ -> "bf"  (* TODO: Verify actual Metal suffix for bfloat16 *)
+      | Ops.Bfloat16_prec _ -> "bf" (* TODO: Verify actual Metal suffix for bfloat16 *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
       | Ops.Single_prec _ -> "f"
       | Ops.Double_prec _ -> ""
