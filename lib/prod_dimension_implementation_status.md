@@ -116,7 +116,7 @@ The remaining functions follow similar patterns - they need to handle Prod by ei
 
 ## Next Steps
 
-1. Implement the helper functions in row.ml
+1. ✅ Implement the helper functions in row.ml
 2. Systematically go through each linter error and add Prod handling
 3. Update shape.ml for any needed changes
 4. Design and implement einsum notation parsing for `&`
