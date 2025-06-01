@@ -12,13 +12,28 @@ val get_var : ?label:string -> unit -> dim_var
 val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
 
+type solved_dim = { d : int; label : string option; proj_id : int option }
+[@@deriving equal, hash, compare, sexp]
+
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
+type dim =
+  | Var of dim_var
+  | Dim of solved_dim
+  | Prod of dim list
+      (** A dimension that is the product of other dimensions, e.g. result of concatenation along
+          one or more axes. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 val get_dim : d:int -> ?label:string -> unit -> dim
 val dim_to_int_exn : dim -> int
 val dim_to_string : [> `Only_labels ] -> dim -> string
+
+
+(** Extracts all dimension variables from a dim, including from nested products. *)
+val dim_vars : dim -> dim_var list
+
+(** Checks if a dimension is fully solved (no variables). *)
+val is_solved_dim : dim -> bool
 
 type row_id [@@deriving sexp, compare, equal, hash]
 type row_cmp

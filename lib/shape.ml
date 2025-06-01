@@ -627,10 +627,11 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env
 
-let row_to_dims row =
+let row_to_dims (row : Row.t) : int array=
   let open Row in
-  let f = function
+  let rec f = function
     | Dim { d; _ } -> d
+    | Prod dims -> List.fold dims ~init:1 ~f:(fun acc dim -> acc * f dim)
     | Var v ->
         raise
         @@ Row.Shape_error

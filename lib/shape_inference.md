@@ -1,6 +1,6 @@
 # Shape inference and projection inference
 
-To separate concerns, OCANNL is split into the `arrayjit` library, responsible for compilation of high-level n-D array operation sequences (`Assignments.comp`) via the gccjit and cuda backends, and the main `ocannl` library, responsible for deriving the operations computing the forward propagation and backpropagation from tensor expressions. In particular, `arrayjit` contains `Indexing`, which represents complex indexing into arrays, and the main library `ocannl` has `Row` and `Shape` modules, which do the most "heavy-lifting" in the translation from concise tensor expressions to sequences of assignments.
+To separate concerns, OCANNL is split into the `arrayjit` package, responsible for compilation of high-level n-D array operation sequences (`Assignments.comp`) via multiple backends, and the main `neural_nets_lib` library/package, responsible for deriving the operations computing the forward propagation and backpropagation from tensor expressions. In particular, `arrayjit` contains `Indexing`, which represents complex indexing into arrays, and the main library `neural_nets_lib` (locally `ocannl`) has `Row` and `Shape` modules, which do the most "heavy-lifting" in the translation from concise tensor expressions to sequences of assignments.
 
 Shape inference broadly speaking consists in OCANNL of inferring the `Shape.t` record -- shape inference proper, and inferring the `Indexing.projections` record -- projections inference. `Shape.t` records are mutable, so that the partially inferred shapes can be observed by the user. Shape and projections inference is intended to be declarative -- independent of the order in which constraints are added. There is one aspect that is not declarative: when tensor expressions are compiled to assignments, i.e. jitted, still-unsolved shape variables in terminal nodes are substituted by their least upper bounds if any, or by dimension-1 / no-more-axes.
 
@@ -13,7 +13,10 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed.
 
 ```ocaml
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
+type dim = 
+  | Var of dim_var  (** A dimension variable to be inferred. *)
+  | Dim of { d : int; label : string option; proj_id : int option }  (** A solved dimension. *)
+  | Prod of dim list  (** A product of dimensions, representing concatenation or multi-axis view. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -184,3 +187,25 @@ Other important functions in the `Shape` module.
 * `finish_inference` is called right before some projections or array dimensions are required (typically, because of jitting). It performs a second round of `propagate_shapes`, and then once again attempts to solve any remaining constraints that `propagate_shapes` didn't solve. Then it "closes the shapes": substitutes out remaining shape variables by their LUBs if any, or dimension-1 / `Broadcastable` (no-more-axes). Then it resets the environment state, since the shapes are now guaranteed to not have variables.
 * `derive_projections` starts by freshening the `proj_id`s in the `update_step`. Then it generates and solves shape inequalities, and then generates and solves projection equations, and constructs the `projections` record.
 * `of_spec` constructs a shape record from an einsum slot spec. If `deduced = Input_equals_output`, it adds the corresponding equation to the global environment.
+
+### Product dimensions (Prod)
+
+The `Prod` construct represents an axis that is a product of other axes. This can be used to model:
+
+1. **Concatenation**: Multiple axes concatenated into a single axis
+2. **Multi-axis views**: Treating multiple axes as a single flattened axis
+
+For a `Prod [d1; d2; ...; dn]`:
+
+* The dimension is the product of all constituent dimensions: `dim(d1) × dim(d2) × ... × dim(dn)`
+* The projection respects the order of axes, implementing a row-major indexing scheme
+* During inference, constraints on the product propagate to constraints on the constituents
+* In the einsum notation, product axes will be denoted using `&`, e.g., `i&j` represents a single axis that is the product of axes `i` and `j`
+
+Product dimensions interact with other shape inference features:
+
+* **Broadcasting**: A Prod dimension can be broadcasted if all its constituents are dimension-1
+* **Inequalities**: `Prod ds1 ≥ Prod ds2` requires compatible structures and element-wise inequalities
+* **Constraints**: An `At_least_dim` constraint on a Prod propagates to its constituents
+
+The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature.

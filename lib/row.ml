@@ -27,8 +27,15 @@ type 'a dim_map = 'a Map.M(Dim_var).t [@@deriving equal, sexp]
 let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
 
-(** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
+type solved_dim = { d : int; label : string option; proj_id : int option }
+[@@deriving equal, hash, compare, sexp]
+
+type dim =
+  | Var of dim_var
+  | Dim of solved_dim
+  | Prod of dim list
+      (** A dimension that is the product of other dimensions, e.g. result of concatenation along
+          one or more axes. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -43,13 +50,14 @@ type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
 let dim_hashtbl () = Hashtbl.create (module Dim_var)
 
-let dim_to_string style = function
+let rec dim_to_string style = function
   | Dim { label = None; _ } when phys_equal style `Only_labels -> "_"
   | Dim { label = Some l; _ } when phys_equal style `Only_labels -> l
   | Dim { d; label = None; _ } -> Int.to_string d
   | Dim { d; label = Some l; _ } -> [%string "%{l}=%{d#Int}"]
   | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
   | Var { id; label = None } -> "$" ^ Int.to_string id
+  | Prod ds -> String.concat ~sep:"*" (List.map ds ~f:(dim_to_string style))
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -181,10 +189,21 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 type source = Direct | Equation | Cur | Subr [@@deriving equal, sexp]
 
-let dim_to_int_exn = function
+let rec dim_to_int_exn = function
   | Dim { d; _ } -> d
   | Var _ -> invalid_arg "dim_to_int: dim still unknown"
+  | Prod dims -> List.fold dims ~init:1 ~f:(fun acc d -> acc * dim_to_int_exn d)
 
+(* Helper functions for Prod *)
+let rec dim_vars = function
+  | Var v -> [v]
+  | Dim _ -> []
+  | Prod dims -> List.concat_map dims ~f:dim_vars
+
+let rec is_solved_dim = function
+  | Var _ -> false
+  | Dim _ -> true
+  | Prod dims -> List.for_all dims ~f:is_solved_dim
 let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
 
 (* For future flexibility *)
@@ -239,6 +258,21 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
+    | Prod dims, At_least_dim d_min ->
+        (* For a product, we check if the product of all known dimensions meets the constraint *)
+        let product = ref 1 in
+        let has_vars = ref false in
+        List.iter dims ~f:(function
+          | Dim { d; _ } -> product := !product * d
+          | Var _ -> has_vars := true
+          | Prod _ -> has_vars := true (* Nested products need recursive handling *)
+        );
+        if not !has_vars && !product < d_min then
+          raise
+          @@ Shape_error
+               ( "At_least_dim constraint failed for product, expected at least " ^ Int.to_string d_min,
+                 [ Dim_mismatch [ dim ] ] )
+        else ([], constr) (* TODO: Could propagate constraints to constituent dimensions *)
     | Var v, _ -> (
         match Map.find env.dim_env v with
         | None -> ([], constr)
@@ -259,10 +293,18 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
     row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
-      let ds, (vars : dim_var list) =
-        List.partition_map (beg_dims @ dims) ~f:(function
-          | Dim { d; _ } -> Either.First d
-          | Var v -> Either.Second v)
+      let rec extract_dims_and_vars = function
+        | Dim { d; _ } -> ([ d ], [])
+        | Var v -> ([], [ v ])
+        | Prod dims ->
+            List.fold dims ~init:([], []) ~f:(fun (ds, vs) dim ->
+                let d', v' = extract_dims_and_vars dim in
+                (ds @ d', vs @ v'))
+      in
+      let ds, vars =
+        List.fold (beg_dims @ dims) ~init:([], []) ~f:(fun (ds, vs) dim ->
+            let d', v' = extract_dims_and_vars dim in
+            (ds @ d', vs @ v'))
       in
       let vars = Set.of_list (module Dim_var) vars in
       if not @@ Set.(is_empty @@ inter vars divided_by) then Unconstrained
@@ -283,10 +325,18 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
     row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
+      let rec extract_dims_and_vars = function
+        | Dim { d; _ } -> ([ d ], [])
+        | Var v -> ([], [ v ])
+        | Prod dims ->
+            List.fold dims ~init:([], []) ~f:(fun (ds, vs) dim ->
+                let d', v' = extract_dims_and_vars dim in
+                (ds @ d', vs @ v'))
+      in
       let ds, vars =
-        List.partition_map (beg_dims @ dims) ~f:(function
-          | Dim { d; _ } -> Either.First d
-          | Var v -> Either.Second v)
+        List.fold (beg_dims @ dims) ~init:([], []) ~f:(fun (ds, vs) dim ->
+            let d', v' = extract_dims_and_vars dim in
+            (ds @ d', vs @ v'))
       in
       let vars = Set.of_list (module Dim_var) vars in
       if not @@ Set.is_subset vars ~of_:divided_by then Unconstrained
@@ -359,10 +409,18 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
     | _, Unconstrained -> assert false
     | { dims; bcast = Broadcastable; _ }, Total_elems { nominator; divided_by }
       when Set.length divided_by <= 1 -> (
-        let (ds : int list), (vars : dim_var list) =
-          List.partition_map dims ~f:(function
-            | Dim { d; _ } -> Either.First d
-            | Var v -> Either.Second v)
+        let rec extract_dims_and_vars_dim = function
+          | Dim { d; _ } -> ([ d ], [])
+          | Var v -> ([], [ v ])
+          | Prod dims ->
+              List.fold dims ~init:([], []) ~f:(fun (ds, vs) dim ->
+                  let d', v' = extract_dims_and_vars_dim dim in
+                  (ds @ d', vs @ v'))
+        in
+        let ds, vars =
+          List.fold dims ~init:([], []) ~f:(fun (ds, vs) dim ->
+              let d', v' = extract_dims_and_vars_dim dim in
+              (ds @ d', vs @ v'))
         in
         let d : int = List.fold ds ~init:1 ~f:( * ) in
         let nominator : int = nominator / d in
@@ -433,7 +491,20 @@ let s_dim_one_in_row_constr v ~value constr =
             @@ Shape_error
                  ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
                    [ Dim_mismatch [ value ] ] )
-          else Total_elems { nominator; divided_by })
+          else Total_elems { nominator; divided_by }
+      | Prod dims ->
+          (* When substituting with a Prod, we need to calculate its total dimension *)
+          let d = dim_to_int_exn (Prod dims) in
+          let nominator = nominator / d in
+          if nominator <= 0 then
+            raise
+            @@ Shape_error
+                 ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
+                   [ Dim_mismatch [ value ] ] )
+          else 
+            (* Extract any variables from the Prod and add them to divided_by *)
+            let vars = dim_vars value in
+            Total_elems { nominator; divided_by = Set.union divided_by (Set.of_list (module Dim_var) vars) })
   | _ -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
@@ -450,6 +521,7 @@ let rec subst_dim env = function
       | Some (Solved_dim (Var v2)) when equal_dim_var v v2 -> default
       | Some (Solved_dim d) -> subst_dim env d
       | _ -> default)
+  | Prod dims -> Prod (List.map dims ~f:(subst_dim env))
 
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
@@ -751,6 +823,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
         match Map.find env.dim_env cur_v with
         | None | Some (Solved_dim (Dim _)) -> false
         | Some (Solved_dim (Var v)) -> equal_dim_var subr_v v
+        | Some (Solved_dim (Prod _)) -> false (* Prod doesn't contain variables directly *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
   match (cur, subr) with
@@ -762,6 +835,32 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | _, Dim { d = 1; _ } -> ([], env)
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
+  | Prod ds1, Prod ds2 when List.equal equal_dim ds1 ds2 -> ([], env)
+  | Prod ds1, Prod ds2 ->
+      (* Two different products - need to handle inequality between them *)
+      if is_solved_dim (Prod ds1) && is_solved_dim (Prod ds2) then
+        let d1 = dim_to_int_exn (Prod ds1) in
+        let d2 = dim_to_int_exn (Prod ds2) in
+        let expanded1 = get_dim ~d:d1 () in
+        let expanded2 = get_dim ~d:d2 () in
+        ([ Dim_ineq { cur = expanded1; subr = expanded2 } ], env)
+      else
+        raise @@ Shape_error ("Cannot compare Prod dimensions with unresolved variables", [ Dim_mismatch [ cur; subr ] ])
+  | Prod ds, Dim _ | Dim _, Prod ds ->
+      (* For now, we can't directly compare a Prod with a Dim in an inequality.
+         We could potentially expand this to handle cases where the product is known. *)
+      if is_solved_dim (Prod ds) then
+        let prod_val = dim_to_int_exn (Prod ds) in
+        let expanded = get_dim ~d:prod_val () in
+        (match (cur, subr) with
+         | Prod _, _ -> ([ Dim_ineq { cur = expanded; subr } ], env)
+         | _, Prod _ -> ([ Dim_ineq { cur; subr = expanded } ], env)
+         | _ -> assert false)
+      else
+        raise @@ Shape_error ("Cannot compare Prod with unresolved variables in inequality", [ Dim_mismatch [ cur; subr ] ])
+  | Prod _, Var _ | Var _, Prod _ ->
+      (* Similar to above - we need all dimensions resolved to compare *)
+      raise @@ Shape_error ("Cannot compare Prod with variables in inequality", [ Dim_mismatch [ cur; subr ] ])
   | Var cur_v, Var subr_v -> (
       match (Map.find env.dim_env cur_v, Map.find env.dim_env subr_v) with
       | Some (Bounds_dim { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 subr_v ->
@@ -888,6 +987,29 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
                 (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
+            | Prod _, Dim _ | Dim _, Prod _ ->
+                (* For LUB between Prod and Dim, we need to expand if possible *)
+                if is_solved_dim cur && is_solved_dim lub2 then
+                  let d_cur = dim_to_int_exn cur in
+                  let d_lub2 = dim_to_int_exn lub2 in
+                  if d_cur = d_lub2 then (cur, [])
+                  else
+                    let lub = get_dim ~d:1 () in
+                    (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
+                else
+                  raise @@ Shape_error ("Cannot compute LUB between Prod and unsolved dimensions", [ Dim_mismatch [ cur; lub2 ] ])
+            | Prod _, Prod _ ->
+                (* For LUB between two Prods, they need to match structurally or we force to dim-1 *)
+                if equal_dim cur lub2 then (cur, [])
+                else if is_solved_dim cur && is_solved_dim lub2 then
+                  let d_cur = dim_to_int_exn cur in
+                  let d_lub2 = dim_to_int_exn lub2 in
+                  if d_cur = d_lub2 then (cur, [])
+                  else
+                    let lub = get_dim ~d:1 () in
+                    (lub, [ Dim_eq { d1 = subr; d2 = lub } ])
+                else
+                  raise @@ Shape_error ("Cannot compute LUB between different Prod structures", [ Dim_mismatch [ cur; lub2 ] ])
             | Var _, _ | _, Var _ -> assert false
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
