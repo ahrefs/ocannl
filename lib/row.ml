@@ -875,12 +875,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
         @@ Shape_error
              ( "Cannot compare Prod with unresolved variables in inequality",
                [ Dim_mismatch [ cur; subr ] ] )
-  | Prod _, Var _ | Var _, Prod _ ->
-      (* Similar to above - we need all dimensions resolved to compare *)
-      raise
-      @@ Shape_error
-           ("Cannot compare Prod with variables in inequality", [ Dim_mismatch [ cur; subr ] ])
-  | Var cur_v, Var subr_v -> (
+ | Var cur_v, Var subr_v -> (
       match (Map.find env.dim_env cur_v, Map.find env.dim_env subr_v) with
       | Some (Bounds_dim { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 subr_v ->
           ([ Dim_eq { d1 = cur; d2 = subr } ], env)
@@ -1055,7 +1050,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
                 Map.set env.dim_env ~key:subr_v
                   ~data:(Bounds_dim { lub = Some cur; cur = cur2; subr = subr2; constr = constr2 });
             } ))
-  | Var _, Dim _ (* when d2 > 1 *) -> ([ Dim_eq { d1 = cur; d2 = subr } ], env)
+  | Var _, (Dim _ (* when d2 > 1 *) | Prod _) -> ([ Dim_eq { d1 = cur; d2 = subr } ], env)
   | Dim _, Dim _ ->
       raise
       @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])

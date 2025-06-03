@@ -66,24 +66,24 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* 0.6: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
+* 0.6: Hopefully-efficient expressivity: concatenation and splitting, convolution, maybe block tensors.
+  * Requires extending expressivity of projections and the generalized einsum notation.
+  * Then, we can add convnet building blocks and corresponding examples starting with MNIST.
+  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
+* 0.7: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
   * Port (translate or bind) the Python files from [llm.c](https://github.com/karpathy/llm.c) to implement tokenization, data loading and saving etc.
   * At the end of 0.6.x, we should have an apples-to-apples benchmark comparing OCANNL to [llm.c](https://github.com/karpathy/llm.c) for both CPU and GPU.
-* 0.7: Optimize performance -- low hanging fruit.
+* 0.8: Optimize performance -- low hanging fruit.
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will require splitting a routine into multiple CUDA kernels.
-* 0.8: A new abstraction layer automating compilation/linking, execution, and some data transfers.
+* 0.9: A new abstraction layer automating compilation/linking, execution, and some data transfers.
   * E.g. host-device transfers: copy from host if host update is later than the previous device update.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   * At the end of 0.8.x, OCANNL has a REPL.
-* 0.9: Hopefully-efficient expressivity: block tensors, convolution.
-  * Requires extending expressivity of projections and the generalized einsum notation.
-  * Then, we can add convnet building blocks and corresponding examples starting with MNIST.
-  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
 * 0.10: Optimize performance: program search.
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.

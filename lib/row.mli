@@ -28,7 +28,6 @@ val get_dim : d:int -> ?label:string -> unit -> dim
 val dim_to_int_exn : dim -> int
 val dim_to_string : [> `Only_labels ] -> dim -> string
 
-
 (** Extracts all dimension variables from a dim, including from nested products. *)
 val dim_vars : dim -> dim_var list
 

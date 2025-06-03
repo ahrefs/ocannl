@@ -112,7 +112,7 @@ type logic =
 
 ### Non-tensor-like constraints
 
-The above mechanisms (excluding `dim_constraint` and `row_constraint`) are sufficient to express tensor applications such as inner and outer products, axis permutations. They cannot directly express: size constraints, fixed position indexing (except for the special case of position 0), axis concatenation and "reverse concatenation" / splitting, strides, convolutions. At present, we implement size constraints and fixed position indexing.
+The above mechanisms (excluding `dim_constraint` and `row_constraint`) are sufficient to express tensor applications such as inner and outer products, axis permutations. Axis concatenation and "reverse concatenation" / splitting is handled by the representation above via the "product" `Prod` dimension constructor. The above mechanisms cannot directly express: size constraints, fixed position indexing (except for the special case of position 0), strides, convolutions. At present, we implement size constraints and fixed position indexing.
 
 ```ocaml
 type dim_constraint = Unconstrained_dim | At_least_dim of int
@@ -125,13 +125,33 @@ type row_constraint =
 
 During the solution process, the constraints are incorporated, or propagated, into the environment `constr` entry fields, and into further `constraint_` constraints, as needed. This provides sufficient scaffolding to implement the other complex constraints as the need arises.
 
+### Product dimensions (Prod)
+
+The `Prod` construct represents an axis that is a product of other axes. This can be used to model:
+
+1. **Concatenation and splitting**: Multiple axes concatenated into a single axis or a single axis split into multiple as part of an operation.
+2. **Multi-axis views**: Treating multiple axes as a single flattened axis and vice-versa.
+
+For a `Prod [d1; d2; ...; dn]`:
+
+* The dimension is the product of all constituent dimensions: `dim(d1) × dim(d2) × ... × dim(dn)`
+* The projection respects the order of axes, implementing a row-major indexing scheme
+* During inference, constraints on the product propagate to constraints on the constituents
+* In the einsum notation, product axes will be denoted using `&`, e.g., `i&j` represents a single axis that is the product of axes `i` and `j`
+
+Product dimensions interact with other shape inference features:
+
+* **Broadcasting**: A Prod dimension can be broadcasted if its constituents are dimension-1
+* **Inequalities**: `Prod ds1 ≥ Prod ds2` requires compatible structures and element-wise inequalities
+* **Constraints**: An `At_least_dim` constraint on a Prod propagates to its constituents
+
 ## Solving the constraints
 
 The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in stages.
 
 * Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
 * Stage 2, when solving the constraints, substitutes dim variables in terminal shapes that do not have a LUB or other constraints, by dimension-1. (This is generalized at stage 6 to all variables.) It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint.
-* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds (if any). It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at stage 5 to all variables.)
+* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds (if any). It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at stage 6 to all variables.)
 * Stage 4 sets yet-unknown dimensions with >1 lower bounds from direct accesses, to their LUBs if they have any, otherwise to the lower bound.
 * Stage 5 addresses `Total_elems` constraints with yet-unknown row variables. If the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension.
 * Stage 6 sets row variables in the remaining inequalities to no-further-axes values. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality.
@@ -187,25 +207,3 @@ Other important functions in the `Shape` module.
 * `finish_inference` is called right before some projections or array dimensions are required (typically, because of jitting). It performs a second round of `propagate_shapes`, and then once again attempts to solve any remaining constraints that `propagate_shapes` didn't solve. Then it "closes the shapes": substitutes out remaining shape variables by their LUBs if any, or dimension-1 / `Broadcastable` (no-more-axes). Then it resets the environment state, since the shapes are now guaranteed to not have variables.
 * `derive_projections` starts by freshening the `proj_id`s in the `update_step`. Then it generates and solves shape inequalities, and then generates and solves projection equations, and constructs the `projections` record.
 * `of_spec` constructs a shape record from an einsum slot spec. If `deduced = Input_equals_output`, it adds the corresponding equation to the global environment.
-
-### Product dimensions (Prod)
-
-The `Prod` construct represents an axis that is a product of other axes. This can be used to model:
-
-1. **Concatenation**: Multiple axes concatenated into a single axis
-2. **Multi-axis views**: Treating multiple axes as a single flattened axis
-
-For a `Prod [d1; d2; ...; dn]`:
-
-* The dimension is the product of all constituent dimensions: `dim(d1) × dim(d2) × ... × dim(dn)`
-* The projection respects the order of axes, implementing a row-major indexing scheme
-* During inference, constraints on the product propagate to constraints on the constituents
-* In the einsum notation, product axes will be denoted using `&`, e.g., `i&j` represents a single axis that is the product of axes `i` and `j`
-
-Product dimensions interact with other shape inference features:
-
-* **Broadcasting**: A Prod dimension can be broadcasted if all its constituents are dimension-1
-* **Inequalities**: `Prod ds1 ≥ Prod ds2` requires compatible structures and element-wise inequalities
-* **Constraints**: An `At_least_dim` constraint on a Prod propagates to its constituents
-
-The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature.
