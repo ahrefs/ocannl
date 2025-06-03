@@ -1,9 +1,9 @@
-## [0.5.4]  -- current
+## [0.6.0]  -- current
 
 ### Added
 
 - Support for Brain float aka. bfloat16 aka. BF16, and for FP8.
-- TODO: utilities for using Hugging Face Tokenizers.
+- TODO: support for convolution via affine indexing expressions in: projections, einsum notation, shape inference.
 
 ## [0.5.3] -- 2025-05-24
 
