@@ -4,6 +4,7 @@ open Base
 
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 type dim_var [@@deriving equal, hash, compare, sexp]
+type proj_id [@@deriving equal, hash, compare, sexp]
 type dim_cmp
 type dim_var_set = (dim_var, dim_cmp) Base.Set.t [@@deriving equal, sexp]
 type 'a dim_map = (dim_var, 'a, dim_cmp) Base.Map.t [@@deriving equal, sexp]
@@ -11,9 +12,16 @@ type 'a dim_map = (dim_var, 'a, dim_cmp) Base.Map.t [@@deriving equal, sexp]
 val get_var : ?label:string -> unit -> dim_var
 val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
+val use_padding : bool ref
 
 (** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
+type dim =
+  | Var of dim_var
+  | Dim of { d : int; label : string option; proj_id : proj_id option }
+  | Affine of { solved : (int * proj_id) list; unsolved : (int * dim_var) list }
+      (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
+          [!use_padding] is [true], the offset is the dimensionality-preserving padding, otherwise
+          it is 0. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 val get_dim : d:int -> ?label:string -> unit -> dim

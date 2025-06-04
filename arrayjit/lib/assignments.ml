@@ -152,17 +152,26 @@ let%diagn2_sexp to_low_level code =
   in
   let rec loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections =
     let projections = Lazy.force projections in
-    let lhs_idx =
-      derive_index ~product_syms:projections.product_iterators ~projection:projections.project_lhs
-    in
-    let rhs_idcs =
-      Array.map projections.project_rhs ~f:(fun projection ->
-          derive_index ~product_syms:projections.product_iterators ~projection)
-    in
     let basecase rev_iters =
-      let product = Array.of_list_rev_map rev_iters ~f:(fun s -> Indexing.Iterator s) in
-      let rhses_idcs = Array.map rhs_idcs ~f:(fun rhs_idx -> rhs_idx ~product) in
-      let lhs_idcs = lhs_idx ~product in
+      (* Create a substitution from product iterators to loop iterators *)
+      let subst_map = 
+        let loop_iters = Array.of_list_rev rev_iters in
+        Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
+          (prod_iter, Indexing.Iterator loop_iters.(i)))
+        |> Array.to_list
+        |> Map.of_alist_exn (module Indexing.Symbol)
+      in
+      (* Substitute in projections *)
+      let subst_index = function
+        | Indexing.Fixed_idx _ as idx -> idx
+        | Indexing.Iterator s as idx -> 
+            Option.value ~default:idx (Map.find subst_map s)
+        | Indexing.Affine { symbols; offset } ->
+            (* For affine indices, we don't substitute - they should already use the right symbols *)
+            Indexing.Affine { symbols; offset }
+      in
+      let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
+      let rhses_idcs = Array.map projections.project_rhs ~f:(Array.map ~f:subst_index) in
       let open Low_level in
       let lhs_ll = get (Node lhs) lhs_idcs in
       let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in

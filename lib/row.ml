@@ -24,11 +24,17 @@ type dim_cmp = Dim_var.comparator_witness
 type dim_var_set = Set.M(Dim_var).t [@@deriving equal, sexp]
 type 'a dim_map = 'a Map.M(Dim_var).t [@@deriving equal, sexp]
 
+type proj_id = int [@@deriving equal, hash, compare, sexp]
+
 let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
 
-(** A single axis in a shape. *)
-type dim = Var of dim_var | Dim of { d : int; label : string option; proj_id : int option }
+let use_padding = ref false
+
+type dim =
+  | Var of dim_var
+  | Dim of { d : int; label : string option; proj_id : proj_id option }
+  | Affine of { solved : (int * proj_id) list; unsolved : (int * dim_var) list }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -50,6 +56,18 @@ let dim_to_string style = function
   | Dim { d; label = Some l; _ } -> [%string "%{l}=%{d#Int}"]
   | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
   | Var { id; label = None } -> "$" ^ Int.to_string id
+  | Affine { solved; unsolved } ->
+      let solved_terms = List.map solved ~f:(fun (coeff, proj_id) ->
+        if coeff = 1 then [%string "p%{proj_id#Int}"]
+        else [%string "%{coeff#Int}*p%{proj_id#Int}"]) in
+      let unsolved_terms = List.map unsolved ~f:(fun (coeff, v) ->
+        if coeff = 1 then [%string "$%{v.id#Int}"]
+        else [%string "%{coeff#Int}*$%{v.id#Int}"]) in
+      let all_terms = solved_terms @ unsolved_terms in
+      (match all_terms with
+       | [] -> "0"
+       | [t] -> t
+       | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^ "+" ^ t))
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -184,8 +202,31 @@ type source = Direct | Equation | Cur | Subr [@@deriving equal, sexp]
 let dim_to_int_exn = function
   | Dim { d; _ } -> d
   | Var _ -> invalid_arg "dim_to_int: dim still unknown"
+  | Affine _ -> invalid_arg "dim_to_int: affine dimension cannot be converted to single int"
 
-let s_dim_one v ~value ~in_ = match in_ with Var v2 when equal_dim_var v v2 -> value | _ -> in_
+let s_dim_one v ~value ~in_ = match in_ with 
+  | Var v2 when equal_dim_var v v2 -> value 
+  | Affine { solved; unsolved } ->
+      (* Substitute v in affine expression *)
+      let coeff_of_v = List.fold unsolved ~init:0 ~f:(fun acc (c, v2) ->
+        if equal_dim_var v v2 then acc + c else acc) in
+      let new_unsolved = List.filter_map unsolved ~f:(fun (coeff, v2) ->
+        if equal_dim_var v v2 then None else Some (coeff, v2)) in
+      let new_solved, extra_unsolved = match value with
+        | Dim { d; proj_id = Some p; _ } ->
+            (* If substituting with a concrete dim with projection, add to solved *)
+            ((coeff_of_v * d, p) :: solved, new_unsolved)
+        | Dim { d; proj_id = None; _ } when d = 0 ->
+            (* Substituting with 0 removes the term *)
+            (solved, new_unsolved)
+        | Var v' ->
+            (* Substituting with another variable *)
+            if coeff_of_v = 0 then (solved, new_unsolved)
+            else (solved, (coeff_of_v, v') :: new_unsolved)
+        | _ -> (solved, new_unsolved)
+      in
+      Affine { solved = new_solved; unsolved = extra_unsolved }
+  | _ -> in_
 
 (* For future flexibility *)
 let dim_conjunction constr1 constr2 =
@@ -239,6 +280,10 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
+    | Affine _, At_least_dim _ ->
+        (* For affine dimensions, we can't directly check the constraint *)
+        (* We might need to propagate it to the constituent variables *)
+        ([], constr)
     | Var v, _ -> (
         match Map.find env.dim_env v with
         | None -> ([], constr)
@@ -259,23 +304,29 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
     row_constraint =
   match constr with
   | Total_elems { nominator; divided_by } ->
-      let ds, (vars : dim_var list) =
-        List.partition_map (beg_dims @ dims) ~f:(function
-          | Dim { d; _ } -> Either.First d
-          | Var v -> Either.Second v)
+      let ds, (vars : dim_var list), has_affine =
+        List.fold (beg_dims @ dims) ~init:([], [], false) ~f:(fun (ds, vars, has_affine) dim ->
+          match dim with
+          | Dim { d; _ } -> (d :: ds, vars, has_affine)
+          | Var v -> (ds, v :: vars, has_affine)
+          | Affine _ -> (ds, vars, true))
       in
-      let vars = Set.of_list (module Dim_var) vars in
-      if not @@ Set.(is_empty @@ inter vars divided_by) then Unconstrained
+      if has_affine then
+        (* Can't reduce constraint with affine dimensions *)
+        Unconstrained
       else
-        let d : int = List.fold ds ~init:1 ~f:( * ) in
-        let nominator : int = nominator / d in
-        if nominator = 0 then
-          raise
-          @@ Shape_error
-               ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
-                 [ Dim_mismatch (beg_dims @ dims) ] )
-        else if d = 1 && Set.is_empty vars then constr
-        else Total_elems { nominator; divided_by = Utils.Set_O.(divided_by + vars) }
+        let vars = Set.of_list (module Dim_var) vars in
+        if not @@ Set.(is_empty @@ inter vars divided_by) then Unconstrained
+        else
+          let d : int = List.fold ds ~init:1 ~f:( * ) in
+          let nominator : int = nominator / d in
+          if nominator = 0 then
+            raise
+            @@ Shape_error
+                 ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
+                   [ Dim_mismatch (beg_dims @ dims) ] )
+          else if d = 1 && Set.is_empty vars then constr
+          else Total_elems { nominator; divided_by = Utils.Set_O.(divided_by + vars) }
   | Unconstrained -> Unconstrained
 
 (* Inverts what [reduce_row_constraint] would do. *)
@@ -286,7 +337,8 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
       let ds, vars =
         List.partition_map (beg_dims @ dims) ~f:(function
           | Dim { d; _ } -> Either.First d
-          | Var v -> Either.Second v)
+          | Var v -> Either.Second v
+          | Affine _ -> failwith "get_product_proj: affine dimensions not supported in product projections")
       in
       let vars = Set.of_list (module Dim_var) vars in
       if not @@ Set.is_subset vars ~of_:divided_by then Unconstrained
@@ -359,36 +411,42 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
     | _, Unconstrained -> assert false
     | { dims; bcast = Broadcastable; _ }, Total_elems { nominator; divided_by }
       when Set.length divided_by <= 1 -> (
-        let (ds : int list), (vars : dim_var list) =
-          List.partition_map dims ~f:(function
-            | Dim { d; _ } -> Either.First d
-            | Var v -> Either.Second v)
+        let (ds : int list), (vars : dim_var list), has_affine =
+          List.fold dims ~init:([], [], false) ~f:(fun (ds, vars, has_affine) dim ->
+            match dim with
+            | Dim { d; _ } -> (d :: ds, vars, has_affine)
+            | Var v -> (ds, v :: vars, has_affine)
+            | Affine _ -> (ds, vars, true))
         in
-        let d : int = List.fold ds ~init:1 ~f:( * ) in
-        let nominator : int = nominator / d in
-        if nominator = 0 then
-          raise
-          @@ Shape_error
-               ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
-                 [ Dim_mismatch dims ] );
-        match (vars, Set.elements divided_by) with
-        | [], [] ->
-            if nominator = 1 then (extras, env)
-            else
-              raise
-              @@ Shape_error
-                   ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
-                     [ Row_mismatch [ r ] ] )
-        | [ v ], [] | [], [ v ] ->
-            (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env)
-        | vs1, vs2 when nominator = 1 ->
-            ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2) @ extras,
-              env )
-        (* TODO: we can work harder making assumptions here if necessary... *)
-        (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
-           ~d:nominator () } :: extras, env) *)
-        | _ :: _, _ when stored -> (extras, env)
-        | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
+        if has_affine then
+          (* Can't handle affine dimensions in Total_elems constraint yet *)
+          (Row_constr { r; constr } :: extras, env)
+        else
+          let d : int = List.fold ds ~init:1 ~f:( * ) in
+          let nominator : int = nominator / d in
+          if nominator = 0 then
+            raise
+            @@ Shape_error
+                 ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
+                   [ Dim_mismatch dims ] );
+          match (vars, Set.elements divided_by) with
+          | [], [] ->
+              if nominator = 1 then (extras, env)
+              else
+                raise
+                @@ Shape_error
+                     ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
+                       [ Row_mismatch [ r ] ] )
+          | [ v ], [] | [], [ v ] ->
+              (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env)
+          | vs1, vs2 when nominator = 1 ->
+              ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2) @ extras,
+                env )
+          (* TODO: we can work harder making assumptions here if necessary... *)
+          (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
+             ~d:nominator () } :: extras, env) *)
+          | _ :: _, _ when stored -> (extras, env)
+          | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
@@ -433,7 +491,10 @@ let s_dim_one_in_row_constr v ~value constr =
             @@ Shape_error
                  ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
                    [ Dim_mismatch [ value ] ] )
-          else Total_elems { nominator; divided_by })
+          else Total_elems { nominator; divided_by }
+      | Affine _ ->
+          (* Can't handle affine substitution in Total_elems constraint *)
+          Unconstrained)
   | _ -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
@@ -450,6 +511,16 @@ let rec subst_dim env = function
       | Some (Solved_dim (Var v2)) when equal_dim_var v v2 -> default
       | Some (Solved_dim d) -> subst_dim env d
       | _ -> default)
+  | Affine { solved; unsolved } ->
+      (* Substitute variables in affine expression *)
+      let new_unsolved = List.filter_map unsolved ~f:(fun (coeff, v) ->
+        match Map.find env.dim_env v with
+        | Some (Solved_dim _) -> 
+            (* Variable is solved, need to incorporate into affine expression *)
+            None  (* Will be handled below *)
+        | _ -> Some (coeff, v)) in
+      (* FIXME: properly handle substitution of solved variables into affine expressions *)
+      Affine { solved; unsolved = new_unsolved }
 
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
@@ -539,6 +610,13 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
+  | Affine _, Affine _ ->
+      (* FIXME: For now, we can only unify identical affine expressions *)
+      if equal_dim dim1 dim2 then ([], env)
+      else raise @@ Shape_error ("Cannot unify different affine dimensions", [ Dim_mismatch [ dim1; dim2 ] ])
+  | Affine _, _ | _, Affine _ ->
+      (* Cannot unify affine with non-affine dimensions *)
+      raise @@ Shape_error ("Cannot unify affine dimension with non-affine", [ Dim_mismatch [ dim1; dim2 ] ])
   | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in
       let f in_ =
@@ -751,6 +829,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
         match Map.find env.dim_env cur_v with
         | None | Some (Solved_dim (Dim _)) -> false
         | Some (Solved_dim (Var v)) -> equal_dim_var subr_v v
+        | Some (Solved_dim (Affine _)) -> false  (* Affine dimensions can't be cyclic *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
   match (cur, subr) with
@@ -762,6 +841,10 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | _, Dim { d = 1; _ } -> ([], env)
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
+  | Affine _, _ | _, Affine _ ->
+      (* FIXME: For affine dimensions in inequalities, we can't directly compare them *)
+      (* This would need more sophisticated constraint solving *)
+      ([], env)
   | Var cur_v, Var subr_v -> (
       match (Map.find env.dim_env cur_v, Map.find env.dim_env subr_v) with
       | Some (Bounds_dim { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 subr_v ->
@@ -889,6 +972,9 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
+            | Affine _, _ | _, Affine _ ->
+                (* FIXME: Can't compute LUB with affine dimensions *)
+                (lub2, [])
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
@@ -1130,7 +1216,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
                 | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ()
                 | Var _, _ -> d1
                 | _, Var _ -> d2
-                | Dim _, Dim _ -> d1)
+                | Dim _, Dim _ -> d1
+                | Affine _, _ | _, Affine _ -> 
+                    failwith "merge_row_constraint: cannot merge constraints with affine dimensions")
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           ( ineqs,
@@ -1164,6 +1252,9 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
           [ Dim_eq { d1 = dim; d2 = lub } ]
       | _ when not (is_stage4_up stage) -> [ Terminal_dim dim ]
       | _ -> [])
+  | Affine _ -> 
+      (* FIXME: For affine dimensions, we can't generate simple terminal constraints *)
+      []
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
@@ -1308,6 +1399,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
                       | Some (Bounds_dim bounds) -> Bounds_dim { bounds with constr }
                       | None -> Bounds_dim { constr; lub = None; cur = []; subr = [] });
                 }
+            | _, Affine _ -> env  (* FIXME: Can't store constraints on affine dimensions *)
           in
           (extras @ ineqs, env)
       | Row_constr { r; constr } ->
@@ -1363,6 +1455,7 @@ let rec row_to_labels env =
         match Map.find env.dim_env v with
         | None | Some (Bounds_dim _) -> Option.value v.label ~default:""
         | Some (Solved_dim dim) -> f dim)
+    | Affine _ -> ""  (* Affine dimensions don't have labels *)
   in
   function
   | { dims; bcast = Row_var { v; beg_dims }; id } -> (
@@ -1388,13 +1481,14 @@ let fresh_row_proj r =
   let fresh_dim = function
     | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (fresh_proj ()) }
     | Var _ as d -> d
+    | Affine _ as d -> d  (* FIXME: Affine dimensions don't get fresh projections *)
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
    pid1 pid2 *)
 
-type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of Idx.axis_index
+type proj = Var of dim_var | Proj of { proj_id : proj_id; d : int } | Solved of Idx.axis_index
 [@@deriving compare, equal, sexp]
 
 type error_trace += Projection_mismatch of proj list
@@ -1433,7 +1527,8 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         | Dim { proj_id = Some proj_id; d; label = _ } -> Proj { proj_id; d }
         | Dim { proj_id = None; d; _ } -> Proj { proj_id = fresh_proj (); d }
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
-        | Var v -> Var v)
+        | Var v -> Var v
+        | Affine _ -> failwith "get_proj_equations: affine dimensions not supported in projections")
   in
   let rec expand_dims = function
     | { dims; bcast = Row_var { v; beg_dims }; _ } when Map.mem env.row_env v -> (
@@ -1563,6 +1658,7 @@ let get_proj_index proj_env = function
           @@ Shape_error
                ( "projection_of_solved_dims: unknown projection",
                  [ Projection_mismatch [ Proj { proj_id; d } ] ] ))
+  | Affine _ -> failwith "get_proj_index: affine dimensions not supported in projections"
 
 let proj_repr proj_env p =
   fst @@ Utils.union_find ~equal:Int.equal proj_env.proj_classes ~key:p ~rank:0
@@ -1582,6 +1678,7 @@ let get_product_proj proj_env dim =
            ( "projection_of_solved_dims: still not fully inferred for variable "
              ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
              [ Dim_mismatch [ dim ] ] )
+  | Affine _ -> None  (* FIXME: Affine dimensions don't participate in product projections *)
 
 let proj_to_iterator proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with

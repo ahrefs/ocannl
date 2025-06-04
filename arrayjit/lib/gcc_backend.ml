@@ -230,7 +230,13 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     try
       Array.map indices ~f:(function
         | Indexing.Fixed_idx i -> RValue.int ctx c_index i
-        | Iterator s -> Map.find_exn env s)
+        | Iterator s -> Map.find_exn env s
+        | Affine { symbols; offset } ->
+            List.fold symbols ~init:(RValue.int ctx c_index offset) ~f:(fun acc (coeff, s) ->
+              RValue.binary_op ctx Plus c_index acc
+                (RValue.binary_op ctx Mult c_index 
+                  (RValue.int ctx c_index coeff) 
+                  (Map.find_exn env s))))
     with e ->
       Stdlib.Format.eprintf
         "exec_as_gccjit: missing index from@ %a@ among environment keys:@ %a\n%!" Sexp.pp_hum
@@ -352,6 +358,12 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Constant c -> (Float.to_string c, [])
     | Embed_index (Fixed_idx i) -> (Int.to_string i, [])
     | Embed_index (Iterator s) -> (Indexing.symbol_ident s ^ "{=%d}", [ Map.find_exn env s ])
+    | Embed_index (Affine { symbols; offset }) ->
+        let terms = List.map symbols ~f:(fun (coeff, s) ->
+          if coeff = 1 then Indexing.symbol_ident s
+          else Int.to_string coeff ^ "*" ^ Indexing.symbol_ident s) in
+        let expr = String.concat ~sep:"+" (terms @ if offset = 0 then [] else [Int.to_string offset]) in
+        (expr, [])
     | Binop (Arg1, v1, _v2) -> loop v1
     | Binop (Arg2, _v1, v2) -> loop v2
     | Binop (op, v1, v2) ->
@@ -510,6 +522,12 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
             Sexp.pp_hum
             ([%sexp_of: Indexing.symbol list] @@ Map.keys env);
           raise e)
+    | Embed_index (Affine { symbols; offset }) ->
+        List.fold symbols ~init:(RValue.int ctx num_typ offset) ~f:(fun acc (coeff, s) ->
+          RValue.binary_op ctx Plus num_typ acc
+            (RValue.binary_op ctx Mult num_typ 
+              (RValue.int ctx num_typ coeff) 
+              (RValue.cast ctx (Map.find_exn env s) num_typ)))
     | Binop (Arg2, _, c2) -> loop c2
     | Binop (Arg1, c1, _) -> loop c1
     | Binop (op, c1, c2) -> loop_binop op ~num_typ prec ~v1:(loop c1) ~v2:(loop c2)

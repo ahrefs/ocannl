@@ -637,6 +637,11 @@ let row_to_dims row =
              ( "Not enough shape information: unresolved variable "
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Row_mismatch [ row ] ] )
+    | Affine _ ->
+        raise
+        @@ Row.Shape_error
+             ( "Not enough shape information: affine dimension cannot be converted to single int",
+               [ Row_mismatch [ row ] ] )
   in
   match row with
   | { bcast = Row_var { v; _ }; _ } ->

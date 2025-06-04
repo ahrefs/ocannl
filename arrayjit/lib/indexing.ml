@@ -97,10 +97,18 @@ let dims_to_string ?(with_axis_numbers = false) dims =
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
 type axis_index =
-  | Fixed_idx of int  (** The specific position along an axis. *)
-  | Iterator of symbol
-      (** The given member of the [product_space] corresponding to some [product_iterators]. *)
-[@@deriving compare, equal, sexp, variants]
+  | Fixed_idx of int  (** A fixed position along an axis *)
+  | Iterator of symbol  (** A simple iterator symbol *)
+  | Affine of { symbols : (int * symbol) list; offset : int }
+      (** An affine combination of symbols with coefficients and an offset. Represents:
+
+          Σ(coeff_i * symbol_i) + offset
+
+          For convolutions: [symbols = [(stride, i1); (dilation, i2)]] and [offset = ~-padding].
+          Note: for readability, we use [Fixed_idx] and [Iterator] as separate variants and require
+          [Affine] to not be ambiguous: [symbols] should be longer than 1 or have a coefficient
+          different from 1 and 0. *)
+[@@deriving compare, equal, sexp]
 
 type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base.Map.t
 
@@ -143,7 +151,13 @@ let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 let is_bijective proj =
   let lhs_symbols =
     Set.of_array (module Symbol)
-    @@ Array.filter_map proj.project_lhs ~f:(function Iterator s -> Some s | Fixed_idx _ -> None)
+    @@ Array.concat_map proj.project_lhs ~f:(function
+         | Iterator s -> [| s |]
+         | Fixed_idx _ -> [||]
+         | Affine { symbols; _ } ->
+             (* For affine indices, we consider all symbols with coefficient 1 *)
+             List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
+             |> Array.of_list)
   in
   Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
 
@@ -193,9 +207,23 @@ let derive_index ~product_syms ~(projection : axis_index array) =
   let positions =
     Array.map projection ~f:(function
       | Iterator s when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
-      | it -> Second it)
+      | Fixed_idx _ as it -> Second it
+      | Affine _ as it -> Second it
+      | Iterator _ as it -> Second it)
   in
-  fun ~product -> Array.map positions ~f:(function First p -> product.(p) | Second it -> it)
+  fun ~product ->
+    Array.map positions ~f:(function
+      | First p -> product.(p)
+      | Second (Fixed_idx i) -> i
+      | Second (Iterator s) ->
+          (* This shouldn't happen if sym_to_i is complete *)
+          failwith ("derive_index: unresolved iterator " ^ symbol_ident s)
+      | Second (Affine { symbols; offset }) ->
+          List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
+              match Map.find sym_to_i s with
+              | Some idx -> acc + (coeff * product.(idx))
+              | None ->
+                  failwith ("derive_index: unresolved symbol in affine index " ^ symbol_ident s)))
 
 module Pp_helpers = struct
   open PPrint
@@ -209,7 +237,24 @@ module Pp_helpers = struct
     | Some range ->
         infix 4 1 colon (pp_symbol static_symbol) (brackets (string "0.." ^^ OCaml.int (range - 1)))
 
-  let pp_axis_index = function Iterator sym -> pp_symbol sym | Fixed_idx i -> OCaml.int i
+  let pp_axis_index = function
+    | Iterator sym -> pp_symbol sym
+    | Fixed_idx i -> OCaml.int i
+    | Affine { symbols; offset } -> (
+        let terms =
+          List.map symbols ~f:(fun (coeff, sym) ->
+              if coeff = 1 then pp_symbol sym else OCaml.int coeff ^^ string "*" ^^ pp_symbol sym)
+        in
+        let all_terms =
+          if offset = 0 then terms
+          else if offset > 0 then terms @ [ OCaml.int offset ]
+          else terms @ [ string "-" ^^ OCaml.int (-offset) ]
+        in
+        match all_terms with
+        | [] -> OCaml.int 0
+        | [ t ] -> t
+        | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
+
   let pp_indices idcs = separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)
   let print ppf doc = ToFormatter.pretty 1.0 80 ppf doc
 end
@@ -230,7 +275,24 @@ module Doc_helpers = struct
           (PPrint.brackets (PPrint.string "0.." ^^ int (range - 1)))
 
   let pp_axis_index idx =
-    match idx with Iterator sym -> pp_symbol sym | Fixed_idx i -> PPrint.OCaml.int i
+    match idx with
+    | Iterator sym -> pp_symbol sym
+    | Fixed_idx i -> PPrint.OCaml.int i
+    | Affine { symbols; offset } -> (
+        let open PPrint in
+        let terms =
+          List.map symbols ~f:(fun (coeff, sym) ->
+              if coeff = 1 then pp_symbol sym else int coeff ^^ string "*" ^^ pp_symbol sym)
+        in
+        let all_terms =
+          if offset = 0 then terms
+          else if offset > 0 then terms @ [ int offset ]
+          else terms @ [ string "-" ^^ int (-offset) ]
+        in
+        match all_terms with
+        | [] -> int 0
+        | [ t ] -> t
+        | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
 
   let pp_indices idcs =
     PPrint.separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)

@@ -154,7 +154,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   let lookup env indices =
     Array.map indices ~f:(function
       | Indexing.Fixed_idx i -> i
-      | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s)
+      | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s
+      | Indexing.Affine { symbols; offset } ->
+          List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
+            acc + coeff * (Option.value ~default:0 @@ Map.find env s)))
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -190,7 +193,11 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           | Iterator s ->
               let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
               (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
-              assert (Tn.equal old_tn tn))
+              assert (Tn.equal old_tn tn)
+          | Indexing.Affine { symbols; _ } ->
+              List.iter symbols ~f:(fun (_, s) ->
+                let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+                assert (Tn.equal old_tn tn)))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -271,7 +278,12 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
              Indexing.(
                function
                | Fixed_idx _ -> None
-               | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s)
+               | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
+               | Affine { symbols; _ } ->
+                   (* For affine indices, collect all symbols that are not static *)
+                   List.filter_map symbols ~f:(fun (_, s) ->
+                     Option.some_if (not @@ Set.mem static_indices s) s)
+                   |> function [] -> None | [s] -> Some s | _ -> failwith "check_idcs: multiple non-static symbols in affine index")
     in
     let num_syms =
       Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
@@ -335,6 +347,13 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
             [%log2
               "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
           raise @@ Non_virtual 10)
+    | Embed_index (Affine { symbols; _ }) ->
+        List.iter symbols ~f:(fun (_, s) ->
+          if not @@ Set.mem env_dom s then (
+            if not (Set.mem static_indices s) then
+              [%log2
+                "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
+            raise @@ Non_virtual 10))
     | Ternop (_, llv1, llv2, llv3) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2;
@@ -579,6 +598,9 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Embed_index (Iterator s) ->
         assert (Set.mem env_dom s);
         llv
+    | Embed_index (Affine { symbols; _ }) ->
+        List.iter symbols ~f:(fun (_, s) -> assert (Set.mem env_dom s));
+        llv
     | Ternop (op, llv1, llv2, llv3) -> Ternop (op, loop llv1, loop llv2, loop llv3)
     | Binop (op, llv1, llv2) -> Binop (op, loop llv1, loop llv2)
     | Unop (op, llv) -> Unop (op, loop llv)
@@ -664,6 +686,7 @@ let simplify_llc llc =
     | Get_global _ -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
     | Embed_index (Iterator _) -> llv
+    | Embed_index (Affine _) -> llv  (* Cannot simplify affine expressions to constants *)
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
