@@ -139,5 +139,5 @@ val get_proj_equations :
 
 val solve_proj_equations : proj_equation list -> proj_env
 val get_proj_index : proj_env -> dim -> Ir.Indexing.axis_index
-val get_product_proj : proj_env -> dim -> (int * int) option
-val proj_to_iterator : proj_env -> int -> Ir.Indexing.symbol
+val get_product_proj : proj_env -> dim -> (proj_id * int) option
+val proj_to_iterator : proj_env -> proj_id -> Ir.Indexing.symbol

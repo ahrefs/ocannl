@@ -729,8 +729,8 @@ let derive_projections (update_step : update_step) : Idx.projections =
   let rhs_dims = Array.of_list_map ~f:to_dims rhs in
   let all_dims : Row.dim list = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
   (* Note: the ordering will affect performance of naive backends. *)
-  let all_product_projs : (int * int) list =
-    Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> p = q)
+  let all_product_projs : (Row.proj_id * int) list =
+    Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> Row.equal_proj_id p q)
     @@ List.filter_map all_dims ~f:(Row.get_product_proj proj_env)
   in
   let product_space : int array = Array.of_list_map all_product_projs ~f:snd in
