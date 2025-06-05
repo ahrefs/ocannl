@@ -13,10 +13,12 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed.
 
 ```ocaml
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+
 type dim = 
   | Var of dim_var 
-  | Dim of { d : int; label : string option; proj_id : int option }
-  | Affine of { solved : (int * proj_id) list; unsolved : (int * dim_var) list }
+  | Dim of solved_dim
+  | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -41,12 +43,13 @@ Labels are a part of OCANNL, but it's a topic that needs more exploration and fu
 
 The `Affine` constructor represents an affine combination of projection indices, enabling support for operations like convolutions where output indices relate to input indices through affine transformations. An affine index has the form:
 
-```
+```latex
 index = Σ(coefficient_i * iterator_i) + offset
 ```
 
 Where:
-- `solved : (int * proj_id) list` contains pairs of (coefficient, projection_id) for resolved projections
+
+- `solved : (int * solved_dim) list` contains pairs of (coefficient, solved_dimension) for resolved projections
 - `unsolved : (int * dim_var) list` contains pairs of (coefficient, dimension_variable) for unresolved dimensions
 - The offset is implicit and automatically derived based on the operation (e.g., for convolutions, it depends on padding)
 

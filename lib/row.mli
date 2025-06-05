@@ -15,10 +15,13 @@ val dim_map_empty : 'a dim_map
 val use_padding : bool ref
 
 (** A single axis in a shape. *)
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+[@@deriving equal, hash, compare, sexp]
+
 type dim =
   | Var of dim_var
-  | Dim of { d : int; label : string option; proj_id : proj_id option }
-  | Affine of { solved : (int * proj_id) list; unsolved : (int * dim_var) list }
+  | Dim of solved_dim
+  | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
       (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
           [!use_padding] is [true], the offset is the dimensionality-preserving padding, otherwise
           it is 0. *)
@@ -26,6 +29,7 @@ type dim =
 
 val get_dim : d:int -> ?label:string -> unit -> dim
 val dim_to_int_exn : dim -> int
+val solved_dim_to_string : [> `Only_labels ] -> solved_dim -> string
 val dim_to_string : [> `Only_labels ] -> dim -> string
 
 type row_id [@@deriving sexp, compare, equal, hash]
