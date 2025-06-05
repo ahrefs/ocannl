@@ -71,6 +71,9 @@ type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
+  padding : ((int * int) array * float) option Lazy.t;
+      (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
+          padding value. *)
   size_in_bytes : int Lazy.t;
   id : int;
   label : string list;
@@ -93,6 +96,15 @@ let compare a1 a2 = compare_int a1.id a2.id
 let num_elems tn =
   let dims = Lazy.force tn.dims in
   if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
+
+let dims_without_padding tn =
+  match Lazy.force tn.padding with
+  | None -> Lazy.force tn.dims
+  | Some (padding, _) ->
+      let dims = Lazy.force tn.dims in
+      Array.map2_exn dims padding ~f:(fun dim (left, right) -> dim - left - right)
+
+let get_padding tn = Lazy.force tn.padding
 
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
@@ -522,12 +534,14 @@ end)
 
 let registry = Registry.create 16
 
-let create ?default_prec ~id ~label ~dims init_op =
+let create ?default_prec ~id ~label ~dims ~padding init_op =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
       (if is_hosted_force tn 30 then
-         Some (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims) init_op)
+         Some
+           (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims) ~padding:(Lazy.force padding)
+              init_op)
        else None)
   and prec =
     lazy
@@ -545,6 +559,7 @@ let create ?default_prec ~id ~label ~dims init_op =
       delayed_prec_unsafe;
       prec;
       dims;
+      padding;
       size_in_bytes;
       id;
       label;
@@ -572,6 +587,7 @@ let find =
       prec = lazy initial_default_prec;
       delayed_prec_unsafe = Specified initial_default_prec;
       dims = lazy [||];
+      padding = lazy None;
       size_in_bytes = lazy 0;
       id = -1;
       label = [];

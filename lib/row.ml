@@ -511,16 +511,12 @@ let rec subst_dim env = function
       | Some (Solved_dim (Var v2)) when equal_dim_var v v2 -> default
       | Some (Solved_dim d) -> subst_dim env d
       | _ -> default)
-  | Affine { solved; unsolved } ->
-      (* Substitute variables in affine expression *)
-      let new_unsolved = List.filter_map unsolved ~f:(fun (coeff, v) ->
+  | Affine { solved = _; unsolved } as init ->
+      List.fold unsolved ~init ~f:(fun acc (_coeff, v) ->
         match Map.find env.dim_env v with
-        | Some (Solved_dim _) -> 
-            (* Variable is solved, need to incorporate into affine expression *)
-            None  (* Will be handled below *)
-        | _ -> Some (coeff, v)) in
-      (* FIXME: properly handle substitution of solved variables into affine expressions *)
-      Affine { solved; unsolved = new_unsolved }
+        | Some (Solved_dim d) -> 
+            s_dim_one v ~value:d ~in_:acc
+        | _ -> acc)
 
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
@@ -614,8 +610,7 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
       (* FIXME: For now, we can only unify identical affine expressions *)
       if equal_dim dim1 dim2 then ([], env)
       else raise @@ Shape_error ("Cannot unify different affine dimensions", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Affine _, _ | _, Affine _ ->
-      (* Cannot unify affine with non-affine dimensions *)
+  | Affine _, Dim _ | Dim _, Affine _ ->
       raise @@ Shape_error ("Cannot unify affine dimension with non-affine", [ Dim_mismatch [ dim1; dim2 ] ])
   | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in

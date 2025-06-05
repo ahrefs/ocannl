@@ -198,7 +198,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims init_op in
+  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) init_op in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -238,7 +238,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims default_init_op in
+    let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims ~padding:(lazy None) default_init_op in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g ti =
@@ -358,7 +358,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let debug = "Temporary array for pretty-printing" in
     let ndarr =
-      Nd.create_array ~debug Ir.Ops.double ~dims (Ir.Ops.Constant_fill { values; strict })
+      Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None (Ir.Ops.Constant_fill { values; strict })
     in
     let ( ! ) = List.length in
     let b = Buffer.create 1024 in
