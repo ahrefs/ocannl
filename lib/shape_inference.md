@@ -13,12 +13,22 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed.
 
 ```ocaml
-type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+type solved_dim = {
+  d : int;
+  mutable padding : int option; [@hash.ignore]
+  label : string option;
+  proj_id : proj_id option;
+}
+(** A single axis in a shape. *)
 
-type dim = 
-  | Var of dim_var 
+type dim =
+  | Var of dim_var
   | Dim of solved_dim
   | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
+      (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
+          [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
+          otherwise it is 0. NOTE: negative strides are not supported (negative coefficients are
+          reserved for the solving process). *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)

@@ -14,17 +14,24 @@ val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
 val use_padding : bool ref
 
-(** A single axis in a shape. *)
-type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+type solved_dim = {
+  d : int;
+  mutable padding : int option; [@hash.ignore]
+  (** The maximal required total (left + right) padding for this axis. *)
+  label : string option;
+  proj_id : proj_id option;
+}
 [@@deriving equal, hash, compare, sexp]
+(** A single axis in a shape. *)
 
 type dim =
   | Var of dim_var
   | Dim of solved_dim
   | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
       (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
-          [!use_padding] is [true], the offset is the dimensionality-preserving padding, otherwise
-          it is 0. *)
+          [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
+          otherwise it is 0. NOTE: negative strides are not supported (negative coefficients are
+          reserved for the solving process). *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 val get_dim : d:int -> ?label:string -> unit -> dim
