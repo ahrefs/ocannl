@@ -8,15 +8,20 @@ type proj_id [@@deriving equal, hash, compare, sexp]
 type dim_cmp
 type dim_var_set = (dim_var, dim_cmp) Base.Set.t [@@deriving equal, sexp]
 type 'a dim_map = (dim_var, 'a, dim_cmp) Base.Map.t [@@deriving equal, sexp]
+type proj_cmp
+type proj_var_set = (proj_id, proj_cmp) Base.Set.t [@@deriving equal, sexp]
+type 'a proj_map = (proj_id, 'a, proj_cmp) Base.Map.t [@@deriving equal, sexp]
 
 val get_var : ?label:string -> unit -> dim_var
 val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
+val proj_var_set_empty : proj_var_set
+val proj_map_empty : 'a proj_map
 val use_padding : bool ref
 
 type solved_dim = {
   d : int;
-  mutable padding : int option; [@hash.ignore]
+  padding : int option;
   (** The maximal required total (left + right) padding for this axis. *)
   label : string option;
   proj_id : proj_id option;
@@ -27,7 +32,7 @@ type solved_dim = {
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
+  | Affine of { solved : solved_dim option; unsolved : (int * dim_var) list }
       (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
           [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
           otherwise it is 0. NOTE: negative strides are not supported (negative coefficients are

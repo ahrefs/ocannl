@@ -714,6 +714,8 @@ let derive_projections (update_step : update_step) : Idx.projections =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
   assert (List.is_empty unsolved);
+  (* Important: ineqs must not be substituted / solved before getting proj_equations, because
+     get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
   let proj_env : Row.proj_env = Row.solve_proj_equations proj_eqs in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in

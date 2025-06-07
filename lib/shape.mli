@@ -8,7 +8,7 @@
     - if there is a comma [','] anywhere in the initial text, the multicharacter version is used,
     - otherwise the single character version is used.
     - Currently, the only non-whitespace, non-alphanumeric characters that make sense / are allowed
-      in a spec are: ['>', '|', '-', ',', '=', ';'].
+      in a spec are: ['>', '|', '-', ',', '=', ';', '+', '*', '_'].
     - identifier: single alphanum character or '_' in single-char mode, a sequence of alphanum
       characters or '_' otherwise (whitespace not allowed).
     - separators: a sequence of commas and whitespaces.
@@ -51,7 +51,7 @@ type t = {
   mutable batch : Row.t;
   mutable input : Row.t;
   mutable output : Row.t;
-  id : int;  (** A node that has the same shape as this shape. *)
+  id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }
 [@@deriving equal, sexp]
