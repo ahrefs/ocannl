@@ -590,7 +590,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
   let label = Tn.label t.value in
   let prefix_str =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ " shape "
-    ^ Shape.to_string_hum ~style:`Axis_number_and_size sh
+            ^ Shape.to_string_hum ~style:Row.Axis_number_and_size sh
     ^ " "
   in
   let grad_txt diff =
@@ -631,7 +631,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
     Array.exists ~f:(Fn.non String.is_empty) labels
     || Shape.(List.exists ~f:Row.(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
   in
-  let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:`Only_labels sh) else None in
+      let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_labels sh) else None in
   let num_batch_axes = List.length sh.batch.dims in
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in

@@ -109,7 +109,7 @@ val make :
     inferred when provided, and must match whenever the axis sizes must match. *)
 
 val to_string_hum :
-  ?style:[< `Axis_number_and_size | `Axis_size | `Only_labels > `Axis_size `Only_labels ] ->
+  ?style:Row.print_style ->
   t ->
   string
 

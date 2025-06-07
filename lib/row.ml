@@ -75,26 +75,41 @@ type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
 let dim_hashtbl () = Hashtbl.create (module Dim_var)
 
+type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
+[@@deriving equal, compare, sexp]
+
 let solved_dim_to_string style { d; label; proj_id; padding } =
-  let label_prefix =
-    match style with
-    | `Only_labels -> ( match label with None -> "_" | Some l -> l)
-    | _ -> ( match label with None -> "" | Some l -> l ^ "=")
-  in
-  match (proj_id, padding) with
-  | _ when phys_equal style `Only_labels -> label_prefix
-  | Some proj_id, None -> label_prefix ^ [%string "p%{Proj_id.to_string proj_id}"]
-  | Some proj_id, Some p -> label_prefix ^ [%string "p%{Proj_id.to_string proj_id}+%{p#Int}"]
-  | None, Some p -> label_prefix ^ [%string "%{d#Int}+%{p#Int}"]
-  | None, None -> label_prefix ^ Int.to_string d
+  match style with
+  | Only_labels -> ( match label with None -> "_" | Some l -> l)
+  | Axis_size | Axis_number_and_size ->
+      let label_prefix = match label with None -> "" | Some l -> l ^ "=" in
+      (match (proj_id, padding) with
+      | None, None -> label_prefix ^ Int.to_string d
+      | None, Some p -> label_prefix ^ [%string "%{d#Int}+%{p#Int}"]
+      | Some _, None -> label_prefix ^ Int.to_string d
+      | Some _, Some p -> label_prefix ^ [%string "%{d#Int}+%{p#Int}"])
+  | Projection_and_size ->
+      let label_part = match label with None -> "" | Some l -> l ^ "=" in
+      let size_part = Int.to_string d in
+      let padding_part = match padding with None -> "" | Some p -> "+" ^ Int.to_string p in
+      let proj_part = match proj_id with None -> "" | Some pid -> "p" ^ Proj_id.to_string pid in
+      let extra_parts = 
+        match (proj_id, padding) with
+        | None, None -> ""
+        | None, Some _ -> padding_part
+        | Some _, None -> "[" ^ proj_part ^ "]"
+        | Some _, Some _ -> "[" ^ proj_part ^ "]" ^ padding_part
+      in
+      label_part ^ size_part ^ extra_parts
 
 let dim_to_string style = function
-  | Dim { label = None; _ } when phys_equal style `Only_labels -> "_"
-  | Dim { label = Some l; _ } when phys_equal style `Only_labels -> l
-  | Dim { d; label = None; padding = None; _ } -> Int.to_string d
-  | Dim { d; label = Some l; padding = None; _ } -> [%string "%{l}=%{d#Int}"]
-  | Dim { d; label = None; padding = Some p; _ } -> [%string "%{d#Int}+%{p#Int}"]
-  | Dim { d; label = Some l; padding = Some p; _ } -> [%string "%{l}=%{d#Int}+%{p#Int}"]
+  | Dim { label = None; _ } when equal_print_style style Only_labels -> "_"
+  | Dim { label = Some l; _ } when equal_print_style style Only_labels -> l
+  | Dim { d; label = None; padding = None; proj_id = None } when equal_print_style style Axis_size -> Int.to_string d
+  | Dim { d; label = Some l; padding = None; proj_id = None } when equal_print_style style Axis_size -> [%string "%{l}=%{d#Int}"]
+  | Dim { d; label = None; padding = Some p; proj_id = None } when equal_print_style style Axis_size -> [%string "%{d#Int}+%{p#Int}"]
+  | Dim { d; label = Some l; padding = Some p; proj_id = None } when equal_print_style style Axis_size -> [%string "%{l}=%{d#Int}+%{p#Int}"]
+  | Dim solved_dim -> solved_dim_to_string style solved_dim
   | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
   | Var { id; label = None } -> "$" ^ Int.to_string id
   | Affine { solved; unsolved } -> (
@@ -105,7 +120,8 @@ let dim_to_string style = function
       in
       let unsolved_terms =
         List.map unsolved ~f:(fun (coeff, v) ->
-            if coeff = 1 then [%string "$%{v.id#Int}"] else [%string "%{coeff#Int}*$%{v.id#Int}"])
+            let label_part = match v.label with None -> "" | Some l -> ":" ^ l in
+            if coeff = 1 then [%string "$%{v.id#Int}%{label_part}"] else [%string "%{coeff#Int}*$%{v.id#Int}%{label_part}"])
       in
       let all_terms = solved_terms @ unsolved_terms in
       match all_terms with

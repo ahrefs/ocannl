@@ -70,6 +70,26 @@
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
    "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
+(executable
+ (name test_print_style)
+ (modules test_print_style)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(rule
+ (target test_print_style.output)
+ (deps test_print_style.exe ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff test_print_style.expected test_print_style.output)))
+
 (library
  (name tutorials)
  (package neural_nets_lib)

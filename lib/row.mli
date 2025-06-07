@@ -36,8 +36,11 @@ type dim =
 
 val get_dim : d:int -> ?label:string -> unit -> dim
 val dim_to_int_exn : dim -> int
-val solved_dim_to_string : [> `Only_labels ] -> solved_dim -> string
-val dim_to_string : [> `Only_labels ] -> dim -> string
+type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
+[@@deriving equal, compare, sexp]
+
+val solved_dim_to_string : print_style -> solved_dim -> string
+val dim_to_string : print_style -> dim -> string
 
 type row_id [@@deriving sexp, compare, equal, hash]
 type row_cmp

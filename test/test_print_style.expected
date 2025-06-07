@@ -1,0 +1,48 @@
+
+Welcome to OCANNL! Reading configuration defaults from /Users/lukstafi/ocannl/_build/default/test/ocannl_config.
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Testing print_style functionality:
+
+=== Testing solved_dim_to_string ===
+Full attributes (d=28, padding=2, label=height, proj_id):
+  Only_labels: height
+  Axis_size: height=28+2
+  Axis_number_and_size: height=28+2
+  Projection_and_size: height=28+2
+
+Minimal attributes (d=64, no padding, no label, no proj_id):
+  Only_labels: _
+  Axis_size: 64
+  Projection_and_size: 64
+
+With padding only (d=32, padding=3, label=width, no proj_id):
+  Axis_size: width=32+3
+  Projection_and_size: width=32+3
+
+With projection (d=32, label=width, proj_id):
+  Axis_size: width=32
+  Projection_and_size: width=32[p1]
+
+=== Testing dim_to_string ===
+Solved dimensions:
+  Only_labels (full): height
+  Axis_size (full): height=28+2
+  Projection_and_size (full): height=28+2
+  Only_labels (minimal): _
+  Axis_size (minimal): 64
+
+Variable dimensions:
+  Only_labels (labeled var): $1:channels
+  Axis_size (labeled var): $1:channels
+  Projection_and_size (labeled var): $1:channels
+  Only_labels (unlabeled var): $2
+  Axis_size (unlabeled var): $2
+
+=== Testing Shape.to_string_hum ===
+Shape with batch=[1], input=[784], output=[10,5]:
+  Only_labels: _|_->_,_
+  Axis_size: 1|784->10,5
+  Axis_number_and_size: 0:1|3:784->1:10,2:5
+  Projection_and_size: 1|784->10,5
+  Default style: 1|784->10,5

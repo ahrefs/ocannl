@@ -851,7 +851,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
         raise @@ Row.Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
 
-let to_string_hum ?(style = `Axis_size) (sh : t) =
+let to_string_hum ?(style = Row.Axis_size) (sh : t) =
   let n_outputs = List.length @@ sh.output.dims in
   let n_batch = List.length @@ sh.batch.dims in
   let dims_to_string kind =
@@ -865,8 +865,8 @@ let to_string_hum ?(style = `Axis_size) (sh : t) =
              | `Batch -> i
            in
            match style with
-           | `Only_labels | `Axis_size -> Row.dim_to_string style d
-           | `Axis_number_and_size -> Int.to_string num ^ ":" ^ Row.dim_to_string style d)
+           | Row.Only_labels | Axis_size | Projection_and_size -> Row.dim_to_string style d
+           | Axis_number_and_size -> Int.to_string num ^ ":" ^ Row.dim_to_string style d)
   in
   let batch_dims = dims_to_string `Batch in
   let input_dims = dims_to_string `Input in
