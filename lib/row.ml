@@ -381,10 +381,14 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Affine _, At_least_dim _ ->
-        (* For affine dimensions, we can't directly check the constraint *)
-        (* We might need to propagate it to the constituent variables *)
-        ([], constr)
+    | Affine { solved = Some { d; _ }; unsolved =[]}, At_least_dim d_min ->
+        if d < d_min then
+          raise
+          @@ Shape_error
+               ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
+                 [ Dim_mismatch [ dim ] ] )
+        else ([], constr)
+    | Affine _, At_least_dim _ -> ([], constr)
     | Var v, _ -> (
         match Map.find env.dim_env v with
         | None -> ([], constr)
@@ -708,16 +712,73 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | Affine _, Affine _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      if equal_dim dim1 dim2 then ([], env)
-      else
-        raise
-        @@ Shape_error ("Cannot unify different affine dimensions", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Affine _, Dim _ | Dim _, Affine _ ->
-      raise
-      @@ Shape_error
-           ("Cannot unify affine dimension with non-affine", [ Dim_mismatch [ dim1; dim2 ] ])
+  | Affine { solved = solved1; unsolved = unsolved1 }, Affine { solved = solved2; unsolved = unsolved2 } ->
+      (* Unify two affine expressions: a1 + b1*v1 + ... = a2 + b2*v2 + ... *)
+      (* Rearrange to: (a1 - a2) + (b1*v1 + ...) - (b2*v2 + ...) = 0 *)
+      let offset_diff = match (solved1, solved2) with
+        | Some { d = d1; _ }, Some { d = d2; _ } -> d1 - d2
+        | Some { d; _ }, None -> d
+        | None, Some { d; _ } -> -d
+        | None, None -> 0
+      in
+      let var_terms = ref [] in
+      (* Add terms from first affine expression with positive coefficients *)
+      List.iter unsolved1 ~f:(fun (coeff, var) -> 
+        var_terms := (coeff, var) :: !var_terms);
+      (* Add terms from second affine expression with negative coefficients *)
+      List.iter unsolved2 ~f:(fun (coeff, var) -> 
+        var_terms := (-coeff, var) :: !var_terms);
+      
+      (* Group by variable and sum coefficients *)
+      let combined_terms = 
+        List.fold !var_terms ~init:(Map.empty (module Dim_var)) ~f:(fun acc (coeff, var) ->
+          Map.update acc var ~f:(function 
+            | None -> coeff 
+            | Some existing -> existing + coeff))
+        |> Map.to_alist
+        |> List.filter ~f:(fun (_, coeff) -> coeff <> 0)
+      in
+      
+      (* If we have exactly one variable with non-zero coefficient, we can solve for it *)
+      (match combined_terms with
+      | [(var, coeff)] when coeff <> 0 ->
+          (* We have: offset_diff + coeff*var = 0, so var = -offset_diff/coeff *)
+          if offset_diff % coeff = 0 then
+            let value = get_dim ~d:(-offset_diff / coeff) () in
+            unify_dim ~stage (Var var, value) env
+          else
+            (* Non-integer solution - this shouldn't happen in well-formed problems *)
+            raise @@ Shape_error ("Non-integer solution in affine unification", [ Dim_mismatch [ dim1; dim2 ] ])
+      | [] when offset_diff = 0 ->
+          (* 0 = 0, already unified *)
+          ([], env)
+      | [] ->
+          (* Non-zero constant difference - contradiction *)
+          raise @@ Shape_error ("Contradictory affine constraint", [ Dim_mismatch [ dim1; dim2 ] ])
+      | _ ->
+          (* Multiple variables - cannot solve directly, defer as constraint *)
+          ([], env))
+  | Affine { solved; unsolved }, Dim { d; _ } | Dim { d; _ }, Affine { solved; unsolved } ->
+      (* Unify affine expression with concrete dimension *)
+      (* affine = d  =>  solved + sum(coeff_i * var_i) = d *)
+      let offset = match solved with Some { d = offset; _ } -> offset | None -> 0 in
+      let target = d - offset in
+      
+      (match unsolved with
+      | [(coeff, var)] when coeff <> 0 ->
+          (* One variable: target = coeff * var => var = target / coeff *)
+          if target % coeff = 0 then
+            let value = get_dim ~d:(target / coeff) () in
+            unify_dim ~stage (Var var, value) env
+          else
+            raise @@ Shape_error ("Non-integer solution in affine-concrete unification", [ Dim_mismatch [ dim1; dim2 ] ])
+      | [] ->
+          (* No variables: just check if offset = d *)
+          if offset = d then ([], env)
+          else raise @@ Shape_error ("Contradictory affine-concrete constraint", [ Dim_mismatch [ dim1; dim2 ] ])
+      | _ ->
+          (* Multiple variables - cannot solve directly *)
+          ([], env))
   | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in
       let f in_ =
@@ -1352,9 +1413,36 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
           [ Dim_eq { d1 = dim; d2 = lub } ]
       | _ when not (is_stage4_up stage) -> [ Terminal_dim dim ]
       | _ -> [])
-  | Affine _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      []
+  | Affine { solved; unsolved } ->
+      (* For affine dimensions at terminal, we try to resolve remaining variables *)
+      (match unsolved with
+      | [] ->
+          (* No variables left, affine is already fully resolved *)
+          []
+      | [(_coeff, var)] when is_stage2_up stage ->
+          (* Single variable case: try to bound it based on constraints *)
+          (match Map.find env.dim_env var with
+          | Some (Bounds_dim { lub = Some lub; constr = _; _ }) when is_stage3_up stage ->
+              (* Use the upper bound to constrain the affine expression *)
+              [ Dim_eq { d1 = Var var; d2 = lub } ]
+          | Some (Bounds_dim { constr = At_least_dim min_d; _ }) when is_stage4_up stage ->
+              (* Use the lower bound constraint *)
+              [ Dim_eq { d1 = Var var; d2 = get_dim ~d:min_d () } ]
+          | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage2_up stage ->
+              (* Default to 1 for unconstrained variables *)
+              [ Dim_eq { d1 = Var var; d2 = get_dim ~d:1 () } ]
+          | _ when not (is_stage4_up stage) ->
+              (* Keep as terminal for later stages *)
+              [ Terminal_dim (Affine { solved; unsolved }) ]
+          | _ -> [])
+      | _ when is_stage4_up stage ->
+          (* Multiple variables - try to default them all to 1 *)
+          List.map unsolved ~f:(fun (_, var) ->
+            Dim_eq { d1 = Var var; d2 = get_dim ~d:1 () })
+      | _ when not (is_stage4_up stage) ->
+          (* Keep as terminal for later stages *)
+          [ Terminal_dim (Affine { solved; unsolved }) ]
+      | _ -> [])
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
