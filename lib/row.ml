@@ -54,13 +54,18 @@ let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
 let use_padding = ref false
 
-type solved_dim = { d : int; padding : int option; label : string option; proj_id : proj_id option }
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Affine of { solved : solved_dim option; unsolved : (int * dim_var) list }
+  | Conv_input of {
+      stride : int;
+      output : dim;
+      solved_kernel : solved_dim option;
+      unsolved_kernel : (int * dim_var) list;
+    }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let uid = ref 0
@@ -69,7 +74,7 @@ let get_var ?label () : dim_var =
   Int.incr uid;
   { id = !uid; label }
 
-let get_dim ~d ?label () = Dim { d; label; proj_id = None; padding = None }
+let get_dim ~d ?label () = Dim { d; label; proj_id = None }
 
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
@@ -78,64 +83,53 @@ let dim_hashtbl () = Hashtbl.create (module Dim_var)
 type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
 [@@deriving equal, compare, sexp]
 
-let solved_dim_to_string style { d; label; proj_id; padding } =
+let solved_dim_to_string style { d; label; proj_id } =
   match style with
   | Only_labels -> ( match label with None -> "_" | Some l -> l)
   | Axis_size | Axis_number_and_size -> (
       let label_prefix = match label with None -> "" | Some l -> l ^ "=" in
-      match (proj_id, padding) with
-      | None, None -> label_prefix ^ Int.to_string d
-      | None, Some p -> label_prefix ^ [%string "%{d#Int}+%{p#Int}"]
-      | Some _, None -> label_prefix ^ Int.to_string d
-      | Some _, Some p -> label_prefix ^ [%string "%{d#Int}+%{p#Int}"])
+      match proj_id with
+      | None -> label_prefix ^ Int.to_string d
+      | Some _ -> label_prefix ^ Int.to_string d)
   | Projection_and_size ->
       let label_part = match label with None -> "" | Some l -> l ^ "=" in
       let size_part = Int.to_string d in
-      let padding_part = match padding with None -> "" | Some p -> "+" ^ Int.to_string p in
       let proj_part = match proj_id with None -> "" | Some pid -> "p" ^ Proj_id.to_string pid in
-      let extra_parts =
-        match (proj_id, padding) with
-        | None, None -> ""
-        | None, Some _ -> padding_part
-        | Some _, None -> "[" ^ proj_part ^ "]"
-        | Some _, Some _ -> "[" ^ proj_part ^ "]" ^ padding_part
-      in
-      label_part ^ size_part ^ extra_parts
+      label_part ^ size_part ^ proj_part
 
-let dim_to_string style = function
+let rec dim_to_string style = function
   | Dim { label = None; _ } when equal_print_style style Only_labels -> "_"
   | Dim { label = Some l; _ } when equal_print_style style Only_labels -> l
-  | Dim { d; label = None; padding = None; proj_id = None } when equal_print_style style Axis_size
-    ->
+  | Dim { d; label = None; proj_id = None } when equal_print_style style Axis_size ->
       Int.to_string d
-  | Dim { d; label = Some l; padding = None; proj_id = None } when equal_print_style style Axis_size
-    ->
+  | Dim { d; label = Some l; proj_id = None } when equal_print_style style Axis_size ->
       [%string "%{l}=%{d#Int}"]
-  | Dim { d; label = None; padding = Some p; proj_id = None } when equal_print_style style Axis_size
-    ->
-      [%string "%{d#Int}+%{p#Int}"]
-  | Dim { d; label = Some l; padding = Some p; proj_id = None }
-    when equal_print_style style Axis_size ->
-      [%string "%{l}=%{d#Int}+%{p#Int}"]
+  | Dim { d; label = None; proj_id = None } when equal_print_style style Axis_size ->
+      Int.to_string d
+  | Dim { d; label = Some l; proj_id = None } when equal_print_style style Axis_size ->
+      [%string "%{l}=%{d#Int}"]
   | Dim solved_dim -> solved_dim_to_string style solved_dim
   | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
   | Var { id; label = None } -> "$" ^ Int.to_string id
-  | Affine { solved; unsolved } -> (
-      let solved_term =
-        Option.to_list solved
+  | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+      let output_str = dim_to_string style output in
+      let kernel_terms =
+        Option.to_list solved_kernel
         |> List.map ~f:(fun solved_dim -> solved_dim_to_string style solved_dim)
       in
-      let unsolved_terms =
-        List.map unsolved ~f:(fun (coeff, v) ->
+      let unsolved_kernel_terms =
+        List.map unsolved_kernel ~f:(fun (coeff, v) ->
             let label_part = match v.label with None -> "" | Some l -> ":" ^ l in
             if coeff = 1 then [%string "$%{v.id#Int}%{label_part}"]
             else [%string "%{coeff#Int}*$%{v.id#Int}%{label_part}"])
       in
-      let all_terms = solved_term @ unsolved_terms in
-      match all_terms with
-      | [] -> "0"
-      | [ t ] -> t
-      | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^ "+" ^ t))
+      let kernel_str =
+        match kernel_terms @ unsolved_kernel_terms with
+        | [] -> "0"
+        | [ t ] -> t
+        | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^ "+" ^ t)
+      in
+      [%string "conv(%{stride#Int}*%{output_str}+%{kernel_str})"]
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -270,64 +264,119 @@ type source = Direct | Equation | Cur | Subr [@@deriving equal, sexp]
 let dim_to_int_exn = function
   | Dim { d; _ } -> d
   | Var _ -> invalid_arg "dim_to_int: dim still unknown"
-  | Affine _ -> invalid_arg "dim_to_int: affine dimension cannot be converted to single int"
+  | Conv_input _ -> invalid_arg "dim_to_int: conv_input dimension cannot be converted to single int"
 
-let add_dims ~keep_proj_id:{ d = d1; padding = p1; label = l1; proj_id } ~coef
-    { d = d2; padding = p2; label = l2; proj_id = _ } =
-  match (p1, p2) with
-  | Some p1, Some p2 ->
-      {
-        d = d1 + (coef * d2);
-        padding = Some (max p1 (coef * p2));
-        label = Option.first_some l1 l2;
-        proj_id;
-      }
-  | _ ->
-      {
-        d = d1 + (coef * d2);
-        padding = Option.first_some p1 (Option.map ~f:(( * ) coef) p2);
-        label = Option.first_some l1 l2;
-        proj_id;
-      }
+let add_dims ~keep_proj_id:{ d = d1; label = l1; proj_id } ~coef { d = d2; label = l2; proj_id = _ }
+    =
+  if !use_padding && d1 <> 0 then { d = d1; label = Option.first_some l1 l2; proj_id }
+  else { d = d1 + (coef * d2); label = Option.first_some l1 l2; proj_id }
 
-let s_dim_one v ~value ~in_ =
+let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
   match in_ with
   | Var v2 when equal_dim_var v v2 -> value
-  | Affine { solved; unsolved } ->
-      (* Substitute v in affine expression *)
+  | Conv_input { stride; output; solved_kernel; unsolved_kernel } -> (
+      (* Substitute v in conv_input expression *)
       let coeff_of_v =
-        List.fold unsolved ~init:0 ~f:(fun acc (c, v2) ->
+        List.fold unsolved_kernel ~init:0 ~f:(fun acc (c, v2) ->
             if equal_dim_var v v2 then acc + c else acc)
       in
-      let new_unsolved =
-        List.filter_map unsolved ~f:(fun (coeff, v2) ->
+      let new_unsolved_kernel =
+        List.filter_map unsolved_kernel ~f:(fun (coeff, v2) ->
             if equal_dim_var v v2 then None else Some (coeff, v2))
       in
-      let new_solved, extra_unsolved =
-        if coeff_of_v = 0 then (solved, new_unsolved)
+      let new_output = s_dim_one ~keep_conv v ~value ~in_:output in
+      let new_solved_kernel, extra_unsolved_kernel =
+        if coeff_of_v = 0 then (solved_kernel, new_unsolved_kernel)
         else
           match value with
           | Dim s ->
-              let existing = Option.value solved ~default:{ s with d = 0; padding = None } in
+              let existing = Option.value solved_kernel ~default:{ s with d = 0; proj_id = None } in
               let new_solved = add_dims ~keep_proj_id:existing ~coef:coeff_of_v s in
-              (Some new_solved, new_unsolved)
-          | Var v' -> (solved, (coeff_of_v, v') :: new_unsolved)
-          | Affine { solved = value_solved; unsolved = value_unsolved } ->
-              (* Inlining affine expression: coeff_of_v * value *)
-              let new_solved =
-                match value_solved with
-                | None -> solved
-                | Some vs ->
-                    let existing = Option.value solved ~default:{ vs with d = 0; padding = None } in
-                    Some (add_dims ~keep_proj_id:existing ~coef:coeff_of_v vs)
+              (Some new_solved, new_unsolved_kernel)
+          | Var v' -> (solved_kernel, (coeff_of_v, v') :: new_unsolved_kernel)
+          | Conv_input
+              {
+                solved_kernel = value_solved_kernel;
+                unsolved_kernel = value_unsolved_kernel;
+                stride = value_stride;
+                output = value_output;
+              } ->
+              (* Inlining conv_input kernel: coeff_of_v * value kernel terms *)
+              let new_solved_kernel =
+                match (solved_kernel, value_solved_kernel, value_output) with
+                | None, None, Dim s ->
+                    Some
+                      (add_dims ~keep_proj_id:{ s with d = 0; proj_id = None } ~coef:coeff_of_v s)
+                | None, Some vs, Dim s ->
+                    Some
+                      (add_dims ~keep_proj_id:{ s with d = 0; proj_id = None } ~coef:coeff_of_v
+                      @@ add_dims ~keep_proj_id:vs ~coef:value_stride s)
+                | Some vs, None, Dim s ->
+                    Some
+                      (add_dims ~keep_proj_id:vs ~coef:coeff_of_v
+                      @@ add_dims ~keep_proj_id:{ s with d = 0; proj_id = None } ~coef:value_stride
+                           s)
+                | Some vs, Some vs', Dim s ->
+                    Some
+                      (add_dims ~keep_proj_id:vs ~coef:coeff_of_v
+                      @@ add_dims ~keep_proj_id:vs' ~coef:value_stride s)
+                | _ -> solved_kernel
               in
-              let scaled_unsolved =
-                List.map value_unsolved ~f:(fun (c, v) -> (coeff_of_v * c, v))
+              let scaled_unsolved_kernel =
+                List.map value_unsolved_kernel ~f:(fun (c, v) -> (coeff_of_v * c, v))
               in
-              (new_solved, scaled_unsolved @ new_unsolved)
+              let more_unsolved =
+                match value_output with
+                | Var v -> (coeff_of_v * value_stride, v) :: scaled_unsolved_kernel
+                | _ -> scaled_unsolved_kernel
+              in
+              (new_solved_kernel, more_unsolved @ new_unsolved_kernel)
       in
-      Affine { solved = new_solved; unsolved = extra_unsolved }
-  | _ -> in_
+      (* Normalize: expand Conv_input nested inside output field *)
+      let result =
+        match new_output with
+        | Conv_input
+            {
+              stride = inner_stride;
+              output = inner_output;
+              solved_kernel = inner_solved;
+              unsolved_kernel = inner_unsolved;
+            } ->
+            let combined_stride = stride * inner_stride in
+            let combined_solved_kernel =
+              match (new_solved_kernel, inner_solved) with
+              | None, _ -> inner_solved
+              | _, None -> new_solved_kernel
+              | Some k1, Some k2 -> Some (add_dims ~keep_proj_id:k1 ~coef:stride k2)
+            in
+            let combined_unsolved_kernel =
+              List.map inner_unsolved ~f:(fun (c, v) -> (c * stride, v)) @ extra_unsolved_kernel
+            in
+            Conv_input
+              {
+                stride = combined_stride;
+                output = inner_output;
+                solved_kernel = combined_solved_kernel;
+                unsolved_kernel = combined_unsolved_kernel;
+              }
+        | _ ->
+            Conv_input
+              {
+                stride;
+                output = new_output;
+                solved_kernel = new_solved_kernel;
+                unsolved_kernel = extra_unsolved_kernel;
+              }
+      in
+
+      match result with
+      | _ when keep_conv -> result
+      | Conv_input { stride = _; output = _; solved_kernel = None; unsolved_kernel = [] } ->
+          assert false
+      | Conv_input { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [] } ->
+          get_dim ~d:((s.d * stride) + k.d) ()
+      | _ -> result)
+  | Dim _ | Var _ -> in_
 
 (* For future flexibility *)
 let dim_conjunction constr1 constr2 =
@@ -370,8 +419,8 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
         Some (extras ~keep_constr1:true, constr1)
       else None
 
-let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr : dim_constraint)
-    (env : environment) : constraint_ list * dim_constraint =
+let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
+    (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
     | Dim { d; _ }, At_least_dim d_min ->
@@ -381,14 +430,13 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Affine { solved = Some { d; _ }; unsolved =[]}, At_least_dim d_min ->
-        if d < d_min then
-          raise
-          @@ Shape_error
-               ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
-                 [ Dim_mismatch [ dim ] ] )
-        else ([], constr)
-    | Affine _, At_least_dim _ -> ([], constr)
+    | Conv_input { stride; output; solved_kernel; _ }, At_least_dim d_min -> (
+        match solved_kernel with
+        | Some { d = d_solved; _ } when not !use_padding ->
+            apply_dim_constraint ~source ~stage output
+              (At_least_dim ((d_min / stride) + d_solved))
+              env
+        | _ -> apply_dim_constraint ~source ~stage output (At_least_dim (d_min / stride)) env)
     | Var v, _ -> (
         match Map.find env.dim_env v with
         | None -> ([], constr)
@@ -405,21 +453,34 @@ let apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim) (constr
       (Dim_eq { d1 = dim; d2 = get_dim ~d () } :: extras, Unconstrained_dim)
   | _ -> (extras, constr)
 
+exception Given_up
+
+let collect_factors ~beg_dims ~dims =
+  let rec f (ds, vars) = function
+    | Dim { d; _ } -> (d :: ds, vars)
+    | Var v -> (ds, v :: vars)
+    | Conv_input { stride; output; _ } when !use_padding ->
+        let ds', vars' = f ([], []) output in
+        if stride <> 1 && not (List.is_empty vars') then raise Given_up;
+        (List.map ~f:(( * ) stride) ds' @ ds, vars' @ vars)
+    | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+        if not (List.is_empty unsolved_kernel) then raise Given_up;
+        let ds', vars' = f ([], []) output in
+        if stride <> 1 && not (List.is_empty vars') then raise Given_up;
+        let margin = Option.value (Option.map ~f:(fun { d; _ } -> d) solved_kernel) ~default:0 in
+        (List.map ~f:(fun d -> (stride * d) + margin) ds' @ ds, vars' @ vars)
+  in
+  List.fold ~f ~init:([], []) (beg_dims @ dims)
+
 let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
     row_constraint =
   match constr with
-  | Total_elems { nominator; divided_by } ->
-      let ds, (vars : dim_var list), has_affine =
-        List.fold (beg_dims @ dims) ~init:([], [], false) ~f:(fun (ds, vars, has_affine) dim ->
-            match dim with
-            | Dim { d; _ } -> (d :: ds, vars, has_affine)
-            | Var v -> (ds, v :: vars, has_affine)
-            | Affine _ -> (ds, vars, true))
-      in
-      if has_affine then
-        (* Can't reduce constraint with affine dimensions *)
-        Unconstrained
-      else
+  | Unconstrained -> Unconstrained
+  | Total_elems { nominator; divided_by } -> (
+      (* TODO: can be made more precise at the cost of more complexity, e.g. tracking coeffs with
+         divided_by variables *)
+      try
+        let ds, (vars : dim_var list) = collect_factors ~beg_dims ~dims in
         let vars = Set.of_list (module Dim_var) vars in
         if not @@ Set.(is_empty @@ inter vars divided_by) then Unconstrained
         else
@@ -432,7 +493,7 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
                    [ Dim_mismatch (beg_dims @ dims) ] )
           else if d = 1 && Set.is_empty vars then constr
           else Total_elems { nominator; divided_by = Utils.Set_O.(divided_by + vars) }
-  | Unconstrained -> Unconstrained
+      with Given_up -> Unconstrained)
 
 (* Inverts what [reduce_row_constraint] would do. *)
 let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
@@ -443,8 +504,7 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
         List.partition_map (beg_dims @ dims) ~f:(function
           | Dim { d; _ } -> Either.First d
           | Var v -> Either.Second v
-          | Affine _ ->
-              failwith "get_product_proj: affine dimensions not supported in product projections")
+          | Conv_input _ -> failwith "NOT IMPLEMENTED YET")
       in
       let vars = Set.of_list (module Dim_var) vars in
       if not @@ Set.is_subset vars ~of_:divided_by then Unconstrained
@@ -517,17 +577,8 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
     | _, Unconstrained -> assert false
     | { dims; bcast = Broadcastable; _ }, Total_elems { nominator; divided_by }
       when Set.length divided_by <= 1 -> (
-        let (ds : int list), (vars : dim_var list), has_affine =
-          List.fold dims ~init:([], [], false) ~f:(fun (ds, vars, has_affine) dim ->
-              match dim with
-              | Dim { d; _ } -> (d :: ds, vars, has_affine)
-              | Var v -> (ds, v :: vars, has_affine)
-              | Affine _ -> (ds, vars, true))
-        in
-        if has_affine then
-          (* Can't handle affine dimensions in Total_elems constraint yet *)
-          (Row_constr { r; constr } :: extras, env)
-        else
+        try
+          let ds, (vars : dim_var list) = collect_factors ~beg_dims:[] ~dims in
           let d : int = List.fold ds ~init:1 ~f:( * ) in
           let nominator : int = nominator / d in
           if nominator = 0 then
@@ -553,7 +604,10 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
           (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
              ~d:nominator () } :: extras, env) *)
           | _ :: _, _ when stored -> (extras, env)
-          | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
+          | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
+        with Given_up ->
+          if stored then (extras, env)
+          else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
@@ -585,7 +639,7 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
 let s_dim_one_in_row v ~value in_ =
   { in_ with dims = List.map in_.dims ~f:(fun in_ -> s_dim_one v ~value ~in_) }
 
-let s_dim_one_in_row_constr v ~value constr =
+let rec s_dim_one_in_row_constr v ~value constr =
   match constr with
   | Total_elems { nominator; divided_by } when Set.mem divided_by v -> (
       let divided_by = Set.remove divided_by v in
@@ -599,9 +653,11 @@ let s_dim_one_in_row_constr v ~value constr =
                  ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
                    [ Dim_mismatch [ value ] ] )
           else Total_elems { nominator; divided_by }
-      | Affine _ ->
-          (* Can't handle affine substitution in Total_elems constraint *)
-          Unconstrained)
+      | Conv_input { stride; output; _ } ->
+          if not !use_padding then Unconstrained
+          else
+            s_dim_one_in_row_constr v ~value:output
+              (Total_elems { nominator = nominator / stride; divided_by = Set.(add divided_by v) }))
   | _ -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
@@ -611,18 +667,21 @@ let s_dim_one_in_row_entry v ~value in_ =
       let constr = s_dim_one_in_row_constr v ~value constr in
       Bounds_row { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr }
 
-let rec subst_dim env = function
-  | Dim _ as d -> d
-  | Var v as default -> (
+let rec vars_of_dim = function
+  | Dim _ -> Set.empty (module Dim_var)
+  | Var v -> Set.singleton (module Dim_var) v
+  | Conv_input { output; unsolved_kernel; _ } ->
+      if not (List.is_empty unsolved_kernel) then Set.empty (module Dim_var)
+      else
+        Set.union (vars_of_dim output)
+          (Set.of_list (module Dim_var) @@ List.map unsolved_kernel ~f:(fun (_, v) -> v))
+
+let subst_dim ?(keep_conv = false) env dim =
+  let vars = vars_of_dim dim in
+  List.fold (Set.elements vars) ~init:dim ~f:(fun acc v ->
       match Map.find env.dim_env v with
-      | Some (Solved_dim (Var v2)) when equal_dim_var v v2 -> default
-      | Some (Solved_dim d) -> subst_dim env d
-      | _ -> default)
-  | Affine { solved = _; unsolved } as init ->
-      List.fold unsolved ~init ~f:(fun acc (_coeff, v) ->
-          match Map.find env.dim_env v with
-          | Some (Solved_dim d) -> s_dim_one v ~value:d ~in_:acc
-          | _ -> acc)
+      | Some (Solved_dim d) -> s_dim_one ~keep_conv v ~value:d ~in_:acc
+      | _ -> acc)
 
 let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   match in_ with
@@ -712,73 +771,47 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | Affine { solved = solved1; unsolved = unsolved1 }, Affine { solved = solved2; unsolved = unsolved2 } ->
-      (* Unify two affine expressions: a1 + b1*v1 + ... = a2 + b2*v2 + ... *)
-      (* Rearrange to: (a1 - a2) + (b1*v1 + ...) - (b2*v2 + ...) = 0 *)
-      let offset_diff = match (solved1, solved2) with
-        | Some { d = d1; _ }, Some { d = d2; _ } -> d1 - d2
-        | Some { d; _ }, None -> d
-        | None, Some { d; _ } -> -d
-        | None, None -> 0
-      in
-      let var_terms = ref [] in
-      (* Add terms from first affine expression with positive coefficients *)
-      List.iter unsolved1 ~f:(fun (coeff, var) -> 
-        var_terms := (coeff, var) :: !var_terms);
-      (* Add terms from second affine expression with negative coefficients *)
-      List.iter unsolved2 ~f:(fun (coeff, var) -> 
-        var_terms := (-coeff, var) :: !var_terms);
-      
-      (* Group by variable and sum coefficients *)
-      let combined_terms = 
-        List.fold !var_terms ~init:(Map.empty (module Dim_var)) ~f:(fun acc (coeff, var) ->
-          Map.update acc var ~f:(function 
-            | None -> coeff 
-            | Some existing -> existing + coeff))
-        |> Map.to_alist
-        |> List.filter ~f:(fun (_, coeff) -> coeff <> 0)
-      in
-      
-      (* If we have exactly one variable with non-zero coefficient, we can solve for it *)
-      (match combined_terms with
-      | [(var, coeff)] when coeff <> 0 ->
-          (* We have: offset_diff + coeff*var = 0, so var = -offset_diff/coeff *)
-          if offset_diff % coeff = 0 then
-            let value = get_dim ~d:(-offset_diff / coeff) () in
-            unify_dim ~stage (Var var, value) env
-          else
-            (* Non-integer solution - this shouldn't happen in well-formed problems *)
-            raise @@ Shape_error ("Non-integer solution in affine unification", [ Dim_mismatch [ dim1; dim2 ] ])
-      | [] when offset_diff = 0 ->
-          (* 0 = 0, already unified *)
-          ([], env)
-      | [] ->
-          (* Non-zero constant difference - contradiction *)
-          raise @@ Shape_error ("Contradictory affine constraint", [ Dim_mismatch [ dim1; dim2 ] ])
-      | _ ->
-          (* Multiple variables - cannot solve directly, defer as constraint *)
-          ([], env))
-  | Affine { solved; unsolved }, Dim { d; _ } | Dim { d; _ }, Affine { solved; unsolved } ->
-      (* Unify affine expression with concrete dimension *)
-      (* affine = d  =>  solved + sum(coeff_i * var_i) = d *)
-      let offset = match solved with Some { d = offset; _ } -> offset | None -> 0 in
-      let target = d - offset in
-      
-      (match unsolved with
-      | [(coeff, var)] when coeff <> 0 ->
-          (* One variable: target = coeff * var => var = target / coeff *)
-          if target % coeff = 0 then
-            let value = get_dim ~d:(target / coeff) () in
-            unify_dim ~stage (Var var, value) env
-          else
-            raise @@ Shape_error ("Non-integer solution in affine-concrete unification", [ Dim_mismatch [ dim1; dim2 ] ])
-      | [] ->
-          (* No variables: just check if offset = d *)
-          if offset = d then ([], env)
-          else raise @@ Shape_error ("Contradictory affine-concrete constraint", [ Dim_mismatch [ dim1; dim2 ] ])
-      | _ ->
-          (* Multiple variables - cannot solve directly *)
-          ([], env))
+  | (Conv_input { stride = 1; output; _ }, dim | dim, Conv_input { stride = 1; output; _ })
+    when !use_padding ->
+      unify_dim ~stage (output, dim) env
+  | ( Conv_input { stride = stride1; output = output1; _ },
+      Conv_input { stride = stride2; output = output2; _ } )
+    when !use_padding && (stride1 % stride2 = 0 || stride2 % stride1 = 0) ->
+      unify_dim ~stage
+        ( Conv_input
+            {
+              stride = (if stride1 > stride2 then stride1 / stride2 else stride2 / stride1);
+              output = (if stride1 > stride2 then output1 else output2);
+              solved_kernel = None;
+              unsolved_kernel = [];
+            },
+          if stride1 > stride2 then output2 else output1 )
+        env
+  | (Conv_input { stride; output = Dim s; _ }, dim | dim, Conv_input { stride; output = Dim s; _ })
+    when !use_padding ->
+      unify_dim ~stage (get_dim ~d:(stride * s.d) (), dim) env
+  | (Conv_input { stride; output; _ }, Dim s | Dim s, Conv_input { stride; output; _ })
+    when !use_padding ->
+      unify_dim ~stage (get_dim ~d:(s.d / stride) (), output) env
+  | Conv_input { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [] }, dim
+  | dim, Conv_input { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [] } ->
+      unify_dim ~stage (get_dim ~d:((stride * s.d) + k.d) (), dim) env
+  | Conv_input { stride; output; solved_kernel = Some k; unsolved_kernel = [] }, Dim s
+  | Dim s, Conv_input { stride; output; solved_kernel = Some k; unsolved_kernel = [] } ->
+      unify_dim ~stage (get_dim ~d:((s.d / stride) - k.d) (), output) env
+  | ( Conv_input { stride; output = Dim s; solved_kernel = None; unsolved_kernel = [ (dv, kv) ] },
+      Dim s' )
+  | ( Dim s',
+      Conv_input { stride; output = Dim s; solved_kernel = None; unsolved_kernel = [ (dv, kv) ] } )
+    ->
+      unify_dim ~stage (get_dim ~d:((s'.d - (stride * s.d)) / dv) (), Var kv) env
+  | ( Conv_input { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [ (dv, kv) ] },
+      Dim s' )
+  | ( Dim s',
+      Conv_input { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [ (dv, kv) ] }
+    ) ->
+      unify_dim ~stage (get_dim ~d:((s'.d - ((stride * s.d) + k.d)) / dv) (), Var kv) env
+  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = dim1; d2 = dim2 } ], env)
   | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in
       let f in_ =
@@ -991,7 +1024,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
         match Map.find env.dim_env cur_v with
         | None | Some (Solved_dim (Dim _)) -> false
         | Some (Solved_dim (Var v)) -> equal_dim_var subr_v v
-        | Some (Solved_dim (Affine _)) -> false (* Affine dimensions can't be cyclic *)
+        | Some (Solved_dim (Conv_input _)) -> false (* Affine dimensions can't be cyclic *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
   match (cur, subr) with
@@ -1003,9 +1036,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | _, Dim { d = 1; _ } -> ([], env)
   | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
-  | Affine _, _ | _, Affine _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      ([], env)
+  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = subr; d2 = cur } ], env)
   | Var cur_v, Var subr_v -> (
       match (Map.find env.dim_env cur_v, Map.find env.dim_env subr_v) with
       | Some (Bounds_dim { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 subr_v ->
@@ -1133,9 +1164,7 @@ let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env 
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
-            | Affine _, _ | _, Affine _ ->
-                (* FIXME: NOT IMPLEMENTED YET *)
-                (lub2, [])
+            | Conv_input _, _ | _, Conv_input _ -> assert false
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
@@ -1375,11 +1404,47 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
                 | Dim { d = 1; _ }, _ -> d1
                 | _, Dim { d = 1; _ } -> d2
                 | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ()
+                | ( Conv_input { stride; output = Dim s; solved_kernel = _; unsolved_kernel = _ },
+                    Dim s' )
+                | ( Dim s',
+                    Conv_input { stride; output = Dim s; solved_kernel = _; unsolved_kernel = _ } )
+                  when !use_padding && stride * s.d <> s'.d ->
+                    get_dim ~d:1 ()
+                | ( Conv_input
+                      { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [] },
+                    Dim s' )
+                | ( Dim s',
+                    Conv_input
+                      { stride; output = Dim s; solved_kernel = Some k; unsolved_kernel = [] } )
+                  when (stride * s.d) + k.d <> s'.d ->
+                    get_dim ~d:1 ()
+                | ( Conv_input
+                      { stride = stride1; output = Dim s1; solved_kernel = _; unsolved_kernel = _ },
+                    Conv_input
+                      { stride = stride2; output = Dim s2; solved_kernel = _; unsolved_kernel = _ }
+                  )
+                  when !use_padding && stride1 * s1.d <> stride2 * s2.d ->
+                    get_dim ~d:1 ()
+                | ( Conv_input
+                      {
+                        stride = stride1;
+                        output = Dim s1;
+                        solved_kernel = Some k1;
+                        unsolved_kernel = [];
+                      },
+                    Conv_input
+                      {
+                        stride = stride2;
+                        output = Dim s2;
+                        solved_kernel = Some k2;
+                        unsolved_kernel = [];
+                      } )
+                  when (stride1 * s1.d) + k1.d <> (stride2 * s2.d) + k2.d ->
+                    get_dim ~d:1 ()
                 | Var _, _ -> d1
                 | _, Var _ -> d2
-                | Dim _, Dim _ -> d1
-                | Affine _, _ | _, Affine _ ->
-                    failwith "merge_row_constraint: cannot merge constraints with affine dimensions")
+                | _, Dim _ -> d2
+                | _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
           ( ineqs,
@@ -1413,36 +1478,10 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
           [ Dim_eq { d1 = dim; d2 = lub } ]
       | _ when not (is_stage4_up stage) -> [ Terminal_dim dim ]
       | _ -> [])
-  | Affine { solved; unsolved } ->
-      (* For affine dimensions at terminal, we try to resolve remaining variables *)
-      (match unsolved with
-      | [] ->
-          (* No variables left, affine is already fully resolved *)
-          []
-      | [(_coeff, var)] when is_stage2_up stage ->
-          (* Single variable case: try to bound it based on constraints *)
-          (match Map.find env.dim_env var with
-          | Some (Bounds_dim { lub = Some lub; constr = _; _ }) when is_stage3_up stage ->
-              (* Use the upper bound to constrain the affine expression *)
-              [ Dim_eq { d1 = Var var; d2 = lub } ]
-          | Some (Bounds_dim { constr = At_least_dim min_d; _ }) when is_stage4_up stage ->
-              (* Use the lower bound constraint *)
-              [ Dim_eq { d1 = Var var; d2 = get_dim ~d:min_d () } ]
-          | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage2_up stage ->
-              (* Default to 1 for unconstrained variables *)
-              [ Dim_eq { d1 = Var var; d2 = get_dim ~d:1 () } ]
-          | _ when not (is_stage4_up stage) ->
-              (* Keep as terminal for later stages *)
-              [ Terminal_dim (Affine { solved; unsolved }) ]
-          | _ -> [])
-      | _ when is_stage4_up stage ->
-          (* Multiple variables - try to default them all to 1 *)
-          List.map unsolved ~f:(fun (_, var) ->
-            Dim_eq { d1 = Var var; d2 = get_dim ~d:1 () })
-      | _ when not (is_stage4_up stage) ->
-          (* Keep as terminal for later stages *)
-          [ Terminal_dim (Affine { solved; unsolved }) ]
-      | _ -> [])
+  | Conv_input _ ->
+      (* The input dimension itself cannot be dim-1, and the output dimension doesn't become
+         transitively terminal. *)
+      []
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
@@ -1577,7 +1616,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           let extras, constr = apply_dim_constraint ~source:Direct ~stage d constr env in
           let env =
             match (constr, d) with
-            | Unconstrained_dim, _ | _, Dim _ -> env
+            | Unconstrained_dim, _ | _, Dim _ | _, Conv_input _ -> env
             | _, Var v ->
                 {
                   env with
@@ -1587,7 +1626,6 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
                       | Some (Bounds_dim bounds) -> Bounds_dim { bounds with constr }
                       | None -> Bounds_dim { constr; lub = None; cur = []; subr = [] });
                 }
-            | _, Affine _ -> env (* FIXME: NOT IMPLEMENTED YET *)
           in
           (extras @ ineqs, env)
       | Row_constr { r; constr } ->
@@ -1643,7 +1681,7 @@ let rec row_to_labels env =
         match Map.find env.dim_env v with
         | None | Some (Bounds_dim _) -> Option.value v.label ~default:""
         | Some (Solved_dim dim) -> f dim)
-    | Affine _ -> "" (* Affine dimensions don't have labels *)
+    | Conv_input _ -> ""
   in
   function
   | { dims; bcast = Row_var { v; beg_dims }; id } -> (
@@ -1660,16 +1698,11 @@ let rec row_to_labels env =
 (** *** Projection inference *** *)
 
 let fresh_row_proj r =
-  let fresh_dim = function
-    | Dim { d; padding; label; proj_id = _ } ->
-        Dim { d; padding; label; proj_id = Some (Proj_id.fresh ()) }
+  let rec fresh_dim = function
+    | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (Proj_id.fresh ()) }
     | Var _ as d -> d
-    | Affine { solved; unsolved } as d ->
-        if List.is_empty unsolved then
-          Dim { (Option.value_exn ~here:[%here] solved) with proj_id = Some (Proj_id.fresh ()) }
-        else (
-          assert (Option.is_none solved);
-          d)
+    | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+        Conv_input { stride; output = fresh_dim output; solved_kernel; unsolved_kernel }
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
@@ -1680,10 +1713,11 @@ type proj =
   | Var of dim_var
   | Proj of proj_id * solved_dim
   | Solved of Idx.axis_index
-  | Affine of {
-      solved : (int * Idx.axis_index) list;
-      solving : (int * proj_id) list;
-      unsolved : (int * dim_var) list;
+  | Conv_input of {
+      stride : int;
+      output : proj;
+      solved_kernel : (int * Idx.axis_index) list;
+      unsolved_kernel : (int * dim_var) list;
     }
 [@@deriving compare, equal, sexp]
 
@@ -1698,12 +1732,15 @@ type proj_to_index = Idx.axis_index Map.M(Proj_id).t [@@deriving sexp]
 type proj_classes = Proj_id.t Map.M(Proj_id).t [@@deriving sexp]
 
 type proj_env = {
+  v_env : (dim_var, proj) Hashtbl.t;
   proj_to_index : proj_to_index;
+  proj_to_padding : int Map.M(Proj_id).t;
+      (** Total padding (left + right) for projections, for the axis of the indexed tensor. *)
   proj_classes : proj_classes;
   product_dim : int Map.M(Proj_id).t;
   non_product : Set.M(Proj_id).t;
 }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 type proj_equation =
   | Proj_eq of proj * proj
@@ -1715,20 +1752,26 @@ type proj_equation =
 
 let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env
     (env : environment) : proj_equation list =
-  let to_proj : dim -> proj = function
+  let rec to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
-    | Affine { solved = None; unsolved } as d -> Affine { solved = []; solving = []; unsolved }
+    | Conv_input { stride; output; solved_kernel = None; unsolved_kernel } ->
+        let solved_kernel, unsolved_kernel =
+          List.fold unsolved_kernel ~init:([], [])
+            ~f:(fun (solved_kernel, unsolved_kernel) (c, v) ->
+              if Map.mem proj_axis_env v then
+                ((c, Map.find_exn proj_axis_env v) :: solved_kernel, unsolved_kernel)
+              else (solved_kernel, (c, v) :: unsolved_kernel))
+        in
+        Conv_input { stride; output = to_proj output; solved_kernel; unsolved_kernel }
+    | Conv_input { solved_kernel = Some _; _ } -> assert false
     | d -> (
         match subst_dim env d with
         | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
         | Dim s -> Proj (Proj_id.fresh (), s)
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v
-        | Affine { solved = Some d; unsolved } ->
-            assert (List.is_empty unsolved);
-            Proj (Option.value ~default:(Proj_id.fresh ()) d.proj_id, d)
-        | Affine { solved = None; unsolved = _ } -> assert false (* handled above *))
+        | Conv_input _ -> assert false (* handled above and by default keep_conv is false *))
   in
   let rec expand_dims = function
     | { dims; bcast = Row_var { v; beg_dims }; _ } when Map.mem env.row_env v -> (
@@ -1768,45 +1811,97 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
   in
   List.concat_map inequalities ~f
 
+let unknown_projection proj_id d =
+  raise
+  @@ Shape_error
+       ([%string "projection_of_solved_dims: unknown projection: %{proj_id#Proj_id} %{d#Int}"], [])
+
+let get_proj_index proj_env =
+  let rec loop = function
+    | Proj (proj_id, { d; _ }) -> (
+        let repr, _ =
+          Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
+        in
+        match Map.find proj_env.proj_to_index repr with
+        | Some i -> i
+        | None -> unknown_projection proj_id d)
+    | Solved idx -> idx
+    | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+        let output = loop output in
+        let solved_kernel = List.map solved_kernel ~f:(fun (c, i) -> (c, i)) in
+        let unsolved_kernel = List.map unsolved_kernel ~f:(fun (c, v) -> (c, loop @@ Var v)) in
+        Idx.Affine { symbols = ((stride, output) :: solved_kernel) @ unsolved_kernel; offset = 0 }
+    | Var v when Hashtbl.mem proj_env.v_env v -> loop @@ Hashtbl.find_exn proj_env.v_env v
+    | Var v as proj ->
+        raise
+        @@ Shape_error
+             ( "projection_of_solved_dims: still not fully inferred for variable "
+               ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+               [ Projection_mismatch [ proj ] ] )
+  in
+  loop
+
+let get_dim_index proj_env =
+  let rec loop = function
+    | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
+    | Dim { proj_id = None; _ } -> assert false
+    | Var v when Hashtbl.mem proj_env.v_env v ->
+        get_proj_index proj_env @@ Hashtbl.find_exn proj_env.v_env v
+    | Var v as dim ->
+        raise
+        @@ Shape_error
+             ( "projection_of_solved_dims: still not fully inferred for variable "
+               ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+               [ Dim_mismatch [ dim ] ] )
+    | Dim { proj_id = Some proj_id; d; _ } -> (
+        let repr, _ =
+          Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
+        in
+        match Map.find proj_env.proj_to_index repr with
+        | Some i -> i
+        | None -> unknown_projection proj_id d)
+    | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+        (* Handle unsolved variables - these should be resolved by now *)
+        if not (List.is_empty unsolved) then
+          raise
+          @@ Shape_error
+               ( "Affine dimension has unresolved variables",
+                 [ Dim_mismatch [ Affine { solved; unsolved } ] ] );
+
+        (* Process solved terms *)
+        let symbols = ref [] in
+        let offset = ref 0 in
+
+        Option.iter solved ~f:(function
+          | { d; proj_id = Some proj_id; _ } ->
+              if Idx.iterated d then
+                let repr, _ =
+                  Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
+                in
+                match Map.find proj_env.proj_to_index repr with
+                | Some (Iterator symbol) -> symbols := (1, symbol) :: !symbols
+                | Some (Fixed_idx i) -> offset := !offset + i
+                | Some (Affine _) ->
+                    (* Nested affine - would need recursive handling *)
+                    raise @@ Shape_error ("Nested affine projections not supported", [])
+                | None -> unknown_projection proj_id d
+              else ()
+          | { proj_id = None; _ } -> assert false);
+
+        Idx.Affine { symbols = List.rev !symbols; offset = !offset }
+  in
+  loop
+
 let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
+  let p_conv_input = ref [] in
+  let verify_when_solved1 = ref [] in
+  let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
-  let _s_proj_one proj_id ~value ~in_ =
-    match in_ with
-    | Var _ -> in_
-    | Proj (pid, _) -> if Proj_id.equal pid proj_id then value else in_
-    | Solved _ -> in_
-    | Affine { solved; solving; unsolved } ->
-        (* Substitute proj_id in affine expression *)
-        let coeff_of_p =
-          List.fold solving ~init:0 ~f:(fun acc (c, pid) ->
-              if Proj_id.equal pid proj_id then acc + c else acc)
-        in
-        let new_solving =
-          List.filter_map solving ~f:(fun (coeff, pid) ->
-              if Proj_id.equal pid proj_id then None else Some (coeff, pid))
-        in
-        let new_solved, extra_solving =
-          if coeff_of_p = 0 then (solved, new_solving)
-          else
-            match value with
-            | Solved idx -> ((coeff_of_p, idx) :: solved, new_solving)
-            | Proj (pid, _) -> (solved, (coeff_of_p, pid) :: new_solving)
-            | Var _ -> (solved, new_solving) (* Can't substitute variable into affine *)
-            | Affine { solved = value_solved; solving = value_solving; unsolved = _ } ->
-                (* Inlining affine expression: coeff_of_p * value *)
-                let scaled_solved =
-                  List.map value_solved ~f:(fun (c, idx) -> (coeff_of_p * c, idx))
-                in
-                let scaled_solving =
-                  List.map value_solving ~f:(fun (c, pid) -> (coeff_of_p * c, pid))
-                in
-                (scaled_solved @ solved, scaled_solving @ new_solving)
-        in
-        Affine { solved = new_solved; solving = extra_solving; unsolved }
-  in
+  (* let *)
+
   let rec loop = function
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
         p_dims := (p1, d) :: !p_dims
@@ -1821,58 +1916,40 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
         proj_classes := Utils.union_add ~equal:Proj_id.equal !proj_classes p1 p2
     | Proj_eq (Proj (p, _), Solved idx) | Proj_eq (Solved idx, Proj (p, _)) ->
         p_solved := (p, idx) :: !p_solved
-    | Proj_eq (Proj (_, _), (Affine _ as _affine)) | Proj_eq ((Affine _ as _affine), Proj (_, _)) ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-        ()
-    | Proj_eq (Solved (Idx.Affine { symbols; offset }), Affine { solved; solving; unsolved })
-    | Proj_eq (Affine { solved; solving; unsolved }, Solved (Idx.Affine { symbols; offset })) ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-        ignore (symbols, offset, solved, solving, unsolved)
-    | Proj_eq (Solved idx, Affine affine) | Proj_eq (Affine affine, Solved idx) ->
-        (* For affine expressions with solved indices, we can't directly substitute *)
-        (* This case might require more sophisticated handling *)
-        raise
-        @@ Shape_error
-             ( "Cannot unify solved index with affine projection",
-               [ Projection_mismatch [ Solved idx; Affine affine ] ] )
-    | Proj_eq (Var v, Affine affine) | Proj_eq (Affine affine, Var v) -> (
-        (* Handle variable to affine binding *)
-        match Hashtbl.find v_env v with
-        | None -> Hashtbl.add_exn v_env ~key:v ~data:(Affine affine)
-        | Some p2 -> loop (Proj_eq (Affine affine, p2)))
-    | Proj_eq (Affine affine1, Affine affine2) ->
+    | Proj_eq (Proj (p, _), (Conv_input _ as conv_input))
+    | Proj_eq ((Conv_input _ as conv_input), Proj (p, _)) ->
+        (* We will substitute variables in conv_input later *)
+        p_conv_input := (p, conv_input) :: !p_conv_input
+    | Proj_eq (Solved idx, (Conv_input _ as conv_input))
+    | Proj_eq ((Conv_input _ as conv_input), Solved idx) ->
+        verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
+        (* raise @@ Shape_error ( "Cannot unify non-affine index with affine projection", [
+           Projection_mismatch [ Solved idx; Affine affine ] ] ) *)
+    | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ as conv_input2)) ->
         (* For now, we can only unify identical affine expressions *)
-        if equal_proj (Affine affine1) (Affine affine2) then ()
-        else
-          raise
-          @@ Shape_error
-               ( "Cannot unify different affine projections",
-                 [ Projection_mismatch [ Affine affine1; Affine affine2 ] ] )
+        if equal_proj conv_input1 conv_input2 then ()
+        else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
     | Proj_eq (Solved idx1, Solved idx2) when Idx.equal_axis_index idx1 idx2 -> ()
     | Proj_eq (Solved idx1, Solved idx2) ->
         raise
         @@ Shape_error
              ("Conflicting indices for the same axis/projection", [ Index_mismatch [ idx1; idx2 ] ])
+    | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
     | Proj_eq (Var v, p) | Proj_eq (p, Var v) -> (
         match Hashtbl.find v_env v with
         | None -> Hashtbl.add_exn v_env ~key:v ~data:p
         | Some p2 -> loop (Proj_eq (p, p2)))
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
-    | Iterated (Affine { solving; _ }) ->
-        (* For affine expressions, mark all constituent projections as iterated *)
-        List.iter solving ~f:(fun (_, proj_id) -> p_dims := (proj_id, 1) :: !p_dims)
+    | Iterated (Conv_input { output; unsolved_kernel; _ }) ->
+        loop (Iterated output);
+        List.iter ~f:(fun (_, v) -> loop @@ Iterated (Var v)) unsolved_kernel
     | Iterated (Var v) -> (
         match Hashtbl.find v_env v with
         | None ->
             let idx = Idx.(Iterator (get_symbol ())) in
             Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
-        | Some (Var v2) -> loop (Iterated (Var v2))
-        | Some (Solved _) -> ()
-        | Some (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
-        | Some (Affine { solving; _ }) ->
-            (* For affine expressions, mark all constituent projections as iterated *)
-            List.iter solving ~f:(fun (_, proj_id) -> p_dims := (proj_id, 1) :: !p_dims))
+        | Some proj -> loop @@ Iterated proj)
   in
   List.iter eqs ~f:loop;
   let projs = ref @@ Map.empty (module Proj_id)
@@ -1901,64 +1978,15 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
+
   {
+    v_env;
     proj_classes = !proj_classes;
     proj_to_index = !projs;
+    proj_to_padding;
     product_dim = !product_dim;
     non_product = !non_product;
   }
-
-let get_proj_index proj_env =
-  let unknown_projection proj_id d =
-    raise
-    @@ Shape_error
-         ([%string "projection_of_solved_dims: unknown projection: %{proj_id#Proj_id} %{d#Int}"], [])
-  in
-  function
-  | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
-  | Dim { proj_id = None; _ } -> assert false
-  | Var v as dim ->
-      raise
-      @@ Shape_error
-           ( "projection_of_solved_dims: still not fully inferred for variable "
-             ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
-             [ Dim_mismatch [ dim ] ] )
-  | Dim { proj_id = Some proj_id; d; _ } -> (
-      let repr, _ =
-        Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
-      in
-      match Map.find proj_env.proj_to_index repr with
-      | Some i -> i
-      | None -> unknown_projection proj_id d)
-  | Affine { solved; unsolved } ->
-      (* Handle unsolved variables - these should be resolved by now *)
-      if not (List.is_empty unsolved) then
-        raise
-        @@ Shape_error
-             ( "Affine dimension has unresolved variables",
-               [ Dim_mismatch [ Affine { solved; unsolved } ] ] );
-
-      (* Process solved terms *)
-      let symbols = ref [] in
-      let offset = ref 0 in
-
-      Option.iter solved ~f:(function
-        | { d; proj_id = Some proj_id; _ } ->
-            if Idx.iterated d then
-              let repr, _ =
-                Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
-              in
-              match Map.find proj_env.proj_to_index repr with
-              | Some (Iterator symbol) -> symbols := (1, symbol) :: !symbols
-              | Some (Fixed_idx i) -> offset := !offset + i
-              | Some (Affine _) ->
-                  (* Nested affine - would need recursive handling *)
-                  raise @@ Shape_error ("Nested affine projections not supported", [])
-              | None -> unknown_projection proj_id d
-            else ()
-        | { proj_id = None; _ } -> assert false);
-
-      Idx.Affine { symbols = List.rev !symbols; offset = !offset }
 
 let proj_repr proj_env p =
   fst @@ Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:p ~rank:0
@@ -1980,7 +2008,7 @@ let get_product_proj proj_env dim =
              [ Dim_mismatch [ dim ] ] )
   | Affine _ -> None
 
-let proj_to_iterator proj_env p =
+let proj_to_iterator_exn proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with
   | Iterator s -> s
-  | _ -> assert false
+  | _ -> invalid_arg "proj_to_iterator_exn"

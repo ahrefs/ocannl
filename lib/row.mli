@@ -19,28 +19,27 @@ val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
 val use_padding : bool ref
 
-type solved_dim = {
-  d : int;
-  padding : int option;
-  (** The maximal required total (left + right) padding for this axis. *)
-  label : string option;
-  proj_id : proj_id option;
-}
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 (** A single axis in a shape. *)
 
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Affine of { solved : solved_dim option; unsolved : (int * dim_var) list }
+  | Conv_input of {
+      stride : int;
+      output : dim;
+      solved_kernel : solved_dim option;
+      unsolved_kernel : (int * dim_var) list;
+    }
       (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
           [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
-          otherwise it is 0. NOTE: negative strides are not supported (negative coefficients are
-          reserved for the solving process). *)
+          otherwise it is 0. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 val get_dim : d:int -> ?label:string -> unit -> dim
 val dim_to_int_exn : dim -> int
+
 type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
 [@@deriving equal, compare, sexp]
 
@@ -153,6 +152,10 @@ val get_proj_equations :
   constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
 
 val solve_proj_equations : proj_equation list -> proj_env
-val get_proj_index : proj_env -> dim -> Ir.Indexing.axis_index
+val get_proj_index : proj_env -> proj -> Ir.Indexing.axis_index
+val get_dim_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (proj_id * int) option
-val proj_to_iterator : proj_env -> proj_id -> Ir.Indexing.symbol
+
+val proj_to_iterator_exn : proj_env -> proj_id -> Ir.Indexing.symbol
+(** [proj_to_iterator_exn proj_env p] returns the iterator for [p] in [proj_env]. Raises
+    [Invalid_argument] if [p] is not an iterator. *)

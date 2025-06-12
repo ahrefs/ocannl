@@ -15,7 +15,6 @@ A row is a sequence of axes of a single kind: batch, input, or output. The shape
 ```ocaml
 type solved_dim = {
   d : int;
-  mutable padding : int option; [@hash.ignore]
   label : string option;
   proj_id : proj_id option;
 }
@@ -24,11 +23,16 @@ type solved_dim = {
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Affine of { solved : (int * solved_dim) list; unsolved : (int * dim_var) list }
-      (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
-          [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
-          otherwise it is 0. NOTE: negative strides are not supported (negative coefficients are
-          reserved for the solving process). *)
+  | Conv_input of {
+      stride : int;
+      output : dim;
+      solved_kernel : solved_dim option;
+      unsolved_kernel : (int * dim_var) list;
+    }
+      (** Represents convolution-style input dimensions where the output dimension
+          relates to the input dimension through: input = stride * output + kernel_terms.
+          This is a generalization of convolutions that supports affine indexing patterns.
+          The offset is implicit and depends on the global setting use_padding. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -49,21 +53,17 @@ The actual implementation is split into the `Row` module, which handles multi-ro
 
 Labels are a part of OCANNL, but it's a topic that needs more exploration and future work. Currently, OCANNL has labeled dimensions, but not labeled axes. This means that when two axes need to agree on the number of dimensions, they also need to agree on the labels. If the dimensions of both axes have labels, the labels need to be the same, and if one doesn't have a label initially, it's inferred to have the label from the other axis. Intuitively, the label is a specification of the semantics of an axis that is more fine-grained than, but of similar nature as, the number of dimensions. Currently, there is no global check to prevent the same label be used with different numbers of dimensions (on unrelated axes). Example: a label `"rgb"` attached to dimensions size 3 to denote that an axis represents three channels "red", "green" and "blue".
 
-### Affine indexing
+### Convolution-based indexing
 
-The `Affine` constructor represents an affine combination of projection indices, enabling support for operations like convolutions where output indices relate to input indices through affine transformations. An affine index has the form:
+The `Conv_input` constructor represents convolution-style input dimensions that enable support for operations like convolutions where output indices relate to input indices through the relationship:
 
-```latex
-index = Σ(coefficient_i * iterator_i) + offset
+```
+input_dimension = stride * output_iterator + dilation * kernel_iterator
 ```
 
-Where:
+When `use_padding` is true, the offset is chosen to preserve dimensionality (i.e., output size equals input size for stride=1). When false, the offset is 0 (no padding).
 
-- `solved : (int * solved_dim) list` contains pairs of (coefficient, solved_dimension) for resolved projections
-- `unsolved : (int * dim_var) list` contains pairs of (coefficient, dimension_variable) for unresolved dimensions
-- The offset is implicit and automatically derived based on the operation (e.g., for convolutions, it depends on padding)
-
-When `!use_padding` is true, the offset is chosen to preserve dimensionality (i.e., output size equals input size for stride=1). When false, the offset is 0 (no padding).
+The shape and projection inference handles `Conv_input` terms differently depending on `use_padding`. If `use_padding` is false, the impact of convolution kernels is incorporated additively during shape inference, and there's nothing more to do during projection inference. If `use_padding` is true, convolution kernels don't contribute during shape inference, and padding is computed during projection inference, keyed by `proj_id`. Padding is maximal size (width) of dilated kernels as encountered in `Dim` - `Conv_input` constraints and is propagated in either direction, although in practice for CNNs `Conv_input` should only appear as `subr` of `Dim_ineq`.
 
 ### Inference strategy
 
@@ -188,6 +188,9 @@ The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, w
 
 ## Projections inference
 
+Unlike shape inference proper, constraints that participate in projections inference pertain to a single assignment, and projection equations only tie individual instances of tensor accesses in the assignments. In particular even if the same tensor repeats in the assignments, the distinct instances will have different projection ids and participate in disjoint equations, so that they can be indexed differently.
+
+
 ```ocaml
 type proj = Var of dim_var | Proj of { proj_id : int; d : int } | Solved of axis_index
 type proj_to_index = Ir.Indexing.axis_index Map.M(Int).t
@@ -205,7 +208,7 @@ The projection inference functions.
 
 * `get_proj_equations inequalities proj_axis_env env` converts both equations and inequalitites to projection equations. For inequalities, it takes broadcasting into account, and equates a potentially-broadcasted dim-1 projection to `Fixed_idx 0`. `proj_axis_env` originates from the `Shape` module, holds projections from the slice operator and the einsum syntax.
 * `solve_proj_equations` unifies the projection equations, using union-find to maintain a representative for equal projections. Projections that already have an `axis_index` are `non_product` (not to be iterated over). The remaining projections have a `product_dim`, and get a fresh iterator.
-* `get_proj_index` gets an `axis_index` for a `dim` based on the representative of its `proj_id`; and `Fixed_idx 0` for dim=1.
+* `get_dim_index` gets an `axis_index` for a `dim` based on the representative of its `proj_id`; and `Fixed_idx 0` for dim=1.
 
 ## Deriving the constraints
 

@@ -637,7 +637,7 @@ let row_to_dims row =
              ( "Not enough shape information: unresolved variable "
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Row_mismatch [ row ] ] )
-    | Affine _ ->
+    | Conv_input _ ->
         raise
         @@ Row.Shape_error
              ( "Not enough shape information: affine dimension cannot be converted to single int",
@@ -740,7 +740,7 @@ let derive_projections (update_step : update_step) : Idx.projections =
     Array.of_list_map all_product_projs ~f:(fun (p, _) -> Row.proj_to_iterator proj_env p)
   in
   let indices_of_sh (sh : t) =
-    Array.of_list_map ~f:(Row.get_proj_index proj_env)
+    Array.of_list_map ~f:(Row.get_dim_index proj_env)
     @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
   in
   try

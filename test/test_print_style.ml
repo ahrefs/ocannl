@@ -6,7 +6,6 @@ let test_print_styles () =
   (* Create a solved dimension with all possible attributes *)
   let solved_dim_full = { 
     d = 28; 
-    padding = Some 2; 
     label = Some "height"; 
     proj_id = None
   } in
@@ -26,19 +25,12 @@ let test_print_styles () =
   (* Create a solved dimension with minimal attributes *)
   let solved_dim_minimal = { 
     d = 64; 
-    padding = None; 
+    
     label = None; 
     proj_id = None 
   } in
   
-  (* Create a solved dimension with only padding *)
-  let solved_dim_padding = { 
-    d = 32; 
-    padding = Some 3; 
-    label = Some "width"; 
-    proj_id = None 
-  } in
-  
+
   (* Create a variable dimension *)
   let var_dim_labeled = get_var ~label:"channels" () in
   let var_dim_unlabeled = get_var () in
@@ -54,10 +46,6 @@ let test_print_styles () =
   Stdio.printf "  Only_labels: %s\n" (solved_dim_to_string Only_labels solved_dim_minimal);
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_minimal);
   Stdio.printf "  Projection_and_size: %s\n" (solved_dim_to_string Projection_and_size solved_dim_minimal);
-  
-  Stdio.printf "\nWith padding only (d=32, padding=3, label=width, no proj_id):\n";
-  Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_padding);
-  Stdio.printf "  Projection_and_size: %s\n" (solved_dim_to_string Projection_and_size solved_dim_padding);
   
   Stdio.printf "\nWith projection (d=32, label=width, proj_id):\n";
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_with_proj);
