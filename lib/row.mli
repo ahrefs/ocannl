@@ -136,7 +136,7 @@ val solve_inequalities :
 val row_to_labels : environment -> t -> string array
 
 type proj [@@deriving compare, equal, sexp]
-type proj_env [@@deriving sexp]
+type proj_env [@@deriving sexp_of]
 
 val fresh_row_proj : t -> t
 

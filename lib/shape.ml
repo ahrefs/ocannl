@@ -737,7 +737,7 @@ let derive_projections (update_step : update_step) : Idx.projections =
   in
   let product_space : int array = Array.of_list_map all_product_projs ~f:snd in
   let product_iterators : Idx.symbol array =
-    Array.of_list_map all_product_projs ~f:(fun (p, _) -> Row.proj_to_iterator proj_env p)
+    Array.of_list_map all_product_projs ~f:(fun (p, _) -> Row.proj_to_iterator_exn proj_env p)
   in
   let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(Row.get_dim_index proj_env)
