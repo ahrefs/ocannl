@@ -1827,24 +1827,10 @@ let get_proj_index proj_env =
         | None -> unknown_projection proj_id d)
     | Solved idx -> idx
     | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
-        let symbols = ref [] in
-        let offset = ref 0 in
-        let process_term coeff term_index =
-          match term_index with
-          | Idx.Fixed_idx i -> offset := !offset + (coeff * i)
-          | Idx.Iterator s -> symbols := (coeff, s) :: !symbols
-          | Idx.Affine { symbols = term_symbols; offset = term_offset } ->
-              offset := !offset + (coeff * term_offset);
-              symbols := List.map term_symbols ~f:(fun (c, s) -> (coeff * c, s)) @ !symbols
-        in
-        let process_proj coeff term_proj =
-          let index = loop term_proj in
-          process_term coeff index
-        in
-        process_proj stride output;
-        List.iter solved_kernel ~f:(fun (c, i) -> process_term c i);
-        List.iter unsolved_kernel ~f:(fun (c, v) -> process_proj c (Var v));
-        Idx.Affine { symbols = List.rev !symbols; offset = !offset }
+        let output = loop output in
+        let solved_kernel = List.map solved_kernel ~f:(fun (c, i) -> (c, i)) in
+        let unsolved_kernel = List.map unsolved_kernel ~f:(fun (c, v) -> (c, loop @@ Var v)) in
+        Idx.Affine { symbols = ((stride, output) :: solved_kernel) @ unsolved_kernel; offset = 0 }
     | Var v when Hashtbl.mem proj_env.v_env v -> loop @@ Hashtbl.find_exn proj_env.v_env v
     | Var v as proj ->
         raise
@@ -1874,38 +1860,35 @@ let get_dim_index proj_env =
         match Map.find proj_env.proj_to_index repr with
         | Some i -> i
         | None -> unknown_projection proj_id d)
-    | Conv_input _ as conv_dim ->
-        let rec to_proj_from_dim : dim -> proj = function
-          | Var v -> Var v
-          | Dim s -> Proj (Option.value ~default:(Proj_id.fresh ()) s.proj_id, s)
-          | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
-              let new_solved_kernel =
-                Option.to_list solved_kernel |> List.map ~f:(fun s -> (1, loop (Dim s)))
-              in
-              Conv_input
-                {
-                  stride;
-                  output = to_proj_from_dim output;
-                  solved_kernel = new_solved_kernel;
-                  unsolved_kernel;
-                }
-        in
-        let proj = to_proj_from_dim conv_dim in
-        let index = get_proj_index proj_env proj in
-        let padding =
-          match conv_dim with
-          | Conv_input { output = Dim { proj_id = Some pid; _ }; _ } ->
-              let repr, _ =
-                Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:pid ~rank:0
-              in
-              Map.find proj_env.proj_to_padding repr |> Option.value ~default:0
-          | _ -> 0
-        in
-        let left_padding = (padding + 1) / 2 in
-        match index with
-        | Idx.Affine ({ offset; _ } as aff) ->
-            Idx.Affine { aff with offset = offset - left_padding }
-        | idx -> idx
+    | Conv_input { stride; output; solved_kernel; unsolved_kernel } ->
+        (* Handle unsolved variables - these should be resolved by now *)
+        if not (List.is_empty unsolved) then
+          raise
+          @@ Shape_error
+               ( "Affine dimension has unresolved variables",
+                 [ Dim_mismatch [ Affine { solved; unsolved } ] ] );
+
+        (* Process solved terms *)
+        let symbols = ref [] in
+        let offset = ref 0 in
+
+        Option.iter solved ~f:(function
+          | { d; proj_id = Some proj_id; _ } ->
+              if Idx.iterated d then
+                let repr, _ =
+                  Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
+                in
+                match Map.find proj_env.proj_to_index repr with
+                | Some (Iterator symbol) -> symbols := (1, symbol) :: !symbols
+                | Some (Fixed_idx i) -> offset := !offset + i
+                | Some (Affine _) ->
+                    (* Nested affine - would need recursive handling *)
+                    raise @@ Shape_error ("Nested affine projections not supported", [])
+                | None -> unknown_projection proj_id d
+              else ()
+          | { proj_id = None; _ } -> assert false);
+
+        Idx.Affine { symbols = List.rev !symbols; offset = !offset }
   in
   loop
 
@@ -1917,7 +1900,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
-  let proj_to_padding = ref @@ Map.empty (module Proj_id) in
+  (* let *)
+
   let rec loop = function
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
         p_dims := (p1, d) :: !p_dims
@@ -1932,23 +1916,17 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
         proj_classes := Utils.union_add ~equal:Proj_id.equal !proj_classes p1 p2
     | Proj_eq (Proj (p, _), Solved idx) | Proj_eq (Solved idx, Proj (p, _)) ->
         p_solved := (p, idx) :: !p_solved
-    | Proj_eq (Proj (p, { d; _ }), (Conv_input { solved_kernel; _ } as conv_input))
-    | Proj_eq ((Conv_input { solved_kernel; _ } as conv_input), Proj (p, { d; _ })) ->
-        let total_kernel_size =
-          List.fold solved_kernel ~init:0 ~f:(fun acc (_, idx) ->
-              match idx with Idx.Fixed_idx i -> acc + i | _ -> acc)
-        in
-        let padding = d - total_kernel_size in
-        if padding > 0 then
-          proj_to_padding :=
-            Map.update !proj_to_padding p ~f:(function
-              | None -> padding
-              | Some p' -> max padding p');
+    | Proj_eq (Proj (p, _), (Conv_input _ as conv_input))
+    | Proj_eq ((Conv_input _ as conv_input), Proj (p, _)) ->
+        (* We will substitute variables in conv_input later *)
         p_conv_input := (p, conv_input) :: !p_conv_input
     | Proj_eq (Solved idx, (Conv_input _ as conv_input))
     | Proj_eq ((Conv_input _ as conv_input), Solved idx) ->
         verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
+        (* raise @@ Shape_error ( "Cannot unify non-affine index with affine projection", [
+           Projection_mismatch [ Solved idx; Affine affine ] ] ) *)
     | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ as conv_input2)) ->
+        (* For now, we can only unify identical affine expressions *)
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
     | Proj_eq (Solved idx1, Solved idx2) when Idx.equal_axis_index idx1 idx2 -> ()
@@ -1989,6 +1967,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       if Idx.iterated d && (not @@ Map.mem !projs repr) then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
+            (* TODO: consider updating padding *)
             if d <> d2 then
               raise
               @@ Shape_error
@@ -1999,40 +1978,12 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list) : proj_env =
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
-  let proj_env_for_conv =
-    {
-      v_env;
-      proj_classes = !proj_classes;
-      proj_to_index = !projs;
-      proj_to_padding = !proj_to_padding;
-      product_dim = !product_dim;
-      non_product = !non_product;
-    }
-  in
-  List.iter !p_conv_input ~f:(fun (pid, conv_input) ->
-      let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0 in
-      let index = get_proj_index proj_env_for_conv conv_input in
-      projs := Map.set !projs ~key:repr ~data:index);
-  List.iter !verify_when_solved1 ~f:(fun (idx, conv_input) ->
-      let index = get_proj_index proj_env_for_conv conv_input in
-      if not (Idx.equal_axis_index idx index) then
-        raise
-        @@ Shape_error
-             ( "Cannot unify non-affine index with affine projection",
-               [ Index_mismatch [ idx; index ] ] ));
-  List.iter !verify_when_solved2 ~f:(fun (conv1, conv2) ->
-      let index1 = get_proj_index proj_env_for_conv conv1 in
-      let index2 = get_proj_index proj_env_for_conv conv2 in
-      if not (Idx.equal_axis_index index1 index2) then
-        raise
-        @@ Shape_error
-             ( "Cannot unify different affine projections",
-               [ Index_mismatch [ index1; index2 ] ] ));
+
   {
     v_env;
     proj_classes = !proj_classes;
     proj_to_index = !projs;
-    proj_to_padding = !proj_to_padding;
+    proj_to_padding;
     product_dim = !product_dim;
     non_product = !non_product;
   }
@@ -2055,7 +2006,7 @@ let get_product_proj proj_env dim =
            ( "projection_of_solved_dims: still not fully inferred for variable "
              ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
              [ Dim_mismatch [ dim ] ] )
-  | Conv_input _ -> None
+  | Affine _ -> None
 
 let proj_to_iterator_exn proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with
