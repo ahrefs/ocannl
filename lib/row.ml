@@ -1592,7 +1592,6 @@ let empty_env =
   {
     dim_env = Map.empty (module Dim_var);
     row_env = Map.empty (module Row_var);
-    (* padding_env = Map.empty (module Dim_var); *)
   }
 
 let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
