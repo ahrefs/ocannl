@@ -73,21 +73,25 @@ opam install cudajit gccjit  # for CUDA and GCC backends
 ## Development Workflow
 
 ### Testing
+
 - Tests are implemented as inline expectations using `ppx_expect`
 - Tutorial files in `test/` serve as both documentation and integration tests
 - Use `dune promote` to accept test output changes
 
 ### Configuration
+
 - Copy `ocannl_config.example` to `ocannl_config` to customize settings
 - Key configs: backend selection, debug logging, optimization levels
 - Config is searched in current and ancestor directories
 
 ### Backend Development
+
 - Backends must implement stream-based execution with FIFO queuing
 - Support for events and synchronization between streams/devices  
 - Code generation through `Low_level.t` to backend-specific representations
 
 ### Syntax Extensions
+
 - `%cd` requires `NTDSL` module in scope (from `Operation.NTDSL`)
 - `%op` requires `TDSL` module in scope (from `Operation.TDSL`)
 - Inline tensor declarations using string literals
@@ -96,18 +100,21 @@ opam install cudajit gccjit  # for CUDA and GCC backends
 ## Common Development Tasks
 
 ### Adding New Operations
+
 1. Add primitive operation to `arrayjit/lib/ops.ml`
 2. Implement interpretation in the same file
 3. Add syntax support in `lib/ppx_*.ml` if needed
 4. Add high-level wrappers in `lib/operation.ml`
 
 ### Backend Extensions
+
 1. Implement device-specific module following `Backend_impl` signatures
 2. Add compilation logic in `arrayjit/lib/backends.ml`
 3. Handle memory management and synchronization
 4. Add configuration options in `ocannl_config.example`
 
 ### Shape Inference Extensions
+
 1. Modify projection logic in `arrayjit/lib/indexing.ml`
 2. Update shape constraint generation in `lib/shape.ml`
 3. Test with various einsum patterns in `test/einsum_trivia.ml`

@@ -17,6 +17,7 @@ let optimization_level () =
 
 let compiler_command =
   let default =
+    (* TODO: there's a direct way to get the compiler command from the OCaml compiler. *)
     lazy
       (let ic = Unix.open_process_in "ocamlc -config" in
        let rec find_compiler () =
