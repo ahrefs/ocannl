@@ -71,7 +71,7 @@ type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
-  padding : ((int * int) array * float) option Lazy.t;
+  padding : (Nd.axis_padding array * float) option Lazy.t;
       (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
           padding value. *)
   size_in_bytes : int Lazy.t;
@@ -102,7 +102,7 @@ let dims_without_padding tn =
   | None -> Lazy.force tn.dims
   | Some (padding, _) ->
       let dims = Lazy.force tn.dims in
-      Array.map2_exn dims padding ~f:(fun dim (left, right) -> dim - left - right)
+      Array.map2_exn dims padding ~f:(fun dim { left; right } -> dim - left - right)
 
 let get_padding tn = Lazy.force tn.padding
 

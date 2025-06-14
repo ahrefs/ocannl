@@ -47,10 +47,15 @@
 
 open Base
 
+type padding = Ir.Ndarray.axis_padding array option
+
 type t = {
   mutable batch : Row.t;
   mutable input : Row.t;
   mutable output : Row.t;
+  mutable batch_padding : padding;
+  mutable input_padding : padding;
+  mutable output_padding : padding;
   id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }

@@ -129,6 +129,11 @@ let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precisio
 let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
 
+(** {2 *** Initialization ***} *)
+  
+type axis_padding = { left : int; right : int }
+[@@deriving sexp, equal]
+
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding
     (init_op : Ops.init_op) : (ocaml, elt_t) bigarray =
   Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Rand.Lib.init seed);
@@ -137,7 +142,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
   let unpadded_dims, padding_info = match padding with
     | None -> dims, None
     | Some (pad_config, pad_value) ->
-        let unpadded_dims = Array.map2_exn dims pad_config ~f:(fun dim (left, right) -> 
+        let unpadded_dims = Array.map2_exn dims pad_config ~f:(fun dim { left; right } -> 
           dim - left - right) in
         (unpadded_dims, Some (pad_config, pad_value))
   in
@@ -164,7 +169,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
     match padding_info with
     | None -> idcs
     | Some (pad_config, _) ->
-        Array.map2_exn idcs pad_config ~f:(fun idx (left, _) -> idx + left)
+        Array.map2_exn idcs pad_config ~f:(fun idx { left; _ } -> idx + left)
   in
   
   (* For non-constant fill operations, we need to iterate over unpadded dimensions *)

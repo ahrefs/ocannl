@@ -48,7 +48,7 @@ let test_padding () =
   Stdio.printf "\n\nTesting padding functionality:\n";
 
   (* Test padding with float32 array *)
-  let padding_config = [| (1, 1); (2, 1) |] in (* left=1,right=1 for first dim; left=2,right=1 for second dim *)
+  let padding_config = [| { Ndarray.left = 1; right = 1 }; { left = 2; right = 1 } |] in (* left=1,right=1 for first dim; left=2,right=1 for second dim *)
   let padding_value = -999.0 in
 
   let padded_dims = [| 4; 6 |] in (* (2+1+1) x (3+2+1) *)
