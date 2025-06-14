@@ -361,7 +361,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
-    let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let size_in_bytes = tn.Tn.size_in_bytes in
 
     let memcpy ~dst_ptr =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
@@ -685,10 +685,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
             | Param_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
                 let buffer =
                   Hashtbl.find_or_add stream.device.cross_stream_candidates tn ~default:(fun () ->
-                      get_buffer_for_ptr device ~size_in_bytes:(Lazy.force tn.size_in_bytes)
+                      get_buffer_for_ptr device ~size_in_bytes:(tn.size_in_bytes)
                       @@ Ndarray.get_voidptr_not_managed
                       @@ Option.value_exn ~here:[%here]
-                      @@ Lazy.force tn.array)
+                      tn.array)
                 in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
             | Param_ptr tn ->

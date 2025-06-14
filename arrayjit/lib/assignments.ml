@@ -122,7 +122,7 @@ let%diagn2_sexp to_low_level code =
   let open Indexing in
   let get buffer idcs =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
-    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
+    if not (Array.length idcs = Array.length tn.Tn.dims) then
       [%log
         "get",
         "a=",
@@ -130,15 +130,15 @@ let%diagn2_sexp to_low_level code =
         ":",
         Tn.label tn,
         (idcs : Indexing.axis_index array),
-        (Lazy.force tn.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+        (tn.dims : int array)];
+    assert (Array.length idcs = Array.length tn.Tn.dims);
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn ->
         Low_level.Get_global (Ops.Merge_buffer { source_node_id = tn.Tn.id }, Some idcs)
   in
   let set tn idcs llv =
-    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
+    if not (Array.length idcs = Array.length tn.Tn.dims) then
       [%log
         "set",
         "a=",
@@ -146,8 +146,8 @@ let%diagn2_sexp to_low_level code =
         ":",
         Tn.label tn,
         (idcs : Indexing.axis_index array),
-        (Lazy.force tn.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+        (tn.dims : int array)];
+    assert (Array.length idcs = Array.length tn.Tn.dims);
     Low_level.Set { tn; idcs; llv; debug = "" }
   in
   let rec loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections =

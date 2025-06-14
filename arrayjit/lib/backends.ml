@@ -42,7 +42,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%track2_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
+    | { Tn.array = Some hosted; _ }, Some src ->
         if Tn.potentially_cross_stream tn then
           wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
@@ -90,7 +90,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%track2_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
+    | { Tn.array = Some hosted; _ }, Some dst ->
         wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
@@ -303,7 +303,7 @@ module Add_device
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let s = dst.stream in
-    let size_in_bytes = Lazy.force tn.Tnode.size_in_bytes in
+    let size_in_bytes = tn.Tnode.size_in_bytes in
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
       match (into_merge_buffer, dst_ptr) with
@@ -389,11 +389,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       [%log (key : Tnode.t)];
       let default () =
         let dst_ptr =
-          alloc_zero_init_array (Lazy.force key.prec) ~dims:(Lazy.force key.dims) stream
+          alloc_zero_init_array (key.prec) ~dims:(key.dims) stream
         in
         (if Utils.settings.automatic_host_transfers && Tn.known_constant key then
            match key.array with
-           | (lazy (Some hosted)) ->
+           | Some hosted ->
                Device.from_host ~dst_ptr ~dst:parent_context hosted;
                Hash_set.add key.host_read_by_devices stream.device.device_id
            | _ -> ());
@@ -413,10 +413,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                   && Tn.known_shared_cross_streams key && Tn.is_hosted_force key 44
                 then
                   Hashtbl.update_and_return device.cross_stream_candidates key ~f:(fun _ ->
-                      get_buffer_ptr ~size_in_bytes:(Lazy.force key.size_in_bytes)
+                      get_buffer_ptr ~size_in_bytes:(key.size_in_bytes)
                       @@ Ndarray.get_voidptr_not_managed
                       @@ Option.value_exn ~here:[%here]
-                      @@ Lazy.force key.array)
+                      @@ key.array)
                 else Hashtbl.find_or_add device.cross_stream_candidates key ~default
           in
           if Hashtbl.mem device.cross_stream_candidates key then

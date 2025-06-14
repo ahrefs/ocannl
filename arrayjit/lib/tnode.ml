@@ -61,26 +61,22 @@ type memory_mode =
           optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
-type delayed_prec = Not_specified | Default_spec of Ops.prec Lazy.t | Specified of Ops.prec
-[@@deriving sexp, equal]
-
 type prepare = { is_done : unit -> bool; sync : unit -> unit; transfer : unit -> unit }
 [@@deriving sexp_of]
 
 type t = {
-  array : Nd.t option Lazy.t;
-  prec : Ops.prec Lazy.t;
-  dims : int array Lazy.t;
-  padding : ((int * int) array * float) option Lazy.t;
+  mutable array : Nd.t option;
+  prec : Ops.prec;
+  dims : int array;
+  init_op : Ops.init_op;
+  padding : ((int * int) array * float) option;
       (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
           padding value. *)
-  size_in_bytes : int Lazy.t;
+  size_in_bytes : int;
   id : int;
   label : string list;
       (** Display information. It is better if the last element of the list is the most narrow or
           alphanumeric, e.g. an identifier. *)
-  mutable delayed_prec_unsafe : delayed_prec;
-      (** Participates in the computation of {!field-prec}. *)
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
@@ -94,17 +90,15 @@ type t = {
 let compare a1 a2 = compare_int a1.id a2.id
 
 let num_elems tn =
-  let dims = Lazy.force tn.dims in
+  let dims = tn.dims in
   if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
 
 let dims_without_padding tn =
-  match Lazy.force tn.padding with
-  | None -> Lazy.force tn.dims
+  match tn.padding with
+  | None -> tn.dims
   | Some (padding, _) ->
-      let dims = Lazy.force tn.dims in
+      let dims = tn.dims in
       Array.map2_exn dims padding ~f:(fun dim (left, right) -> dim - left - right)
-
-let get_padding tn = Lazy.force tn.padding
 
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
@@ -189,11 +183,9 @@ let log_debug_info ~from_log_level tn =
         debug_memory_mode tn.memory_mode,
         "backends:",
         (tn.backend_info : Sexp.t)];
-      if Lazy.is_val tn.array then
-        match tn.array with
-        | (lazy None) -> [%log "<not-on-host>"]
-        | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
-      else [%log "<not-in-yet>"]]]
+      match tn.array with
+      | None -> [%log "<not-on-host>"]
+      | Some nd -> Nd.log_debug_info ~from_log_level nd]]
 
 (** The one exception to "most local" is that the sharing property is kept at [Unset]. *)
 let default_to_most_local tn provenance =
@@ -286,7 +278,7 @@ let mode_is_unspecified tn =
   | _ -> false
 
 let update_memory_mode tn mode provenance =
-  match (tn.memory_mode, mode) with
+  (match (tn.memory_mode, mode) with
   | None, _ -> tn.memory_mode <- Some (mode, provenance)
   | Some (m1, _), m2 when equal_memory_mode m1 m2 -> ()
   | Some (Never_virtual, prov2), Virtual ->
@@ -321,7 +313,13 @@ let update_memory_mode tn mode provenance =
       invalid_arg
         [%string
           "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
-           %{debug_name tn}"]
+           %{debug_name tn}"]);
+  match (mode, tn.array) with
+  | Hosted _, None ->
+      (* Create array if the tensor should be hosted *)
+      let debug = "Host array for " ^ get_debug_name ~id:tn.id ~label:tn.label () in
+      tn.array <- Some (Nd.create_array ~debug tn.prec ~dims:tn.dims ~padding:tn.padding tn.init_op)
+  | _ -> ()
 
 (** [update_memory_sharing tn sharing provenance] preserves the memory mode of [tn] while updating
     the cross-stream sharing property, except that [Hosted Nonconstant] is further specialized to
@@ -359,68 +357,11 @@ let update_memory_sharing tn sharing provenance =
            %{debug_name tn}: old mode %{debug_memory_mode mem_mode}, new sharing \
            %{Sexp.to_string_hum @@ sexp_of_sharing sharing}"]
 
-let update_prec ?only_if tn prec =
-  let do_update =
-    match only_if with
-    | None -> false
-    | Some cond -> (
-        match tn.delayed_prec_unsafe with
-        | Specified old_prec -> cond old_prec
-        | Default_spec old_prec when Lazy.is_val old_prec -> cond @@ Lazy.force old_prec
-        | _ -> true)
-  in
-  if do_update then
-    if Lazy.is_val tn.prec then (
-      if not @@ Ops.equal_prec (Lazy.force tn.prec) prec then
-        raise
-        @@ Utils.User_error
-             (String.concat
-                [
-                  "Tnode.update_prec: setting precision ";
-                  Ops.prec_string prec;
-                  " for ";
-                  debug_name tn;
-                  " but the settled precision is ";
-                  Ops.prec_string (Lazy.force tn.prec);
-                ]))
-    else
-      match (tn.delayed_prec_unsafe, only_if) with
-      | Specified old_prec, _ when not @@ Ops.equal_prec old_prec prec ->
-          raise
-          @@ Utils.User_error
-               (String.concat
-                  [
-                    "Tnode.update_prec: setting precision ";
-                    Ops.prec_string prec;
-                    " for ";
-                    debug_name tn;
-                    ", but the precision is already set to ";
-                    Ops.prec_string (Lazy.force tn.prec);
-                  ])
-      | Default_spec old_prec, Some cond when not @@ Lazy.is_val old_prec ->
-          tn.delayed_prec_unsafe <-
-            Default_spec
-              (lazy
-                (let old = Lazy.force old_prec in
-                 if cond old then prec else old))
-      | _ -> tn.delayed_prec_unsafe <- Specified prec
 
 let exceeds_fp16_cutoff tn c =
   match Utils.settings.check_half_prec_constants_cutoff with
   | None -> false
-  | Some cutoff ->
-      (* Only force if needed. *)
-      Float.(abs c >= cutoff)
-      &&
-      let prec =
-        if Lazy.is_val tn.prec then Lazy.force tn.prec
-        else
-          match tn.delayed_prec_unsafe with
-          | Specified prec -> prec
-          | Default_spec prec -> Lazy.force prec
-          | Not_specified -> Lazy.force tn.prec
-      in
-      Ops.is_up_to_fp16 prec
+  | Some cutoff -> Float.(abs c >= cutoff) && Ops.is_up_to_fp16 tn.prec
 
 include Comparator.Make (struct
   type nonrec t = t
@@ -445,17 +386,14 @@ let sexp_of_t_set s = [%sexp_of: t Sequence.t] @@ Set.to_sequence s
 
 let get_exn a =
   match a.array with
-  | (lazy (Some nd)) -> nd
-  | _ -> invalid_arg @@ "Tnode.get_exn: array " ^ debug_name a ^ " is not hosted"
+  | Some nd -> nd
+  | None -> invalid_arg @@ "Tnode.get_exn: array " ^ debug_name a ^ " is not hosted"
 
-let has a = match a.array with (lazy (Some _)) -> true | _ -> false
+let has a = match a.array with Some _ -> true | None -> false
 
 let dims_to_string ?(with_axis_numbers = false) arr =
-  let dims_s =
-    if Lazy.is_val arr.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
-    else "<not-in-yet>"
-  in
-  Ops.prec_string (Lazy.force arr.prec) ^ " prec " ^ dims_s
+  let dims_s = Nd.int_dims_to_string ~with_axis_numbers arr.dims in
+  Ops.prec_string arr.prec ^ " prec " ^ dims_s
 
 let no_grad_ident_label tn =
   match List.filter tn.label ~f:(fun i -> is_alphanum_ i) with
@@ -509,13 +447,11 @@ let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
 let header tn =
   let debug = Utils.settings.log_level > 0 in
   let mem_size =
-    if Lazy.is_val tn.array then
-      match tn.array with
-      | (lazy None) -> "<not-hosted>"
-      | (lazy (Some nd)) ->
-          let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
-          if debug then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
-    else "<not-in-yet>"
+    match tn.array with
+    | None -> "<not-hosted>"
+    | Some nd ->
+        let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
+        if debug then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
   let repeating_grad_idents = Hashtbl.create ~size:1 (module String) in
@@ -534,31 +470,17 @@ end)
 
 let registry = Registry.create 16
 
-let create ?default_prec ~id ~label ~dims ~padding init_op =
-  let debug = "Host array for " ^ get_debug_name ~id ~label () in
-  let rec array =
-    lazy
-      (if is_hosted_force tn 30 then
-         Some
-           (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims) ~padding:(Lazy.force padding)
-              init_op)
-       else None)
-  and prec =
-    lazy
-      (match tn.delayed_prec_unsafe with
-      | Specified prec | Default_spec (lazy prec) -> prec
-      | Not_specified ->
-          raise @@ Utils.User_error "Tnode.update_prec: precision is not specified yet")
-  and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
-  and tn =
-    let delayed_prec_unsafe =
-      match default_prec with None -> Not_specified | Some prec -> Default_spec prec
-    in
+let create ~prec ~id ~label ~dims ~padding init_op =
+  let size_in_bytes =
+    let num_elems = if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * ) in
+    num_elems * Ops.prec_in_bytes prec
+  in
+  let tn =
     {
-      array;
-      delayed_prec_unsafe;
+      array = None;
       prec;
       dims;
+      init_op;
       padding;
       size_in_bytes;
       id;
@@ -583,12 +505,12 @@ let initial_default_prec =
 let find =
   let mock =
     {
-      array = lazy None;
-      prec = lazy initial_default_prec;
-      delayed_prec_unsafe = Specified initial_default_prec;
-      dims = lazy [||];
-      padding = lazy None;
-      size_in_bytes = lazy 0;
+      array = None;
+      prec = initial_default_prec;
+      dims = [||];
+      init_op = Ops.Constant_fill { values = [||]; strict = false };
+      padding = None;
+      size_in_bytes = 0;
       id = -1;
       label = [];
       memory_mode = None;
@@ -618,32 +540,29 @@ let do_write tn =
 
 let points_1d ?from_axis ~xdim tn =
   do_read tn;
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
-  @@ Lazy.force tn.array
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr) tn.array
 
 let points_2d ?from_axis ~xdim ~ydim tn =
   do_read tn;
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
-  @@ Lazy.force tn.array
+  Option.value_map ~default:[||]
+    ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+    tn.array
 
 let set_value tn =
   do_write tn;
-  Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+  Nd.set_from_float @@ Option.value_exn ~here:[%here] tn.array
 
 let get_value tn =
   do_read tn;
-  Nd.get_as_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+  Nd.get_as_float @@ Option.value_exn ~here:[%here] tn.array
 
 let set_values tn values =
   do_write tn;
-  Nd.(
-    reset (Constant_fill { values; strict = false })
-    @@ Option.value_exn ~here:[%here]
-    @@ Lazy.force tn.array)
+  Nd.(reset (Constant_fill { values; strict = false }) @@ Option.value_exn ~here:[%here] tn.array)
 
 let get_values tn =
   do_read tn;
-  Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
+  Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] tn.array)
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";

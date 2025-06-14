@@ -1,4 +1,5 @@
 open Base
+module Lazy = Utils.Lazy
 module Nd = Ir.Ndarray
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
@@ -17,16 +18,26 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.comp }
+type delayed_prec = Not_specified | Default_spec of Ir.Ops.prec Lazy.t | Specified of Ir.Ops.prec
+[@@deriving sexp, equal]
+
+type diff = { 
+  mutable grad : (Tn.t[@sexp.opaque]) Lazy.t;
+  zero_grads : Asgns.t;
+  backprop : Asgns.comp;
+  mutable delayed_prec_unsafe : delayed_prec;
+}
 [@@deriving sexp_of]
 
 type t = {
   forward : comp;
   diff : diff option;
   id : int;
-  value : tn;
+  label : string list;
+  mutable value : tn Lazy.t;
   shape : Shape.t;
   children : subtensor list;
+  mutable delayed_prec_unsafe : delayed_prec;
 }
 
 and subtensor = { subtensor : t; embedded : bool }
@@ -35,7 +46,7 @@ let rec sexp_of_t t =
   Sexp.message "Tensor"
     [
       ("id", sexp_of_int t.id);
-      ("label", [%sexp_of: string list] t.value.label);
+      ("label", [%sexp_of: string list] t.label);
       ("forward", [%sexp_of: Asgns.comp] t.forward);
       ("diff", [%sexp_of: diff option] t.diff);
       ("children", [%sexp_of: subtensor list] t.children);
@@ -110,7 +121,7 @@ exception Session_error of string * t option [@@deriving sexp]
 let session_error_printer = function
   | Session_error (msg, None) -> Some msg
   | Session_error (msg, Some m) ->
-      Some [%string "For #%{m.id#Int} %{Tn.debug_name m.value}: %{msg}"]
+      Some [%string {|For #%{m.id#Int} %{String.concat ~sep:" " m.label}: %{msg}|}];
   | _ -> None
 
 let () = Stdlib.Printexc.register_printer session_error_printer
@@ -177,14 +188,14 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let id = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
-  let default_prec =
-    let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
+  let value_delayed_prec =
+    let v_precs = List.filter_map orig_ts ~f:(fun ti -> ti.value) |> List.map ~f:(fun tn -> tn.prec) in
     let default = !default_value_prec in
-    lazy
-      (List.map lazy_v_precs ~f:Lazy.force
-      |> List.reduce ~f:Ir.Ops.promote_prec
-      |> Option.value ~default)
+    match List.reduce v_precs ~f:Ir.Ops.promote_prec with
+    | Some prec -> Specified prec
+    | None -> Specified default
   in
+  let resolved_prec = resolve_prec value_delayed_prec in
   let rec shape_logics = function
     | [] -> [ Shape.Terminal init_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
@@ -198,15 +209,19 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) init_op in
+  let resolved_dims = Lazy.force dims in
+  let v = Tn.create ~prec:resolved_prec ~id ~label ~dims:resolved_dims ~padding:None init_op in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
       ~init:(Set.empty (module Int))
       ~f:(fun used ti ->
         let embedded = is_fwd_root ti && not (Set.mem used ti.id) in
-        if embedded then
-          embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) ti.value;
+        if embedded then (
+          match ti.value with
+          | Some tn -> embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) tn
+          | None -> () (* Skip if tensor node not yet created *)
+        );
         (Set.add used ti.id, { subtensor = ti; embedded }))
   in
   let fwds =
@@ -218,7 +233,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
-  let t = { forward; diff = None; id; value = v; shape; children } in
+  let t = { forward; diff = None; id; value = Some v; shape; children; delayed_prec_unsafe = value_delayed_prec } in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
@@ -227,18 +242,18 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
     t)
   else
-    let default_prec =
-      let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
-      let lazy_g_precs = List.filter_map orig_ts ~f in
+    let grad_delayed_prec =
+      let f ti = Option.bind ti.diff ~f:(fun d -> d.grad) |> Option.map ~f:(fun tn -> tn.prec) in
+      let g_precs = List.filter_map orig_ts ~f in
       let default = !default_grad_prec in
-      lazy
-        (List.map lazy_g_precs ~f:Lazy.force
-        |> List.reduce ~f:Ir.Ops.promote_prec
-        |> Option.value ~default)
+      match List.reduce g_precs ~f:Ir.Ops.promote_prec with
+      | Some prec -> Specified prec
+      | None -> Specified default
     in
+    let resolved_grad_prec = resolve_prec grad_delayed_prec in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims ~padding:(lazy None) default_init_op in
+    let g = Tn.create ~prec:resolved_grad_prec ~id:grad_id ~label:("grad" :: label) ~dims:resolved_dims ~padding:None default_init_op in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g ti =
@@ -257,8 +272,9 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let ordered_ts = List.rev ordered_ts in
     let bprop ti =
       Option.map ti.diff ~f:(fun diff ->
-          embedded_nodes :=
-            Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
+          match diff.grad with
+        | Some g -> embedded_nodes := Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) g
+        | None -> () (* Skip if grad node not yet created *);
           diff.backprop)
     in
     let bcks =
@@ -274,8 +290,8 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     List.iter ordered_ts ~f:(fun ti ->
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
-    let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor = { forward; diff; id; value = v; shape; children } in
+    let diff = Some { grad = Some g; zero_grads; backprop; delayed_prec_unsafe = grad_delayed_prec } in
+    let tensor = { forward; diff; id; value = Some v; shape; children; delayed_prec_unsafe = value_delayed_prec } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor

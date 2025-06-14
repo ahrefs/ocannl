@@ -209,7 +209,7 @@ let hum_typ_of_prec = function
     precision. *)
 type init_op =
   | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=true], loops over
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=false], loops over
           the provided values. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell (i.e. how many cells away it is from the

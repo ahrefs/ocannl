@@ -499,12 +499,12 @@ module C_syntax (B : C_syntax_config) = struct
         group (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body_doc) ^^ hardline ^^ rbrace)
     | Zero_out tn ->
         pp_ll
-          (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
+          (Low_level.loop_over_dims (tn.dims) ~body:(fun idcs ->
                Set { tn; idcs; llv = Constant 0.0; debug = get_ident tn ^ " := 0" }))
     | Set { tn; idcs; llv; debug } ->
         let ident_doc = string (get_ident tn) in
-        let dims = Lazy.force tn.dims in
-        let prec = Lazy.force tn.prec in
+        let dims = tn.dims in
+        let prec = tn.prec in
         let local_defs, val_doc = pp_float prec llv in
         let offset_doc = pp_array_offset (idcs, dims) in
         let assignment =
@@ -567,7 +567,7 @@ module C_syntax (B : C_syntax_config) = struct
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback -> callback ()
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
-        let local_defs, value_doc = pp_float (Lazy.force prec) value in
+        let local_defs, value_doc = pp_float (prec) value in
         let assignment =
           string ("v" ^ Int.to_string scope_id) ^^ string " = " ^^ value_doc ^^ semi
         in
@@ -578,25 +578,25 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     match vcomp with
     | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
-        let num_typ = string (B.typ_of_prec @@ Lazy.force scope_prec) in
+        let num_typ = string (B.typ_of_prec scope_prec) in
         let decl =
           num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ string " = 0" ^^ semi
         in
         let body_doc = pp_ll body in
         let defs = decl ^^ hardline ^^ body_doc in
-        let prefix, postfix = B.convert_precision ~from:(Lazy.force scope_prec) ~to_:prec in
+        let prefix, postfix = B.convert_precision ~from:(scope_prec) ~to_:prec in
         let expr = string prefix ^^ string ("v" ^ Int.to_string scope_id) ^^ string postfix in
         (defs, expr)
     | Get_local id ->
-        let scope_prec = Lazy.force id.tn.prec in
+        let scope_prec = id.tn.prec in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (empty, expr)
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        let from_prec = Lazy.force tn.prec in
+        let from_prec = tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let offset_doc = pp_array_offset (idcs, tn.dims) in
         let expr =
           string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
         in
@@ -604,9 +604,9 @@ module C_syntax (B : C_syntax_config) = struct
     | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
-        let from_prec = Lazy.force tn.prec in
+        let from_prec = tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let offset_doc = pp_array_offset (idcs, tn.dims) in
         let expr = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
         (empty, expr)
     | Constant c ->
@@ -661,14 +661,14 @@ module C_syntax (B : C_syntax_config) = struct
            logs. *)
         debug_float prec @@ Get_local id
     | Get_local id ->
-        let scope_prec = Lazy.force id.tn.prec in
+        let scope_prec = id.tn.prec in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
     | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        let from_prec = Lazy.force tn.prec in
-        let dims = Lazy.force tn.dims in
+        let from_prec = tn.prec in
+        let dims = tn.dims in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
         let access_doc =
@@ -684,8 +684,8 @@ module C_syntax (B : C_syntax_config) = struct
     | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
-        let from_prec = Lazy.force tn.prec in
-        let dims = Lazy.force tn.dims in
+        let from_prec = tn.prec in
+        let dims = tn.dims in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
         let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
@@ -736,7 +736,7 @@ module C_syntax (B : C_syntax_config) = struct
              if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
                tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
              if is_param then
-               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+               (B.typ_of_prec (tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
              else params)
     in
     let idx_params =
@@ -754,7 +754,7 @@ module C_syntax (B : C_syntax_config) = struct
       Option.(
         to_list
         @@ map merge_node ~f:(fun tn ->
-               ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
+               ("const " ^ B.typ_of_prec (tn.prec) ^ " *merge_buffer", Merge_buffer)))
     in
     let all_params = log_file_param @ merge_param @ idx_params @ params in
     let sorted_params =
@@ -830,7 +830,7 @@ module C_syntax (B : C_syntax_config) = struct
       ^^ separate_map empty
            (fun (tn, node) ->
              if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
-               let typ_doc = string (B.typ_of_prec @@ Lazy.force tn.prec) in
+               let typ_doc = string (B.typ_of_prec @@ tn.prec) in
                let ident_doc = string (get_ident tn) in
                let size_doc = OCaml.int (Tn.num_elems tn) in
                let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in

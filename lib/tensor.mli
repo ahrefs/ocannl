@@ -10,24 +10,32 @@ type init_op = Ir.Ops.init_op
 type fetch_op = Ir.Assignments.fetch_op
 type projections = Ir.Indexing.projections
 
+(** This type allows us to delay the precision specification until a tensor node is observed by code
+    generation, making it convenient to specify precisions for composite tensors. *)
+type delayed_prec = Not_specified | Default_spec of Ir.Ops.prec Lazy.t | Specified of Ir.Ops.prec
+[@@deriving sexp, equal]
+
 type diff = {
-  grad : tn;
+  grad : tn Lazy.t;
   zero_grads : asgns;
       (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
   backprop : comp;
       (** Backpropagates for the tensor and its descendants; which typically means adding partial
           gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
+  mutable delayed_prec_unsafe : delayed_prec;
 }
 
 type t = {
   forward : comp;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
-  value : tn;
+  label : string list;  (** Same as [value.label]. *)
+  value : tn Lazy.t;
   shape : Shape.t;
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
+  mutable delayed_prec_unsafe : delayed_prec;
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)

@@ -88,7 +88,7 @@ let zero_out ctx block node =
        [
          Lazy.force node.ptr;
          RValue.zero ctx c_int;
-         RValue.int ctx c_index @@ Lazy.force node.tn.size_in_bytes;
+         RValue.int ctx c_index node.tn.size_in_bytes;
        ]
 
 let get_c_ptr ctx num_typ ptr = Gccjit.(RValue.ptr ctx (Type.pointer num_typ) ptr)
@@ -97,12 +97,12 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~param_ptrs ini
     (tn : Tn.t) =
   let open Gccjit in
   let traced = Low_level.(get_node traced_store tn) in
-  let dims = Lazy.force tn.dims in
+  let dims = tn.dims in
   let size_in_elems = Array.fold ~init:1 ~f:( * ) dims in
   let is_on_host = Tn.is_hosted_force tn 33 in
   assert (not @@ Tn.is_virtual_force tn 330);
-  assert (Bool.(Option.is_some (Lazy.force tn.array) = is_on_host));
-  let prec = Lazy.force tn.prec in
+  assert (Bool.(Option.is_some (tn.array) = is_on_host));
+  let prec = tn.prec in
   let zero_initialized = traced.zero_initialized in
   let c_typ = gcc_typ_of_prec prec in
   let num_typ = Type.(get ctx c_typ) in
@@ -120,7 +120,7 @@ let prepare_node ~debug_log_zero_out ~get_ident ctx traced_store ~param_ptrs ini
         let addr arr =
           Lazy.from_val @@ get_c_ptr ctx num_typ @@ Ctypes.bigarray_start Ctypes_static.Genarray arr
         in
-        match Lazy.force tn.array with
+        match tn.array with
         | Some (Byte_nd arr) -> addr arr
         | Some (Half_nd arr) -> addr arr
         | Some (Single_nd arr) -> addr arr
@@ -344,7 +344,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let idcs = lookup env idcs in
         let ptr = Option.value_exn ~here:[%here] merge_node in
-        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
+        let offset = jit_array_offset ctx ~idcs ~dims:(tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         (get_ident tn ^ ".merge[%d]{=%g}", [ offset; v ])
     | Get_global (C_function _, Some _) ->
@@ -352,7 +352,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get (tn, idcs) ->
         let node = get_node tn in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
+        let offset = jit_array_offset ctx ~idcs ~dims:(tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
         (node_debug_name get_ident node ^ "[%d]{=%g}", [ offset; v ])
     | Constant c -> (Float.to_string c, [])
@@ -445,7 +445,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
           zero_out ctx !current_block node)
     | Set_local (id, llv) ->
         let lhs = Map.find_exn !locals id in
-        let local_prec = Lazy.force id.tn.prec in
+        let local_prec = id.tn.prec in
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         let value = loop_float ~name ~env ~num_typ local_prec llv in
@@ -472,7 +472,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get_local id ->
         let lvalue = Map.find_exn !locals id in
         let rvalue = RValue.lvalue lvalue in
-        let local_prec = Lazy.force id.tn.prec in
+        let local_prec = id.tn.prec in
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
@@ -494,9 +494,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         let ptr = Option.value_exn ~here:[%here] merge_node in
         let idcs = lookup env idcs in
-        let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
+        let offset = jit_array_offset ctx ~idcs ~dims:(tn.dims) in
         let rvalue = RValue.lvalue @@ LValue.access_array ptr offset in
-        let local_prec = Lazy.force tn.prec in
+        let local_prec = tn.prec in
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
@@ -508,7 +508,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims:node.dims in
         let rvalue = RValue.lvalue @@ LValue.access_array (Lazy.force node.ptr) offset in
-        let local_prec = Lazy.force tn.prec in
+        let local_prec = tn.prec in
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
@@ -628,7 +628,7 @@ let%diagn_sexp compile_proc ~name ctx bindings ~get_ident
   in
   let merge_param =
     Option.map merge_node ~f:(fun tn ->
-        let c_typ = gcc_typ_of_prec @@ Lazy.force tn.prec in
+        let c_typ = gcc_typ_of_prec tn.prec in
         let num_typ = Type.(get ctx c_typ) in
         let ptr_typ = Type.pointer num_typ in
         (Param.create ctx ptr_typ "merge_buffer", Merge_buffer))
@@ -787,7 +787,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
                          [%string
                            "Gcc_backend.link_compiled: node %{Tn.debug_name tn} missing from \
                             context: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
-                  @@ Lazy.force tn.array
+                  tn.array
               | Some arr -> arr
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))

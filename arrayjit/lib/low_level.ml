@@ -147,7 +147,7 @@ let is_constexpr_comp traced_store llv =
   in
   loop llv
 
-let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
+let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
@@ -939,7 +939,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
     | Set p ->
-        let prec = Lazy.force p.tn.prec in
+        let prec = p.tn.prec in
         let result =
           group
             (doc_ident p.tn
@@ -954,7 +954,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Comment message -> string ("/* " ^ message ^ " */")
     | Staged_compilation callback -> callback ()
     | Set_local (id, llv) ->
-        let prec = Lazy.force id.tn.prec in
+        let prec = id.tn.prec in
         group (doc_local id ^^ string " := " ^^ doc_of_float prec llv ^^ string ";")
   and doc_of_float prec value =
     match value with

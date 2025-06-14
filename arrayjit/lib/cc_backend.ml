@@ -184,7 +184,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
                          [%string
                            "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from \
                             context: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
-                  @@ Lazy.force tn.array
+                  tn.array
               | Some arr -> arr
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))

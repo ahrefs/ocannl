@@ -188,7 +188,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream.device in
     let same_device = dev.ordinal = src.stream.device.ordinal in
-    let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let size_in_bytes = tn.Tn.size_in_bytes in
     let memcpy ~dst_ptr =
       (* FIXME: coming in cudajit.0.6.2. *)
       (* if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then () else *)
