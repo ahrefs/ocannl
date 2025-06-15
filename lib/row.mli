@@ -2,6 +2,7 @@
 
 open Base
 
+type axis_padding = Ir.Ndarray.axis_padding [@@deriving equal, sexp]
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 type dim_var [@@deriving equal, hash, compare, sexp]
 type proj_id [@@deriving equal, hash, compare, sexp]
@@ -26,15 +27,9 @@ type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of {
-      stride : int;
-      output : dim;
-      solved_kernel : solved_dim option;
-      unsolved_kernel : (int * dim_var) list;
-    }
-      (** The offset is implicit, automatically derived. Most frequent use case: convolutions. If
-          [!use_padding] is [true], the offset is the dimensionality-preserving left padding,
-          otherwise it is 0. *)
+  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
+      (** The offset is implicit, automatically derived. If [!use_padding] is [true], the offset is
+          the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 val get_dim : d:int -> ?label:string -> unit -> dim
@@ -151,7 +146,7 @@ type proj_equation =
 val get_proj_equations :
   constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
 
-val solve_proj_equations : proj_equation list -> proj_env
+val solve_proj_equations : proj_equation list -> resolved_padding:(proj_id, axis_padding) List.Assoc.t -> proj_env
 val get_proj_index : proj_env -> proj -> Ir.Indexing.axis_index
 val get_dim_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (proj_id * int) option

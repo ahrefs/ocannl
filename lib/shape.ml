@@ -60,10 +60,15 @@ type parsed_axis_labels = {
 
 let axis_labels parsed = parsed.labels
 
+type padding = Row.axis_padding array option [@@deriving sexp, equal]
+
 type t = {
   mutable batch : Row.t;
   mutable input : Row.t;
   mutable output : Row.t;
+  mutable batch_padding : padding;
+  mutable input_padding : padding;
+  mutable output_padding : padding;
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
@@ -676,13 +681,24 @@ let () =
 (** *** Projection inference *** *)
 
 let fresh_proj_ids update =
+  let resolved_padding = ref [] in
+  let fetch_padding row row_padding =
+    Option.iter row_padding ~f:(fun padding ->
+        Array.iter2_exn (Array.of_list row.Row.dims) padding ~f:(fun d p ->
+            match d with
+            | Row.Dim { proj_id = Some proj_id; _ } -> resolved_padding := (proj_id, p) :: !resolved_padding
+            | _ -> ()))
+  in
   let fresh_shape (sh : t) =
     sh.batch <- Row.fresh_row_proj sh.batch;
     sh.input <- Row.fresh_row_proj sh.input;
-    sh.output <- Row.fresh_row_proj sh.output
+    sh.output <- Row.fresh_row_proj sh.output;
+    fetch_padding sh.batch sh.batch_padding;
+    fetch_padding sh.input sh.input_padding;
+    fetch_padding sh.output sh.output_padding
   in
   fresh_shape update.shape;
-  match update.logic with
+  (match update.logic with
   | Terminal _ -> ()
   | Transpose (_, sh) -> fresh_shape sh
   | Broadcast (_, sh1, sh2) ->
@@ -691,13 +707,14 @@ let fresh_proj_ids update =
   | Broadcast_tern (_, sh1, sh2, sh3) ->
       fresh_shape sh1;
       fresh_shape sh2;
-      fresh_shape sh3
+      fresh_shape sh3);
+  !resolved_padding
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
-  fresh_proj_ids update_step;
+  let resolved_padding = fresh_proj_ids update_step in
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
     get_inequalities update_step
@@ -717,7 +734,7 @@ let derive_projections (update_step : update_step) : Idx.projections =
   (* Important: ineqs must not be substituted / solved before getting proj_equations, because
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
-  let proj_env : Row.proj_env = Row.solve_proj_equations proj_eqs in
+  let proj_env : Row.proj_env = Row.solve_proj_equations ~resolved_padding proj_eqs in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let rhs =
@@ -809,7 +826,18 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     | None, None -> make_unknown `Output
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
   in
-  let result = { input; output; batch; id; debug_name } in
+  let result =
+    {
+      input;
+      output;
+      batch;
+      id;
+      debug_name;
+      batch_padding = None;
+      input_padding = None;
+      output_padding = None;
+    }
+  in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
@@ -841,7 +869,18 @@ let shape_spec_to_dims_bio labels =
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let batch, input, output = shape_spec_to_dims_bio ~sh_id:id @@ axis_labels_of_spec spec in
-  let result = { input; output; batch; id; debug_name } in
+  let result =
+    {
+      input;
+      output;
+      batch;
+      id;
+      debug_name;
+      batch_padding = None;
+      input_padding = None;
+      output_padding = None;
+    }
+  in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (

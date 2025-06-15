@@ -7,28 +7,24 @@ Testing print_style functionality:
 === Testing solved_dim_to_string ===
 Full attributes (d=28, padding=2, label=height, proj_id):
   Only_labels: height
-  Axis_size: height=28+2
-  Axis_number_and_size: height=28+2
-  Projection_and_size: height=28+2
+  Axis_size: height=28
+  Axis_number_and_size: height=28
+  Projection_and_size: height=28
 
 Minimal attributes (d=64, no padding, no label, no proj_id):
   Only_labels: _
   Axis_size: 64
   Projection_and_size: 64
 
-With padding only (d=32, padding=3, label=width, no proj_id):
-  Axis_size: width=32+3
-  Projection_and_size: width=32+3
-
 With projection (d=32, label=width, proj_id):
   Axis_size: width=32
-  Projection_and_size: width=32[p1]
+  Projection_and_size: width=32p1
 
 === Testing dim_to_string ===
 Solved dimensions:
   Only_labels (full): height
-  Axis_size (full): height=28+2
-  Projection_and_size (full): height=28+2
+  Axis_size (full): height=28
+  Projection_and_size (full): height=28
   Only_labels (minimal): _
   Axis_size (minimal): 64
 

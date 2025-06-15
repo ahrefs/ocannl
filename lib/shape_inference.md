@@ -13,26 +13,15 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed.
 
 ```ocaml
-type solved_dim = {
-  d : int;
-  label : string option;
-  proj_id : proj_id option;
-}
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 (** A single axis in a shape. *)
 
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of {
-      stride : int;
-      output : dim;
-      solved_kernel : solved_dim option;
-      unsolved_kernel : (int * dim_var) list;
-    }
-      (** Represents convolution-style input dimensions where the output dimension
-          relates to the input dimension through: input = stride * output + kernel_terms.
-          This is a generalization of convolutions that supports affine indexing patterns.
-          The offset is implicit and depends on the global setting use_padding. *)
+  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
+      (** The offset is implicit, automatically derived. If [!use_padding] is [true], the offset is
+          the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -214,7 +203,7 @@ The projection inference functions.
 
 ### Convolutions
 
-There is an important and intentional disconnect between `dims` in the `arrayjit` part of the project: tensor nodes, `Ndarray` buffers, code generation: they include padding in the dimension sizes -- and on the other hand shape types, shape inference and tensors exclude padding from the dimension sizes. There is a tension: once the delayed computations of padding, projections and dims (dimension sizes) are forced for a particular node, the padding can no longer be updated (the underlying `Ndarray` buffer might already be created). Since during inference we update the padding incrementally without variables standing in for insufficient information, this unfortunately causes observability of the during-inference and post-inference distinction for the padding of a tensor node.
+There is an important and intentional difference between `dims` in the `arrayjit` part of the project: tensor nodes, `Ndarray` buffers, code generation -- they include padding in the dimension sizes; and on the other hand shape types, shape inference and tensors exclude padding from the dimension sizes. There is a tension: once the delayed computations of padding, projections and dims (dimension sizes) are forced for a particular node, the padding can no longer be updated (the underlying `Ndarray` buffer might already be created). Since during inference we update the padding incrementally without variables standing in for insufficient information, this unfortunately causes observability of the during-inference and post-inference distinction for the padding of a tensor node.
 
 ## Deriving the constraints
 

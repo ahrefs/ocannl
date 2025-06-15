@@ -47,7 +47,7 @@
 
 open Base
 
-type padding = Ir.Ndarray.axis_padding array option
+type padding = Row.axis_padding array option [@@deriving sexp, equal]
 
 type t = {
   mutable batch : Row.t;
@@ -113,10 +113,7 @@ val make :
     that these are dimensions labels and not axis labels: they need not be unique for a row, are
     inferred when provided, and must match whenever the axis sizes must match. *)
 
-val to_string_hum :
-  ?style:Row.print_style ->
-  t ->
-  string
+val to_string_hum : ?style:Row.print_style -> t -> string
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any unfinished inference. *)
