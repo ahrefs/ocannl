@@ -146,7 +146,12 @@ type proj_equation =
 val get_proj_equations :
   constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
 
-val solve_proj_equations : proj_equation list -> resolved_padding:(proj_id, axis_padding) List.Assoc.t -> proj_env
+val solve_proj_equations :
+  proj_equation list ->
+  resolved_padding:(proj_id, axis_padding) List.Assoc.t ->
+  inferred_padding:(proj_id, axis_padding) List.Assoc.t ->
+  proj_env
+
 val get_proj_index : proj_env -> proj -> Ir.Indexing.axis_index
 val get_dim_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (proj_id * int) option

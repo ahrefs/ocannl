@@ -682,20 +682,25 @@ let () =
 
 let fresh_proj_ids update =
   let resolved_padding = ref [] in
-  let fetch_padding row row_padding =
+  let inferred_padding = ref [] in
+  let fetch_padding ~id row row_padding =
+    let tn_opt = Ir.Tnode.find ~id in
+    let is_resolved = match tn_opt with Some tn -> Lazy.is_val tn.padding | None -> false in
     Option.iter row_padding ~f:(fun padding ->
         Array.iter2_exn (Array.of_list row.Row.dims) padding ~f:(fun d p ->
             match d with
-            | Row.Dim { proj_id = Some proj_id; _ } -> resolved_padding := (proj_id, p) :: !resolved_padding
+            | Row.Dim { proj_id = Some proj_id; _ } ->
+                if is_resolved then resolved_padding := (proj_id, p) :: !resolved_padding
+                else inferred_padding := (proj_id, p) :: !inferred_padding
             | _ -> ()))
   in
   let fresh_shape (sh : t) =
     sh.batch <- Row.fresh_row_proj sh.batch;
     sh.input <- Row.fresh_row_proj sh.input;
     sh.output <- Row.fresh_row_proj sh.output;
-    fetch_padding sh.batch sh.batch_padding;
-    fetch_padding sh.input sh.input_padding;
-    fetch_padding sh.output sh.output_padding
+    fetch_padding ~id:sh.id sh.batch sh.batch_padding;
+    fetch_padding ~id:sh.id sh.input sh.input_padding;
+    fetch_padding ~id:sh.id sh.output sh.output_padding
   in
   fresh_shape update.shape;
   (match update.logic with
@@ -708,13 +713,13 @@ let fresh_proj_ids update =
       fresh_shape sh1;
       fresh_shape sh2;
       fresh_shape sh3);
-  !resolved_padding
+  (!resolved_padding, !inferred_padding)
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let derive_projections (update_step : update_step) : Idx.projections =
   finish_inference ();
-  let resolved_padding = fresh_proj_ids update_step in
+  let resolved_padding, inferred_padding = fresh_proj_ids update_step in
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
     get_inequalities update_step
@@ -734,7 +739,9 @@ let derive_projections (update_step : update_step) : Idx.projections =
   (* Important: ineqs must not be substituted / solved before getting proj_equations, because
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
-  let proj_env : Row.proj_env = Row.solve_proj_equations ~resolved_padding proj_eqs in
+  let proj_env : Row.proj_env =
+    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
+  in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
   let rhs =

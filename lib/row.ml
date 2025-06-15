@@ -1847,7 +1847,8 @@ let get_dim_index proj_env =
   loop
 
 let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
-    ~(resolved_padding : (proj_id, axis_padding) List.Assoc.t) : proj_env =
+    ~(resolved_padding : (proj_id, axis_padding) List.Assoc.t)
+    ~(inferred_padding : (proj_id, axis_padding) List.Assoc.t) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
   let p_conv_input = ref [] in
@@ -1941,10 +1942,14 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
       Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
 
   (* Process p_conv_input to populate projs and compute padding *)
-  let inferred_padding = Hashtbl.create (module Proj_id) in
   let resolved_padding =
     Map.of_alist_exn (module Proj_id)
     @@ List.map resolved_padding ~f:(fun (p, pad) ->
+           (fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0, pad))
+  in
+  let inferred_padding =
+    Hashtbl.of_alist_exn (module Proj_id)
+    @@ List.map inferred_padding ~f:(fun (p, pad) ->
            (fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0, pad))
   in
 
