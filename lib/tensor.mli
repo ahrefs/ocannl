@@ -300,6 +300,7 @@ val to_doc :
   PPrint.document
 
 val print :
+  ?here:Ppx_here_lib.position ->
   ?spy:bool ->
   with_grad:bool ->
   with_code:bool ->
@@ -311,6 +312,7 @@ val print :
 val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style -> unit
 
 val print_tree :
+  ?here:Ppx_here_lib.position ->
   ?entries_per_axis:int ->
   ?with_backend_info:bool ->
   ?with_id:bool ->

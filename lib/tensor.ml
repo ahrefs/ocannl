@@ -238,7 +238,11 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
-    let g = Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims ~padding:(lazy None) default_init_op in
+    let g =
+      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims
+        ~padding:(lazy None)
+        default_init_op
+    in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g ti =
@@ -358,7 +362,8 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let debug = "Temporary array for pretty-printing" in
     let ndarr =
-      Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None (Ir.Ops.Constant_fill { values; strict })
+      Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None
+        (Ir.Ops.Constant_fill { values; strict })
     in
     let ( ! ) = List.length in
     let b = Buffer.create 1024 in
@@ -590,7 +595,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
   let label = Tn.label t.value in
   let prefix_str =
     "[" ^ Int.to_string t.id ^ "]: " ^ label ^ " shape "
-            ^ Shape.to_string_hum ~style:Row.Axis_number_and_size sh
+    ^ Shape.to_string_hum ~style:Row.Axis_number_and_size sh
     ^ " "
   in
   let grad_txt diff =
@@ -631,7 +636,9 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
     Array.exists ~f:(Fn.non String.is_empty) labels
     || Shape.(List.exists ~f:Row.(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
   in
-      let axes_spec = if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_labels sh) else None in
+  let axes_spec =
+    if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_labels sh) else None
+  in
   let num_batch_axes = List.length sh.batch.dims in
   let num_input_axes = List.length sh.input.dims in
   let num_output_axes = List.length sh.output.dims in
@@ -731,8 +738,10 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
   (* Combine all documents and print *)
   group (value_doc ^^ break 1 ^^ grad_doc ^^ break 1 ^^ code_doc ^^ break 1 ^^ low_level_doc)
 
-let print ?(spy = false) ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style)
-    t =
+let print ?here ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
+    (style : array_print_style) t =
+  Option.iter here ~f:(fun here ->
+      Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   PPrint.ToChannel.pretty 0.7 100 Stdio.stdout
     (to_doc ~spy ~with_grad ~with_code ~with_low_level style t)
 
@@ -741,8 +750,10 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(spy = false)
+let print_tree ?here ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(spy = false)
     ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
+  Option.iter here ~f:(fun here ->
+      Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth

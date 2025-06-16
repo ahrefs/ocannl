@@ -13,6 +13,7 @@
   str
   arrayjit.utils
   ; mem_usage
+  ppx_here.runtime-lib
   ppx_minidebug.runtime
   arrayjit.ir
   arrayjit.backends)

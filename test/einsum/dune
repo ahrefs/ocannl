@@ -1,0 +1,18 @@
+(copy_files
+ (files ../config/ocannl_config))
+
+(test
+ (name moons_demo_variant)
+ (deps ocannl_config)
+ (modules moons_demo_variant)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
+ (name einsum_trivia_exec)
+ (deps ocannl_config)
+ (modules einsum_trivia_exec)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl ppx_here)))

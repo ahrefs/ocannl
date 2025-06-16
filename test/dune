@@ -70,45 +70,13 @@
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
    "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
-(executable
+(test
  (name test_print_style)
+ (deps ocannl_config)
  (modules test_print_style)
  (libraries ocannl)
  (preprocess
   (pps ppx_ocannl)))
-
-(rule
- (target test_print_style.output)
- (deps test_print_style.exe ocannl_config)
- (action
-  (with-stdout-to
-   %{target}
-   (run %{deps}))))
-
-(rule
- (alias runtest)
- (action
-  (diff test_print_style.expected test_print_style.output)))
-
-(executable
- (name moons_demo_variant)
- (modules moons_demo_variant)
- (libraries ocannl)
- (preprocess
-  (pps ppx_ocannl)))
-
-(rule
- (target moons_demo_variant.output)
- (deps moons_demo_variant.exe ocannl_config)
- (action
-  (with-stdout-to
-   %{target}
-   (run %{deps}))))
-
-(rule
- (alias runtest)
- (action
-  (diff moons_demo_variant.expected moons_demo_variant.output)))
 
 (library
  (name tutorials)
