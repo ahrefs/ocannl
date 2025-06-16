@@ -608,12 +608,13 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
     match style with
     | `Default -> Shape.default_display_indices sh
     | `N5_layout priorities ->
-        let f : (string, int) Either.t -> int = function
-          | Either.Second i -> i
-          | First _ -> invalid_arg "`N5_layout requires integer-only labels"
+        let f : Shape.axis_spec -> int = function
+          | Shape.Fixed_index i -> i
+          | Shape.Label _ -> invalid_arg "`N5_layout requires integer-only labels"
+          | Shape.Conv_spec _ -> invalid_arg "`N5_layout does not support conv expressions"
         in
         let p_labels = Shape.(axis_labels @@ axis_labels_of_spec priorities) in
-        (Shape.axis_map_to_dims_index p_labels : (string, int) Either.t array) |> Array.map ~f
+        (Shape.axis_map_to_dims_index p_labels : Shape.axis_spec array) |> Array.map ~f
     | `Label_layout label_idcs ->
         let inv_labels =
           Array.mapi labels ~f:(fun i l -> (l, i)) |> Array.to_list |> Map.of_alist (module String)

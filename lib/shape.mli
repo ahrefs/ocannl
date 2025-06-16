@@ -15,6 +15,7 @@
     - separators_with_comma: commas and whitespaces containing at least one comma.
     - axes_spec_single_char: separators? identifier+ separators?
     - axes_spec_multichar: separators? (identifier separators_with_comma)* identifier separators?
+    - conv_expression: term '+' term where term is [coeff '*'] identifier and coeff is integer
     - ellipsis_spec: '...' <|> '..' identifier '..'
     - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
     - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|'
@@ -38,6 +39,12 @@
     The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of
     other labels.
 
+    Conv expressions have the form [stride*output+dilation*kernel] where stride and dilation are
+    optional integer coefficients (defaulting to 1), and output/kernel are axis labels. This syntax
+    enables convolution-style indexing where input_dimension = stride * output_iterator + dilation *
+    kernel_iterator. Conv expressions automatically trigger multichar mode and are only supported in
+    multichar mode.
+
     Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
     axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case
     `row_spec` = `axes_spec`, the axes are the rightmost axes (broadcasting to the left). In the
@@ -48,6 +55,14 @@
 open Base
 
 type padding = Row.axis_padding array option [@@deriving sexp, equal]
+
+(** Specification for individual axes in the einsum notation. *)
+type axis_spec =
+  | Label of string  (** A variable axis label. *)
+  | Fixed_index of int  (** A fixed index, used for projection. *)
+  | Conv_spec of { stride : int; output_label : string; dilation : int; kernel_label : string }
+      (** Convolution-style axis specification: stride*output + dilation*kernel. *)
+[@@deriving compare, sexp]
 
 type t = {
   mutable batch : Row.t;
@@ -161,8 +176,8 @@ val default_display_indices : t -> int array
 val to_labels : t -> string array
 
 type 'a axis_map
-type parsed_axis_labels
+type parsed_axis_labels [@@deriving sexp]
 
-val axis_labels : parsed_axis_labels -> (string, int) Either.t axis_map
+val axis_labels : parsed_axis_labels -> axis_spec axis_map
 val axis_labels_of_spec : string -> parsed_axis_labels
 val axis_map_to_dims_index : ?default:'a -> 'a axis_map -> 'a array

@@ -38,6 +38,14 @@ end
 
 type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
 
+(** Specification for individual axes in the einsum notation. *)
+type axis_spec =
+  | Label of string  (** A variable axis label. *)
+  | Fixed_index of int  (** A fixed index, used for projection. *)
+  | Conv_spec of { stride : int; output_label : string; dilation : int; kernel_label : string }
+      (** Convolution-style axis specification: stride*output + dilation*kernel. *)
+[@@deriving compare, sexp]
+
 type parsed_axis_labels = {
   bcast_batch : string option;
   bcast_input : string option;
@@ -48,7 +56,7 @@ type parsed_axis_labels = {
   given_beg_batch : int;
   given_beg_input : int;
   given_beg_output : int;
-  labels : (string, int) Either.t axis_map;
+  labels : axis_spec axis_map;
 }
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
@@ -100,6 +108,56 @@ let separators_with_comma =
   let* sep = opt_separators in
   if String.contains sep ',' then return () else fail "comma expected"
 
+(** Parse a single axis specification that can be a label, fixed index, or conv expression. *)
+let parse_single_axis_spec ~multichar : string Angstrom.t =
+  let open Angstrom in
+  if multichar then
+    (* In multichar mode, try to parse conv expressions first, then fall back to regular identifiers *)
+    let integer = take_while1 Char.is_digit in
+    let identifier = identifier_multichar in
+    let conv_term = 
+      (integer <* char '*' >>= fun coeff -> identifier >>| fun id -> coeff ^ "*" ^ id)
+      <|> identifier
+    in
+    let conv_expr =
+      conv_term >>= fun first_term ->
+      char '+' *> conv_term >>| fun second_term ->
+      first_term ^ "+" ^ second_term
+    in
+    choice [ conv_expr; integer; identifier ]
+  else
+    (* In single-char mode, conv expressions are not supported since they would be ambiguous *)
+    take 1
+
+(** Convert a string to axis_spec, handling conv expressions. *)
+let string_to_axis_spec (s : string) : axis_spec =
+  if String.contains s '*' || String.contains s '+' then
+    (* Parse as conv expression *)
+    let parse_conv_expr spec =
+      let open Angstrom in
+      let integer = take_while1 Char.is_digit >>| Int.of_string in
+      let identifier = take_while1 Char.is_alphanum in
+      let term = 
+        (integer <* char '*' >>= fun coeff -> identifier >>| fun id -> (coeff, id))
+        <|> (identifier >>| fun id -> (1, id))
+      in
+      let conv_expr =
+        term >>= fun (stride, output_label) ->
+        char '+' *> term >>| fun (dilation, kernel_label) ->
+        Conv_spec { stride; output_label; dilation; kernel_label }
+      in
+      match parse_string ~consume:Consume.All conv_expr spec with
+      | Ok result -> result
+      | Error _ -> 
+          (* If conv parsing fails, treat as regular label *)
+          Label s
+    in
+    parse_conv_expr s
+  else
+    (* Try to parse as integer first, then as label *)
+    try Fixed_index (Int.of_string s) 
+    with _ -> Label s
+
 let axes_spec ~from_end ~multichar : _ Angstrom.t =
   let open Angstrom in
   let single_char (pos, acc) c =
@@ -111,7 +169,7 @@ let axes_spec ~from_end ~multichar : _ Angstrom.t =
       lift (fun l ->
           let n = List.length l in
           List.mapi l ~f:(fun i v -> (p n i, v)))
-      @@ sep_by1 separators_with_comma identifier_multichar
+      @@ sep_by1 separators_with_comma (parse_single_axis_spec ~multichar)
     else
       lift (fun (_, acc) ->
           let n = List.length acc in
@@ -162,7 +220,7 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   in
   let labels =
     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
-    |> Map.map ~f:(fun s -> try Either.Second (Int.of_string s) with _ -> First s)
+    |> Map.map ~f:string_to_axis_spec
   in
   {
     bcast_batch;
@@ -178,7 +236,7 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   }
 
 let axis_labels_of_spec spec =
-  let multichar = String.contains spec ',' in
+  let multichar = String.contains spec ',' || String.contains spec '*' || String.contains spec '+' in
   match
     Angstrom.(
       parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
@@ -199,7 +257,7 @@ let einsum_of_spec_parser ~multichar : _ Angstrom.t =
   <|> lift2 (fun a c -> (a, None, c)) (p <?> "RHS") (string "=>" *> (p <?> "LHS"))
 
 let einsum_of_spec spec =
-  let multichar = String.contains spec ',' in
+  let multichar = String.contains spec ',' || String.contains spec '*' || String.contains spec '+' in
   match
     Angstrom.(
       parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
@@ -322,18 +380,22 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
-    | Either.First label ->
+    | Label label ->
         Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
-    | Second 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
+    | Fixed_index 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
         Row.get_dim ~d:1 ()
-    | Second i ->
+    | Fixed_index i ->
         let var = Row.get_var () in
         let d = Row.Var var in
         proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Idx.Fixed_idx i);
         extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
         d
+    | Conv_spec { stride; output_label; dilation; kernel_label } ->
+        let output_dim = Row.Var (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () -> Row.get_var ~label:output_label ())) in
+        let kernel_dim = Row.Var (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () -> Row.get_var ~label:kernel_label ())) in
+        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
-  let result = axes_spec_to_dims_bio ~f ~row_var_env ~dim_var_env ~sh_id labels in
+  let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
@@ -621,6 +683,7 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
   let eliminated =
     List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps
   in
@@ -859,7 +922,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
 let shape_spec_to_dims_bio labels =
   let dim_var_env = Hashtbl.create (module String) in
   let f _kind = function
-    | Either.First s when String.contains s '=' -> (
+    | Label s when String.contains s '=' -> (
         let label, dim =
           match String.split s ~on:'=' with
           | [ l; d ] -> (l, d)
@@ -867,9 +930,13 @@ let shape_spec_to_dims_bio labels =
         in
         try Row.get_dim ~d:(Int.of_string dim) ~label ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
-    | First label ->
+    | Label label ->
         Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
-    | Second d -> Row.get_dim ~d ()
+    | Fixed_index d -> Row.get_dim ~d ()
+    | Conv_spec { stride; output_label; dilation; kernel_label } ->
+        let output_dim = Row.Var (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () -> Row.get_var ~label:output_label ())) in
+        let kernel_dim = Row.Var (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () -> Row.get_var ~label:kernel_label ())) in
+        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels

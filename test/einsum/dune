@@ -16,3 +16,11 @@
  (libraries ocannl)
  (preprocess
   (pps ppx_ocannl ppx_here)))
+
+(test
+ (name test_conv_syntax)
+ (deps ocannl_config)
+ (modules test_conv_syntax)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
