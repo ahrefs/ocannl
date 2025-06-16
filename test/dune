@@ -90,6 +90,26 @@
  (action
   (diff test_print_style.expected test_print_style.output)))
 
+(executable
+ (name moons_demo_variant)
+ (modules moons_demo_variant)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(rule
+ (target moons_demo_variant.output)
+ (deps moons_demo_variant.exe ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff moons_demo_variant.expected moons_demo_variant.output)))
+
 (library
  (name tutorials)
  (package neural_nets_lib)
