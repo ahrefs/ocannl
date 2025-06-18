@@ -98,10 +98,26 @@ type transpose_type =
 
 type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
 
-let identifier_multichar = Angstrom.take_while1 Char.is_alphanum
+let identifier ~multichar =
+  let open Angstrom in
+  if multichar then lift2 ( ^ ) (take_while1 Char.is_alpha) (take_while Char.is_alphanum)
+  else Angstrom.satisfy Char.is_alpha >>| Char.to_string
 
-let opt_separators : _ Angstrom.t =
-  Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
+let integer = Angstrom.(take_while1 Char.is_digit >>| Int.of_string)
+
+let scaled_identifier ~multichar =
+  let open Angstrom in
+  integer <* char '*'
+  >>= (fun coeff -> identifier ~multichar >>| fun id -> (coeff, id))
+  <|> (identifier ~multichar >>| fun id -> (1, id))
+
+let conv_term ~multichar =
+  let open Angstrom in
+  let* stride, output_label = scaled_identifier ~multichar in
+  char '+' *> scaled_identifier ~multichar >>| fun (dilation, kernel_label) ->
+  Conv_spec { stride; output_label; dilation; kernel_label }
+
+let opt_separators = Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
 
 let separators_with_comma =
   let open Angstrom in
@@ -109,74 +125,27 @@ let separators_with_comma =
   if String.contains sep ',' then return () else fail "comma expected"
 
 (** Parse a single axis specification that can be a label, fixed index, or conv expression. *)
-let parse_single_axis_spec ~multichar : string Angstrom.t =
+let parse_single_axis_spec ~multichar =
   let open Angstrom in
-  if multichar then
-    (* In multichar mode, try to parse conv expressions first, then fall back to regular identifiers *)
-    let integer = take_while1 Char.is_digit in
-    let identifier = identifier_multichar in
-    let conv_term = 
-      (integer <* char '*' >>= fun coeff -> identifier >>| fun id -> coeff ^ "*" ^ id)
-      <|> identifier
-    in
-    let conv_expr =
-      conv_term >>= fun first_term ->
-      char '+' *> conv_term >>| fun second_term ->
-      first_term ^ "+" ^ second_term
-    in
-    choice [ conv_expr; integer; identifier ]
-  else
-    (* In single-char mode, conv expressions are not supported since they would be ambiguous *)
-    take 1
-
-(** Convert a string to axis_spec, handling conv expressions. *)
-let string_to_axis_spec (s : string) : axis_spec =
-  if String.contains s '*' || String.contains s '+' then
-    (* Parse as conv expression *)
-    let parse_conv_expr spec =
-      let open Angstrom in
-      let integer = take_while1 Char.is_digit >>| Int.of_string in
-      let identifier = take_while1 Char.is_alphanum in
-      let term = 
-        (integer <* char '*' >>= fun coeff -> identifier >>| fun id -> (coeff, id))
-        <|> (identifier >>| fun id -> (1, id))
-      in
-      let conv_expr =
-        term >>= fun (stride, output_label) ->
-        char '+' *> term >>| fun (dilation, kernel_label) ->
-        Conv_spec { stride; output_label; dilation; kernel_label }
-      in
-      match parse_string ~consume:Consume.All conv_expr spec with
-      | Ok result -> result
-      | Error _ -> 
-          (* If conv parsing fails, treat as regular label *)
-          Label s
-    in
-    parse_conv_expr s
-  else
-    (* Try to parse as integer first, then as label *)
-    try Fixed_index (Int.of_string s) 
-    with _ -> Label s
+  choice
+    [
+      conv_term ~multichar <?> "conv_term";
+      integer >>| (fun i -> Fixed_index i) <?> "fixed_index";
+      identifier ~multichar >>| (fun s -> Label s) <?> "label";
+    ]
 
 let axes_spec ~from_end ~multichar : _ Angstrom.t =
   let open Angstrom in
-  let single_char (pos, acc) c =
-    Option.some_if (Char.is_alphanum c) (pos + 1, (pos, Char.to_string c) :: acc)
-  in
   let result =
     let p n i = if from_end then n - i else i + 1 in
-    if multichar then
-      lift (fun l ->
-          let n = List.length l in
-          List.mapi l ~f:(fun i v -> (p n i, v)))
-      @@ sep_by1 separators_with_comma (parse_single_axis_spec ~multichar)
-    else
-      lift (fun (_, acc) ->
-          let n = List.length acc in
-          List.rev_map acc ~f:(fun (i, v) -> (p n i, v)))
-      @@ scan_state (0, []) single_char
+    lift (fun l ->
+        let n = List.length l in
+        List.mapi l ~f:(fun i v -> (p n i, v)))
+    @@ sep_by1
+         (if multichar then separators_with_comma else opt_separators >>| ignore)
+         (parse_single_axis_spec ~multichar)
   in
-  opt_separators *> result <* opt_separators
+  opt_separators *> result <* opt_separators <?> "axes_spec"
 
 let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   let open Angstrom in
@@ -184,7 +153,7 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   let axes_spec ~from_end =
     axes_spec ~from_end ~multichar <?> if from_end then "axes_spec" else "axes_spec_beg"
   in
-  let ellipsis_spec = string "..." <|> (string ".." *> identifier_multichar <* string "..") in
+  let ellipsis_spec = string "..." <|> (string ".." *> identifier ~multichar <* string "..") in
   let ellipsis_spec = ellipsis_spec <?> "ellipsis_spec" in
   let for_row ~kind in_axes beg_axes row_var_spec end_axes =
     let f from_end (pos, label) = (AxisKey.{ in_axes; pos; from_end }, label) in
@@ -198,12 +167,12 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   let parse_row ~kind in_axes =
     let row = lift3 (for_row ~kind in_axes) in
     opt_separators
-    *> (row (return []) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
-       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec)
-             (axes_spec ~from_end:true)
+    *> (row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
+       <|> row (return []) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
+       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (return [])
        <|> row (return []) (return None) (axes_spec ~from_end:true)
        <|> row (return []) (lift Option.some ellipsis_spec) (return []))
-    <* opt_separators
+    <* opt_separators <?> "row_spec"
   in
   let default = Option.value ~default:(None, 0, 0, Map.empty (module AxisKey)) in
   let shape = lift3 (fun batch input output -> (default batch, default input, output)) in
@@ -217,10 +186,10 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
     <|> shape (p_b <* char '|') (p_i <* string "->") p_o
     <|> shape (p_b <* char '|') (return None) p_o
     <|> shape (return None) (return None) p_o
+    <?> "shape_spec"
   in
   let labels =
     Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
-    |> Map.map ~f:string_to_axis_spec
   in
   {
     bcast_batch;
@@ -236,7 +205,7 @@ let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
   }
 
 let axis_labels_of_spec spec =
-  let multichar = String.contains spec ',' || String.contains spec '*' || String.contains spec '+' in
+  let multichar = String.contains spec ',' in
   match
     Angstrom.(
       parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
@@ -255,9 +224,10 @@ let einsum_of_spec_parser ~multichar : _ Angstrom.t =
     (p <?> "RHS2")
     (string "=>" *> (p <?> "LHS"))
   <|> lift2 (fun a c -> (a, None, c)) (p <?> "RHS") (string "=>" *> (p <?> "LHS"))
+  <?> "einsum_spec"
 
 let einsum_of_spec spec =
-  let multichar = String.contains spec ',' || String.contains spec '*' || String.contains spec '+' in
+  let multichar = String.contains spec ',' in
   match
     Angstrom.(
       parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
@@ -391,8 +361,16 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
         extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
         d
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
-        let output_dim = Row.Var (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () -> Row.get_var ~label:output_label ())) in
-        let kernel_dim = Row.Var (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () -> Row.get_var ~label:kernel_label ())) in
+        let output_dim =
+          Row.Var
+            (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
+                 Row.get_var ~label:output_label ()))
+        in
+        let kernel_dim =
+          Row.Var
+            (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                 Row.get_var ~label:kernel_label ()))
+        in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
@@ -934,8 +912,16 @@ let shape_spec_to_dims_bio labels =
         Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
     | Fixed_index d -> Row.get_dim ~d ()
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
-        let output_dim = Row.Var (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () -> Row.get_var ~label:output_label ())) in
-        let kernel_dim = Row.Var (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () -> Row.get_var ~label:kernel_label ())) in
+        let output_dim =
+          Row.Var
+            (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
+                 Row.get_var ~label:output_label ()))
+        in
+        let kernel_dim =
+          Row.Var
+            (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                 Row.get_var ~label:kernel_label ()))
+        in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
   let row_var_env = Hashtbl.create (module String) in
