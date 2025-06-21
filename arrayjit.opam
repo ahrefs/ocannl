@@ -13,7 +13,7 @@ homepage: "https://github.com/lukstafi/ocannl"
 doc: "https://github.com/lukstafi/ocannl/blob/master/README.md"
 bug-reports: "https://github.com/lukstafi/ocannl/issues"
 depends: [
-  "ocaml" {>= "5.2.0"}
+  "ocaml" {>= "5.3.0"}
   "dune" {>= "3.18"}
   "base" {>= "v0.17.0"}
   "ctypes" {>= "0.23"}
@@ -33,7 +33,7 @@ depends: [
   "ppx_string"
   "ppx_variants_conv"
   "ppx_expect"
-  "ppx_minidebug" {>= "2.2.0"}
+  "ppx_minidebug" {>= "2.3.0"}
   "metal" {os = "macos"}
   "odoc" {with-doc}
 ]

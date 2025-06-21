@@ -33,7 +33,7 @@
   "The optimizing compiler sub-package of OCANNL. Use neural_nets_lib instead to also get: nice syntax, shape inference, backpropagation, optimizers.")
  (depends
   (ocaml
-   (>= 5.2.0))
+   (>= 5.3.0))
   dune
   (base
    (>= v0.17.0))
@@ -65,7 +65,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.2.0))
+   (>= 2.3.0))
   (metal
    (= :os macos)))
  (depopts
@@ -89,7 +89,7 @@
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
  (depends
   (ocaml
-   (>= 5.2.0))
+   (>= 5.3.0))
   dune
   (base
    (>= v0.17.0))
@@ -115,7 +115,7 @@
   csv
   curl
   time_now
-  zip
+  camlzip
   ppxlib
   ppx_compare
   ppx_fields_conv
@@ -125,9 +125,8 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
-  ; ppx_minidebug 2.2.0 will be a breaking change.
   (ppx_minidebug
-   (>= 2.2.0))
+   (>= 2.3.0))
   (odoc :with-doc)
   (md2mld :with-doc))
  (tags
