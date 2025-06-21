@@ -3,7 +3,8 @@
 ### Added
 
 - Support for Brain float aka. bfloat16 aka. BF16, and for FP8.
-- TODO: support for convolution via affine indexing expressions in: projections, einsum notation, shape inference.
+- Support for convolution via affine indexing expressions in: projections, einsum notation, shape inference.
+- MNIST and CIFAR10 datasets (borrowed from Raven).
 
 ## [0.5.3] -- 2025-05-24
 

@@ -112,7 +112,10 @@
   stdio
   sexplib
   num
+  csv
+  curl
   time_now
+  zip
   ppxlib
   ppx_compare
   ppx_fields_conv

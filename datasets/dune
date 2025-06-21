@@ -1,0 +1,6 @@
+(include_subdirs unqualified)
+
+(library
+ (name datasets)
+ (public_name neural_nets_lib.datasets)
+ (libraries unix zip curl csv))
