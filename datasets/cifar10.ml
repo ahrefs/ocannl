@@ -37,11 +37,11 @@ let read_cifar_batch filename =
   let images =
     Genarray.create int8_unsigned c_layout [| num_images; 32; 32; 3 |]
   in
-  let labels = Array1.create int8_unsigned c_layout num_images in
+  let labels = Genarray.create int8_unsigned c_layout [| num_images |] in
 
   for i = 0 to num_images - 1 do
     let base_offset = i * bytes_per_image in
-    labels.{i} <- Char.code s.[base_offset];
+    Genarray.set labels [| i |] (Char.code s.[base_offset]);
     let r_offset = base_offset + 1 in
     let g_offset = r_offset + 1024 in
     let b_offset = g_offset + 1024 in
@@ -76,12 +76,12 @@ let load () =
   let train_images =
     Genarray.create int8_unsigned c_layout [| total_train_images; 32; 32; 3 |]
   in
-  let train_labels = Array1.create int8_unsigned c_layout total_train_images in
+  let train_labels = Genarray.create int8_unsigned c_layout [| total_train_images |] in
 
   let current_offset = ref 0 in
   List.iter
     (fun (batch_images, batch_labels) ->
-      let batch_size = Array1.dim batch_labels in
+      let batch_size = (Genarray.dims batch_labels).(0) in
       let img_slice_dims = [| batch_size; 32; 32; 3 |] in
       let img_slice =
         Genarray.sub_left train_images !current_offset batch_size
@@ -98,9 +98,9 @@ let load () =
                 (Array.to_list
                    (Array.map string_of_int (Genarray.dims img_slice)))));
 
-      let lbl_slice = Array1.sub train_labels !current_offset batch_size in
+      let lbl_slice = Genarray.sub_left train_labels !current_offset batch_size in
       Genarray.blit batch_images img_slice;
-      Array1.blit batch_labels lbl_slice;
+      Genarray.blit batch_labels lbl_slice;
       current_offset := !current_offset + batch_size)
     train_batches_data;
 

@@ -19,14 +19,10 @@ module Config = struct
     {
       name = "MNIST";
       cache_subdir = "mnist/";
-      train_images_url =
-        "https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz";
-      train_labels_url =
-        "https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz";
-      test_images_url =
-        "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz";
-      test_labels_url =
-        "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz";
+      train_images_url = "https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz";
+      train_labels_url = "https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz";
+      test_images_url = "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz";
+      test_labels_url = "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz";
       image_magic_number = 2051;
       label_magic_number = 2049;
     }
@@ -79,8 +75,7 @@ let ensure_dataset config =
       let path = dataset_dir ^ base_filename in
 
       if not (Sys.file_exists path) then (
-        Printf.printf "File %s not found for %s dataset.\n%!" base_filename
-          config.name;
+        Printf.printf "File %s not found for %s dataset.\n%!" base_filename config.name;
         (* Ensure the .gz file is downloaded *)
         ensure_file url gz_path;
         (* Ensure it's decompressed *)
@@ -89,25 +84,21 @@ let ensure_dataset config =
       else Printf.printf "Found decompressed file %s.\n%!" path)
     files_to_process
 
-let read_idx_file ~read_header ~create_array ~populate_array ~expected_magic
-    config filename =
+let read_idx_file ~read_header ~create_array ~populate_array ~expected_magic config filename =
   Printf.printf "Reading %s file: %s\n%!" config.Config.name filename;
   let ic = open_in_bin filename in
   let s =
     try really_input_string ic (in_channel_length ic)
     with exn ->
       close_in_noerr ic;
-      failwith
-        (Printf.sprintf "Error reading file %s: %s" filename
-           (Printexc.to_string exn))
+      failwith (Printf.sprintf "Error reading file %s: %s" filename (Printexc.to_string exn))
   in
   close_in ic;
 
   let magic = read_int32_be s 0 in
   if magic <> expected_magic then
     failwith
-      (Printf.sprintf "Invalid magic number %d in %s (expected %d)" magic
-         filename expected_magic);
+      (Printf.sprintf "Invalid magic number %d in %s (expected %d)" magic filename expected_magic);
 
   let dimensions, data_offset = read_header s in
   let total_items, data_len =
@@ -119,17 +110,14 @@ let read_idx_file ~read_header ~create_array ~populate_array ~expected_magic
   let expected_len = data_offset + data_len in
   if String.length s <> expected_len then
     failwith
-      (Printf.sprintf
-         "File %s has unexpected length: %d vs %d (header offset %d, data len \
-          %d)"
+      (Printf.sprintf "File %s has unexpected length: %d vs %d (header offset %d, data len %d)"
          filename (String.length s) expected_len data_offset data_len);
 
   let arr = create_array dimensions in
   populate_array arr s data_offset total_items;
   arr
 
-(* read_images and read_labels remain largely the same, just use the config
-   passed in *)
+(* read_images and read_labels remain largely the same, just use the config passed in *)
 let read_images config filename =
   let read_header s =
     let num_images = read_int32_be s 4 in
@@ -137,20 +125,19 @@ let read_images config filename =
     let num_cols = read_int32_be s 12 in
     ([| num_images; num_rows; num_cols |], 16)
   in
-  let create_array dims =
-    Array3.create int8_unsigned c_layout dims.(0) dims.(1) dims.(2)
-  in
+  let create_array dims = Genarray.create int8_unsigned c_layout dims in
   let populate_array arr s offset _ =
-    let num_images = Array3.dim1 arr in
-    let num_rows = Array3.dim2 arr in
-    let num_cols = Array3.dim3 arr in
+    let dims = Genarray.dims arr in
+    let num_images = dims.(0) in
+    let num_rows = dims.(1) in
+    let num_cols = dims.(2) in
     let img_size = num_rows * num_cols in
     for i = 0 to num_images - 1 do
       let start_pos = offset + (i * img_size) in
       for r = 0 to num_rows - 1 do
         for c = 0 to num_cols - 1 do
           let pos = start_pos + (r * num_cols) + c in
-          arr.{i, r, c} <- Char.code s.[pos]
+          Genarray.set arr [| i; r; c |] (Char.code s.[pos])
         done
       done
     done
@@ -163,10 +150,10 @@ let read_labels config filename =
     let num_labels = read_int32_be s 4 in
     ([| num_labels |], 8)
   in
-  let create_array dims = Array1.create int8_unsigned c_layout dims.(0) in
+  let create_array dims = Genarray.create int8_unsigned c_layout dims in
   let populate_array arr s offset total_items =
     for i = 0 to total_items - 1 do
-      arr.{i} <- Char.code s.[offset + i]
+      Genarray.set arr [| i |] (Char.code s.[offset + i])
     done
   in
   read_idx_file ~read_header ~create_array ~populate_array
