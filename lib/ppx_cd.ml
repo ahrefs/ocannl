@@ -365,6 +365,31 @@ let args_for ~loc = function
 
 let reduce_res_vbs rs = reduce_vbss @@ List.map rs ~f:(fun r -> r.vbs)
 
+(** Helper function to handle cases (for Pexp_match, Pexp_function with cases, etc.) *)
+let handle_cases ~bad_pun_hints ~proj_in_scope transl cases =
+  let fields, transformed_cases =
+    List.unzip
+    @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
+           let res = transl ~bad_pun_hints ~proj_in_scope pc_rhs in
+           ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
+  in
+  let vbss, typs, slots = List.unzip3 fields in
+  (* TODO: make the inference of typ and slot more strict by detecting mismatches. *)
+  let typ = Option.value ~default:Unknown @@ List.find typs ~f:(Fn.non is_unknown) in
+  let slot =
+    Option.value ~default:Undet @@ List.find ~f:(function Undet -> false | _ -> true) slots
+  in
+  let loc = (List.hd_exn cases).pc_lhs.ppat_loc in
+  ( transformed_cases,
+    {
+      vbs = reduce_vbss vbss;
+      typ;
+      slot;
+      expr = [%expr ()];
+      (* This will be replaced by the caller *)
+      array_opt_of_code = None;
+    } )
+
 let translate (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
   let rec transl ~bad_pun_hints ~proj_in_scope (expr : expression) : result =
@@ -736,15 +761,26 @@ let translate (expr : expression) : result =
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_primitive_op op_ident ->
         default_result
     | [%expr !.[%e? expr1]] ->
-        (* Hardcoding these two patterns to improve projection derivation expressivity. *)
-        let res1 = loop ~proj_in_scope expr1 in
-        { res1 with typ = Tensor; slot = Scalar; expr = [%expr NTDSL.O.( !. ) [%e res1.expr]] }
+        (* Hardcoding these two patterns (!. and !..) to improve projection derivation expressivity
+           and avoid treating the constants as already tensors. *)
+        {
+          typ = Tensor;
+          slot = Scalar;
+          expr = [%expr NTDSL.O.( !. ) [%e expr1]];
+          array_opt_of_code = None;
+          vbs = no_vbs;
+        }
     | [%expr !..[%e? expr1]] ->
-        let res1 = loop ~proj_in_scope expr1 in
-        { res1 with typ = Tensor; slot = Scalar; expr = [%expr NTDSL.O.( !.. ) [%e res1.expr]] }
+        {
+          typ = Tensor;
+          slot = Scalar;
+          expr = [%expr NTDSL.O.( !.. ) [%e expr1]];
+          array_opt_of_code = None;
+          vbs = no_vbs;
+        }
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-        (* FIXME: `**.` should take a tensor and require that it's a literal. *)
-        (* We need to hardcode these two patterns to prevent the numbers from being converted to tensors. *)
+        (* We need to hardcode these two patterns (for **. ) to prevent the numbers from
+           being converted to tensors. *)
         let res1 = loop ~proj_in_scope expr1 in
         {
           res1 with
@@ -1135,17 +1171,49 @@ let translate (expr : expression) : result =
           expr = [%expr [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-    | { pexp_desc = Pexp_fun ((arg_label : arg_label), arg, pat, expr1); _ } as expr ->
+    | { pexp_desc = Pexp_function (args, constr, body); _ } as expr ->
         let proj_in_scope =
           proj_in_scope
-          ||
-          match arg_label with
-          | (Labelled s | Optional s) when String.equal s "projections" -> true
-          | _ -> false
+          || List.exists args ~f:(function
+               | { pparam_desc = Pparam_val ((Labelled s | Optional s), _, _); _ }
+                 when String.equal s "projections" ->
+                   true
+               | _ -> false)
         in
-        let bad_pun_hints = Set.union bad_pun_hints @@ collect_pat_idents pat in
-        let res1 = transl ~bad_pun_hints ~proj_in_scope expr1 in
-        { res1 with expr = { expr with pexp_desc = Pexp_fun (arg_label, arg, pat, res1.expr) } }
+        let bad_pun_hints =
+          Set.union_list (module String)
+          @@ bad_pun_hints
+             :: List.map args ~f:(fun arg ->
+                    match arg.pparam_desc with
+                    | Pparam_val (_, _, pat) -> collect_pat_idents pat
+                    | _ -> Set.empty (module String))
+        in
+        let result =
+          match body with
+          | Pfunction_body body ->
+              let res = transl ~bad_pun_hints ~proj_in_scope body in
+              {
+                res with
+                expr =
+                  { expr with pexp_desc = Pexp_function (args, constr, Pfunction_body res.expr) };
+              }
+          | Pfunction_cases (cases, loc, attrs) ->
+              let transformed_cases, cases_result =
+                handle_cases ~bad_pun_hints ~proj_in_scope
+                  (fun ~bad_pun_hints ~proj_in_scope -> transl ~bad_pun_hints ~proj_in_scope)
+                  cases
+              in
+              {
+                cases_result with
+                expr =
+                  {
+                    expr with
+                    pexp_desc =
+                      Pexp_function (args, constr, Pfunction_cases (transformed_cases, loc, attrs));
+                  };
+              }
+        in
+        result
     | [%expr
         while [%e? _test_expr] do
           [%e? _body]
@@ -1222,26 +1290,13 @@ let translate (expr : expression) : result =
           array_opt_of_code = res2.array_opt_of_code;
         }
     | { pexp_desc = Pexp_match (expr1, cases); _ } ->
-        let fields, cases =
-          List.unzip
-          @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                 let res = loop ~proj_in_scope pc_rhs in
-                 ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
+        let transformed_cases, cases_result =
+          handle_cases ~bad_pun_hints ~proj_in_scope transl cases
         in
-        let vbss, typs, slots = List.unzip3 fields in
-        let typ = Option.value ~default:Unknown @@ List.find typs ~f:(Fn.non is_unknown) in
-        let slot =
-          Option.value ~default:Undet @@ List.find ~f:(function Undet -> false | _ -> true) slots
-        in
-        {
-          vbs = reduce_vbss vbss;
-          typ;
-          slot;
-          expr = { expr with pexp_desc = Pexp_match (expr1, cases) };
-          array_opt_of_code = None;
-        }
+        { cases_result with expr = { expr with pexp_desc = Pexp_match (expr1, transformed_cases) } }
     | { pexp_desc = Pexp_let (_recflag, _bindings, _body); _ } ->
-        (* TODO(80): to properly support local bindings, we need to collect the type environment. *)
+        (* TODO(#80): to properly support local bindings, we need to collect the type
+           environment. *)
         {
           default_result with
           typ = Unknown;

@@ -11,15 +11,19 @@ let y1 =
   let hey2 = TDSL.param ?values:None "hey2" in
   let open! TDSL.O in
     fun x ->
-      ((+) ?label:(Some (["y1"] @ (x.Tensor.value).Ir.Tnode.label)))
+      ((+) ?label:(Some
+                     (List.concat [["y1"]; (x.Tensor.value).Ir.Tnode.label])))
         ((( * ) ?label:None) hey2 (TDSL.number (Float.of_int 2))) x
 let y2 =
   let hey3 = TDSL.param ?values:None "hey3" in
   let open! TDSL.O in
-    fun x1 ->
-      fun x2 ->
-        ((+) ?label:(Some (["y2"] @ (x1.Tensor.value).Ir.Tnode.label)))
-          ((( *. ) ?label:None) x1 hey3) x2
+    fun x1 x2 ->
+      ((+) ?label:(Some
+                     (List.concat
+                        [["y2"];
+                        (x1.Tensor.value).Ir.Tnode.label;
+                        (x2.Tensor.value).Ir.Tnode.label])))
+        ((( *. ) ?label:None) x1 hey3) x2
 let a =
   let open! TDSL.O in
     TDSL.ndarray ?label:(Some ["a"]) ~batch_dims:[] ~input_dims:[3]
@@ -56,7 +60,10 @@ let mlp_layer =
           "b"
       and w = (TDSL.param ~more_label:(config.label)) ?values:None "w" in
       fun x ->
-        (relu ?label:(Some (["mlp_layer"] @ (x.Tensor.value).Ir.Tnode.label)))
+        (relu
+           ?label:(Some
+                     (List.concat
+                        [["mlp_layer"]; (x.Tensor.value).Ir.Tnode.label])))
           (((+) ?label:None) ((( * ) ?label:None) w x) b)
 let _use_layer =
   let config_block__0 = mlp_layer ~config:{ label = ["L2"]; hid_dim = 3 }

@@ -143,9 +143,12 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?label expr)
+  | [%expr !.[%e? expr1]] ->
+      (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as
+         already tensors. *)
+      (no_vbs, [%expr TDSL.O.( !. ) [%e expr1]])
+  | [%expr !..[%e? expr1]] -> (no_vbs, [%expr TDSL.O.( !.. ) [%e expr1]])
   | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      (* We need to hardcode these two patterns to prevent the numbers from being converted to
-         tensors. *)
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] (Float.of_int [%e i])])
   | [%expr [%e? expr1] **. [%e? expr2]] ->

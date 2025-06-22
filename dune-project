@@ -56,7 +56,7 @@
   num
   (saturn_lockfree
    (>= 0.5.0))
-  ppxlib
+  (ppxlib (>= 0.36.0))
   ppx_compare
   ppx_hash
   ppx_here
@@ -116,7 +116,7 @@
   curl
   time_now
   camlzip
-  ppxlib
+  (ppxlib (>= 0.36.0))
   ppx_compare
   ppx_fields_conv
   ppx_hash

@@ -256,7 +256,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
        and type dev = dev
        and type runner = runner
        and type event = event) ~(grad_updates : Backend.context BT.routine array)
-    ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync updaten : unit -> unit =
+    ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync updaten =
   assert (not @@ Array.is_empty grad_updates);
   let num_streams : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
