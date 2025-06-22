@@ -106,3 +106,82 @@ let ndarray_constant expr =
       | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))
   in
   (values, List.rev batch_dims, List.rev output_dims, List.rev input_dims)
+
+(** Convert a string containing patterns like "identifier*" to an OCaml expression that substitutes
+    the identifiers with their runtime values. Identifiers match the pattern [a-z_][a-z0-9_]* and
+    must directly precede '*'.
+
+    Example usage: [substitute_identifiers_in_string ~loc "a *x + b * y"] generates an expression
+    equivalent to: [String.concat "" [Int.to_string a; " *x + "; Int.to_string b; " * y"]]
+
+    So if [a = 2] and [b = 3], the result would be ["2 *x + 3 * y"]. Whitespace between identifiers
+    and '*' is preserved. *)
+let substitute_identifiers_in_einsum_spec ~loc str_input =
+  let multichar = String.contains str_input ',' in
+  let open Ast_builder.Default in
+  (* Helper to check if character is valid for identifier start *)
+  let is_identifier_start c = Char.is_alpha c || Char.equal c '_' in
+
+  (* Helper to check if character is valid for identifier continuation *)
+  let is_identifier_char c = Char.is_alphanum c || Char.equal c '_' in
+
+  (* Find all identifier* patterns and their positions using forward scanning *)
+  let len = String.length str_input in
+  let substitutions = ref [] in
+
+  let i = ref 0 in
+  while !i < len do
+    let c = str_input.[!i] in
+    if is_identifier_start c then (
+      (* Found start of potential identifier *)
+      let start_pos = !i in
+      (* Scan forward to find end of identifier *)
+      while !i < len && is_identifier_char str_input.[!i] && (multichar || !i = start_pos) do
+        i := !i + 1
+      done;
+      let end_pos = !i - 1 in
+
+      (* Skip any whitespace after identifier *)
+      while !i < len && List.mem ~equal:Char.equal [ ' '; '\t'; '\n'; '\r' ] str_input.[!i] do
+        i := !i + 1
+      done;
+
+      (* Check if followed by '*' *)
+      if !i < len && Char.equal str_input.[!i] '*' then
+        let identifier = String.sub str_input ~pos:start_pos ~len:(end_pos - start_pos + 1) in
+        substitutions := (start_pos, end_pos, identifier) :: !substitutions)
+    else i := !i + 1
+  done;
+
+  let substitutions = List.rev !substitutions in
+
+  (* Build segments by splitting the string at substitution boundaries *)
+  let segments = ref [] in
+  let pos = ref 0 in
+
+  List.iter substitutions ~f:(fun (start_pos, end_pos, identifier) ->
+      (* Add literal segment before substitution *)
+      (if start_pos > !pos then
+         let literal = String.sub str_input ~pos:!pos ~len:(start_pos - !pos) in
+         segments := estring ~loc literal :: !segments);
+
+      (* Add substitution marker *)
+      segments :=
+        [%expr Int.to_string [%e pexp_ident ~loc (Located.mk ~loc (Lident identifier))]]
+        :: !segments;
+
+      (* Move position past the '*' *)
+      pos := end_pos + 1);
+
+  (* Add final literal segment *)
+  (if !pos < len then
+     let literal = String.sub str_input ~pos:!pos ~len:(len - !pos) in
+     segments := estring ~loc literal :: !segments);
+
+  let segments = List.rev !segments in
+
+  (* Generate expression to concatenate all segments *)
+  match segments with
+  | [] -> estring ~loc ""
+  | [ single ] -> single
+  | multiple -> [%expr String.concat ~sep:"" [%e elist ~loc multiple]]

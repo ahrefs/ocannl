@@ -48,7 +48,27 @@ let z =
     ((+) ?label:(Some ["z"]))
       ((( * ) ?label:None) (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
       ((( * ) ?label:None) hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
-let () = ignore (y0, y1, y2, a, b, y, z)
+let stride = 2
+and dilation = 3
+let z2 =
+  let hey7 = TDSL.param ?values:None "hey7"
+  and hey8 = TDSL.param ?values:None "hey8" in
+  let open! TDSL.O in
+    TDSL.einsum ?label:(Some ["z2"])
+      (String.concat ~sep:""
+         [Int.to_string stride; "*a+"; Int.to_string dilation; "*b,;b=>a,"])
+      hey7 hey8
+let z3 =
+  let s = 2
+  and d = 3 in
+  let hey10 = TDSL.param ?values:None "hey10"
+  and hey9 = TDSL.param ?values:None "hey9" in
+  let open! TDSL.O in
+    TDSL.einsum ?label:(Some [])
+      (String.concat ~sep:""
+         ["i"; Int.to_string s; "*a+"; Int.to_string d; "*bc;b=>iac"]) hey9
+      hey10
+let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 type mlp_layer_config = {
   label: string list ;
   hid_dim: int }

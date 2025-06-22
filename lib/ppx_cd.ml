@@ -792,11 +792,12 @@ let translate (expr : expression) : result =
         { res1 with typ = Tensor; expr = [%expr NTDSL.O.( **. ) [%e res1.expr] [%e expr2]] }
     | [%expr
         [%e? expr1]
-        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]
+        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
              [%e? expr2]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
+        let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
         let slot =
           Option.value ~default:Undet
           @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
@@ -810,9 +811,10 @@ let translate (expr : expression) : result =
         }
     | [%expr
         [%e? expr1]
-        ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
+        ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
+        let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
         { res1 with typ = Tensor; expr = [%expr NTDSL.einsum1 [%e spec] [%e res1.expr]] }
     | [%expr [%e? expr1].grad] -> (
         let res1 = loop ~proj_in_scope expr1 in

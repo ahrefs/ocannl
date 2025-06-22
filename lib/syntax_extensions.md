@@ -319,9 +319,13 @@ The syntax of a row variable:
 
 The syntax of an axis spec:
 
-- depending on the mode, either a alphabetic character or an alphanumeric identifier provides an axis variable,
-- the underscore `_` is a placeholder to align other axes, but does not specify anything for the given axis (it is not a variable),
-- a number specifies the particular dimension within the axis.
+- Depending on the mode, either a alphabetic character or an alphanumeric identifier provides an axis variable.
+- Dhe underscore `_` is a placeholder to align other axes, but does not specify anything for the given axis (it is not a variable).
+- A number specifies the particular dimension within the axis,
+- A `+` sign specifies a convolution input axis with the output on the left of `+` and the kernel on the right of `+`.
+  - In both the output part and the kernel part you can prefix the axis variable by a constant coefficient with the `*` sign.
+  - The coefficient can directly only be an integer, e.g. `"2*i+3*k"`, but under the `%op` and `%cd` syntax extensions, it can also be an identifier of an integer value, e.g. `let stride = 2 and dilation = 3 in [%op "input" *+ "stride * a + dilation * b; b=>a," "kernel"]`.
+  - Note the comma above. The syntax extension's expansion of stride and dilation respects the "multichar" mode. Without the comma we are limited to single-character identifiers, e.g. `let s = 2 and d = 3 in [%op "input" *+ "is*a+d*bc;b=>iac" "kernel"]`.
 
 Examples:
 

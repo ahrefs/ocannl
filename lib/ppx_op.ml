@@ -101,16 +101,18 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       )
   | [%expr
       [%e? expr1]
-      *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec] [%e? expr2]]
+      *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2]]
     when String.contains spec_str '>' ->
       let vbs1, e1 = loop expr1 in
       let vbs2, e2 = loop expr2 in
+      let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( reduce_vbss [ vbs1; vbs2 ],
         [%expr TDSL.einsum ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
   | [%expr
-      [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ } as spec]]
+      [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
     when String.contains spec_str '>' ->
       let vbs1, e1 = loop expr1 in
+      let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       (vbs1, [%expr TDSL.einsum1 ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]])
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
