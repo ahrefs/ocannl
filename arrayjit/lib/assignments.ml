@@ -13,6 +13,7 @@ type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
+  | Constant of float
   | Constant_fill of { values : float array; strict : bool }
       (** Fills in the numbers where the rightmost axis is contiguous. If [strict=false], loops over
           the provided values. *)
@@ -141,7 +142,7 @@ let%diagn2_sexp to_low_level code =
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn ->
-        Low_level.Access (Ops.Merge_buffer { source_node_id = tn.Tn.id }, Some idcs)
+        Low_level.Access (Low_level.Merge_buffer { source = tn }, Some idcs)
   in
   let set tn idcs llv =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
@@ -238,6 +239,18 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Access global; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Access (global, Some idcs))
+    | Fetch { array; fetch_op = Range_over_offsets; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            let offset = Array.foldi idcs ~init:0 ~f:(fun _i acc idx ->
+                match idx with
+                | Fixed_idx j -> acc + j
+                | Iterator _ -> acc  (* Will be computed dynamically *)
+                | Affine _ -> acc    (* Will be computed dynamically *)) in
+            set array idcs @@ Constant (Float.of_int offset))
+    | Fetch { array; fetch_op = Constant_fill { values; strict }; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            let value = if strict then values.(0) else values.(0) in  (* TODO: implement proper indexing *)
+            set array idcs @@ Constant value)
   in
   loop code
 
@@ -302,12 +315,19 @@ let to_doc ?name ?static_indices () c =
   let doc_of_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> string (Float.to_string f)
-    | Access (Ops.C_function c) -> string (c ^ "()")
-    | Access (Merge_buffer { source_node_id }) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
-        string (ident tn ^ ".merge")
-    | Access (Ops.External_unsafe { ptr; prec; dims = _ }) ->
+    | Constant_fill { values; strict } ->
+        let values_str = String.concat ~sep:", " (Array.to_list (Array.map values ~f:Float.to_string)) in
+        string ("constant_fill([" ^ values_str ^ "], strict=" ^ Bool.to_string strict ^ ")")
+    | Range_over_offsets -> string "range_over_offsets"
+    | Access (Low_level.C_function c) -> string (c ^ "()")
+    | Access (Low_level.Merge_buffer { source }) ->
+        string (ident source ^ ".merge")
+    | Access (Low_level.External_unsafe { ptr; prec; dims = _ }) ->
         string (Ops.ptr_to_string_hum ptr prec)
+    | Access (Low_level.File_mapped (file, file_prec)) ->
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string file_prec ^ ")")
+    | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = target_prec }) ->
+        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(" ^ ident source ^ ")")
     | Slice { batch_idx; sliced } ->
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->

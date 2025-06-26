@@ -41,6 +41,7 @@ type prec =
 let byte = Byte_prec Byte
 let uint16 = Uint16_prec Uint16
 let int32 = Int32_prec Int32
+let uint4x32 = Uint4x32_prec Uint4x32
 let half = Half_prec Half
 let bfloat16 = Bfloat16_prec Bfloat16
 let fp8 = Fp8_prec Fp8
@@ -56,6 +57,7 @@ let sexp_of_prec = function
   | Byte_prec _ -> Sexp.Atom "Byte_prec"
   | Uint16_prec _ -> Sexp.Atom "Uint16_prec"
   | Int32_prec _ -> Sexp.Atom "Int32_prec"
+  | Uint4x32_prec _ -> Sexp.Atom "Uint4x32_prec"
   | Half_prec _ -> Sexp.Atom "Half_prec"
   | Bfloat16_prec _ -> Sexp.Atom "Bfloat16_prec"
   | Fp8_prec _ -> Sexp.Atom "Fp8_prec"
@@ -67,6 +69,7 @@ let prec_of_sexp = function
   | Sexp.Atom "Byte_prec" -> byte
   | Sexp.Atom "Uint16_prec" -> uint16
   | Sexp.Atom "Int32_prec" -> int32
+  | Sexp.Atom "Uint4x32_prec" -> uint4x32
   | Sexp.Atom "Half_prec" -> half
   | Sexp.Atom "Bfloat16_prec" -> bfloat16
   | Sexp.Atom "Fp8_prec" -> fp8
@@ -80,6 +83,7 @@ let precision_to_string (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   | Byte -> "byte"
   | Uint16 -> "uint16"
   | Int32 -> "int32"
+  | Uint4x32 -> "uint4x32"
   | Half -> "half"
   | Bfloat16 -> "bfloat16"
   | Fp8 -> "fp8"
@@ -91,6 +95,7 @@ let prec_string = function
   | Byte_prec _ -> "byte"
   | Uint16_prec _ -> "uint16"
   | Int32_prec _ -> "int32"
+  | Uint4x32_prec _ -> "uint4x32"
   | Half_prec _ -> "half"
   | Bfloat16_prec _ -> "bfloat16"
   | Fp8_prec _ -> "fp8"
@@ -105,6 +110,7 @@ let equal_prec p1 p2 =
   | Byte_prec _, Byte_prec _ -> true
   | Uint16_prec _, Uint16_prec _ -> true
   | Int32_prec _, Int32_prec _ -> true
+  | Uint4x32_prec _, Uint4x32_prec _ -> true
   | Half_prec _, Half_prec _ -> true
   | Bfloat16_prec _, Bfloat16_prec _ -> true
   | Fp8_prec _, Fp8_prec _ -> true
@@ -114,6 +120,7 @@ let equal_prec p1 p2 =
   | Byte_prec _, _
   | Uint16_prec _, _
   | Int32_prec _, _
+  | Uint4x32_prec _, _
   | Half_prec _, _
   | Bfloat16_prec _, _
   | Fp8_prec _, _
@@ -121,11 +128,43 @@ let equal_prec p1 p2 =
   | Double_prec _, _ ->
       false
 
+let compare_prec p1 p2 =
+  match (p1, p2) with
+  | Void_prec, Void_prec -> 0
+  | Byte_prec _, Byte_prec _ -> 0
+  | Uint16_prec _, Uint16_prec _ -> 0
+  | Int32_prec _, Int32_prec _ -> 0
+  | Uint4x32_prec _, Uint4x32_prec _ -> 0
+  | Half_prec _, Half_prec _ -> 0
+  | Bfloat16_prec _, Bfloat16_prec _ -> 0
+  | Fp8_prec _, Fp8_prec _ -> 0
+  | Single_prec _, Single_prec _ -> 0
+  | Double_prec _, Double_prec _ -> 0
+  | Void_prec, _ -> -1
+  | _, Void_prec -> 1
+  | Byte_prec _, _ -> -1
+  | _, Byte_prec _ -> 1
+  | Uint16_prec _, _ -> -1
+  | _, Uint16_prec _ -> 1
+  | Int32_prec _, _ -> -1
+  | _, Int32_prec _ -> 1
+  | Uint4x32_prec _, _ -> -1
+  | _, Uint4x32_prec _ -> 1
+  | Half_prec _, _ -> -1
+  | _, Half_prec _ -> 1
+  | Bfloat16_prec _, _ -> -1
+  | _, Bfloat16_prec _ -> 1
+  | Fp8_prec _, _ -> -1
+  | _, Fp8_prec _ -> 1
+  | Single_prec _, _ -> -1
+  | _, Single_prec _ -> 1
+
 let prec_in_bytes = function
   | Void_prec -> 0
   | Byte_prec _ -> 1
   | Uint16_prec _ -> 2
   | Int32_prec _ -> 4
+  | Uint4x32_prec _ -> 16
   | Half_prec _ -> 2
   | Bfloat16_prec _ -> 2
   | Fp8_prec _ -> 1
@@ -134,6 +173,8 @@ let prec_in_bytes = function
 
 let promote_prec p1 p2 =
   match (p1, p2) with
+  | Uint4x32_prec _, _ -> p1
+  | _, Uint4x32_prec _ -> p2
   | Double_prec _, _ -> p1
   | _, Double_prec _ -> p2
   | Single_prec _, _ -> p1
@@ -157,6 +198,7 @@ let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   | Byte -> byte
   | Uint16 -> uint16
   | Int32 -> int32
+  | Uint4x32 -> uint4x32
   | Half -> half
   | Bfloat16 -> bfloat16
   | Fp8 -> fp8
@@ -183,6 +225,7 @@ let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
   | Uint16_prec _ -> "unsigned short"
   | Int32_prec _ -> "int"
+  | Uint4x32_prec _ -> "uint4" (* CUDA's uint4 type - 128-bit *)
   | Half_prec _ -> "_Float16"
   | Bfloat16_prec _ -> "unsigned short" (* Bfloat16 represented as uint16 *)
   | Fp8_prec _ -> "unsigned char" (* FP8 represented as uint8 *)
@@ -194,6 +237,7 @@ let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
   | Uint16_prec _ -> "uint16"
   | Int32_prec _ -> "int32"
+  | Uint4x32_prec _ -> "uint4x32"
   | Half_prec _ -> "half"
   | Bfloat16_prec _ -> "bfloat16"
   | Fp8_prec _ -> "fp8"
@@ -274,7 +318,7 @@ let neutral_elem = function
   | Min -> Float.infinity
   | And -> 1.
   | Or -> 0.
-  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq | Cmpne (* | Shl | Shr *) -> 0.
+  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq | Cmpne | Threefry4x32 (* | Shl | Shr *) -> 0.
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -299,6 +343,7 @@ let interpret_binop op v1 v2 =
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
+  | Threefry4x32 -> invalid_arg "interpret_binop: Threefry4x32 requires hardware implementation"
 
 let interpret_unop op v =
   let open Float in
@@ -351,6 +396,7 @@ let binop_cd_syntax = function
   | Mod -> "%"
   | Max -> "@^"
   | Min -> "^^"
+  | Threefry4x32 -> "threefry4x32"
 (* | Shl -> "lsl" *)
 (* | Shr -> "lsr" *)
 
@@ -374,6 +420,7 @@ let binop_cd_fallback_syntax = function
   | Mod -> "mod_"
   | Max -> "max"
   | Min -> "min"
+  | Threefry4x32 -> "threefry4x32"
 (* | Shl -> "shlf" *)
 (* | Shr -> "shrf" *)
 
@@ -414,9 +461,10 @@ let binop_c_syntax prec v =
   (* | Shr, _ -> ("((", ") / exp2(", "))") *)
   | Or, _ -> ("(", " ||", ")")
   | And, _ -> ("(", " &&", ")")
+  | Threefry4x32, _ -> ("threefry4x32(", ",", ")")
 
 let is_assign_op = function
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne -> false
+  | Arg1 | Mod | Threefry4x32 (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne -> false
   | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
@@ -443,7 +491,7 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Min -> "=^^"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
+  | Arg1 | Mod | Threefry4x32 (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)
@@ -529,6 +577,7 @@ let c_convert_precision ~from ~to_ =
   | Byte_prec _, Byte_prec _
   | Uint16_prec _, Uint16_prec _
   | Int32_prec _, Int32_prec _
+  | Uint4x32_prec _, Uint4x32_prec _
   | Bfloat16_prec _, Bfloat16_prec _
   | Fp8_prec _, Fp8_prec _
   | Void_prec, Void_prec ->
@@ -559,6 +608,9 @@ let c_convert_precision ~from ~to_ =
   (* BFloat16 <-> FP8 conversions *)
   | Bfloat16_prec _, Fp8_prec _ -> ("float_to_fp8(bfloat16_to_float(", "))")
   | Fp8_prec _, Bfloat16_prec _ -> ("float_to_bfloat16(fp8_to_float(", "))")
+  (* Uint4x32 conversions - special handling *)
+  | Uint4x32_prec _, _ -> ("uint4x32_to_" ^ c_typ_of_prec to_ ^ "(", ")")
+  | _, Uint4x32_prec _ -> (c_typ_of_prec from ^ "_to_uint4x32(", ")")
   (* Default case for all other conversions *)
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 

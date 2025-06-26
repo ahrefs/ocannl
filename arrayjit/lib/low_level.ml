@@ -15,10 +15,10 @@ type dedicated_access =
       prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
       dims : int array Lazy.t;
     }
-  | Merge_buffer of { source_node_id : int }
+  | Merge_buffer of { source : Tnode.t }
   | File_mapped of string * Ops.prec
   | Uint4x32_to_prec_uniform of {
-      source_node_id : int;
+      source : Tnode.t;
       prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
     }
 [@@deriving sexp_of, equal, compare]
@@ -227,7 +227,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
-    | Access (Ops.Merge_buffer { source_node_id }, _) ->
+    | Access (Merge_buffer { source }, _) ->
+        let source_node_id = source.Tn.id in
         Option.iter !merge_node_id ~f:(fun merge_node_id ->
             if merge_node_id <> source_node_id then
               raise
@@ -294,7 +295,7 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
                function
                | Fixed_idx _ -> None
                | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
-               | Affine { symbols; _ } -> (
+               | Affine { symbols; offset } -> (
                    (* For affine indices, collect all symbols that are not static *)
                    List.filter_map symbols ~f:(fun (_, s) ->
                        Option.some_if (not @@ Set.mem static_indices s) s)
@@ -984,18 +985,24 @@ let to_doc_cstyle ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Access (Ops.C_function s, None) -> string (s ^ "()")
-    | Access (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+    | Access (C_function s, None) -> string (s ^ "()")
+    | Access (C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
+    | Access (External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
-    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+    | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Ops.Merge_buffer { source_node_id }, None) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        doc_ident tn ^^ string ".merge"
-    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Access (Merge_buffer { source }, None) ->
+        doc_ident source ^^ string ".merge"
+    | Access (Merge_buffer { source }, Some idcs) ->
+        group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Access (File_mapped (file, prec), None) ->
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")")
+    | Access (File_mapped (file, prec), Some idcs) ->
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")") ^^ brackets (pp_indices idcs)
+    | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
+        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")"
+    | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
+        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")" ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
@@ -1062,18 +1069,24 @@ let to_doc ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Access (Ops.C_function s, None) -> string (s ^ "()")
-    | Access (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+    | Access (C_function s, None) -> string (s ^ "()")
+    | Access (C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
+    | Access (External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
-    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+    | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Ops.Merge_buffer { source_node_id }, None) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        doc_ident tn ^^ string ".merge"
-    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
-        let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
-        group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Access (Merge_buffer { source }, None) ->
+        doc_ident source ^^ string ".merge"
+    | Access (Merge_buffer { source }, Some idcs) ->
+        group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
+    | Access (File_mapped (file, prec), None) ->
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")")
+    | Access (File_mapped (file, prec), Some idcs) ->
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")") ^^ brackets (pp_indices idcs)
+    | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
+        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")"
+    | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
+        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")" ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx

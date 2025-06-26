@@ -32,6 +32,7 @@ let sexp_of_bigarray (arr : ('a, 'b) bigarray) =
 type byte_nd = (char, Ops.uint8_elt) bigarray
 type uint16_nd = (int, Ops.uint16_elt) bigarray [@@ocaml.boxed]
 type int32_nd = (int32, Ops.int32_elt) bigarray [@@ocaml.boxed]
+type uint4x32_nd = (Stdlib.Complex.t, Bigarray.complex64_elt) bigarray [@@ocaml.boxed]
 type half_nd = (float, Ops.float16_elt) bigarray
 type bfloat16_nd = (int, Ops.uint16_elt) bigarray [@@ocaml.boxed] (* Using uint16 representation *)
 type fp8_nd = (char, Ops.uint8_elt) bigarray (* Using uint8 representation *)
@@ -41,6 +42,7 @@ type double_nd = (float, Ops.float64_elt) bigarray
 let sexp_of_byte_nd (arr : byte_nd) = Sexp.Atom (big_ptr_to_string arr)
 let sexp_of_uint16_nd (arr : uint16_nd) = Sexp.Atom (big_ptr_to_string arr)
 let sexp_of_int32_nd (arr : int32_nd) = Sexp.Atom (big_ptr_to_string arr)
+let sexp_of_uint4x32_nd (arr : uint4x32_nd) = Sexp.Atom (big_ptr_to_string arr)
 let sexp_of_half_nd (arr : half_nd) = Sexp.Atom (big_ptr_to_string arr)
 let sexp_of_bfloat16_nd (arr : bfloat16_nd) = Sexp.Atom (big_ptr_to_string arr)
 let sexp_of_fp8_nd (arr : fp8_nd) = Sexp.Atom (big_ptr_to_string arr)
@@ -51,6 +53,7 @@ type t =
   | Byte_nd of byte_nd
   | Uint16_nd of uint16_nd
   | Int32_nd of int32_nd
+  | Uint4x32_nd of uint4x32_nd
   | Half_nd of half_nd
   | Bfloat16_nd of bfloat16_nd
   | Fp8_nd of fp8_nd
@@ -64,6 +67,7 @@ let as_array (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision)
   | Ops.Byte -> Byte_nd arr
   | Ops.Uint16 -> Uint16_nd arr
   | Ops.Int32 -> Int32_nd arr
+  | Ops.Uint4x32 -> Uint4x32_nd arr
   | Ops.Half -> Half_nd arr
   | Ops.Bfloat16 -> Bfloat16_nd arr
   | Ops.Fp8 -> Fp8_nd arr
@@ -76,6 +80,7 @@ let precision_to_bigarray_kind (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.pre
   | Ops.Byte -> Bigarray.Char
   | Ops.Uint16 -> Bigarray.Int16_unsigned
   | Ops.Int32 -> Bigarray.Int32
+  | Ops.Uint4x32 -> Bigarray.Complex64
   | Ops.Half -> Bigarray.Float16
   | Ops.Bfloat16 -> Bigarray.Int16_unsigned (* Using uint16 representation *)
   | Ops.Fp8 -> Bigarray.Char (* Using uint8 representation *)
@@ -86,6 +91,7 @@ let precision_string = function
   | Byte_nd _ -> "byte"
   | Uint16_nd _ -> "uint16"
   | Int32_nd _ -> "int32"
+  | Uint4x32_nd _ -> "uint4x32"
   | Half_nd _ -> "half"
   | Bfloat16_nd _ -> "bfloat16"
   | Fp8_nd _ -> "fp8"
@@ -98,6 +104,7 @@ let get_prec = function
   | Byte_nd _ -> Ops.byte
   | Uint16_nd _ -> Ops.uint16
   | Int32_nd _ -> Ops.int32
+  | Uint4x32_nd _ -> Ops.uint4x32
   | Half_nd _ -> Ops.half
   | Bfloat16_nd _ -> Ops.bfloat16
   | Fp8_nd _ -> Ops.fp8
@@ -112,6 +119,7 @@ let map_with_prec { f } = function
   | Byte_nd arr -> f Ops.Byte arr
   | Uint16_nd arr -> f Ops.Uint16 arr
   | Int32_nd arr -> f Ops.Int32 arr
+  | Uint4x32_nd arr -> f Ops.Uint4x32 arr
   | Half_nd arr -> f Ops.Half arr
   | Bfloat16_nd arr -> f Ops.Bfloat16 arr
   | Fp8_nd arr -> f Ops.Fp8 arr
@@ -145,6 +153,7 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       | Ops.Byte -> A.fill arr (Char.of_int_exn @@ Int.of_float pad_value)
       | Ops.Uint16 -> A.fill arr (Int.of_float pad_value)
       | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
+      | Ops.Uint4x32 -> A.fill arr Stdlib.Complex.{ re = pad_value; im = 0.0 }
       | Ops.Half -> A.fill arr pad_value
       | Ops.Bfloat16 -> A.fill arr (float_to_bfloat16 pad_value)
       | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ float_to_fp8 pad_value)
@@ -160,6 +169,7 @@ let map { f } = function
   | Byte_nd arr -> f arr
   | Uint16_nd arr -> f arr
   | Int32_nd arr -> f arr
+  | Uint4x32_nd arr -> f arr
   | Half_nd arr -> f arr
   | Bfloat16_nd arr -> f arr
   | Fp8_nd arr -> f arr
@@ -175,6 +185,7 @@ let map2 { f2 } x1 x2 =
   | Byte_nd arr1, Byte_nd arr2 -> f2 arr1 arr2
   | Uint16_nd arr1, Uint16_nd arr2 -> f2 arr1 arr2
   | Int32_nd arr1, Int32_nd arr2 -> f2 arr1 arr2
+  | Uint4x32_nd arr1, Uint4x32_nd arr2 -> f2 arr1 arr2
   | Half_nd arr1, Half_nd arr2 -> f2 arr1 arr2
   | Bfloat16_nd arr1, Bfloat16_nd arr2 -> f2 arr1 arr2
   | Fp8_nd arr1, Fp8_nd arr2 -> f2 arr1 arr2
@@ -201,6 +212,7 @@ let set_from_float arr idx v =
   | Byte_nd arr -> A.set arr idx @@ Char.of_int_exn @@ Int.of_float v
   | Uint16_nd arr -> A.set arr idx @@ Int.of_float v
   | Int32_nd arr -> A.set arr idx @@ Int32.of_float v
+  | Uint4x32_nd arr -> A.set arr idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.set arr idx v
   | Bfloat16_nd arr -> A.set arr idx @@ float_to_bfloat16 v
   | Fp8_nd arr -> A.set arr idx @@ Char.of_int_exn @@ float_to_fp8 v
@@ -212,6 +224,7 @@ let fill_from_float arr v =
   | Byte_nd arr -> A.fill arr @@ Char.of_int_exn @@ Int.of_float v
   | Uint16_nd arr -> A.fill arr @@ Int.of_float v
   | Int32_nd arr -> A.fill arr @@ Int32.of_float v
+  | Uint4x32_nd arr -> A.fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.fill arr v
   | Bfloat16_nd arr -> A.fill arr @@ float_to_bfloat16 v
   | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ float_to_fp8 v
@@ -252,6 +265,7 @@ let fold_as_float ~init ~f arr =
       fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
   | Uint16_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
   | Int32_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
+  | Uint4x32_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
   | Half_nd arr -> fold_bigarray ~init ~f arr
   | Bfloat16_nd arr ->
       fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
@@ -271,6 +285,7 @@ let get_as_float arr idx =
   | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx
   | Uint16_nd arr -> Float.of_int @@ A.get arr idx
   | Int32_nd arr -> Int32.to_float @@ A.get arr idx
+  | Uint4x32_nd arr -> (A.get arr idx).Stdlib.Complex.re
   | Half_nd arr -> A.get arr idx
   | Bfloat16_nd arr -> bfloat16_to_float @@ A.get arr idx
   | Fp8_nd arr -> fp8_to_float @@ Char.to_int @@ A.get arr idx
