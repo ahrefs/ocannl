@@ -76,7 +76,7 @@ TODO: flesh out explanation.
 
 ## Translation
 
-The translation `Assignments.to_low_level` is straightforward. Commented code blocks are delineated by `Low_level.Comment "end"` statements. Indices into tensor nodes are derived from the `projections` fields by the `Indexing.derive_index` function. We translate `projections.product_space` elements into for loops. `to_low_level` returns all the data that `Low_level` optimizations generated, so that backends can make more informed decisions when jitting, i.e. emitting the backend-specific code.
+The translation `Assignments.to_low_level` is straightforward. Commented code blocks are delineated by `Low_level.Comment "end"` statements. Indices into tensor nodes are derived from the `projections` fields. We translate `projections.product_space` elements into for loops. `to_low_level` returns all the data that `Low_level` optimizations generated, so that backends can make more informed decisions when jitting, i.e. emitting the backend-specific code.
 
 ## Inlining
 

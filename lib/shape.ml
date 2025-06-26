@@ -394,16 +394,16 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
   match logic with
-  | Terminal (Range_over_offsets | Standard_uniform | Constant_fill { strict = false; _ }) ->
+  | Terminal (Range_over_offsets | Standard_uniform) ->
       (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Constant_fill { values; strict = true }) ->
+  | Terminal (Constant_fill values) ->
       let len = Array.length values in
       let io_dims =
         try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
         with Invalid_argument _ ->
           raise
           @@ Shape_error
-               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+               ( "unify_shapes Constant_fill: non-batch dimensions must be known",
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
@@ -423,7 +423,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         with Invalid_argument _ ->
           raise
           @@ Shape_error
-               ( "unify_shapes Constant_fill strict: non-batch dimensions must be known",
+               ( "unify_shapes Constant_fill: non-batch dimensions must be known",
                  [ Shape_mismatch [ cur_sh ] ] )
       in
       let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in

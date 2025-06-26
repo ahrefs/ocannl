@@ -16,7 +16,7 @@ let test_bfloat16_conversions () =
   (* Test round-trip through ndarray *)
   let arr =
     Ndarray.create_array ~debug:"test" Ops.bfloat16 ~dims:[| 3; 2 |] ~padding:None
-      (Ops.Constant_fill { values = [| 1.0; 2.0; 3.14; -1.5; 0.125; 1000.0 |]; strict = true })
+      (Assignments.Constant_fill [| 1.0; 2.0; 3.14; -1.5; 0.125; 1000.0 |])
   in
 
   Stdio.printf "\nBFloat16 array values:\n";

@@ -66,6 +66,7 @@ val apply_op : Ops.op -> float_t array -> float_t
 val flat_lines : t list -> t list
 val unflat_lines : t list -> t
 val loop_over_dims : int array -> body:(Indexing.axis_index array -> t) -> t
+val unroll_dims : int array -> body:(Indexing.axis_index array -> offset:int -> t) -> t
 
 (** {2 Optimization} *)
 

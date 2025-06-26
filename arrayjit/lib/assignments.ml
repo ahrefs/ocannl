@@ -14,9 +14,11 @@ type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
   | Constant of float
-  | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=false], loops over
-          the provided values. *)
+  | Constant_fill of float array
+      (** Fills in the numbers where the rightmost axis is contiguous. Does not loop over the
+          provided values; shape inference will require the assigned tensor to have the same number
+          of elements. This unrolls all assignments and should be used only for small arrays.
+          Consider using {!Tnode.set_values} instead for larger arrays. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell, i.e. how many cells away it is from the
           beginning, in the logical representation of the tensor node. (The actual in-memory
@@ -141,8 +143,7 @@ let%diagn2_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
-    | Merge_buffer tn ->
-        Low_level.Access (Low_level.Merge_buffer { source = tn }, Some idcs)
+    | Merge_buffer tn -> Low_level.Access (Low_level.Merge_buffer { source = tn }, Some idcs)
   in
   let set tn idcs llv =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
@@ -239,18 +240,13 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Access global; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Access (global, Some idcs))
-    | Fetch { array; fetch_op = Range_over_offsets; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            let offset = Array.foldi idcs ~init:0 ~f:(fun _i acc idx ->
-                match idx with
-                | Fixed_idx j -> acc + j
-                | Iterator _ -> acc  (* Will be computed dynamically *)
-                | Affine _ -> acc    (* Will be computed dynamically *)) in
-            set array idcs @@ Constant (Float.of_int offset))
-    | Fetch { array; fetch_op = Constant_fill { values; strict }; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            let value = if strict then values.(0) else values.(0) in  (* TODO: implement proper indexing *)
-            set array idcs @@ Constant value)
+    | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
+        Low_level.loop_over_dims dims ~body:(fun idcs ->
+            let offset = Indexing.reflect_projection ~dims ~projection:idcs in
+            set array idcs @@ Embed_index offset)
+    | Fetch { array; fetch_op = Constant_fill values; dims = (lazy dims) } ->
+        Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
+            set array idcs @@ Constant values.(offset))
   in
   loop code
 
@@ -315,13 +311,14 @@ let to_doc ?name ?static_indices () c =
   let doc_of_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> string (Float.to_string f)
-    | Constant_fill { values; strict } ->
-        let values_str = String.concat ~sep:", " (Array.to_list (Array.map values ~f:Float.to_string)) in
-        string ("constant_fill([" ^ values_str ^ "], strict=" ^ Bool.to_string strict ^ ")")
+    | Constant_fill values ->
+        let values_str =
+          String.concat ~sep:", " (Array.to_list (Array.map values ~f:Float.to_string))
+        in
+        string ("constant_fill([" ^ values_str ^ "])")
     | Range_over_offsets -> string "range_over_offsets"
     | Access (Low_level.C_function c) -> string (c ^ "()")
-    | Access (Low_level.Merge_buffer { source }) ->
-        string (ident source ^ ".merge")
+    | Access (Low_level.Merge_buffer { source }) -> string (ident source ^ ".merge")
     | Access (Low_level.External_unsafe { ptr; prec; dims = _ }) ->
         string (Ops.ptr_to_string_hum ptr prec)
     | Access (Low_level.File_mapped (file, file_prec)) ->

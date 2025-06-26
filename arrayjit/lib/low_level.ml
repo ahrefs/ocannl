@@ -295,7 +295,7 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
                function
                | Fixed_idx _ -> None
                | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
-               | Affine { symbols; offset } -> (
+               | Affine { symbols; offset = _ } -> (
                    (* For affine indices, collect all symbols that are not static *)
                    List.filter_map symbols ~f:(fun (_, s) ->
                        Option.some_if (not @@ Set.mem static_indices s) s)
@@ -991,18 +991,21 @@ let to_doc_cstyle ?name ?static_indices () llc =
         string (Ops.ptr_to_string_hum ptr prec)
     | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Merge_buffer { source }, None) ->
-        doc_ident source ^^ string ".merge"
+    | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
     | Access (Merge_buffer { source }, Some idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Access (File_mapped (file, prec), None) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")")
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
     | Access (File_mapped (file, prec), Some idcs) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")") ^^ brackets (pp_indices idcs)
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
+        ^^ brackets (pp_indices idcs)
     | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
-        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")"
+        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+        ^^ doc_ident source ^^ string ")"
     | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")" ^^ brackets (pp_indices idcs)
+        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+        ^^ doc_ident source ^^ string ")"
+        ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
@@ -1075,18 +1078,21 @@ let to_doc ?name ?static_indices () llc =
         string (Ops.ptr_to_string_hum ptr prec)
     | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Merge_buffer { source }, None) ->
-        doc_ident source ^^ string ".merge"
+    | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
     | Access (Merge_buffer { source }, Some idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Access (File_mapped (file, prec), None) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")")
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
     | Access (File_mapped (file, prec), Some idcs) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.precision_to_string prec ^ ")") ^^ brackets (pp_indices idcs)
+        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
+        ^^ brackets (pp_indices idcs)
     | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
-        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")"
+        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+        ^^ doc_ident source ^^ string ")"
     | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.precision_to_string prec ^ "_uniform(") ^^ doc_ident source ^^ string ")" ^^ brackets (pp_indices idcs)
+        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+        ^^ doc_ident source ^^ string ")"
+        ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
@@ -1138,3 +1144,33 @@ let loop_over_dims dims ~body =
           }
   in
   for_loop [] (Array.to_list dims)
+
+let unroll_dims dims ~body =
+  if Array.is_empty dims then body [||] ~offset:0
+  else
+    (* Calculate strides for each dimension (rightmost changes fastest) *)
+    let strides = Array.create ~len:(Array.length dims) 1 in
+    for i = Array.length dims - 2 downto 0 do
+      strides.(i) <- strides.(i + 1) * dims.(i + 1)
+    done;
+
+    (* Generate all combinations of indices *)
+    let rec generate_all_combinations indices_so_far offset dim_index =
+      if dim_index >= Array.length dims then
+        (* We have a complete combination, call the body *)
+        body (Array.of_list_rev indices_so_far) ~offset
+      else
+        (* Generate all values for current dimension *)
+        let results = ref [] in
+        for i = 0 to dims.(dim_index) - 1 do
+          let new_offset = offset + (i * strides.(dim_index)) in
+          let result =
+            generate_all_combinations
+              (Indexing.Fixed_idx i :: indices_so_far)
+              new_offset (dim_index + 1)
+          in
+          results := result :: !results
+        done;
+        unflat_lines (List.rev !results)
+    in
+    generate_all_combinations [] 0 0

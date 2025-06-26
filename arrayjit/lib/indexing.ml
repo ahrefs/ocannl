@@ -198,32 +198,18 @@ let identity_projections ?debug_info ?derived_for ~lhs_dims () =
     debug_info;
   }
 
-let derive_index ~product_syms ~(projection : axis_index array) =
-  let sym_to_i =
-    Array.mapi product_syms ~f:(fun i s -> (s, i))
-    |> Array.to_list
-    |> Map.of_alist_exn (module Symbol)
-  in
-  let positions =
-    Array.map projection ~f:(function
-      | Iterator s when Map.mem sym_to_i s -> Either.First (Map.find_exn sym_to_i s)
-      | Fixed_idx _ as it -> Second it
-      | Affine _ as it -> Second it
-      | Iterator _ as it -> Second it)
-  in
-  fun ~product ->
-    Array.map positions ~f:(function
-      | First p -> product.(p)
-      | Second (Fixed_idx i) -> i
-      | Second (Iterator s) ->
-          (* This shouldn't happen if sym_to_i is complete *)
-          failwith ("derive_index: unresolved iterator " ^ symbol_ident s)
-      | Second (Affine { symbols; offset }) ->
-          List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
-              match Map.find sym_to_i s with
-              | Some idx -> acc + (coeff * product.(idx))
-              | None ->
-                  failwith ("derive_index: unresolved symbol in affine index " ^ symbol_ident s)))
+let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
+  Array.zip_exn dims projection
+  |> Array.fold_right ~init:(1, [], 0) ~f:(fun (dim, idx) (stride, symbols, offset) ->
+         match idx with
+         | Fixed_idx fixed_offset -> (stride * dim, symbols, offset + (fixed_offset * stride))
+         | Iterator sym -> (stride * dim, (stride, sym) :: symbols, offset)
+         | Affine { symbols = affine_symbols; offset = affine_offset } ->
+             let new_symbols =
+               List.map affine_symbols ~f:(fun (coeff, sym) -> (coeff * stride, sym))
+             in
+             (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride)))
+  |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
 module Pp_helpers = struct
   open PPrint

@@ -386,9 +386,10 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
 
 let random_seed =
   let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
-  let res = Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
-    ~fetch_op:(Asgns.Constant_fill { values = [| seed |]; strict = true })
-    () in
+  let res =
+    Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
+      ~fetch_op:(Asgns.Constant_fill [| seed |]) ()
+  in
   Tn.update_memory_mode res.value Tn.Effectively_constant 24;
   Tn.update_prec res.value Ir.Ops.uint4x32;
   ref res
@@ -462,21 +463,15 @@ module TDSL = struct
   let stop_gradient = stop_gradient
 
   (** The input [i] dimensions default to empty. The batch dimensions will be inferred if omitted.
-      [strict] controls whether [Constant_fill] will try to fit the given values in the tensor and
-      contribute to shape inference. If it is not provided explicitly, it will be [true] if [b] is
-      omitted, and [false] otherwise. *)
-  let init_const ~l ?strict ?b ?(i = []) ~o values =
-    let strict =
-      match (strict, b) with Some s, _ -> s | None, Some _ -> false | None, None -> true
-    in
+  *)
+  let init_const ~l ?b ?(i = []) ~o values =
     Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ?batch_dims:b ~input_dims:i ~output_dims:o
-      ~fetch_op:(Constant_fill { values; strict })
-      ()
+      ~fetch_op:(Asgns.Constant_fill values) ()
 
   (** It's like `Tensor.param` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:[ l ] ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~fetch_op:(Constant_fill { values; strict = false })
+      ~fetch_op:(Asgns.Constant_fill values)
       ()
 end
 

@@ -119,7 +119,7 @@ let lazy_to_dims shape = lazy (Shape.to_dims shape)
 let fetch_zeros array shape =
   Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 
-let default_init_op = Ir.Ops.Constant_fill { values = [| 0.0 |]; strict = false }
+let default_init_op = Ir.Assignments.Constant 0.0
 let max_sublabel_length = ref 25
 
 let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
@@ -305,12 +305,12 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match (fetch_op, fetch_op) with
-    | None, Some (Ir.Ops.Constant_fill { values = [| _ |]; strict = _ })
+    | None, Some (Ir.Assignments.Constant _)
       when not (is_require_grad grad_spec) ->
         (* The scalar literal case. *)
         let fetch_op =
           match fetch_op with
-          | Some (Ir.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
+          | Some (Ir.Assignments.Constant c) -> Constant c
           | _ -> assert false
         in
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
@@ -336,7 +336,7 @@ let float_to_label v = Float.to_string v
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let fetch_op = Ir.Ops.Constant_fill { values = [| c |]; strict = true } in
+  let fetch_op = Ir.Assignments.Constant c in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
@@ -350,7 +350,7 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   t
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
-    ?batch_axes ?input_axes ?output_axes ?(strict = true) values =
+    ?batch_axes ?input_axes ?output_axes values =
   let to_dim_list dims axes =
     Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
   in
@@ -363,7 +363,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     let debug = "Temporary array for pretty-printing" in
     let ndarr =
       Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None
-        (Ir.Ops.Constant_fill { values; strict })
+        (Asgns.Constant_fill values)
     in
     let ( ! ) = List.length in
     let b = Buffer.create 1024 in
@@ -387,7 +387,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
       ~deduced:Not_constrained
-      ~fetch_op:(Constant_fill { values; strict })
+      ~fetch_op:(Asgns.Constant_fill values)
       ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -398,11 +398,11 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   t
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-    ?(strict = false) ?values label =
+    ?values label =
   let fetch_op =
     match values with
-    | Some values -> Ir.Ops.Constant_fill { values; strict }
-    | None -> Ir.Ops.Standard_uniform
+    | Some values -> Asgns.Constant_fill values
+    | None -> Asgns.Standard_uniform
   in
   let t =
     term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims

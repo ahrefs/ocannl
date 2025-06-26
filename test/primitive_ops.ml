@@ -23,7 +23,7 @@ let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   in
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill { values = xs; strict = true })
+      ~fetch_op:(Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
