@@ -16,9 +16,12 @@ type ('ocaml, 'impl) precision =
   | Byte : (char, uint8_elt) precision
   | Uint16 : (int, uint16_elt) precision
   | Int32 : (int32, int32_elt) precision
+  | Uint4x32 : (Stdlib.Complex.t, Bigarray.complex64_elt) precision
+      (** A 128-bit value that corresponds to CUDA's uint4 type. Luckily, the OCaml Bigarray library
+          supports complex64_elt which is a 128-bit value, so we avoid dims conversions. *)
   | Half : (float, float16_elt) precision
-  | Bfloat16 : (int, uint16_elt) precision (* Using uint16 representation for now *)
-  | Fp8 : (char, uint8_elt) precision (* Using uint8 representation *)
+  | Bfloat16 : (int, uint16_elt) precision  (** Using uint16 representation for now *)
+  | Fp8 : (char, uint8_elt) precision  (** Using uint8 representation for now *)
   | Single : (float, float32_elt) precision
   | Double : (float, float64_elt) precision
 [@@deriving sexp_of]
@@ -28,6 +31,7 @@ type prec =
   | Byte_prec of (char, uint8_elt) precision
   | Uint16_prec of (int, uint16_elt) precision
   | Int32_prec of (int32, int32_elt) precision
+  | Uint4x32_prec of (Stdlib.Complex.t, Bigarray.complex64_elt) precision
   | Half_prec of (float, float16_elt) precision
   | Bfloat16_prec of (int, uint16_elt) precision
   | Fp8_prec of (char, uint8_elt) precision
@@ -205,19 +209,6 @@ let hum_typ_of_prec = function
     This is a redundant set of operations, aiming to expose hardware-supported "intrinsics", to
     reduce the need for backends to pattern-match and optimize. Also for convenience. *)
 
-(** Initializes or resets a array by filling in the corresponding numbers, at the appropriate
-    precision. *)
-type init_op =
-  | Constant_fill of { values : float array; strict : bool }
-      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=false], loops over
-          the provided values. *)
-  | Range_over_offsets
-      (** Fills in the offset number of each cell (i.e. how many cells away it is from the
-          beginning). *)
-  | Standard_uniform  (** Draws the values from U(0,1). *)
-  | File_mapped of string * prec  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
-[@@deriving equal, sexp]
-
 type binop =
   | Arg1
   | Arg2
@@ -239,6 +230,9 @@ type binop =
   (* | Shr *)
   | Or
   | And
+  | Threefry4x32
+      (** 4x32-bit Threefry PRNG. Requires a 128-bit key and a 128-bit counter and outputs a 128-bit
+          value (precision [Uint4x32]). *)
 [@@deriving sexp, compare, equal]
 
 type unop =
@@ -568,7 +562,7 @@ let c_convert_precision ~from ~to_ =
   (* Default case for all other conversions *)
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 
-(** {2 *** Global references ***} *)
+(** {2 *** Pointer representation ***} *)
 
 type voidptr = unit Ctypes.ptr
 
@@ -587,16 +581,3 @@ let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
 
 let ptr_to_string_hum (type elem) (ptr : elem Ctypes.ptr) prec =
   rawptr_to_string_hum (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) prec
-
-type global_identifier =
-  | C_function of string  (** Calls a no-argument or indices-arguments C function. *)
-  | External_unsafe of {
-      ptr : voidptr;
-      prec : (prec[@equal.ignore] [@compare.ignore]);
-      dims : int array Lazy.t;
-    }
-  | Merge_buffer of { source_node_id : int }
-      (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by
-          merge operations. The merge buffer is associated with the source node of the device's most
-          recent [device_to_device ~into_merge_buffer:true] operation. *)
-[@@deriving sexp_of, equal, compare]

@@ -8,6 +8,21 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
+type dedicated_access =
+  | C_function of string
+  | External_unsafe of {
+      ptr : Ops.voidptr;
+      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
+      dims : int array Lazy.t;
+    }
+  | Merge_buffer of { source_node_id : int }
+  | File_mapped of string * Ops.prec
+  | Uint4x32_to_prec_uniform of {
+      source_node_id : int;
+      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
+    }
+[@@deriving sexp_of, equal, compare]
+
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
@@ -42,7 +57,7 @@ type t =
 and float_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
-  | Get_global of Ops.global_identifier * Indexing.axis_index array option
+  | Access of dedicated_access * Indexing.axis_index array option
   | Get of Tn.t * Indexing.axis_index array
   | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
@@ -135,7 +150,7 @@ let is_constexpr_comp traced_store llv =
     | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
-    | Get_global (_, _) -> false
+    | Access (_, _) -> false
     | Get (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
@@ -157,7 +172,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s
       | Indexing.Affine { symbols; offset } ->
           List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
-            acc + coeff * (Option.value ~default:0 @@ Map.find env s)))
+              acc + (coeff * (Option.value ~default:0 @@ Map.find env s))))
   in
   let rec loop_proc env llc =
     let loop = loop_proc env in
@@ -196,8 +211,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               assert (Tn.equal old_tn tn)
           | Indexing.Affine { symbols; _ } ->
               List.iter symbols ~f:(fun (_, s) ->
-                let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-                assert (Tn.equal old_tn tn)))
+                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+                  assert (Tn.equal old_tn tn)))
     | Set_local (_, llv) -> loop_float env llv
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -212,7 +227,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc env body
     | Get_local _ -> ()
-    | Get_global (Ops.Merge_buffer { source_node_id }, _) ->
+    | Access (Ops.Merge_buffer { source_node_id }, _) ->
         Option.iter !merge_node_id ~f:(fun merge_node_id ->
             if merge_node_id <> source_node_id then
               raise
@@ -221,7 +236,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
                      "Low_evel.optimize_proc: currently only one merge buffer per routine is \
                       allowed, found node ids %{source_node_id#Int} and %{merge_node_id#Int}"]);
         merge_node_id := Some source_node_id
-    | Get_global _ -> ()
+    | Access _ -> ()
     | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
@@ -279,11 +294,14 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
                function
                | Fixed_idx _ -> None
                | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
-               | Affine { symbols; _ } ->
+               | Affine { symbols; _ } -> (
                    (* For affine indices, collect all symbols that are not static *)
                    List.filter_map symbols ~f:(fun (_, s) ->
-                     Option.some_if (not @@ Set.mem static_indices s) s)
-                   |> function [] -> None | [s] -> Some s | _ -> failwith "check_idcs: multiple non-static symbols in affine index")
+                       Option.some_if (not @@ Set.mem static_indices s) s)
+                   |> function
+                   | [] -> None
+                   | [ s ] -> Some s
+                   | _ -> failwith "check_idcs: multiple non-static symbols in affine index"))
     in
     let num_syms =
       Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
@@ -339,7 +357,7 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
     | Get_local _ -> ()
-    | Get_global _ -> ()
+    | Access _ -> ()
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
@@ -349,11 +367,13 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
           raise @@ Non_virtual 10)
     | Embed_index (Affine { symbols; _ }) ->
         List.iter symbols ~f:(fun (_, s) ->
-          if not @@ Set.mem env_dom s then (
-            if not (Set.mem static_indices s) then
-              [%log2
-                "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
-            raise @@ Non_virtual 10))
+            if not @@ Set.mem env_dom s then (
+              if not (Set.mem static_indices s) then
+                [%log2
+                  "Inlining candidate has an escaping variable",
+                  (s : Indexing.symbol),
+                  (top_llc : t)];
+              raise @@ Non_virtual 10))
     | Ternop (_, llv1, llv2, llv3) ->
         loop_float ~env_dom llv1;
         loop_float ~env_dom llv2;
@@ -435,7 +455,7 @@ let inline_computation ~id traced static_indices call_args =
               orig_indices = Array.map ~f:(subst env) orig_indices;
             }
       | Get_local _ -> llv
-      | Get_global _ -> llv
+      | Access _ -> llv
       | Embed_index idx -> Embed_index (subst env idx)
       | Ternop (op, llv1, llv2, llv3) ->
           Ternop (op, loop_float env llv1, loop_float env llv2, loop_float env llv3)
@@ -511,7 +531,7 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         Local_scope
           { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
     | Get_local _ -> llv
-    | Get_global _ -> llv
+    | Access _ -> llv
     | Embed_index _ -> llv
     | Ternop (op, llv1, llv2, llv3) ->
         Ternop
@@ -593,7 +613,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         assert (not @@ Tn.known_non_virtual id.tn);
         Tn.update_memory_mode id.tn Virtual 16;
         llv
-    | Get_global _ -> llv
+    | Access _ -> llv
     | Embed_index (Fixed_idx _) -> llv
     | Embed_index (Iterator s) ->
         assert (Set.mem env_dom s);
@@ -621,7 +641,7 @@ let rec substitute_float ~var ~value llv =
     | Get (_ptr, _indices) -> llv
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llv
-    | Get_global _ -> llv
+    | Access _ -> llv
     | Embed_index _ -> llv
     | Ternop (op, llv1, llv2, llv3) -> Ternop (op, loop_float llv1, loop_float llv2, loop_float llv3)
     | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
@@ -683,10 +703,10 @@ let simplify_llc llc =
         loop_float @@ substitute_float ~var:(Get_local id) ~value:v1 v2
     | Local_scope opts -> Local_scope { opts with body = loop_proc local_scope_body }
     | Get_local _ -> llv
-    | Get_global _ -> llv
+    | Access _ -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
     | Embed_index (Iterator _) -> llv
-    | Embed_index (Affine _) -> llv  (* Cannot simplify affine expressions to constants *)
+    | Embed_index (Affine _) -> llv (* Cannot simplify affine expressions to constants *)
     | Binop (Arg1, llv1, _) -> loop_float llv1
     | Binop (Arg2, _, llv2) -> loop_float llv2
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
@@ -790,7 +810,7 @@ let simplify_llc llc =
         loop v2
     | Unop (_, v) -> loop v
     | Embed_index (Indexing.Fixed_idx i) -> check_constant tn (Float.of_int i)
-    | Embed_index _ | Get_local _ | Get_global (_, _) | Get (_, _) -> ()
+    | Embed_index _ | Get_local _ | Access (_, _) | Get (_, _) -> ()
   in
   let result = loop_proc llc in
   if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
@@ -891,7 +911,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
     | Local_scope { id = { tn; _ }; body; orig_indices = _ } ->
         visit tn;
         loop body
-    | Get_global (_, _) -> ()
+    | Access (_, _) -> ()
     | Get (la, _) -> visit la
     | Ternop (_, f1, f2, f3) ->
         loop_float f1;
@@ -964,16 +984,16 @@ let to_doc_cstyle ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Get_global (Ops.C_function s, None) -> string (s ^ "()")
-    | Get_global (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+    | Access (Ops.C_function s, None) -> string (s ^ "()")
+    | Access (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
+    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
-    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
+    | Access (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         doc_ident tn ^^ string ".merge"
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
@@ -1042,16 +1062,16 @@ let to_doc ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Get_global (Ops.C_function s, None) -> string (s ^ "()")
-    | Get_global (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
+    | Access (Ops.C_function s, None) -> string (s ^ "()")
+    | Access (Ops.C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
+    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, None) ->
         string (Ops.ptr_to_string_hum ptr prec)
-    | Get_global (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
+    | Access (Ops.External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
         string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Get_global (Ops.Merge_buffer { source_node_id }, None) ->
+    | Access (Ops.Merge_buffer { source_node_id }, None) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         doc_ident tn ^^ string ".merge"
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         group (doc_ident tn ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))

@@ -57,7 +57,7 @@ let _suspended () =
   let x_flat =
     Tensor.term ~grad_spec:Tensor.Require_grad
       ~label:[ "x_flat" ] (* ~input_dims:[] ~output_dims:[ 1 ] *)
-      ~init_op:(Constant_fill { values; strict = true })
+      ~fetch_op:(Constant_fill { values; strict = true })
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -111,7 +111,7 @@ let _suspended () =
   (* Yay, the whole shape gets inferred! *)
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~init_op:(Constant_fill { values = xs; strict = true })
+      ~fetch_op:(Constant_fill { values = xs; strict = true })
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in

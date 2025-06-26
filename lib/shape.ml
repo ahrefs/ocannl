@@ -240,7 +240,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of Ir.Ops.init_op
+  | Terminal of Ir.Assignments.fetch_op
 [@@deriving equal, sexp]
 
 let logic_to_spec = function

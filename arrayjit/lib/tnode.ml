@@ -105,7 +105,6 @@ let dims_without_padding tn =
       Array.map2_exn dims padding ~f:(fun dim { left; right } -> dim - left - right)
 
 let get_padding tn = Lazy.force tn.padding
-
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
 let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
@@ -254,15 +253,6 @@ let known_volatile tn = match tn.memory_mode with Some (Hosted Volatile, _) -> t
 
 let known_non_virtual tn =
   match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
-
-let known_not_param tn =
-  match tn.memory_mode with
-  | Some
-      ( ( Virtual | Local | Effectively_constant | Device_only | On_device _
-        | Hosted (Constant | Volatile) ),
-        _ ) ->
-      true
-  | _ -> false
 
 let known_shared_cross_streams tn =
   match tn.memory_mode with
@@ -534,14 +524,14 @@ end)
 
 let registry = Registry.create 16
 
-let create ?default_prec ~id ~label ~dims ~padding init_op =
+let create ?default_prec ~id ~label ~dims ~padding () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
       (if is_hosted_force tn 30 then
          Some
-           (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims) ~padding:(Lazy.force padding)
-              init_op)
+           (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims)
+              ~padding:(Lazy.force padding))
        else None)
   and prec =
     lazy
@@ -637,7 +627,7 @@ let get_value tn =
 let set_values tn values =
   do_write tn;
   Nd.(
-    reset (Constant_fill { values; strict = false })
+    set_flat_values values
     @@ Option.value_exn ~here:[%here]
     @@ Lazy.force tn.array)
 

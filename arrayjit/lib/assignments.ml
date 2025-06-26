@@ -9,15 +9,21 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of]
+type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
-  | Constant of float
-  | Imported of Ops.global_identifier
+  | Constant_fill of { values : float array; strict : bool }
+      (** Fills in the numbers where the rightmost axis is contiguous. If [strict=false], loops over
+          the provided values. *)
+  | Range_over_offsets
+      (** Fills in the offset number of each cell, i.e. how many cells away it is from the
+          beginning, in the logical representation of the tensor node. (The actual in-memory
+          positions in a buffer instantiating the node can differ.) *)
+  | Access of Low_level.dedicated_access
   | Slice of { batch_idx : Indexing.static_symbol; sliced : Tn.t }
   | Embed_symbol of Indexing.static_symbol
-[@@deriving sexp_of]
+[@@deriving sexp_of, equal]
 
 and t =
   | Noop
@@ -135,7 +141,7 @@ let%diagn2_sexp to_low_level code =
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn ->
-        Low_level.Get_global (Ops.Merge_buffer { source_node_id = tn.Tn.id }, Some idcs)
+        Low_level.Access (Ops.Merge_buffer { source_node_id = tn.Tn.id }, Some idcs)
   in
   let set tn idcs llv =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
@@ -154,20 +160,20 @@ let%diagn2_sexp to_low_level code =
     let projections = Lazy.force projections in
     let basecase rev_iters =
       (* Create a substitution from product iterators to loop iterators *)
-      let subst_map = 
+      let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
         Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
-          (prod_iter, Indexing.Iterator loop_iters.(i)))
+            (prod_iter, Indexing.Iterator loop_iters.(i)))
         |> Array.to_list
         |> Map.of_alist_exn (module Indexing.Symbol)
       in
       (* Substitute in projections *)
       let subst_index = function
         | Indexing.Fixed_idx _ as idx -> idx
-        | Indexing.Iterator s as idx -> 
-            Option.value ~default:idx (Map.find subst_map s)
+        | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
         | Indexing.Affine { symbols; offset } ->
-            (* For affine indices, we don't substitute - they should already use the right symbols *)
+            (* For affine indices, we don't substitute - they should already use the right
+               symbols *)
             Indexing.Affine { symbols; offset }
       in
       let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
@@ -229,9 +235,9 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
-    | Fetch { array; fetch_op = Imported global; dims } ->
+    | Fetch { array; fetch_op = Access global; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            set array idcs @@ Get_global (global, Some idcs))
+            set array idcs @@ Access (global, Some idcs))
   in
   loop code
 
@@ -296,11 +302,11 @@ let to_doc ?name ?static_indices () c =
   let doc_of_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> string (Float.to_string f)
-    | Imported (Ops.C_function c) -> string (c ^ "()")
-    | Imported (Merge_buffer { source_node_id }) ->
+    | Access (Ops.C_function c) -> string (c ^ "()")
+    | Access (Merge_buffer { source_node_id }) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         string (ident tn ^ ".merge")
-    | Imported (Ops.External_unsafe { ptr; prec; dims = _ }) ->
+    | Access (Ops.External_unsafe { ptr; prec; dims = _ }) ->
         string (Ops.ptr_to_string_hum ptr prec)
     | Slice { batch_idx; sliced } ->
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)

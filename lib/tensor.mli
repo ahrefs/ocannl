@@ -6,7 +6,6 @@ type tn = Ir.Tnode.t
 type tn_set = Set.M(Ir.Tnode).t
 type asgns = Ir.Assignments.t
 type comp = Ir.Assignments.comp
-type init_op = Ir.Ops.init_op
 type fetch_op = Ir.Assignments.fetch_op
 type projections = Ir.Indexing.projections
 
@@ -20,6 +19,10 @@ type diff = {
 }
 
 type t = {
+  params : (t, comparator_witness) Base.Set.t;
+      (** Parameters [t.params] are the descendants of [t] whose {!field:diff} is not [None] and
+          whose {!field:forward} code is not included in [t.forward] as it is meant for
+          initialization. *)
   forward : comp;
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
@@ -39,9 +42,14 @@ and subtensor = {
           ends up when used as part of a bigger computation. *)
 }
 
-type comparator_witness
+and comparator_witness
 
 val comparator : (t, comparator_witness) Base.Comparator.t
+
+val init_params : t -> comp
+(** [init_params t] simply collects the {!field:forward} code of [t.params] into a single sequence.
+*)
+
 val is_fwd_root : t -> bool
 val remove_fwd_root : t -> unit
 val is_bprop_root : t -> bool
@@ -120,14 +128,14 @@ val op :
   ?ternary_op:Shape.ternary_type ->
   ?compose_op:Shape.compose_type ->
   ?transpose_op:Shape.transpose_type ->
-  ?init_op:init_op ->
+  ?fetch_op:fetch_op ->
   op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   (debug_name:string -> id:int -> Shape.t) ->
   t list ->
   t
-(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?init_op] should be
+(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?fetch_op] should be
     provided, except when the operation takes more than three arguments which uses both
     [?compose_op] or [?transpose_op]. The defaults are pointwise operations. The [grad_asn] function
     receives the non-differentiable variant of the tensor as an argument, which can be used to
@@ -173,7 +181,6 @@ val term :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
-  ?init_op:init_op ->
   ?fetch_op:(v:tn -> fetch_op) ->
   unit ->
   t

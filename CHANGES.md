@@ -5,6 +5,20 @@
 - Support for Brain float aka. bfloat16 aka. BF16, and for FP8.
 - Support for convolution via affine indexing expressions in: projections, einsum notation, shape inference.
 - MNIST and CIFAR10 datasets (borrowed from Raven).
+- New precision `Uint4x32` that piggybacks on the `Complex.t` type for the `Bigarray` backing.
+- TODO: New operation `Threefry4x32`, which is unusually and hopefully uniquely coarse-grained (requiring nontrivial implementation code for each backend that should conform to a common algorithm).
+  - This way we avoid introducing multiple operations on bits. We might yet split this operation into more fine grained ones.
+- TODO: Support of counter-based randomness, and behind-the-scenes key splitting by the relevant operations.
+  - TODO: The cascade of splits uses the Tnode id, the train step and the tensor cell position.
+- TODO: Added a new operation `Uint4x32_to_prec_uniform`. It is added to `dedicated_access` and thus to `fetch_op` -- it cannot be `unop` because it cannot be implemented pointwise / is not shape-preserving due to efficient use of the 128 bits.
+- Added a field `params` to `Tensor.t` since we need to track parameters to properly initialize computations (see below).
+
+### Changed
+
+- Removed the ndarray initialization logic. Some of its functionality is now incorporated into `fetch_op`.
+- Refactored `init_op` and the badly named `global_identifier` from `ops.ml` into `dedicated_access` in `low_level.ml` and a bigger `fetch_op` in `assignments.ml` (more meaningful file locations).
+  - Also renamed the badly named `Get_global` to `Access`.
+- Initialization now needs to be handled via running the corresponding code explicitly. In particular `Tensor.init_params` will run the forward code of tensors from the `params` field.
 
 ## [0.5.3] -- 2025-05-24
 

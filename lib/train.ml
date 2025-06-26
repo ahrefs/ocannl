@@ -43,17 +43,6 @@ end
 
 let run jitted = Task.run jitted.BT.schedule
 
-let is_param t =
-  match t with
-  | { Tensor.children = []; diff = Some _; _ } -> not @@ Tn.known_not_param t.value
-  | _ -> false
-
-let get_params t =
-  let rec loop accu { Tensor.subtensor = t; _ } =
-    List.fold t.children ~init:(if is_param t then Set.add accu t else accu) ~f:loop
-  in
-  loop (Set.empty (module Tensor)) { subtensor = t; embedded = true }
-
 (* let save_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
    is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
    "Train.save_params: root tensor is not named") ident in let with_name p = let is_grad, ident =
@@ -91,12 +80,6 @@ let forward ?(disable_rootness_check = false) t =
   let label = Tn.debug_name t.value in
   { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
 
-type updaten = {
-  loss : Tensor.t;
-  params : (Tensor.t, Tensor.comparator_witness) Base.Set.t;
-  fwd_bprop : Asgns.comp;
-}
-
 let diff_or_error t provenance =
   Option.value_or_thunk t.Tensor.diff ~default:(fun () ->
       raise @@ Tensor.Session_error (provenance ^ ": tensor is not differentiable", Some t))
@@ -115,7 +98,7 @@ let grad_update_nochecks loss =
          ~~(loss "bprop";
             diff.backprop))]
   in
-  { loss; params; fwd_bprop }
+  fwd_bprop
 
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
     comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
@@ -128,8 +111,7 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
   let fwd =
     if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss
   in
-  let diff = diff_or_error loss "Train.grad_update" in
-  let fwd_bprop =
+let diff = diff_or_error loss "Train.grad_update" in
     let zero_grads, bprop =
       if disable_rootness_check then (diff.zero_grads, diff.backprop)
       else Tensor.consume_backprop_code loss
@@ -144,8 +126,6 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
          loss.grad =: 1;
          ~~(loss "bprop";
             bprop))]
-  in
-  { loss; params; fwd_bprop }
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =

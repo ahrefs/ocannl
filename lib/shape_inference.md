@@ -126,7 +126,7 @@ type logic =
   | Transpose of transpose_type * shape
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of [s1],
       hence the name. *)
-  | Terminal of Ir.Ops.init_op
+  | Terminal of Ir.Ops.fetch_op
       (** Extracts any available shape information from the initialization. E.g.
       for [File_mapped fn], opens the file [fn] to check its length. *)
 ```

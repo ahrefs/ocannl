@@ -330,24 +330,24 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Get_local id ->
         let lvalue = Map.find_exn !debug_locals id in
         (LValue.to_string lvalue ^ "{=%g}", [ to_d @@ RValue.lvalue lvalue ])
-    | Get_global (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
-    | Get_global (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
+    | Access (C_function f_name, None) -> ("<calls " ^ f_name ^ ">", [])
+    | Access (External_unsafe { ptr; dims = (lazy dims); prec }, Some idcs) ->
         let idcs = lookup env idcs in
         let typ = Type.get ctx @@ prec_to_kind prec in
         let ptr = RValue.ptr ctx (Type.pointer typ) ptr in
         let offset = jit_array_offset ctx ~idcs ~dims in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         ("external " ^ RValue.to_string ptr ^ "[%d]{=%g}", [ offset; v ])
-    | Get_global (External_unsafe _, None) -> assert false
-    | Get_global (Merge_buffer _, None) -> assert false
-    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+    | Access (External_unsafe _, None) -> assert false
+    | Access (Merge_buffer _, None) -> assert false
+    | Access (Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let idcs = lookup env idcs in
         let ptr = Option.value_exn ~here:[%here] merge_node in
         let offset = jit_array_offset ctx ~idcs ~dims:(Lazy.force tn.dims) in
         let v = to_d @@ RValue.lvalue @@ LValue.access_array ptr offset in
         (get_ident tn ^ ".merge[%d]{=%g}", [ offset; v ])
-    | Get_global (C_function _, Some _) ->
+    | Access (C_function _, Some _) ->
         failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let node = get_node tn in
@@ -476,11 +476,11 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
-    | Get_global (C_function f_name, None) ->
+    | Access (C_function f_name, None) ->
         (* TODO: this is too limiting. *)
         let f = Function.builtin ctx f_name in
         RValue.call ctx f []
-    | Get_global (External_unsafe { ptr; dims = (lazy dims); prec = local_prec }, Some idcs) ->
+    | Access (External_unsafe { ptr; dims = (lazy dims); prec = local_prec }, Some idcs) ->
         let idcs = lookup env idcs in
         let offset = jit_array_offset ctx ~idcs ~dims in
         let typ = Type.get ctx @@ prec_to_kind prec in
@@ -489,8 +489,8 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
-    | Get_global ((External_unsafe _ | Merge_buffer _), None) -> assert false
-    | Get_global (Merge_buffer { source_node_id }, Some idcs) ->
+    | Access ((External_unsafe _ | Merge_buffer _), None) -> assert false
+    | Access (Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tnode.find ~id:source_node_id in
         let ptr = Option.value_exn ~here:[%here] merge_node in
         let idcs = lookup env idcs in
@@ -500,7 +500,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         let local_typ = gcc_typ_of_prec local_prec in
         let num_typ = Type.get ctx local_typ in
         if not @@ Ops.equal_prec prec local_prec then RValue.cast ctx rvalue num_typ else rvalue
-    | Get_global (C_function _, Some _) ->
+    | Access (C_function _, Some _) ->
         failwith "gccjit_backend: FFI with parameters NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         Hash_set.add visited tn;
@@ -661,7 +661,7 @@ let%diagn_sexp compile_proc ~name ctx bindings ~get_ident
       let file_ptr = Type.(get ctx File_ptr) in
       let log_file = Function.local func file_ptr "log_file" in
       let fopen =
-        Function.create ctx Imported file_ptr "fopen"
+        Function.create ctx Access file_ptr "fopen"
           [ Param.create ctx c_str "filename"; Param.create ctx c_str "mode" ]
       in
       Block.assign init_block log_file
@@ -670,7 +670,7 @@ let%diagn_sexp compile_proc ~name ctx bindings ~get_ident
       let fprintf = Function.builtin ctx "fprintf" in
       let fflush =
         let f_ptr = Type.get ctx Type.File_ptr in
-        Function.create ctx Imported (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ]
+        Function.create ctx Access (Type.get ctx Void) "fflush" [ Param.create ctx f_ptr "f" ]
       in
       log_functions_ref := Some (log_file, fprintf, fflush));
   let log_functions = Lazy.force log_functions in
@@ -686,10 +686,10 @@ let%diagn_sexp compile_proc ~name ctx bindings ~get_ident
   let after_proc = compile_main ~name ~log_functions ~env ctx_info func main_block proc in
   (match log_functions with
   | Some (lf, _, _) ->
-      (* FIXME: should be Imported? *)
+      (* FIXME: should be Access? *)
       let file_ptr = Type.(get ctx File_ptr) in
       let fclose =
-        Function.create ctx Imported
+        Function.create ctx Access
           Type.(get ctx Type.Void_ptr)
           "fclose"
           [ Param.create ctx file_ptr "f" ]

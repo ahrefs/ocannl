@@ -130,154 +130,26 @@ let indices_to_offset ~dims ~idcs =
   Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
 
 (** {2 *** Initialization ***} *)
-  
-type axis_padding = { left : int; right : int }
-[@@deriving sexp, equal]
 
-let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding
-    (init_op : Ops.init_op) : (ocaml, elt_t) bigarray =
-  Option.iter Utils.settings.fixed_state_for_init ~f:(fun seed -> Rand.Lib.init seed);
-  
-  (* Handle padding: dims already includes padding, compute unpadded dimensions *)
-  let unpadded_dims, padding_info = match padding with
-    | None -> dims, None
-    | Some (pad_config, pad_value) ->
-        let unpadded_dims = Array.map2_exn dims pad_config ~f:(fun dim { left; right } -> 
-          dim - left - right) in
-        (unpadded_dims, Some (pad_config, pad_value))
-  in
-  
+type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
+
+let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding :
+    (ocaml, elt_t) bigarray =
   let arr = create_bigarray_of_prec prec dims in
-  
   (* Fill with padding value if padding is specified *)
-  (match padding_info with
-   | None -> ()
-   | Some (_, pad_value) ->
-       (* Fill the entire array with padding value using precision-specific fill *)
-       (match prec with
-        | Ops.Byte -> A.fill arr (Char.of_int_exn @@ Int.of_float pad_value)
-        | Ops.Uint16 -> A.fill arr (Int.of_float pad_value)
-        | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
-        | Ops.Half -> A.fill arr pad_value
-        | Ops.Bfloat16 -> A.fill arr (float_to_bfloat16 pad_value)
-        | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ float_to_fp8 pad_value)
-        | Ops.Single -> A.fill arr pad_value
-        | Ops.Double -> A.fill arr pad_value));
-  
-  (* Helper function to convert unpadded indices to padded indices *)
-  let unpadded_to_padded_indices idcs =
-    match padding_info with
-    | None -> idcs
-    | Some (pad_config, _) ->
-        Array.map2_exn idcs pad_config ~f:(fun idx { left; _ } -> idx + left)
-  in
-  
-  (* For non-constant fill operations, we need to iterate over unpadded dimensions *)
-  let init_unpadded_region init_func =
-    let rec loop_dims idcs dim_idx =
-      if dim_idx = Array.length unpadded_dims then
-        let padded_idcs = unpadded_to_padded_indices idcs in
-        A.set arr padded_idcs (init_func idcs)
-      else
-        for i = 0 to unpadded_dims.(dim_idx) - 1 do
-          idcs.(dim_idx) <- i;
-          loop_dims idcs (dim_idx + 1)
-        done
-    in
-    loop_dims (Array.create ~len:(Array.length unpadded_dims) 0) 0
-  in
-  
-  let constant_fill_f f values strict =
-    let len = Array.length values in
-    if strict then (
-      let size = Array.fold ~init:1 ~f:( * ) unpadded_dims in
-      if size <> len then
-        raise
-        @@ Utils.User_error
-             [%string
-               "Ndarray.create_bigarray: Constant_fill: invalid data size %{len#Int}, expected \
-                %{size#Int}"];
-      init_unpadded_region (fun idcs -> f values.(indices_to_offset ~dims:unpadded_dims ~idcs)))
-    else
-      init_unpadded_region (fun idcs ->
-        f values.(indices_to_offset ~dims:unpadded_dims ~idcs % len))
-  in
-  let constant_fill_float values strict = constant_fill_f Fn.id values strict in
-  
-  (match (prec, init_op) with
-  | Ops.Byte, Constant_fill { values; strict } ->
-      ignore (constant_fill_f (Fn.compose Char.of_int_exn Int.of_float) values strict)
-  | Ops.Byte, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Byte, Standard_uniform -> init_unpadded_region (fun _ -> Rand.Lib.char ())
-  | Ops.Uint16, Constant_fill { values; strict } -> 
-      ignore (constant_fill_f Int.of_float values strict)
-  | Ops.Uint16, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Uint16, Standard_uniform -> init_unpadded_region (fun _ -> Random.int 65536)
-  | Ops.Int32, Constant_fill { values; strict } -> 
-      ignore (constant_fill_f Int32.of_float values strict)
-  | Ops.Int32, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> Int32.of_int_exn @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Int32, Standard_uniform ->
-      init_unpadded_region (fun _ -> Random.int32 Int32.max_value)
-  | Ops.Half, Constant_fill { values; strict } -> ignore (constant_fill_float values strict)
-  | Ops.Half, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> Float.of_int @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Half, Standard_uniform ->
-      init_unpadded_region (fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Bfloat16, Constant_fill { values; strict } ->
-      ignore (constant_fill_f float_to_bfloat16 values strict)
-  | Ops.Bfloat16, Range_over_offsets ->
-      init_unpadded_region (fun idcs ->
-          float_to_bfloat16 @@ Float.of_int @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Bfloat16, Standard_uniform ->
-      init_unpadded_region (fun _ -> float_to_bfloat16 @@ Rand.Lib.float_range 0.0 1.0)
-  | Ops.Fp8, Constant_fill { values; strict } ->
-      ignore (constant_fill_f (Fn.compose Char.of_int_exn float_to_fp8) values strict)
-  | Ops.Fp8, Range_over_offsets ->
-      init_unpadded_region (fun idcs ->
-          Char.of_int_exn @@ float_to_fp8 @@ Float.of_int @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Fp8, Standard_uniform ->
-      init_unpadded_region (fun _ -> Char.of_int_exn @@ float_to_fp8 @@ Rand.Lib.float_range 0.0 1.0)
-  | Ops.Single, Constant_fill { values; strict } -> ignore (constant_fill_float values strict)
-  | Ops.Single, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> Float.of_int @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Single, Standard_uniform ->
-      init_unpadded_region (fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Double, Constant_fill { values; strict } -> ignore (constant_fill_float values strict)
-  | Ops.Double, Range_over_offsets ->
-      init_unpadded_region (fun idcs -> Float.of_int @@ indices_to_offset ~dims:unpadded_dims ~idcs)
-  | Ops.Double, Standard_uniform ->
-      init_unpadded_region (fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | _, File_mapped (filename, stored_prec) ->
-      (* For file mapping, we don't support padding yet - require no padding *)
-      if Option.is_some padding then
-        raise @@ Utils.User_error "Ndarray.create_bigarray: File_mapped initialization does not support padding";
-      (* See: https://github.com/janestreet/torch/blob/master/src/torch/dataset_helper.ml#L3 *)
-      if not @@ Ops.equal_prec stored_prec (Ops.pack_prec prec) then
-        raise
-        @@ Utils.User_error
-             [%string
-               "Ndarray.create_bigarray: File_mapped: precision mismatch %{Ops.prec_string \
-                stored_prec} vs %{Ops.precision_to_string prec}"];
-      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-      let len = Unix.lseek fd 0 Unix.SEEK_END in
-      ignore (Unix.lseek fd 0 Unix.SEEK_SET : int);
-      let size = Array.fold ~init:1 ~f:( * ) dims in
-      if len / Ops.prec_in_bytes stored_prec <> size then (
-        Unix.close fd;
-        raise
-        @@ Utils.User_error
-             [%string
-               "Ndarray.create_bigarray: File_mapped: invalid file bytes %{len#Int}, expected \
-                %{size * Ops.prec_in_bytes stored_prec#Int}"]);
-      let file_arr =
-        Unix.map_file fd (precision_to_bigarray_kind prec) Bigarray.c_layout false dims
-          ~pos:(Int64.of_int 0)
-      in
-      Unix.close fd;
-      A.blit file_arr arr);
+  (match padding with
+  | None -> ()
+  | Some (_, pad_value) -> (
+      (* Fill the entire array with padding value using precision-specific fill *)
+      match prec with
+      | Ops.Byte -> A.fill arr (Char.of_int_exn @@ Int.of_float pad_value)
+      | Ops.Uint16 -> A.fill arr (Int.of_float pad_value)
+      | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
+      | Ops.Half -> A.fill arr pad_value
+      | Ops.Bfloat16 -> A.fill arr (float_to_bfloat16 pad_value)
+      | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ float_to_fp8 pad_value)
+      | Ops.Single -> A.fill arr pad_value
+      | Ops.Double -> A.fill arr pad_value));
   arr
 
 (** {2 *** Accessing ***} *)
@@ -358,69 +230,6 @@ let set_bigarray arr ~f =
   in
   let len = Array.length dims in
   cloop (Array.create ~len 0) f 0
-
-let reset_bigarray (init_op : Ops.init_op) (type o b) (prec : (o, b) Ops.precision)
-    (arr : (o, b) bigarray) =
-  let dims = A.dims arr in
-  let constant_set_f f values strict =
-    let len = Array.length values in
-    if strict then (
-      let size = Array.fold ~init:1 ~f:( * ) dims in
-      if size <> len then
-        raise
-        @@ Utils.User_error
-             [%string
-               "Ndarray.reset_bigarray: Constant_fill: invalid data size %{len#Int}, expected \
-                %{size#Int}"];
-      set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs)))
-    else set_bigarray arr ~f:(fun idcs -> f values.(indices_to_offset ~dims ~idcs % len))
-  in
-  let constant_set_float values strict = constant_set_f Fn.id values strict in
-  match (prec, init_op) with
-  | Ops.Byte, Constant_fill { values; strict } ->
-      constant_set_f (Fn.compose Char.of_int_exn Int.of_float) values strict
-  | Ops.Byte, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Char.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Ops.Byte, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.char ())
-  | Ops.Uint16, Constant_fill { values; strict } -> constant_set_f Int.of_float values strict
-  | Ops.Uint16, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> indices_to_offset ~dims ~idcs)
-  | Ops.Uint16, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Random.int 65536) (* 2^16 *)
-  | Ops.Int32, Constant_fill { values; strict } -> constant_set_f Int32.of_float values strict
-  | Ops.Int32, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Int32.of_int_exn @@ indices_to_offset ~dims ~idcs)
-  | Ops.Int32, Standard_uniform ->
-      set_bigarray arr ~f:(fun _ -> Random.int32 Int32.max_value)
-  | Ops.Half, Constant_fill { values; strict } -> constant_set_float values strict
-  | Ops.Half, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Half, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Bfloat16, Constant_fill { values; strict } -> constant_set_f float_to_bfloat16 values strict
-  | Ops.Bfloat16, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs ->
-          float_to_bfloat16 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Bfloat16, Standard_uniform ->
-      set_bigarray arr ~f:(fun _ -> float_to_bfloat16 @@ Rand.Lib.float_range 0.0 1.0)
-  | Ops.Fp8, Constant_fill { values; strict } ->
-      constant_set_f (Fn.compose Char.of_int_exn float_to_fp8) values strict
-  | Ops.Fp8, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs ->
-          Char.of_int_exn @@ float_to_fp8 @@ Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Fp8, Standard_uniform ->
-      set_bigarray arr ~f:(fun _ -> Char.of_int_exn @@ float_to_fp8 @@ Rand.Lib.float_range 0.0 1.0)
-  | Ops.Single, Constant_fill { values; strict } -> constant_set_float values strict
-  | Ops.Single, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Single, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | Ops.Double, Constant_fill { values; strict } -> constant_set_float values strict
-  | Ops.Double, Range_over_offsets ->
-      set_bigarray arr ~f:(fun idcs -> Float.of_int @@ indices_to_offset ~dims ~idcs)
-  | Ops.Double, Standard_uniform -> set_bigarray arr ~f:(fun _ -> Rand.Lib.float_range 0.0 1.0)
-  | _, File_mapped _ -> A.blit (create_bigarray prec ~dims ~padding:None init_op) arr
-
-let reset init_op arr =
-  let f arr = reset_bigarray init_op arr in
-  map_with_prec { f } arr
 
 let fold_bigarray arr ~init ~f =
   let dims = A.dims arr in
@@ -542,6 +351,8 @@ let retrieve_flat_values arr =
     iter 0;
     Array.of_list_rev !result
 
+let set_flat_values _arr _values = ()
+
 let c_ptr_to_string nd =
   let prec = get_prec nd in
   let f arr = Ops.c_rawptr_to_string (bigarray_start_not_managed arr) prec in
@@ -563,8 +374,8 @@ let hash_t nd = Nativeint.hash @@ to_native nd
 
 let used_memory = Atomic.make 0
 
-let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array)
-    ~padding init_op =
+let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array) ~padding
+    =
   (* dims already includes padding if padding is specified *)
   let size_in_bytes : int =
     (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
@@ -573,7 +384,7 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     [%log3 "Deleting", _debug, ptr_to_string_hum _result]
   in
-  let f prec = as_array prec @@ create_bigarray prec ~dims ~padding init_op in
+  let f prec = as_array prec @@ create_bigarray prec ~dims ~padding in
   let result = Ops.map_prec { f } prec in
   Stdlib.Gc.finalise finalizer result;
   let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
@@ -582,9 +393,6 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
       "create_array";
       [%log _debug, ptr_to_string_hum result]]];
   result
-
-let empty_array prec =
-  create_array prec ~dims:[||] ~padding:None (Constant_fill { values = [| 0.0 |]; strict = false })
 
 let get_used_memory () = Atomic.get used_memory
 

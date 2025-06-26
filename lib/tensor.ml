@@ -8,7 +8,7 @@ type tn = Tn.t
 type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
 type comp = Asgns.comp
-type init_op = Ir.Ops.init_op
+type fetch_op = Ir.Ops.fetch_op
 type fetch_op = Asgns.fetch_op
 type projections = Ir.Indexing.projections
 
@@ -170,7 +170,7 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?(init_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape
+    ?(fetch_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape
     (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
@@ -186,7 +186,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       |> Option.value ~default)
   in
   let rec shape_logics = function
-    | [] -> [ Shape.Terminal init_op ]
+    | [] -> [ Shape.Terminal fetch_op ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
@@ -198,7 +198,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) init_op in
+  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) fetch_op in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -300,16 +300,16 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ?deduced ?init_op ?fetch_op () =
+    ?deduced ?fetch_op ?fetch_op () =
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
-    match (fetch_op, init_op) with
+    match (fetch_op, fetch_op) with
     | None, Some (Ir.Ops.Constant_fill { values = [| _ |]; strict = _ })
       when not (is_require_grad grad_spec) ->
         (* The scalar literal case. *)
         let fetch_op =
-          match init_op with
+          match fetch_op with
           | Some (Ir.Ops.Constant_fill { values = [| c |]; _ }) -> Constant c
           | _ -> assert false
         in
@@ -319,9 +319,9 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
         let fetch_op = fetch_op ~v in
         (match fetch_op with
         | Constant _ | Slice _ | Embed_symbol _ -> ()
-        | Imported _ ->
-            (* Note: [Imported] can be used for merging across devices. But, some use cases of
-               [Imported] will require a hosted tensor node. *)
+        | Access _ ->
+            (* Note: [Access] can be used for merging across devices. But, some use cases of
+               [Access] will require a hosted tensor node. *)
             Tn.update_memory_mode v Materialized 22);
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
@@ -329,15 +329,15 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
-  op ~label ?compose_op:None ?transpose_op:None ?init_op ~op_asn ~grad_asn ~grad_spec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
 
 let float_to_label v = Float.to_string v
 
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let init_op = Ir.Ops.Constant_fill { values = [| c |]; strict = true } in
-  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op in
+  let fetch_op = Ir.Ops.Constant_fill { values = [| c |]; strict = true } in
+  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
     | None -> t ~output_dims:[ 1 ] ()
@@ -387,7 +387,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
       ~deduced:Not_constrained
-      ~init_op:(Constant_fill { values; strict })
+      ~fetch_op:(Constant_fill { values; strict })
       ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -399,14 +399,14 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
     ?(strict = false) ?values label =
-  let init_op =
+  let fetch_op =
     match values with
     | Some values -> Ir.Ops.Constant_fill { values; strict }
     | None -> Ir.Ops.Standard_uniform
   in
   let t =
     term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
-      ?output_dims ?input_axes ?output_axes ?deduced ~init_op ()
+      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

@@ -592,7 +592,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (empty, expr)
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
@@ -601,7 +601,7 @@ module C_syntax (B : C_syntax_config) = struct
           string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
         in
         (empty, expr)
-    | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
+    | Access _ -> failwith "C_syntax: Access / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let from_prec = Lazy.force tn.prec in
@@ -665,7 +665,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
-    | Get_global (Ops.Merge_buffer { source_node_id }, Some idcs) ->
+    | Access (Ops.Merge_buffer { source_node_id }, Some idcs) ->
         let tn = Option.value_exn ~here:[%here] @@ Tn.find ~id:source_node_id in
         let from_prec = Lazy.force tn.prec in
         let dims = Lazy.force tn.dims in
@@ -681,7 +681,7 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ braces (string ("=" ^ B.float_log_style))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
-    | Get_global _ -> failwith "C_syntax: Get_global / FFI NOT IMPLEMENTED YET"
+    | Access _ -> failwith "C_syntax: Access / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let from_prec = Lazy.force tn.prec in

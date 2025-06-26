@@ -319,7 +319,7 @@ let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
     Tensor.term
       ~label:(("0" ^ "..." ^ Int.to_string upto) :: label)
-      ~grad_spec ~batch_dims:[] ~input_dims:[] ~init_op:Range_over_offsets
+      ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op:Range_over_offsets
   in
   match axis_label with
   | None -> result ~output_dims:[ upto + 1 ] ()
@@ -343,7 +343,7 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
   Tensor.term
     ~label:(("r" ^ Idx.dims_to_string dims) :: label)
     ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ~init_op:Range_over_offsets ()
+    ~fetch_op:Range_over_offsets ()
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient ?(label = []) =
@@ -383,6 +383,15 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
   Tensor.op ~label:("!@" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
+
+let random_seed =
+  let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
+  let res = Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
+    ~fetch_op:(Asgns.Constant_fill { values = [| seed |]; strict = true })
+    () in
+  Tn.update_memory_mode res.value Tn.Effectively_constant 24;
+  Tn.update_prec res.value Ir.Ops.uint4x32;
+  ref res
 
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
@@ -461,13 +470,13 @@ module TDSL = struct
       match (strict, b) with Some s, _ -> s | None, Some _ -> false | None, None -> true
     in
     Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ?batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill { values; strict })
+      ~fetch_op:(Constant_fill { values; strict })
       ()
 
   (** It's like `Tensor.param` but without shape inference. *)
   let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
     Tensor.term ~label:[ l ] ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~init_op:(Constant_fill { values; strict = false })
+      ~fetch_op:(Constant_fill { values; strict = false })
       ()
 end
 

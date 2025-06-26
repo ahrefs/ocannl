@@ -6,7 +6,7 @@ Computation in OCANNL is imperative. At the high-level, we store tensor node ass
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
   | Constant of float
-  | Imported of Ops.global_identifier
+  | Access of Low_level.dedicated_access
   | Slice of { batch_idx : Indexing.static_symbol; sliced : Tnode.t }
   | Embed_symbol of Indexing.static_symbol
 
@@ -62,7 +62,7 @@ and float_t =
       orig_indices : Indexing.axis_index array;
     }
   | Get_local of scope_id
-  | Get_global of Ops.global_identifier * Indexing.axis_index array option
+  | Access of Low_level.dedicated_access * Indexing.axis_index array option
   | Get of Tnode.t * Indexing.axis_index array
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
