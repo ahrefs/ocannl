@@ -299,9 +299,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor =
-      { params = Set.empty (module T); forward; diff; id; value = v; shape; children }
-    in
+    let tensor = { params = Set.empty (module T); forward; diff; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -331,7 +329,11 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     | Some fetch_op_fn ->
         let fetch_op = fetch_op_fn ~v in
         (match fetch_op with
-        | Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _ -> ()
+        | Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _
+        | Access (Uint4x32_to_prec_uniform _) ->
+            (* For these operations it makes sense to have a local / virtual tensor if the result is
+               consumed in the same computation. *)
+            ()
         | Access _ ->
             (* Note: [Access] can be used for merging across devices. But, some use cases of
                [Access] will require a hosted tensor node. *)
@@ -363,7 +365,7 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   t
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
-    ?batch_axes ?input_axes ?output_axes ?(_strict = true) values =
+    ?batch_axes ?input_axes ?output_axes values =
   let to_dim_list dims axes =
     Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
   in
@@ -407,8 +409,8 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(_strict = true) ?values
-    label =
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
+   ?values label =
   let fetch_op_fn ~v:_ =
     match values with Some values -> Asgns.Constant_fill values | None -> Asgns.Range_over_offsets
   in

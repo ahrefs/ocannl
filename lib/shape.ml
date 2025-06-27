@@ -394,10 +394,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
   match logic with
-  | Terminal Range_over_offsets ->
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Constant _c) ->
-      (Row.dim_map_empty, mark_terminal ())
+  | Terminal Range_over_offsets -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Constant _c) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Constant_fill values) ->
       let len = Array.length values in
       let io_dims =
@@ -416,14 +414,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-  | Terminal (Access (C_function _)) ->
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (External_unsafe _)) ->
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (Merge_buffer _)) ->
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (Uint4x32_to_prec_uniform _)) ->
-      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (C_function _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (External_unsafe _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (Merge_buffer _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (Uint4x32_to_prec_uniform _)) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Access (File_mapped (filename, prec))) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Ir.Ops.prec_in_bytes prec in
@@ -444,10 +438,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-  | Terminal (Slice _) ->
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Embed_symbol _) ->
-      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Slice _) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Embed_symbol _) -> (Row.dim_map_empty, mark_terminal ())
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -773,7 +765,6 @@ let fresh_proj_ids update =
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
 let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections =
-  Stdio.printf "derive_projections\n%!";
   finish_inference ();
   let resolved_padding, inferred_padding = fresh_proj_ids update_step in
   let _debug_update_step : update_step = update_step in
