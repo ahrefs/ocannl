@@ -200,7 +200,7 @@ val ndarray :
   ?batch_axes:(string * int) list ->
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
-  ?strict:bool ->
+  ?_strict:bool ->
   float array ->
   t
 (** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to
@@ -215,7 +215,7 @@ val param :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
-  ?strict:bool ->
+  ?_strict:bool ->
   ?values:float array ->
   string ->
   t

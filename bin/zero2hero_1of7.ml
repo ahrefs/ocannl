@@ -22,12 +22,12 @@ let _suspended () =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty code.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty code in
   Train.run routine;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
   Stdio.printf "\nHigh-level code:\n%!";
-  Ir.Assignments.to_doc () code.fwd_bprop.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
+  Ir.Assignments.to_doc () code.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
   Stdio.printf "\n%!"
 
 let _suspended () =
@@ -57,7 +57,7 @@ let _suspended () =
   let x_flat =
     Tensor.term ~grad_spec:Tensor.Require_grad
       ~label:[ "x_flat" ] (* ~input_dims:[] ~output_dims:[ 1 ] *)
-      ~fetch_op:(Constant_fill { values; strict = true })
+      ~fetch_op:(fun ~v:_ -> Constant_fill values)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -70,7 +70,7 @@ let _suspended () =
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let update = Train.grad_update fx in
-  let routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
   let open Operation.At in
@@ -111,7 +111,7 @@ let _suspended () =
   (* Yay, the whole shape gets inferred! *)
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill { values = xs; strict = true })
+      ~fetch_op:(fun ~v:_ -> Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -120,7 +120,7 @@ let _suspended () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let%track_sexp () =
     let ys, dys =
@@ -155,9 +155,7 @@ let () =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let update = Train.grad_update l in
-  let routine =
-    Train.to_routine (module Backend) (Backend.make_context stream) IDX.empty update.fwd_bprop
-  in
+  let routine = Train.to_routine (module Backend) (Backend.make_context stream) IDX.empty update in
   Train.run routine;
   (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
      Backend.await stream; *)
@@ -168,8 +166,7 @@ let () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
   let routine =
-    Train.to_routine (module Backend) routine.context IDX.empty
-    @@ Train.sgd_update ~learning_rate update
+    Train.to_routine (module Backend) routine.context IDX.empty @@ Train.sgd_update ~learning_rate l
   in
   (* learning_rate is virtual so this will not print anything. *)
   Stdio.print_endline
@@ -185,7 +182,7 @@ let () =
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
   let update = Train.grad_update l in
-  let routine = Train.to_routine (module Backend) routine.context IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) routine.context IDX.empty update in
   Train.run routine;
   (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
      Backend.await stream; *)

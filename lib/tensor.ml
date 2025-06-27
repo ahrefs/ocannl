@@ -8,7 +8,6 @@ type tn = Tn.t
 type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
 type comp = Asgns.comp
-type fetch_op = Ir.Ops.fetch_op
 type fetch_op = Asgns.fetch_op
 type projections = Ir.Indexing.projections
 
@@ -20,47 +19,65 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.comp }
 [@@deriving sexp_of]
 
-type t = {
-  forward : comp;
-  diff : diff option;
-  id : int;
-  value : tn;
-  shape : Shape.t;
-  children : subtensor list;
-}
+module rec Self : sig
+  type t = {
+    params : (t, Self_comparator.comparator_witness) Set.t;
+    forward : comp;
+    diff : diff option;
+    id : int;
+    value : tn;
+    shape : Shape.t;
+    children : subtensor list;
+  }
+  [@@deriving sexp_of]
 
-and subtensor = { subtensor : t; embedded : bool }
+  and subtensor = { subtensor : t; embedded : bool }
 
-let rec sexp_of_t t =
-  Sexp.message "Tensor"
-    [
-      ("id", sexp_of_int t.id);
-      ("label", [%sexp_of: string list] t.value.label);
-      ("forward", [%sexp_of: Asgns.comp] t.forward);
-      ("diff", [%sexp_of: diff option] t.diff);
-      ("children", [%sexp_of: subtensor list] t.children);
-    ]
+  val compare : t -> t -> int
+end = struct
+  type t = {
+    params : (t, Self_comparator.comparator_witness) Set.t;
+    forward : comp;
+    diff : diff option;
+    id : int;
+    value : tn;
+    shape : Shape.t;
+    children : subtensor list;
+  }
 
-and sexp_of_subtensor ch =
-  Sexp.message "child"
-    [
-      (if ch.embedded then ("", sexp_of_t ch.subtensor) else ("ref-id", sexp_of_int ch.subtensor.id));
-    ]
+  and subtensor = { subtensor : t; embedded : bool }
 
-module Compare = struct
-  type nonrec t = t
+  let rec sexp_of_t t =
+    Sexp.message "Tensor"
+      [
+        ("id", sexp_of_int t.id);
+        ("label", [%sexp_of: string list] t.value.label);
+        ("forward", [%sexp_of: Asgns.comp] t.forward);
+        ("diff", [%sexp_of: diff option] t.diff);
+        ("children", [%sexp_of: subtensor list] t.children);
+      ]
+
+  and sexp_of_subtensor ch =
+    Sexp.message "child"
+      [
+        (if ch.embedded then ("", sexp_of_t ch.subtensor)
+         else ("ref-id", sexp_of_int ch.subtensor.id));
+      ]
 
   let compare t1 t2 = Int.compare t1.id t2.id
-  let sexp_of_t = sexp_of_t
 end
 
-module Self_comparator = Comparator.Make (Compare)
+and Self_comparator : (Comparator.S with type t := Self.t) = Comparator.Make (Self)
+
+include Self
 include Self_comparator
 
-module Self = struct
-  include Compare
+module T = struct
+  include Self
   include Self_comparator
 end
+
+let sexp_of_comparator_witness _ = Sexp.Atom "comparator_witness"
 
 type session_state = {
   mutable next_id : int;
@@ -99,6 +116,11 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
+let init_params _t =
+  (* Based on the interface documentation, this should collect forward code of t.params *)
+  (* For now, return empty since the 'params' field is missing from the current implementation *)
+  Asgns.empty_comp
+
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
 
@@ -119,7 +141,7 @@ let lazy_to_dims shape = lazy (Shape.to_dims shape)
 let fetch_zeros array shape =
   Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 
-let default_init_op = Ir.Assignments.Constant 0.0
+let default_init_op = Asgns.Constant 0.0
 let max_sublabel_length = ref 25
 
 let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
@@ -198,7 +220,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) fetch_op in
+  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) () in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -218,7 +240,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
-  let t = { forward; diff = None; id; value = v; shape; children } in
+  let t = { params = Set.empty (module T); forward; diff = None; id; value = v; shape; children } in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
@@ -239,9 +261,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
-      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims
-        ~padding:(lazy None)
-        default_init_op
+      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims ~padding:(lazy None) ()
     in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
@@ -279,7 +299,9 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor = { forward; diff; id; value = v; shape; children } in
+    let tensor =
+      { params = Set.empty (module T); forward; diff; id; value = v; shape; children }
+    in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -300,25 +322,16 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ?deduced ?fetch_op ?fetch_op () =
+    ?deduced ?fetch_op () =
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
-    match (fetch_op, fetch_op) with
-    | None, Some (Ir.Assignments.Constant _)
-      when not (is_require_grad grad_spec) ->
-        (* The scalar literal case. *)
-        let fetch_op =
-          match fetch_op with
-          | Some (Ir.Assignments.Constant c) -> Constant c
-          | _ -> assert false
-        in
-        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
-    | None, _ -> Asgns.empty_comp
-    | Some fetch_op, _ ->
-        let fetch_op = fetch_op ~v in
+    match fetch_op with
+    | None -> Asgns.empty_comp
+    | Some fetch_op_fn ->
+        let fetch_op = fetch_op_fn ~v in
         (match fetch_op with
-        | Constant _ | Slice _ | Embed_symbol _ -> ()
+        | Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _ -> ()
         | Access _ ->
             (* Note: [Access] can be used for merging across devices. But, some use cases of
                [Access] will require a hosted tensor node. *)
@@ -329,14 +342,14 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
-  op ~label ?compose_op:None ?transpose_op:None ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ~op_asn ~grad_asn ~grad_spec make_shape []
 
 let float_to_label v = Float.to_string v
 
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let fetch_op = Ir.Assignments.Constant c in
+  let fetch_op ~v:_ = Ir.Assignments.Constant c in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
@@ -350,7 +363,7 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   t
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
-    ?batch_axes ?input_axes ?output_axes values =
+    ?batch_axes ?input_axes ?output_axes ?(_strict = true) values =
   let to_dim_list dims axes =
     Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
   in
@@ -361,10 +374,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     (* TODO:~max_indent:!max_sublabel ~margin:(!max_sublabel_length * 2); *)
     let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
     let debug = "Temporary array for pretty-printing" in
-    let ndarr =
-      Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None
-        (Asgns.Constant_fill values)
-    in
+    let ndarr = Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None in
     let ( ! ) = List.length in
     let b = Buffer.create 1024 in
     Nd.to_doc_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
@@ -387,7 +397,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
       ~deduced:Not_constrained
-      ~fetch_op:(Asgns.Constant_fill values)
+      ~fetch_op:(fun ~v:_ -> Asgns.Constant_fill values)
       ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -397,16 +407,14 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-    ?values label =
-  let fetch_op =
-    match values with
-    | Some values -> Asgns.Constant_fill values
-    | None -> Asgns.Standard_uniform
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?(_strict = true) ?values
+    label =
+  let fetch_op_fn ~v:_ =
+    match values with Some values -> Asgns.Constant_fill values | None -> Asgns.Range_over_offsets
   in
   let t =
     term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
-      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op ()
+      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op:fetch_op_fn ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

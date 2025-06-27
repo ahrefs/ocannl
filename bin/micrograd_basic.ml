@@ -25,7 +25,7 @@ let%diagn_sexp _suspended () =
   (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff
      ]; *)
   let update = Train.grad_update d in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 d;
   Stdio.print_endline "\n";
@@ -52,7 +52,7 @@ let%diagn_sexp () : unit =
   List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ];
   (* Train.every_non_literal_on_host g; *)
   let update = Train.grad_update g in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Utils.capture_stdout_logs @@ fun () ->
   Train.run routine;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)

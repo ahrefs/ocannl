@@ -443,6 +443,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> "uchar"
       | Ops.Uint16_prec _ -> "ushort"
       | Ops.Int32_prec _ -> "int"
+      | Ops.Uint4x32_prec _ -> "uint4" (* Metal's uint4 type - 128-bit *)
       | Ops.Half_prec _ -> "half"
       | Ops.Bfloat16_prec _ -> "bfloat" (* Metal supports bfloat16 natively *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
@@ -454,6 +455,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> ""
       | Ops.Uint16_prec _ -> ""
       | Ops.Int32_prec _ -> ""
+      | Ops.Uint4x32_prec _ -> "" (* No specific suffix for uint4 *)
       | Ops.Half_prec _ -> "h"
       | Ops.Bfloat16_prec _ -> "bf" (* TODO: Verify actual Metal suffix for bfloat16 *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
@@ -523,6 +525,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
+      | Threefry4x32, _ -> func "threefry4x32" (* Metal implementation of Threefry4x32 *)
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =

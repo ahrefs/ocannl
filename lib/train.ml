@@ -85,7 +85,6 @@ let diff_or_error t provenance =
       raise @@ Tensor.Session_error (provenance ^ ": tensor is not differentiable", Some t))
 
 let grad_update_nochecks loss =
-  let params = get_params loss in
   let diff = diff_or_error loss "Train.grad_update_nochecks" in
   let fwd_bprop =
     [%cd
@@ -105,31 +104,32 @@ let grad_update_nochecks loss =
     default), sets the parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
-  let params = get_params loss in
   if setup_for_parallel then
-    Set.iter params ~f:(fun p -> set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
+    Set.iter loss.Tensor.params ~f:(fun p ->
+        set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
   let fwd =
     if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss
   in
-let diff = diff_or_error loss "Train.grad_update" in
-    let zero_grads, bprop =
-      if disable_rootness_check then (diff.zero_grads, diff.backprop)
-      else Tensor.consume_backprop_code loss
-    in
-    (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
-    [%cd
-      ~~(loss "gradient update";
-         ~~(loss "fwd";
-            fwd);
-         ~~(loss "zero grads";
-            Asgns.to_comp zero_grads);
-         loss.grad =: 1;
-         ~~(loss "bprop";
-            bprop))]
+  let diff = diff_or_error loss "Train.grad_update" in
+  let zero_grads, bprop =
+    if disable_rootness_check then (diff.zero_grads, diff.backprop)
+    else Tensor.consume_backprop_code loss
+  in
+  (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
+  [%cd
+    ~~(loss "gradient update";
+       ~~(loss "fwd";
+          fwd);
+       ~~(loss "zero grads";
+          Asgns.to_comp zero_grads);
+       loss.grad =: 1;
+       ~~(loss "bprop";
+          bprop))]
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
-  if not @@ is_param p then raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
+  if not @@ Set.mem p.Tensor.params p then
+    raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
   [%cd
     ~~(p "param sgd step";
        "sgd_delta" =: p.grad + (!.weight_decay *. p);
@@ -138,14 +138,14 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
          if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
        p =- learning_rate * sgd_delta ~logic:".")]
 
-let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov l =
+let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss =
   let code =
-    l.params |> Set.to_list
+    loss.Tensor.params |> Set.to_list
     |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
     |> Asgns.sequence
   in
   [%cd
-    ~~(l.loss "sgd update";
+    ~~(loss "sgd update";
        code)]
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value
@@ -236,7 +236,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
        and type dev = dev
        and type runner = runner
        and type event = event) ~(grad_updates : Backend.context BT.routine array)
-    ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync updaten =
+    ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync loss =
   assert (not @@ Array.is_empty grad_updates);
   let num_streams : int = Array.length grad_updates in
   let bindings : Idx.static_symbol list = List.map ~f:fst sgd_update.bindings in
@@ -252,7 +252,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
     assert (
       Array.for_all grad_updates ~f:(fun upd ->
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
-  let all_params : Tensor.t array = Set.to_array updaten.params in
+  let all_params : Tensor.t array = Set.to_array loss.Tensor.params in
   let _occupancies_debug : bool array array = occupancies_dst_src in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let occupancy_dst ~dst_n = Array.exists ~f:Fn.id occupancies_dst_src.(dst_n) in
@@ -276,8 +276,8 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
       link sgd_update.BT.context
       @@ compile Idx.Empty
            [%cd
-             ~~("merging" updaten.loss;
-                updaten.loss.value =+ updaten.loss.value.merge)])
+             ~~("merging" loss;
+                loss.value =+ loss.value.merge)])
   in
   let mbuf_use sched = if copy_to_merge then (BT.Copy, false) else (BT.Streaming_for sched, true) in
   (* Since each device has its own queue, we can iterate over devices in the outer loop. *)
@@ -295,7 +295,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
   let merge_loss ~src =
     let into_merge_buffer, streaming = mbuf_use loss_merge.schedule in
     assert (
-      Backend.device_to_device updaten.loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
+      Backend.device_to_device loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
     if not streaming then Task.run loss_merge.schedule
   in
   (* FIXME: missing device-to-host? *)
@@ -401,8 +401,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   (* Note: constants at default half-prec are automatically upcasted when they exceed
      Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
-  let sgd = sgd_update ~learning_rate ~weight_decay update in
-  let grad_update = Backend.compile bindings update.fwd_bprop in
+  let sgd = sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let grad_update = Backend.compile bindings update in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
@@ -414,7 +414,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let update =
     parallel_update
       (module Backend)
-      ~grad_updates ~sgd_update update ~copy_to_merge
+      ~grad_updates ~sgd_update scalar_loss ~copy_to_merge
       ~post_sync:(fun ~num_synced_devices ->
         step_ref := !step_ref + num_synced_devices;
         let batch_loss = scalar_loss.@[0] in

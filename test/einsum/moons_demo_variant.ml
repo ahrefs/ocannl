@@ -57,9 +57,9 @@ let () =
   let update = Train.grad_update scalar_loss in
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
-  let sgd = Train.sgd_update ~learning_rate ~weight_decay update in
+  let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let sgd_routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update.fwd_bprop; sgd ])
+    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
   in
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;

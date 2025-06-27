@@ -23,7 +23,7 @@ let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   in
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill xs)
+      ~fetch_op:(fun ~v:_ -> Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -32,7 +32,7 @@ let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip

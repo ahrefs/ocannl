@@ -27,7 +27,7 @@ let%debug_sexp graph_t () : unit =
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill { values = xs; strict = true })
+      ~fetch_op:(fun ~v:_ -> Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -37,7 +37,7 @@ let%debug_sexp graph_t () : unit =
   Train.set_hosted x_flat.value;
   Train.set_hosted (Option.value_exn ~here:[%here] xkcd.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   Tensor.print_tree ~with_shape:true ~with_grad:true ~depth:9 xkcd;
   let ys, dys =

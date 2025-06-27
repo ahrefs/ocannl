@@ -151,13 +151,13 @@ type logic =
   | Terminal of Ir.Assignments.fetch_op
       (** Extracts any available shape information from the initialization. E.g. for
           [File_mapped fn], opens the file [fn] to check its length. *)
-[@@deriving equal, sexp]
+[@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]
 
 val get_update_id : unit -> update_id
 
-type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
+type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and

@@ -241,7 +241,7 @@ type logic =
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
   | Terminal of Ir.Assignments.fetch_op
-[@@deriving equal, sexp]
+[@@deriving equal, sexp_of]
 
 let logic_to_spec = function
   | Broadcast (Pointwise_bin, _, _)
@@ -271,7 +271,7 @@ let get_update_id () =
   Int.incr update_uid;
   Update_id.Update_id !update_uid
 
-type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp]
+type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
@@ -394,7 +394,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
   match logic with
-  | Terminal (Range_over_offsets | Standard_uniform) ->
+  | Terminal Range_over_offsets ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Constant _c) ->
       (Row.dim_map_empty, mark_terminal ())
   | Terminal (Constant_fill values) ->
       let len = Array.length values in
@@ -414,7 +416,15 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-  | Terminal (File_mapped (filename, prec)) ->
+  | Terminal (Access (C_function _)) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (External_unsafe _)) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (Merge_buffer _)) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (Uint4x32_to_prec_uniform _)) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Access (File_mapped (filename, prec))) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Ir.Ops.prec_in_bytes prec in
       Unix.close fd;
@@ -434,6 +444,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
+  | Terminal (Slice _) ->
+      (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Embed_symbol _) ->
+      (Row.dim_map_empty, mark_terminal ())
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [

@@ -51,7 +51,7 @@ let%expect_test "Graph drawing recompile" =
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
-  let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd.fwd_bprop in
+  let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd in
   Train.run f_bprop;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -173,7 +173,7 @@ let%expect_test "Graph drawing fetch" =
   (* Yay, the whole shape gets inferred! *)
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill xs)
+      ~fetch_op:(fun ~v:_ -> Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
@@ -182,7 +182,7 @@ let%expect_test "Graph drawing fetch" =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
-  let fx_routine = Train.to_routine (module Backend) ctx bindings update.fwd_bprop in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip
@@ -265,8 +265,8 @@ let%expect_test "Simple gradients hosted" =
   let%op learning_rate = 0.1 in
   Train.every_non_literal_on_host l;
   Train.every_non_literal_on_host learning_rate;
-  let sgd = Train.sgd_update ~learning_rate grad in
-  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad.fwd_bprop in
+  let sgd = Train.sgd_update ~learning_rate l in
+  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   let sgd_routine = Train.to_routine (module Backend) grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running a forward pass. *)
   Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
@@ -375,7 +375,7 @@ let%expect_test "Simple gradients virtual" =
      grad_update and sgd_update together.*)
   let grad = Train.grad_update ~setup_for_parallel:true l in
   let%op learning_rate = 0.1 in
-  let sgd = Train.sgd_update ~learning_rate grad in
+  let sgd = Train.sgd_update ~learning_rate l in
   (* Check out the initial state without forcing memory modes by compilation. *)
   Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
@@ -397,7 +397,7 @@ let%expect_test "Simple gradients virtual" =
     #1 grad_a Material/28 │#3 grad_b Material/28 │                      │
     <not-in-yet>          │<not-in-yet>          │                      │
     |}];
-  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad.fwd_bprop in
+  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
@@ -506,7 +506,7 @@ let%expect_test "2D neuron hosted" =
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
@@ -533,7 +533,7 @@ let%expect_test "2D neuron virtual" =
   let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update.fwd_bprop in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect

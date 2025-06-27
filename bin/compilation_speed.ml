@@ -36,7 +36,7 @@ let benchmark_overhead backend () =
     Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty mock_update_x
   in
   let f_routine =
-    Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f.fwd_bprop
+    Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f
   in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
 
