@@ -1,47 +1,10 @@
 # Compilation to Cross-Backend Low-Level Representation, and Backend-Independent Optimizations
 
-Computation in OCANNL is imperative. At the high-level, we store tensor node assignments as `Assignments.t`:
+Computation in OCANNL is imperative. At the high-level, we store tensor node assignments as `Assignments.t`, which provides high-level operations like `Accum_binop`, `Accum_unop`, and `Fetch`. This is translated to a low-level representation `Low_level.t` which is a C-like mini-language operating on scalars.
 
-```ocaml
-(** Resets a array by performing the specified computation or data fetching. *)
-type fetch_op =
-  | Constant of float
-  | Access of Low_level.dedicated_access
-  | Slice of { batch_idx : Indexing.static_symbol; sliced : Tnode.t }
-  | Embed_symbol of Indexing.static_symbol
+## Low-Level Representation
 
-and t =
-  | Noop
-  | Seq of t * t
-  | Block_comment of string * t  (** Same as the given code, with a comment. *)
-  | Accum_binop of {
-      initialize_neutral : bool;
-      accum : Ops.binop;
-      op : Ops.binop;
-      lhs : Tnode.t;
-      rhs1 : Tnode.t;
-      rhs2 : Tnode.t;
-      projections : Indexing.projections Lazy.t;
-    }
-  | Accum_unop of {
-      initialize_neutral : bool;
-      accum : Ops.binop;
-      op : Ops.unop;
-      lhs : Tnode.t;
-      rhs : Tnode.t;
-      projections : Indexing.projections Lazy.t;
-    }
-  | Fetch of { array : Tnode.t; fetch_op : fetch_op; dims : int array Lazy.t }
-```
-
-The effect of `Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections }` is:
-
-> if `initialize_neutral` then `lhs` := neutral value of `accum`;  
-> `lhs` := `lhs` `accum` (`rhs1` `op` `rhs2`)
-
-The `Assignments` module depends on the `Low_level` module and puts the pieces together in the `compile_proc` function. In addition to the assignments, `compile_proc` takes a `Indexing.static_symbol list` of the static indices, currently they are needed for optimization but not remembered in the `Assignments.t` nor `Low_level.t` types.
-
-The low-level representation is a C-like mini-language operating on scalars.
+The `Low_level.t` type represents a C-like imperative language with for loops and scalar operations:
 
 ```ocaml
 type t =
@@ -55,68 +18,125 @@ type t =
   | Set_local of scope_id * float_t
 
 and float_t =
-  | Local_scope of {
-      id : scope_id;
-      prec : Ops.prec;
-      body : t;
-      orig_indices : Indexing.axis_index array;
-    }
+  | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
-  | Access of Low_level.dedicated_access * Indexing.axis_index array option
+  | Access of dedicated_access * Indexing.axis_index array option
   | Get of Tnode.t * Indexing.axis_index array
+  | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t
   | Constant of float
   | Embed_index of Indexing.axis_index
 ```
 
-The odd part is the `Staged_compilation` element. Backends can use `Staged_compilation` to embed some emitted code within on-the-fly generated `Low_level.t` code. Currently this works only for `PPrint.document` based backends like `C_syntax` derivatives, but this covers almost all backends.
+`t` represents code/statements while `float_t` represents scalar expressions. The `trace_it` flag in `For_loop` indicates whether the loop should be traced for optimization (its initial segment will be unrolled for analysis).
 
-TODO: flesh out explanation.
+## Translation from Assignments
 
-## Translation
+The translation `Assignments.to_low_level` is straightforward:
 
-The translation `Assignments.to_low_level` is straightforward. Commented code blocks are delineated by `Low_level.Comment "end"` statements. Indices into tensor nodes are derived from the `projections` fields. We translate `projections.product_space` elements into for loops. `to_low_level` returns all the data that `Low_level` optimizations generated, so that backends can make more informed decisions when jitting, i.e. emitting the backend-specific code.
+1. **Projections to Loops**: `projections.product_space` elements become nested for loops
+2. **Index Translation**: Tensor indices are derived from `projections.project_lhs` and `projections.project_rhs`
+3. **Operations**: High-level operations like `Accum_binop` become loops over scalar operations
+4. **Initialization**: If `initialize_neutral` is true and the operation isn't total, we initialize with the neutral element
 
-## Inlining
+## Backend-Independent Optimizations
 
-Inlining is a process where we take the computations pertaining to a tensor node, and inline them at the `Get` access sites on a per-scalar basis.
+The optimization pipeline in `optimize_proc` consists of three main phases:
+
+### 1. Tracing Phase (`visit_llc`)
+
+This phase symbolically executes the computation to build a `traced_store` mapping each tensor node to a `traced_array`:
 
 ```ocaml
-type virtualize_settings = {
-  mutable enable_device_only : bool;
-  mutable max_visits : int;
-  mutable max_tracing_dim : int;
-}
-
-type visits =
-  | Visits of int
-  | Recurrent  (** A [Recurrent] visit is when there is an access prior to any assignment in an update. *)
-
 type traced_array = {
-  nd : Tn.t;
+  tn : Tn.t;
   mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the tensor node) are retrieved for optimization just as they are populated,
-          so that the inlined code corresponds precisely to the changes to the arrays that would happen
-          up till that point. Within the code blocks paired with an index tuple, all assignments and accesses
-          must happen via the index tuple; if this is not the case for some assignment, the node cannot
-          be virtual. Currently, we only allow for-loop symbols in assignment indices of virtual nodes. *)
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
-      (** For dynamic indexes, we take a value of 0. This leads to an overestimate of visits, which is safe. *)
   mutable zero_initialized : bool;
   mutable zeroed_out : bool;
-  mutable read_before_write : bool;  (** The node is read before it is written (i.e. it is recurrent). *)
+  mutable read_before_write : bool;
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
-      (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
-          before accessed, is assigned at most once, and from an expression involving only constants
-          or tensor nodes that were at the time is_scalar_constexpr. *)
 }
 ```
 
-- The `visit_llc` function interprets (symbolically executes) the given computation, and fills in `traced_store`: the map of `traced_array`s.
-- 
+Key analyses performed:
 
+- **Access Pattern Analysis**: Tracks which positions are read/written and how many times (`visits`)
+- **Dependency Analysis**: Determines read-before-write patterns (recurrence)
+- **Scalar Constant Expression Detection**: Identifies tensor nodes that are constant scalars
+- **Memory Mode Inference**: Decides whether tensors should be virtual, materialized, etc.
 
-## Rewriting
+### 2. Virtualization and Inlining Phase (`virtual_llc`)
+
+This is the core optimization phase that implements **computation inlining**:
+
+#### Virtualization Decision
+
+- Tensors with too many accesses (`> max_visits`) are marked `Never_virtual`
+- Read-only tensors are typically materialized
+- Recurrent tensors (read-before-write) are materialized
+
+#### Inlining Process (`inline_computation`)
+
+When a tensor node is accessed via `Get`, if it's determined to be virtual:
+
+1. **Retrieve Computations**: Get the stored computations for the tensor from `traced_array.computations`
+2. **Symbol Freshening**: Create fresh symbols to avoid variable capture when inlining
+3. **Substitution**: Replace the definition's indices with the call site's indices
+4. **Code Generation**: Generate a `Local_scope` that computes the value inline
+
+#### Critical Invariant: Symbol Freshening
+
+When inlining, we must ensure that loop variables don't clash. The `subst` function handles index substitution, mapping old symbols to new ones. This is crucial for correctness.
+
+### 3. Cleanup and Simplification Phase (`cleanup_virtual_llc` + `simplify_llc`)
+
+#### Cleanup (`cleanup_virtual_llc`)
+
+- **Environment Validation**: Ensures all symbols are properly bound in their scope
+- **Virtual Tensor Removal**: Removes references to virtual tensors that were successfully inlined
+- **Constraint Checking**: Validates that symbol substitution was correct
+
+#### Simplification (`simplify_llc`)
+
+A traditional optimizing compiler pass that performs:
+
+- **Constant Folding**: `Constant 2.0 + Constant 3.0` → `Constant 5.0`
+- **Algebraic Simplification**: `x + 0` → `x`, `x * 1` → `x`, etc.
+- **Dead Code Elimination**: Removes `Local_scope` that just return values
+- **Integer Power Unrolling**: `x ** 3` → `x * x * x` for small integer powers
+
+## Optimization Settings
+
+The optimization behavior is controlled by `virtualize_settings`:
+
+- `max_visits`: Maximum number of times a tensor can be accessed before being materialized
+- `max_tracing_dim`: Maximum dimension size for loop unrolling during analysis
+- `enable_device_only`: Whether to prefer device-only storage when possible
+- `inline_scalar_constexprs`: Whether to inline scalar constant expressions
+
+## Memory Mode Management
+
+The optimization process works closely with OCANNL's memory mode system:
+
+- **Virtual**: Computations are inlined, no storage allocated
+- **Materialized**: Tensor is stored and reused
+- **Device_only**: Stored only on device, not accessible from host
+- **Hosted**: Stored on both host and device
+
+The optimizer uses provenance tracking (the `int` in memory mode tuples) to debug conflicts in memory mode decisions.
+
+## Code Generation Integration
+
+The optimized `Low_level.t` can be:
+
+1. **Printed** using `to_doc` (OCANNL %cd syntax) or `to_doc_cstyle` (C-like syntax)
+2. **Backend Compilation**: Each backend pattern-matches on `Low_level.t` to generate device-specific code
+3. **Staged Compilation**: `Staged_compilation` nodes allow backends to embed generated code during optimization
+
+The `Staged_compilation` construct is particularly important for backends that need to emit complex code patterns that can't be easily represented in the simple `Low_level.t` grammar.
+
+This optimization pipeline enables OCANNL to achieve high performance by eliminating intermediate tensor allocations and generating specialized code for each computation pattern.

@@ -416,6 +416,29 @@ let inline_computation ~id traced static_indices call_args =
     in
     let subst env = function
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
+      | Indexing.Affine { symbols; offset } ->
+          (* We need to substitute each symbol in the affine expression.
+             If a symbol maps to a non-Iterator, we need to handle it specially. *)
+                     let expand_symbol (coeff, s) =
+             match Map.find env s with
+             | Some (Indexing.Iterator new_s) -> [(coeff, new_s)]
+             | Some (Indexing.Fixed_idx _) -> [] (* Fixed index contributes to offset *)
+             | Some (Indexing.Affine { symbols = inner_symbols; offset = _ }) ->
+                 (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
+                 List.map inner_symbols ~f:(fun (inner_coeff, inner_s) -> (coeff * inner_coeff, inner_s))
+             | None -> [(coeff, s)]
+          in
+          let all_terms = List.concat_map symbols ~f:expand_symbol in
+          (* Calculate the new offset by adding contributions from Fixed_idx substitutions *)
+          let offset_additions = 
+            List.fold symbols ~init:0 ~f:(fun acc (coeff, s) ->
+                match Map.find env s with
+                | Some (Indexing.Fixed_idx i) -> acc + (coeff * i)
+                | Some (Indexing.Affine { offset = inner_offset; _ }) -> acc + (coeff * inner_offset)
+                | _ -> acc)
+          in
+          let new_offset = offset + offset_additions in
+          Indexing.Affine { symbols = all_terms; offset = new_offset }
       | idx -> idx
     in
     let rec loop env llc : t option =
