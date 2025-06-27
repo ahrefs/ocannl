@@ -1688,7 +1688,9 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
              | Proj_eq (proj1, (Proj (_, { d = 1; _ }) as proj2)) ->
                  [ Iterated proj1; Proj_eq (proj2, Solved (Fixed_idx 0)) ]
              | eq -> [ eq ])
-    | Dim_constr _ | Row_constr _ | Terminal_dim _ | Terminal_row _ -> []
+    | Terminal_dim d -> [ Iterated (to_proj d) ]
+    | Terminal_row { dims; _ } -> List.map ~f:(fun d -> Iterated (to_proj d)) dims
+    | Dim_constr _ | Row_constr _ -> []
   in
   List.concat_map inequalities ~f
 
