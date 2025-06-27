@@ -772,7 +772,8 @@ let fresh_proj_ids update =
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let derive_projections (update_step : update_step) : Idx.projections =
+let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections =
+  Stdio.printf "derive_projections\n%!";
   finish_inference ();
   let resolved_padding, inferred_padding = fresh_proj_ids update_step in
   let _debug_update_step : update_step = update_step in

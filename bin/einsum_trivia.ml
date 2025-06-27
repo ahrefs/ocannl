@@ -23,7 +23,7 @@ let _suspended () =
   Stdio.printf "\n%!"
 
 let _suspended () =
-  Utils.set_log_level 2;
+  (* Utils.set_log_level 2; *)
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Backends.fresh_backend ~backend_name:"cuda" ()) in
@@ -49,7 +49,7 @@ let _suspended () =
   Tensor.print ~with_code:false ~with_grad:false `Default @@ ho2
 
 let () =
-  Utils.set_log_level 2;
+  (* Utils.set_log_level 2; *)
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Backends.fresh_backend ()) in
