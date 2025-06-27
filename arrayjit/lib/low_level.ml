@@ -111,7 +111,6 @@ type visits = Visits of int | Recurrent [@@deriving sexp, equal, variants]
 
 type traced_array = {
   tn : Tn.t;
-  mutable computations : (Indexing.axis_index array option * t) list;
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
   mutable zero_initialized : bool;
@@ -122,11 +121,25 @@ type traced_array = {
 }
 [@@deriving sexp_of]
 
+type optimize_ctx = {
+  computations : (Tnode.t, (Indexing.axis_index array option * t) list) Base.Hashtbl.t;
+}
+[@@deriving sexp_of]
+
+type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
+
+type optimized = {
+  traced_store : traced_store;
+  optimize_ctx : optimize_ctx;
+  llc : t;
+  merge_node : Tnode.t option;
+}
+[@@deriving sexp_of]
+
 let get_node store tn =
   Hashtbl.find_or_add store tn ~default:(fun () ->
       {
         tn;
-        computations = [];
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
         zero_initialized = false;
@@ -256,23 +269,23 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.known_non_virtual tn)
-      then Tn.update_memory_mode tn Virtual 40;
+      then Tn.update_memory_mode tn (Virtual { is_constant = traced.is_scalar_constexpr }) 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1
-        (* The tensor node is read-only/recurrent for this computation, but maybe computed by
-           another one. However, if the memory mode is unspecified, we assume this will be the first
-           computation involving the tensor node. *);
+        (* The tensor node is read-only/recurrent for this computation, but maybe computed or
+           specified as virtual by another routine. However, if the memory mode is unspecified, we
+           assume this will be the first computation involving the tensor node. *);
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
-        else Tn.update_memory_mode tn Materialized 35);
+        else if Tn.known_non_virtual tn then Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.read_before_write <- true;
         if Tn.mode_is_unspecified tn then
           Tn.update_memory_mode tn (Hosted (Changed_on_devices Unset)) 38
         else Tn.update_memory_mode tn Materialized 36))
 
-let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
+let%diagn2_sexp check_and_store_virtual computations_table traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
@@ -388,10 +401,13 @@ let%diagn2_sexp check_and_store_virtual traced static_indices top_llc =
     if Tn.known_non_virtual traced.tn then raise @@ Non_virtual 11;
     loop_proc ~env_dom:static_indices top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
-    traced.computations <- (!at_idcs, top_llc) :: traced.computations
+    let current_computations =
+      Hashtbl.find computations_table traced.tn |> Option.value ~default:[]
+    in
+    Hashtbl.set computations_table ~key:traced.tn ~data:((!at_idcs, top_llc) :: current_computations)
   with Non_virtual i -> Tn.update_memory_mode traced.tn Never_virtual i
 
-let inline_computation ~id traced static_indices call_args =
+let inline_computation ~id computations_table traced static_indices call_args =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
@@ -417,20 +433,21 @@ let inline_computation ~id traced static_indices call_args =
     let subst env = function
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
       | Indexing.Affine { symbols; offset } ->
-          (* We need to substitute each symbol in the affine expression.
-             If a symbol maps to a non-Iterator, we need to handle it specially. *)
-                     let expand_symbol (coeff, s) =
-             match Map.find env s with
-             | Some (Indexing.Iterator new_s) -> [(coeff, new_s)]
-             | Some (Indexing.Fixed_idx _) -> [] (* Fixed index contributes to offset *)
-             | Some (Indexing.Affine { symbols = inner_symbols; offset = _ }) ->
-                 (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
-                 List.map inner_symbols ~f:(fun (inner_coeff, inner_s) -> (coeff * inner_coeff, inner_s))
-             | None -> [(coeff, s)]
+          (* We need to substitute each symbol in the affine expression. If a symbol maps to a
+             non-Iterator, we need to handle it specially. *)
+          let expand_symbol (coeff, s) =
+            match Map.find env s with
+            | Some (Indexing.Iterator new_s) -> [ (coeff, new_s) ]
+            | Some (Indexing.Fixed_idx _) -> [] (* Fixed index contributes to offset *)
+            | Some (Indexing.Affine { symbols = inner_symbols; offset = _ }) ->
+                (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
+                List.map inner_symbols ~f:(fun (inner_coeff, inner_s) ->
+                    (coeff * inner_coeff, inner_s))
+            | None -> [ (coeff, s) ]
           in
           let all_terms = List.concat_map symbols ~f:expand_symbol in
           (* Calculate the new offset by adding contributions from Fixed_idx substitutions *)
-          let offset_additions = 
+          let offset_additions =
             List.fold symbols ~init:0 ~f:(fun acc (coeff, s) ->
                 match Map.find env s with
                 | Some (Indexing.Fixed_idx i) -> acc + (coeff * i)
@@ -489,7 +506,8 @@ let inline_computation ~id traced static_indices call_args =
     loop env def
   in
   try
-    let body = List.rev_filter_map ~f:loop_proc traced.computations in
+    let computations = Hashtbl.find computations_table traced.tn |> Option.value ~default:[] in
+    let body = List.rev_filter_map ~f:loop_proc computations in
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
     Tn.update_memory_mode traced.tn Never_virtual i;
@@ -502,7 +520,7 @@ let rec unroll_pow ~(base : float_t) ~(exp : int) : float_t =
   else if exp = 0 then Constant 1.
   else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
 
-let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
+let virtual_llc computations_table traced_store reverse_node_map static_indices (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~process_for (llc : t) : t =
     let loop = loop_proc ~process_for in
@@ -518,20 +536,20 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
             let node : traced_array = get_node traced_store tn in
             let result = loop_proc ~process_for:(Set.add process_for tn) llc in
             if not @@ Tn.known_non_virtual node.tn then
-              check_and_store_virtual node static_indices result;
+              check_and_store_virtual computations_table node static_indices result;
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual traced static_indices llc;
+          check_and_store_virtual computations_table traced static_indices llc;
         llc
     | Set { tn; idcs; llv; debug } ->
         let traced : traced_array = get_node traced_store tn in
         let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
         let result = Set { tn; idcs; llv = loop_float ~process_for:next llv; debug } in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual traced static_indices result;
+          check_and_store_virtual computations_table traced static_indices result;
         result
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
@@ -549,8 +567,8 @@ let virtual_llc traced_store reverse_node_map static_indices (llc : t) : t =
         else
           let id = get_scope tn in
           Option.value ~default:llv
-          @@ Option.map (inline_computation ~id traced static_indices indices) ~f:(fun body ->
-                 Local_scope { id; body; orig_indices = indices })
+          @@ Option.map (inline_computation ~id computations_table traced static_indices indices)
+               ~f:(fun body -> Local_scope { id; body; orig_indices = indices })
     | Local_scope opts ->
         Local_scope
           { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
@@ -584,7 +602,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         | Some a ->
             if not @@ Tn.known_non_virtual a then (
               (* FIXME(#296): *)
-              Tn.update_memory_mode a Virtual 15;
+              Tn.update_memory_mode a (Virtual { is_constant = false }) 15;
               None)
             else
               Option.map ~f:(fun body : t -> For_loop { for_config with body })
@@ -595,13 +613,13 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Zero_out tn ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
-          Tn.update_memory_mode tn Virtual 151;
+          Tn.update_memory_mode tn (Virtual { is_constant = false }) 151;
           None)
         else Some llc
     | Set { tn; idcs; llv; debug } ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
-          Tn.update_memory_mode tn Virtual 152;
+          Tn.update_memory_mode tn (Virtual { is_constant = false }) 152;
           None)
         else (
           assert (
@@ -609,7 +627,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug }))
     | Set_local (id, llv) ->
         assert (not @@ Tn.known_non_virtual id.tn);
-        Tn.update_memory_mode id.tn Virtual 16;
+        Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 16;
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -631,11 +649,11 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         if Tn.known_non_virtual id.tn then Get (id.tn, orig_indices)
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
-          Tn.update_memory_mode id.tn Virtual 18;
+          Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 18;
           Local_scope { id; orig_indices; body }
     | Get_local id ->
         assert (not @@ Tn.known_non_virtual id.tn);
-        Tn.update_memory_mode id.tn Virtual 16;
+        Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 16;
         llv
     | Access _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -840,11 +858,6 @@ let simplify_llc llc =
   if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
   result
 
-type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
-
-type optimized = { traced_store : traced_store; llc : t; merge_node : Tn.t option }
-[@@deriving sexp_of]
-
 let input_and_output_nodes optimized =
   ( Hashtbl.fold optimized.traced_store
       ~init:(Set.empty (module Tn), Set.empty (module Tn))
@@ -866,7 +879,7 @@ let input_and_output_nodes optimized =
         (inputs, outputs)),
     optimized.merge_node )
 
-let%diagn2_sexp optimize_proc static_indices llc =
+let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
   let reverse_node_map = Hashtbl.create (module Indexing.Symbol) in
@@ -875,15 +888,15 @@ let%diagn2_sexp optimize_proc static_indices llc =
   visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits:virtualize_settings.max_visits
     llc;
   [%log "optimizing"];
+  let virtual_llc_result = virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc in
   let llc =
-    simplify_llc
-    @@ cleanup_virtual_llc reverse_node_map ~static_indices
-    @@ virtual_llc traced_store reverse_node_map static_indices llc
+    simplify_llc @@ cleanup_virtual_llc reverse_node_map ~static_indices @@ virtual_llc_result
   in
   let merge_node =
     Option.map !merge_node_id ~f:(fun id -> Option.value_exn ~here:[%here] @@ Tnode.find ~id)
   in
-  { traced_store; llc; merge_node }
+  let optimize_ctx = input_ctx in
+  { traced_store; optimize_ctx; llc; merge_node }
 
 let code_hum_margin = ref 100
 
@@ -1143,10 +1156,10 @@ let to_doc ?name ?static_indices () llc =
 
   hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
-let%diagn2_sexp optimize ~unoptim_ll_source ~ll_source ~(name : string)
+let%diagn2_sexp optimize (input_ctx : optimize_ctx) ~unoptim_ll_source ~ll_source ~(name : string)
     (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () llc));
-  let result = optimize_proc static_indices llc in
+  let result = optimize_proc input_ctx static_indices llc in
   Option.iter ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () result.llc));
   result
 

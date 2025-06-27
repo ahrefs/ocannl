@@ -16,7 +16,8 @@ type dedicated_access =
       (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by
           merge operations. The merge buffer is associated with the source node of the device's most
           recent [device_to_device ~into_merge_buffer:true] operation. *)
-  | File_mapped of string * Ops.prec  (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
+  | File_mapped of string * Ops.prec
+      (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
   | Uint4x32_to_prec_uniform of {
       source : Tnode.t;
       prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
@@ -87,13 +88,6 @@ type visits =
 
 type traced_array = {
   tn : Tnode.t;
-  mutable computations : (Indexing.axis_index array option * t) list;
-      (** The computations (of the tensor node) are retrieved for optimization just as they are
-          populated, so that the inlined code corresponds precisely to the changes to the arrays
-          that would happen up till that point. Within the code blocks paired with an index tuple,
-          all assignments and accesses must happen via the index tuple; if this is not the case for
-          some assignment, the node cannot be virtual. Currently, we only allow for-loop symbols in
-          assignment indices of virtual nodes. *)
   assignments : int array Base.Hash_set.t;
   accesses : (int array, visits) Base.Hashtbl.t;
   mutable zero_initialized : bool;
@@ -113,10 +107,26 @@ val optimize_integer_pow : bool ref
 
 type traced_store = (Tnode.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 
-type optimized = { traced_store : traced_store; llc : t; merge_node : Tnode.t option }
+type optimize_ctx = {
+  computations : (Tnode.t, (Indexing.axis_index array option * t) list) Base.Hashtbl.t;
+      (** The computations (of the tensor node) are retrieved for optimization just as they are
+          populated, so that the inlined code corresponds precisely to the changes to the arrays
+          that would happen up till that point. Within the code blocks paired with an index tuple,
+          all assignments and accesses must happen via the index tuple; if this is not the case for
+          some assignment, the node cannot be virtual. Currently, we only allow for-loop symbols in
+          assignment indices of virtual nodes. *)
+}
+
+type optimized = {
+  traced_store : traced_store;
+  optimize_ctx : optimize_ctx;
+  llc : t;
+  merge_node : Tnode.t option;
+}
 [@@deriving sexp_of]
 
 val optimize :
+  optimize_ctx ->
   unoptim_ll_source:(PPrint.document -> unit) option ->
   ll_source:(PPrint.document -> unit) option ->
   name:string ->

@@ -214,11 +214,12 @@ module type Backend_common = sig
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
 
-  val compile : ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
+  val compile : Low_level.optimize_ctx -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** [name] is used to derive names for compilation artifacts. If omitted, it's derived via
       {!Assignments.get_name_exn}. *)
 
   val compile_batch :
+    Low_level.optimize_ctx ->
     ?names:string array ->
     ?occupancy:(name:string -> src_n:int -> bool) ->
     Indexing.unit_bindings ->

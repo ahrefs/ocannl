@@ -786,7 +786,7 @@ module C_syntax (B : C_syntax_config) = struct
 
   let compile_main llc : PPrint.document = pp_ll llc
 
-  let compile_proc ~name idx_params Low_level.{ traced_store; llc; merge_node } :
+  let compile_proc ~name idx_params Low_level.{ traced_store; llc; merge_node; optimize_ctx = _ } :
       (string * param_source) list * PPrint.document =
     let open PPrint in
     let params : (string * param_source) list =

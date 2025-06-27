@@ -19,6 +19,10 @@
 - Refactored `init_op` and the badly named `global_identifier` from `ops.ml` into `dedicated_access` in `low_level.ml` and a bigger `fetch_op` in `assignments.ml` (more meaningful file locations).
   - Also renamed the badly named `Get_global` to `Access`.
 - Initialization now needs to be handled via running the corresponding code explicitly. In particular `Tensor.init_params` will run the forward code of tensors from the `params` field.
+- Virtual nodes and inlining now also work across routines. This required changing the API to pass the `optimize_ctx` optimization context.
+- TODO: The modes can now be escalated from non-hosted to hosted. This means the `Tnode.array` field is no longer lazy, but mutable.
+  - The virtual memory mode is now tagged with whether the node is constant.
+
 
 ## [0.5.3] -- 2025-05-24
 

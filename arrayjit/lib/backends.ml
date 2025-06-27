@@ -182,7 +182,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Hashtbl.clear s.updating_for)
 end
 
-let%track6_sexp lower_assignments ?name bindings asgns =
+let%track6_sexp lower_assignments optim_ctx ?name bindings asgns =
   let name : string =
     Option.value_or_thunk name ~default:(fun () -> Assignments.get_name_exn asgns)
   in
@@ -190,10 +190,10 @@ let%track6_sexp lower_assignments ?name bindings asgns =
   let ll_source = Utils.output_to_build_file ~fname:(name ^ ".ll") in
   let cd_source = Utils.output_to_build_file ~fname:(name ^ ".cd") in
   ( name,
-    Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name
+    Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name
       (Indexing.bound_symbols bindings) asgns )
 
-let lower_batch_assignments ?names ?occupancy bindings asgns_l =
+let lower_batch_assignments optim_ctx ?names ?occupancy bindings asgns_l =
   let names =
     Option.value_or_thunk names ~default:(fun () ->
         Array.map asgns_l ~f:(fun asgns -> Assignments.get_name_exn asgns))
@@ -209,7 +209,7 @@ let lower_batch_assignments ?names ?occupancy bindings asgns_l =
          let asgns = asgns_l.(src_n) in
          if occupancy ~name ~src_n then
            ( Some name,
-             Some (Assignments.lower ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+             Some (Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
          else (None, None))
 
 let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
@@ -351,9 +351,9 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
-  let%debug3_sexp compile ?name bindings (comp : Assignments.comp) : code =
+  let%debug3_sexp compile optim_ctx ?name bindings (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =
-      lower_assignments ?name bindings comp.Assignments.asgns
+      lower_assignments optim_ctx ?name bindings comp.asgns
     in
     let code : Device.code = compile ~name bindings lowered in
     let from_prior_context : Tn.t_set =
@@ -361,11 +361,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let%debug3_sexp compile_batch ?names ?occupancy bindings (comps : Assignments.comp array) :
+  let%debug3_sexp compile_batch optim_ctx ?names ?occupancy bindings (comps : Assignments.comp array) :
       code_batch =
     let names, lowereds =
-      lower_batch_assignments ?names ?occupancy bindings
-      @@ Array.map comps ~f:(fun c -> c.Assignments.asgns)
+      lower_batch_assignments optim_ctx ?names ?occupancy bindings
+      @@ Array.map comps ~f:(fun c -> c.asgns)
     in
     let code_batch = compile_batch ~names bindings lowereds in
     let from_prior_context =

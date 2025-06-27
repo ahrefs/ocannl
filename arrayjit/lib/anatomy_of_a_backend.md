@@ -92,7 +92,8 @@ type memory_type =
 
 type memory_mode =
   | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
-  | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
+  | Virtual of { is_constant:bool }
+      (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across
@@ -117,6 +118,8 @@ A backend can make more refined distinctions, for example a `Local` node in CUDA
 Contexts track (or store) the on-device arrays corresponding to tensor nodes. Contexts form a hierarchy: linking takes a parent context and outputs a child context. Related contexts that use a tensor node must use the same on-device array for the tensor node. If two unrelated contexts are on the same device, i.e. have a common ancestor, and use the same tensor node that is not part of the most recent common ancestor, the behavior is undefined.
 
 To avoid misleading behavior of `device_to_device` data movement, non-constant materialized tensor nodes are represented in contexts making use of them, even when the underlying array is on host. This way the logic remains the same regardless of whether a backend shares memory with the host.
+
+The memory modes are updateable, but the updates maintain consistency. The modes can be refined to more specific over time, but must be fully specific when optimized code is handed over to the backends. TODO: The modes can also be escalated from non-hosted to hosted.
 
 ## Typical details of a backend implementation
 
