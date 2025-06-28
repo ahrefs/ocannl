@@ -118,7 +118,7 @@ Contexts track (or store) the on-device arrays corresponding to tensor nodes. Co
 
 To avoid misleading behavior of `device_to_device` data movement, non-constant materialized tensor nodes are represented in contexts making use of them, even when the underlying array is on host. This way the logic remains the same regardless of whether a backend shares memory with the host.
 
-The memory modes are updateable, but the updates maintain consistency. The modes can be refined to more specific over time, but must be fully specific when optimized code is handed over to the backends. TODO: The modes can also be escalated from non-hosted to hosted.
+The memory modes are updateable, but the updates maintain consistency. The modes can be refined to more specific over time, but must be fully specific when optimized code is handed over to the backends.
 
 ## Typical details of a backend implementation
 

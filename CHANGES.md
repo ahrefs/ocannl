@@ -20,7 +20,6 @@
   - Also renamed the badly named `Get_global` to `Access`.
 - Initialization now needs to be handled via running the corresponding code explicitly. In particular `Tensor.init_params` will run the forward code of tensors from the `params` field.
 - Virtual nodes and inlining now also work across routines. This required changing the API to pass the `optimize_ctx` optimization context.
-- TODO: The memory modes now decide between non-hosted and hosted based on type inference (dependent types style). (FIXME: is this at all possible?)
 
 ## [0.5.3] -- 2025-05-24
 
