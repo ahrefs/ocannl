@@ -4,13 +4,14 @@ open Base
 module Schedulers = Schedulers
 
 val finalize :
-  'buffer_ptr 'dev 'runner 'event.
+  'buffer_ptr 'dev 'runner 'event 'optimize_ctx.
   (module Ir.Backend_intf.Backend
      with type buffer_ptr = 'buffer_ptr
       and type dev = 'dev
       and type event = 'event
-      and type runner = 'runner) ->
-  ('buffer_ptr, ('buffer_ptr, 'dev, 'runner, 'event) Ir.Backend_intf.stream) Ir.Backend_intf.context ->
+      and type runner = 'runner
+      and type optimize_ctx = 'optimize_ctx) ->
+  ('buffer_ptr, ('buffer_ptr, 'dev, 'runner, 'event) Ir.Backend_intf.stream, 'optimize_ctx) Ir.Backend_intf.context ->
   unit
 (** Frees the arrays that are specific to the context -- not contained in the parent context. Note:
     use [finalize] to optimize memory, it is not obligatory because all arrays are freed when their

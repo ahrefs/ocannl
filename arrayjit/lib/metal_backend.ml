@@ -48,7 +48,7 @@ module Device_config = struct
   let name = "metal"
 end
 
-module Device_stream = Backend_impl.Device_types (Device_config)
+module Device_stream = Backend_impl.Device_types_ll (Device_config)
 
 (* Bring types into scope *)
 open Device_config

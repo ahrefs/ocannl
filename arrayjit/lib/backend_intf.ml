@@ -60,7 +60,7 @@ type 'context routine = {
 }
 [@@deriving sexp_of]
 
-module type Device_config = sig
+module type Device_config_common = sig
   include Buffer
 
   type dev [@@deriving sexp_of]
@@ -73,8 +73,17 @@ module type Device_config = sig
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
       values are used internally for scheduling across streams of the backend, and can be used for
       explicit scheduling. *)
-
   val name : string
+end
+
+module type Device_config = sig
+  include Device_config_common
+
+  type optimize_ctx [@@deriving sexp_of]
+  (** The optimization context for compiling code, in particular {!Low_level.optimize_ctx} for
+      low-level backends. *)
+
+  val empty_optimize_ctx : optimize_ctx
 end
 
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
@@ -171,13 +180,14 @@ type ('buffer_ptr, 'dev, 'runner, 'event) stream =
 
 let equal_stream = equal_stream_ref
 
-type ('buffer_ptr, 'stream) context = {
+type ('buffer_ptr, 'stream, 'optimize_ctx) context = {
   stream : 'stream;
-  parent : ('buffer_ptr, 'stream) context option;
+  parent : ('buffer_ptr, 'stream, 'optimize_ctx) context option;
   ctx_arrays : 'buffer_ptr ctx_arrays;
       (** This map contains arrays used in this context or an ancestor context (they might be unique
           but might also be cross-stream shared. *)
   finalized : Utils.atomic_bool;
+  optimize_ctx : 'optimize_ctx;
 }
 [@@deriving sexp_of]
 
@@ -186,7 +196,7 @@ module type Device_types = sig
 
   type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
   type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
+  type nonrec context = (buffer_ptr, stream, optimize_ctx) context [@@deriving sexp_of]
 end
 
 module type Device = sig
@@ -196,10 +206,10 @@ module type Device = sig
   val make_device : dev -> ordinal:int -> device
   val make_stream : device -> runner -> stream
 
-  val make_context : ?ctx_arrays:ctx_arrays -> stream -> context
+  val make_context : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> stream -> context
   (** Returns a context without a parent. *)
 
-  val make_child : ?ctx_arrays:ctx_arrays -> context -> context
+  val make_child : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> context -> context
   (** Returns a context with the same {!field:Backend_intf.context.stream}, and
       {!field:Backend_intf.context.ctx_arrays} if omitted, as the given context's, which is also the
       {!field:Backend_intf.context.parent}. *)
@@ -213,13 +223,18 @@ module type Backend_common = sig
 
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
+  type optimize_ctx [@@deriving sexp_of]
 
-  val compile : Low_level.optimize_ctx -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
+  val empty_optimize_ctx : optimize_ctx
+  val get_optimize_ctx : code -> optimize_ctx
+  val get_optimize_ctx_batch : code_batch -> optimize_ctx
+
+  val compile : optimize_ctx -> ?name:string -> Indexing.unit_bindings -> Assignments.comp -> code
   (** [name] is used to derive names for compilation artifacts. If omitted, it's derived via
       {!Assignments.get_name_exn}. *)
 
   val compile_batch :
-    Low_level.optimize_ctx ->
+    optimize_ctx ->
     ?names:string array ->
     ?occupancy:(name:string -> src_n:int -> bool) ->
     Indexing.unit_bindings ->
@@ -330,7 +345,9 @@ end
 
 module type Backend = sig
   include Backend_common
-  include Backend_device_common with type buffer_ptr := buffer_ptr
+
+  include
+    Backend_device_common with type buffer_ptr := buffer_ptr and type optimize_ctx := optimize_ctx
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context.

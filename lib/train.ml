@@ -230,11 +230,12 @@ module Lazy = Utils.Lazy
 
     All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
-let%track3_sexp parallel_update (type buffer_ptr dev runner event)
+let%track3_sexp parallel_update (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
+       and type optimize_ctx = optimize_ctx
        and type event = event) ~(grad_updates : Backend.context BT.routine array)
     ~(sgd_update : Backend.context BT.routine) ~copy_to_merge ~post_sync loss =
   assert (not @@ Array.is_empty grad_updates);
@@ -267,15 +268,16 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
     let occupancy ~name:_ ~src_n:_ = true in
     Array.mapi ctxs ~f:(fun dst_n ctx ->
         if occupancy_dst ~dst_n then
-          let empty_ctx = Ir.Low_level.{ computations = Hashtbl.create (module Ir.Tnode) } in
-          snd @@ Backend.(link_batch ctx @@ compile_batch empty_ctx ~occupancy Idx.Empty grad_merges)
+          snd
+          @@ Backend.(
+               link_batch ctx @@ compile_batch ctx.optimize_ctx ~occupancy Idx.Empty grad_merges)
         else [||])
   in
   (* We can cache scheduling, because merging and copying does not depend on static indexing. *)
   let loss_merge =
     Backend.(
       link sgd_update.BT.context
-      @@ compile Idx.Empty
+      @@ compile sgd_update.context.optimize_ctx Idx.Empty
            [%cd
              ~~("merging" loss;
                 loss.value =+ loss.value.merge)])
@@ -295,8 +297,7 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event)
   in
   let merge_loss ~src =
     let into_merge_buffer, streaming = mbuf_use loss_merge.schedule in
-    assert (
-      Backend.device_to_device loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
+    assert (Backend.device_to_device loss.value ~into_merge_buffer ~dst:sgd_update.context ~src);
     if not streaming then Task.run loss_merge.schedule
   in
   (* FIXME: missing device-to-host? *)
@@ -339,13 +340,14 @@ let get_all_suggested_streams ?(max_num_streams : int option) (type buffer_ptr d
   in
   (devices, result)
 
-let to_routine (type buffer_ptr dev runner event)
+let to_routine (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
-       and type event = event) (context : Backend.context) ?name bindings comp =
-  Backend.link context @@ Backend.compile ?name bindings comp
+       and type event = event
+       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?name bindings comp =
+  Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
 type example_train_result = {
   inputs : Tensor.t;
@@ -403,9 +405,9 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
      Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let grad_update = Backend.compile bindings update in
+  let grad_update = Backend.compile Backend.empty_optimize_ctx ?name:None bindings update in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
-  let sgd_update = to_routine (module Backend) grad_updates.(0).context bindings sgd in
+  let sgd_update = to_routine (module Backend) grad_updates.(0).context ?name:None bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
   Tensor.log_debug_info ~from_log_level:2 outputs;
   let open Operation.At in
@@ -458,7 +460,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let routine =
     Backend.(
       link sgd_update.context
-      @@ compile IDX.empty
+      @@ compile sgd_update.context.optimize_ctx IDX.empty
            [%cd
              ~~("infer " model_result;
                 infer_fwd)])
@@ -486,13 +488,17 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   }
 
 (* Note: this will get nicer with modular explicits. *)
-let%track3_sexp forward_and_ctx ?(disable_rootness_check = false) (type buffer_ptr dev runner event)
+let%track3_sexp forward_and_ctx ?(disable_rootness_check = false)
+    (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
+       and type optimize_ctx = optimize_ctx
        and type event = event) ctx ?(bindings = IDX.empty) t =
-  let routine = Backend.(link ctx @@ compile bindings @@ forward ~disable_rootness_check t) in
+  let routine =
+    Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ forward ~disable_rootness_check t)
+  in
   if not disable_rootness_check then Tensor.remove_bprop_root t;
   Task.run routine.schedule;
   routine.context

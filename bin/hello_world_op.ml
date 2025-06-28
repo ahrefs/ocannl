@@ -25,7 +25,8 @@ let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -43,7 +44,8 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -63,7 +65,8 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -159,7 +162,8 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -178,7 +182,8 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -201,7 +206,8 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in

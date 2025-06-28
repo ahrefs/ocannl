@@ -17,7 +17,8 @@ let%expect_test "einsum1 permute axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -280,7 +281,8 @@ let%expect_test "einsum1 sum out axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -350,7 +352,8 @@ let%expect_test "einsum outer product" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -594,7 +597,8 @@ let%expect_test "einsum matrix/inner+outer products" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -708,7 +712,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1122,7 +1127,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1236,7 +1242,8 @@ let%expect_test "einsum1 fixed dim axis" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1360,7 +1367,8 @@ let%expect_test "einsum with fixed dim axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1422,7 +1430,8 @@ let%expect_test "outer_sum simulating axis concatenation" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1620,7 +1629,8 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -1707,7 +1717,8 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in

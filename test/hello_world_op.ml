@@ -21,7 +21,8 @@ let%expect_test "Pointwise multiplication dims 1" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -51,7 +52,8 @@ let%expect_test "Matrix multiplication dims 1x1" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -93,7 +95,8 @@ let%expect_test "Print constant tensor" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -455,7 +458,8 @@ let%expect_test "Matrix multiplication dims 2x3" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -498,7 +502,8 @@ let%expect_test "Big matrix" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -584,7 +589,8 @@ let%expect_test "Very big tensor" =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in

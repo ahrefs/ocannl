@@ -9,7 +9,9 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 module Multicore (Backend : For_add_scheduler) :
-  With_scheduler with type buffer_ptr = Backend.buffer_ptr = struct
+  With_scheduler
+    with type buffer_ptr = Backend.buffer_ptr
+     and type optimize_ctx = Ir.Low_level.optimize_ctx = struct
   include Backend
   module Domain = Domain [@warning "-3"]
   (* Currently, Backend.config is not used. *)
@@ -54,7 +56,7 @@ module Multicore (Backend : For_add_scheduler) :
     let name = "multicore_" ^ Backend.name
   end
 
-  module Device_types = Device_types (Device_config)
+  module Device_types = Device_types_ll (Device_config)
   include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
   open Device_config
 
@@ -250,7 +252,7 @@ module Sync (Backend : For_add_scheduler) = struct
     let name = "sync_" ^ Backend.name
   end
 
-  module Device_types = Device_types (Device_config)
+  module Device_types = Device_types_ll (Device_config)
   include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
   open Device_config
 

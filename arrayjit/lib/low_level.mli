@@ -116,6 +116,7 @@ type optimize_ctx = {
           some assignment, the node cannot be virtual. Currently, we only allow for-loop symbols in
           assignment indices of virtual nodes. *)
 }
+[@@deriving sexp_of]
 
 type optimized = {
   traced_store : traced_store;

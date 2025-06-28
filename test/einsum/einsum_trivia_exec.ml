@@ -19,7 +19,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -53,7 +54,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -80,7 +82,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -108,7 +111,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -139,7 +143,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -188,7 +193,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -217,7 +223,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -249,7 +256,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -270,7 +278,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -298,7 +307,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -322,7 +332,8 @@ let () =
       with type buffer_ptr = Backend.buffer_ptr
        and type dev = Backend.dev
        and type runner = Backend.runner
-       and type event = Backend.event)
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
   in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in

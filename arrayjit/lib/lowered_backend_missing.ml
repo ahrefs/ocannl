@@ -14,7 +14,9 @@ struct
   type dev
   type runner
   type event
+  type optimize_ctx = Low_level.optimize_ctx [@@deriving sexp_of]
 
+  let empty_optimize_ctx = { Low_level.computations = Hashtbl.create (module Tnode) }
   let use_host_memory = None
 
   let sexp_of_dev _dev =
@@ -38,7 +40,7 @@ struct
   let sexp_of_stream _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  type nonrec context = (buffer_ptr, stream) Backend_intf.context
+  type nonrec context = (buffer_ptr, stream, Low_level.optimize_ctx) Backend_intf.context
 
   let sexp_of_context _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
@@ -57,10 +59,10 @@ struct
   let make_stream _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let make_context ?ctx_arrays:_ _stream =
+  let make_context ?ctx_arrays:_ ?optimize_ctx:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let make_child ?ctx_arrays:_ _context =
+  let make_child ?ctx_arrays:_ ?optimize_ctx:_ _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let get_name _stream =

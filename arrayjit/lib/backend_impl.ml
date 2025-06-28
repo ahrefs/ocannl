@@ -89,7 +89,16 @@ module Device_types (Device_config : Device_config) = struct
 
   type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
   type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, stream) context [@@deriving sexp_of]
+  type nonrec context = (buffer_ptr, stream, optimize_ctx) context [@@deriving sexp_of]
+end
+module Device_types_ll (Device_config : Device_config_common) = struct
+  include Device_config
+  type optimize_ctx = Low_level.optimize_ctx [@@deriving sexp_of]
+  let empty_optimize_ctx = { Low_level.computations = Hashtbl.create (module Tnode) }
+
+  type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
+  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
+  type nonrec context = (buffer_ptr, stream, Low_level.optimize_ctx) context [@@deriving sexp_of]
 end
 
 let next_global_device_id : Utils.atomic_int = Atomic.make 0
@@ -133,12 +142,13 @@ struct
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 
-  let make_context ?(ctx_arrays = Map.empty (module Tnode)) stream =
-    { stream; parent = None; ctx_arrays; finalized = Atomic.make false }
+  let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?(optimize_ctx = empty_optimize_ctx) stream =
+    { stream; parent = None; ctx_arrays; finalized = Atomic.make false; optimize_ctx }
 
-  let make_child ?ctx_arrays parent =
+  let make_child ?ctx_arrays ?optimize_ctx parent =
     let ctx_arrays = Option.value ctx_arrays ~default:parent.ctx_arrays in
-    { stream = parent.stream; parent = Some parent; ctx_arrays; finalized = Atomic.make false }
+    let optimize_ctx = Option.value optimize_ctx ~default:parent.optimize_ctx in
+    { stream = parent.stream; parent = Some parent; ctx_arrays; finalized = Atomic.make false; optimize_ctx }
 end
 
 (** Parts shared by backend implementations. *)
@@ -213,7 +223,7 @@ module type No_buffer_retrieval_or_syncing = sig
 end
 
 (** An intermediate stage for converting {!Lowered_no_device_backend} backends into
-    {!Lowered_backend}. *)
+    {!Lowered_backend}. It could potentially be used for assignments-level backends too. *)
 module type With_scheduler = sig
   include Backend_device_common
 
@@ -221,9 +231,9 @@ module type With_scheduler = sig
 end
 
 (** Lowered-level backend interface: implementation-facing API for device-based (GPU, or CPU after
-    adding a scheduler) backends. *)
+    adding a scheduler) backends based on the {!Low_level} IR. *)
 module type Lowered_backend = sig
-  include Backend_device_common
+  include Backend_device_common with type optimize_ctx := Low_level.optimize_ctx
 
   include
     No_buffer_retrieval_or_syncing
@@ -231,6 +241,7 @@ module type Lowered_backend = sig
        and type dev := dev
        and type runner := runner
        and type event := event
+       and type optimize_ctx := Low_level.optimize_ctx
 
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]

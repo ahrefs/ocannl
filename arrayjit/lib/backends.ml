@@ -209,7 +209,9 @@ let lower_batch_assignments optim_ctx ?names ?occupancy bindings asgns_l =
          let asgns = asgns_l.(src_n) in
          if occupancy ~name ~src_n then
            ( Some name,
-             Some (Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns) )
+             Some
+               (Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name bound
+                  asgns) )
          else (None, None))
 
 let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
@@ -232,12 +234,22 @@ let%debug3_sexp from_prior_context_batch ~use_host_memory (comps : Assignments.c
 module Add_device
     (Add_scheduler : functor
       (Impl : For_add_scheduler)
-      -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
+      ->
+      With_scheduler
+        with type buffer_ptr = Impl.buffer_ptr
+         and type optimize_ctx = Low_level.optimize_ctx)
     (Backend : Lowered_no_device_backend)
     (Config : sig
       val config : config
-    end) : Lowered_backend = struct
+    end)
+(* : Lowered_backend *) =
+struct
   include Backend
+
+  include Add_scheduler (struct
+    include Backend
+    include Config
+  end)
 
   type code = { lowered : Low_level.optimized; proc : Backend.procedure } [@@deriving sexp_of]
 
@@ -254,11 +266,6 @@ module Add_device
   let compile_batch ~names bindings lowereds : code_batch =
     let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
-
-  include Add_scheduler (struct
-    include Backend
-    include Config
-  end)
 
   let link context (code : code) ctx_arrays =
     let runner_label = get_name context.stream in
@@ -330,8 +337,14 @@ module Add_device
 end
 
 module Raise_backend (Device : Lowered_backend) : Backend = struct
-  include Device
-  include Add_buffer_retrieval_and_syncing (Device)
+  module Device_with_optimize_ctx = struct
+    include Device
+
+    type optimize_ctx = Low_level.optimize_ctx [@@deriving sexp_of]
+  end
+
+  include Device_with_optimize_ctx
+  include Add_buffer_retrieval_and_syncing (Device_with_optimize_ctx)
 
   type nonrec code = {
     from_prior_context : Set.M(Tnode).t;
@@ -351,6 +364,15 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   }
   [@@deriving sexp_of]
 
+  type nonrec optimize_ctx = Low_level.optimize_ctx
+
+  let empty_optimize_ctx = { Low_level.computations = Hashtbl.create (module Tnode) }
+  let get_optimize_ctx (code : code) = code.lowered.optimize_ctx
+
+  let get_optimize_ctx_batch (code_batch : code_batch) =
+    Array.find_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.optimize_ctx))
+    |> Option.value ~default:empty_optimize_ctx
+
   let%debug3_sexp compile optim_ctx ?name bindings (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =
       lower_assignments optim_ctx ?name bindings comp.asgns
@@ -361,8 +383,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
-  let%debug3_sexp compile_batch optim_ctx ?names ?occupancy bindings (comps : Assignments.comp array) :
-      code_batch =
+  let%debug3_sexp compile_batch optim_ctx ?names ?occupancy bindings
+      (comps : Assignments.comp array) : code_batch =
     let names, lowereds =
       lower_batch_assignments optim_ctx ?names ?occupancy bindings
       @@ Array.map comps ~f:(fun c -> c.asgns)
@@ -487,7 +509,10 @@ end
 module Make_device_backend_from_lowered
     (Add_scheduler : functor
       (Impl : For_add_scheduler)
-      -> With_scheduler with type buffer_ptr = Impl.buffer_ptr)
+      ->
+      With_scheduler
+        with type buffer_ptr = Impl.buffer_ptr
+         and type optimize_ctx = Low_level.optimize_ctx)
     (Backend_impl : Lowered_no_device_backend)
     (Config : sig
       val config : config
@@ -498,12 +523,13 @@ struct
   include Backend_device
 end
 
-let finalize (type buffer_ptr dev runner event)
+let finalize (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
-       and type event = event) (ctx : Backend.context) : unit =
+       and type event = event
+       and type optimize_ctx = optimize_ctx) (ctx : Backend.context) : unit =
   Option.iter Backend.free_buffer ~f:(fun mem_free ->
       if Atomic.compare_and_set ctx.finalized false true then (
         Backend.await ctx.stream;
