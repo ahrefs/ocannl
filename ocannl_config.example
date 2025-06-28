@@ -93,6 +93,9 @@ enable_device_only=true
 # If true, scalar constant expressions will always be inlined.
 inline_scalar_constexprs=true
 
+# If true, if the tensor node is built from index embeddings and scalar constant expressions, regardless of accesses, it will be inlined.
+inline_simple_computations=true
+
 # The random number library. Options: `stdlib` -- `Base.Random`;
 # `for_tests` -- simplistic randomness with 32 bit seed, focused on reproducibility.
 randomness_lib=stdlib

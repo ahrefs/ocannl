@@ -260,6 +260,8 @@ let known_volatile tn = match tn.memory_mode with Some (Hosted Volatile, _) -> t
 let known_non_virtual tn =
   match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
 
+let known_virtual tn = match tn.memory_mode with Some (Virtual, _) -> true | _ -> false
+
 let known_shared_cross_streams tn =
   match tn.memory_mode with
   | Some

@@ -116,7 +116,8 @@ The optimization behavior is controlled by `virtualize_settings`:
 - `max_visits`: Maximum number of times a tensor can be accessed before being materialized
 - `max_tracing_dim`: Maximum dimension size for loop unrolling during analysis
 - `enable_device_only`: Whether to prefer device-only storage when possible
-- `inline_scalar_constexprs`: Whether to inline scalar constant expressions
+- `inline_scalar_constexprs`: Whether to inline scalar constant expressions regardless of accesses
+- `inline_simple_computations`: Currently, whether to inline computations built from index embeddings and scalar constant expressions, regardless of accesses
 
 ## Memory Mode Management
 

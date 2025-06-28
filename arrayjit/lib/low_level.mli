@@ -76,6 +76,7 @@ type virtualize_settings = {
   mutable max_visits : int;
   mutable max_tracing_dim : int;
   mutable inline_scalar_constexprs : bool;
+  mutable inline_simple_computations : bool;
 }
 
 val virtualize_settings : virtualize_settings
@@ -99,6 +100,9 @@ type traced_array = {
       (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
           before accessed, is assigned at most once, and from an expression involving only constants
           or tensor nodes that were at the time is_scalar_constexpr. *)
+  mutable is_complex : bool;
+      (** False only if the tensor node is built from index embeddings and scalar constant
+          expressions. *)
 }
 [@@deriving sexp_of]
 

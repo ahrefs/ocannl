@@ -90,6 +90,7 @@ type virtualize_settings = {
   mutable max_visits : int;
   mutable max_tracing_dim : int;
   mutable inline_scalar_constexprs : bool;
+  mutable inline_simple_computations : bool;
 }
 
 let virtualize_settings =
@@ -105,7 +106,16 @@ let virtualize_settings =
   let inline_scalar_constexprs =
     Bool.of_string @@ Utils.get_global_arg ~arg_name:"inline_scalar_constexprs" ~default:"true"
   in
-  { enable_device_only; max_visits; max_tracing_dim; inline_scalar_constexprs }
+  let inline_simple_computations =
+    Bool.of_string @@ Utils.get_global_arg ~arg_name:"inline_simple_computations" ~default:"true"
+  in
+  {
+    enable_device_only;
+    max_visits;
+    max_tracing_dim;
+    inline_scalar_constexprs;
+    inline_simple_computations;
+  }
 
 type visits = Visits of int | Recurrent [@@deriving sexp, equal, variants]
 
@@ -118,6 +128,7 @@ type traced_array = {
   mutable read_before_write : bool;
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
+  mutable is_complex : bool;
 }
 [@@deriving sexp_of]
 
@@ -147,6 +158,7 @@ let get_node store tn =
         read_before_write = false;
         read_only = false;
         is_scalar_constexpr = false;
+        is_complex = false;
       })
 
 let visit ~is_assigned old =
@@ -175,6 +187,24 @@ let is_constexpr_comp traced_store llv =
   in
   loop llv
 
+let is_complex_comp traced_store llv =
+  let rec loop llv =
+    match llv with
+    | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
+        let traced = get_node traced_store tn in
+        traced.is_complex
+    | Access (_, _) -> true
+    | Get (tn, _) ->
+        let traced = get_node traced_store tn in
+        not traced.is_scalar_constexpr
+    | Ternop (_, v1, v2, v3) -> loop v1 || loop v2 || loop v3
+    | Binop (_, v1, v2) -> loop v1 || loop v2
+    | Unop (_, v) -> loop v
+    | Constant _ -> false
+    | Embed_index _ -> false
+  in
+  loop llv
+
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
@@ -187,23 +217,27 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
               acc + (coeff * (Option.value ~default:0 @@ Map.find env s))))
   in
-  let rec loop_proc env llc =
-    let loop = loop_proc env in
+  let rec loop_proc ~first_visit env llc =
+    let loop = loop_proc ~first_visit env in
     match llc with
     | Noop -> ()
     | (Seq (c1, c2) : t) ->
         loop c1;
         loop c2
     | For_loop { index; from_; to_ = _; body; trace_it = false } ->
-        loop_proc (Map.add_exn ~key:index ~data:from_ env) body
+        loop_proc ~first_visit (Map.add_exn ~key:index ~data:from_ env) body
     | For_loop { index; from_; to_; body; trace_it = true } ->
         for data = from_ to min to_ (from_ + virtualize_settings.max_tracing_dim) do
-          loop_proc (Map.add_exn ~key:index ~data env) body
+          loop_proc
+            ~first_visit:(first_visit && data = from_)
+            (Map.add_exn ~key:index ~data env)
+            body
         done
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then (
           traced.zero_initialized <- true;
+          traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
     | Set { tn; idcs; llv; debug = _ } ->
@@ -215,6 +249,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         then traced.is_scalar_constexpr <- is_constexpr_comp traced_store llv
           (* Note: this prevents detection if the same constant is assigned inside a loop. *)
         else if not @@ Hash_set.is_empty traced.assignments then traced.is_scalar_constexpr <- false;
+        if first_visit then
+          traced.is_complex <- traced.is_complex || is_complex_comp traced_store llv;
         Hash_set.add traced.assignments (lookup env idcs);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
@@ -238,7 +274,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         let at_pos = lookup env indices in
         Hashtbl.update traced.accesses at_pos
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
-    | Local_scope { body; _ } -> loop_proc env body
+    | Local_scope { body; _ } -> loop_proc ~first_visit:true env body
     | Get_local _ -> ()
     | Access (Merge_buffer { source }, _) ->
         let source_node_id = source.Tn.id in
@@ -263,15 +299,21 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         loop llv2
     | Unop (_, llv) -> loop llv
   in
-  loop_proc Indexing.empty_env llc;
+  loop_proc ~first_visit:true Indexing.empty_env llc;
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.tn in
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.known_non_virtual tn)
       then Tn.update_memory_mode tn Virtual 40;
-      if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
-        Tn.update_memory_mode tn Never_virtual 1;
+      let skip_simple =
+        virtualize_settings.inline_simple_computations && (not traced.is_complex)
+        && not (Tn.known_non_virtual tn)
+      in
+      if
+        (not skip_simple) && Option.is_none tn.memory_mode
+        && Hashtbl.exists traced.accesses ~f:is_too_many
+      then Tn.update_memory_mode tn Never_virtual 1;
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
            specified as virtual by another routine. However, if the memory mode is unspecified, we
@@ -287,7 +329,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
                     before the first routine using it gets compiled; another routine re-uses that \
                     computation. Debug: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]))
         else if Tn.known_non_virtual tn then Tn.update_memory_mode tn Materialized 35);
-      if Hashtbl.exists traced.accesses ~f:is_recurrent then (
+      (* We allow sharing virtual nodes across routines. *)
+      if Hashtbl.exists traced.accesses ~f:is_recurrent && not (Tn.known_virtual tn) then (
         traced.read_before_write <- true;
         if Tn.mode_is_unspecified tn then
           Tn.update_memory_mode tn (Hosted (Changed_on_devices Unset)) 38
