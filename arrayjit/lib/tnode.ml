@@ -196,6 +196,9 @@ let log_debug_info ~from_log_level tn =
 
 (** The one exception to "most local" is that the sharing property is kept at [Unset]. *)
 let default_to_most_local tn provenance =
+  let provenance =
+    match tn.memory_mode with Some (_, prov) -> (1000 * prov) + provenance | None -> provenance
+  in
   match tn.memory_mode with
   | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
   | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)

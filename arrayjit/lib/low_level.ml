@@ -271,13 +271,21 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         && not (Tn.known_non_virtual tn)
       then Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
-        Tn.update_memory_mode tn Never_virtual 1
+        Tn.update_memory_mode tn Never_virtual 1;
+      if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
            specified as virtual by another routine. However, if the memory mode is unspecified, we
-           assume this will be the first computation involving the tensor node. *);
-      if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
+           assume this will be the first computation involving the tensor node. *)
         traced.read_only <- true;
         if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
+        else if Tn.known_not_materialized tn then (
+          if Tn.known_non_virtual tn then
+            raise
+              (Utils.User_error
+                 [%string
+                   "Mark %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized) \
+                    before the first routine using it gets compiled; another routine re-uses that \
+                    computation. Debug: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]))
         else if Tn.known_non_virtual tn then Tn.update_memory_mode tn Materialized 35);
       if Hashtbl.exists traced.accesses ~f:is_recurrent then (
         traced.read_before_write <- true;
