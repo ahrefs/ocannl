@@ -269,7 +269,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.known_non_virtual tn)
-      then Tn.update_memory_mode tn (Virtual { is_constant = traced.is_scalar_constexpr }) 40;
+      then Tn.update_memory_mode tn Virtual 40;
       if Option.is_none tn.memory_mode && Hashtbl.exists traced.accesses ~f:is_too_many then
         Tn.update_memory_mode tn Never_virtual 1
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
@@ -602,7 +602,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         | Some a ->
             if not @@ Tn.known_non_virtual a then (
               (* FIXME(#296): *)
-              Tn.update_memory_mode a (Virtual { is_constant = false }) 15;
+              Tn.update_memory_mode a Virtual 15;
               None)
             else
               Option.map ~f:(fun body : t -> For_loop { for_config with body })
@@ -613,13 +613,13 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Zero_out tn ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
-          Tn.update_memory_mode tn (Virtual { is_constant = false }) 151;
+          Tn.update_memory_mode tn Virtual 151;
           None)
         else Some llc
     | Set { tn; idcs; llv; debug } ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
-          Tn.update_memory_mode tn (Virtual { is_constant = false }) 152;
+          Tn.update_memory_mode tn Virtual 152;
           None)
         else (
           assert (
@@ -627,7 +627,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           Some (Set { tn; idcs; llv = loop_float ~balanced ~env_dom llv; debug }))
     | Set_local (id, llv) ->
         assert (not @@ Tn.known_non_virtual id.tn);
-        Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 16;
+        Tn.update_memory_mode id.tn Virtual 16;
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
@@ -649,11 +649,11 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         if Tn.known_non_virtual id.tn then Get (id.tn, orig_indices)
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
-          Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 18;
+          Tn.update_memory_mode id.tn Virtual 18;
           Local_scope { id; orig_indices; body }
     | Get_local id ->
         assert (not @@ Tn.known_non_virtual id.tn);
-        Tn.update_memory_mode id.tn (Virtual { is_constant = false }) 16;
+        Tn.update_memory_mode id.tn Virtual 16;
         llv
     | Access _ -> llv
     | Embed_index (Fixed_idx _) -> llv
@@ -888,7 +888,9 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits:virtualize_settings.max_visits
     llc;
   [%log "optimizing"];
-  let virtual_llc_result = virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc in
+  let virtual_llc_result =
+    virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc
+  in
   let llc =
     simplify_llc @@ cleanup_virtual_llc reverse_node_map ~static_indices @@ virtual_llc_result
   in

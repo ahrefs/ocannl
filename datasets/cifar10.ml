@@ -28,15 +28,12 @@ let read_cifar_batch filename =
   let num_bytes = String.length s in
   let bytes_per_image = 3073 in
   if num_bytes mod bytes_per_image <> 0 then
-    failwith
-      (Printf.sprintf "File %s has unexpected size %d" filename num_bytes);
+    failwith (Printf.sprintf "File %s has unexpected size %d" filename num_bytes);
 
   let num_images = num_bytes / bytes_per_image in
   Printf.printf "Found %d images in %s.\n%!" num_images filename;
 
-  let images =
-    Genarray.create int8_unsigned c_layout [| num_images; 32; 32; 3 |]
-  in
+  let images = Genarray.create int8_unsigned c_layout [| num_images; 32; 32; 3 |] in
   let labels = Genarray.create int8_unsigned c_layout [| num_images |] in
 
   for i = 0 to num_images - 1 do
@@ -48,14 +45,11 @@ let read_cifar_batch filename =
     for row = 0 to 31 do
       for col = 0 to 31 do
         let plane_idx = (row * 32) + col in
-        Genarray.set images [| i; row; col; 0 |]
-          (Char.code s.[r_offset + plane_idx]);
+        Genarray.set images [| i; row; col; 0 |] (Char.code s.[r_offset + plane_idx]);
         (* Red *)
-        Genarray.set images [| i; row; col; 1 |]
-          (Char.code s.[g_offset + plane_idx]);
+        Genarray.set images [| i; row; col; 1 |] (Char.code s.[g_offset + plane_idx]);
         (* Green *)
-        Genarray.set images [| i; row; col; 2 |]
-          (Char.code s.[b_offset + plane_idx])
+        Genarray.set images [| i; row; col; 2 |] (Char.code s.[b_offset + plane_idx])
         (* Blue *)
       done
     done
@@ -73,9 +67,7 @@ let load () =
 
   let total_train_images = 50000 in
   (* Create the final training Genarray *)
-  let train_images =
-    Genarray.create int8_unsigned c_layout [| total_train_images; 32; 32; 3 |]
-  in
+  let train_images = Genarray.create int8_unsigned c_layout [| total_train_images; 32; 32; 3 |] in
   let train_labels = Genarray.create int8_unsigned c_layout [| total_train_images |] in
 
   let current_offset = ref 0 in
@@ -83,20 +75,14 @@ let load () =
     (fun (batch_images, batch_labels) ->
       let batch_size = (Genarray.dims batch_labels).(0) in
       let img_slice_dims = [| batch_size; 32; 32; 3 |] in
-      let img_slice =
-        Genarray.sub_left train_images !current_offset batch_size
-      in
+      let img_slice = Genarray.sub_left train_images !current_offset batch_size in
       (* Ensure the slice has the expected dimensions before blitting *)
       if Genarray.dims img_slice <> img_slice_dims then
         failwith
           (Printf.sprintf
-             "Internal error: train image slice dimension mismatch (expected \
-              %s, got %s)"
-             (String.concat "x"
-                (Array.to_list (Array.map string_of_int img_slice_dims)))
-             (String.concat "x"
-                (Array.to_list
-                   (Array.map string_of_int (Genarray.dims img_slice)))));
+             "Internal error: train image slice dimension mismatch (expected %s, got %s)"
+             (String.concat "x" (Array.to_list (Array.map string_of_int img_slice_dims)))
+             (String.concat "x" (Array.to_list (Array.map string_of_int (Genarray.dims img_slice)))));
 
       let lbl_slice = Genarray.sub_left train_labels !current_offset batch_size in
       Genarray.blit batch_images img_slice;

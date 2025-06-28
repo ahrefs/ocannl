@@ -409,8 +409,8 @@ let to_doc ?name ?static_indices () c =
 
   header_doc ^^ nest 2 (doc_of_code c)
 
-let%track6_sexp lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices (proc : t) :
-    Low_level.optimized =
+let%track6_sexp lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices
+    (proc : t) : Low_level.optimized =
   let llc : Low_level.t = to_low_level proc in
   (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with

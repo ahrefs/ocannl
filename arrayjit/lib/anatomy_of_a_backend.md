@@ -92,8 +92,7 @@ type memory_type =
 
 type memory_mode =
   | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
-  | Virtual of { is_constant:bool }
-      (** The tensor node's computations are inlined on a per-scalar basis. *)
+  | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across

@@ -608,15 +608,22 @@ module C_syntax (B : C_syntax_config) = struct
         let dims_val = Lazy.force dims in
         let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims_val) in
-        let ptr_str = Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec in
+        let ptr_str =
+          Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec
+        in
         let expr =
-          string prefix ^^ string ("(*(" ^ ptr_str ^ " + ") ^^ offset_doc ^^ string "))" ^^ string postfix
+          string prefix
+          ^^ string ("(*(" ^ ptr_str ^ " + ")
+          ^^ offset_doc ^^ string "))" ^^ string postfix
         in
         (empty, expr)
     | Access (Low_level.File_mapped (file, source_prec), Some idcs) ->
         let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
         let expr =
-          string prefix ^^ string ("file_mapped_data_" ^ file ^ "[") ^^ pp_array_offset (idcs, [||]) ^^ string "]" ^^ string postfix
+          string prefix
+          ^^ string ("file_mapped_data_" ^ file ^ "[")
+          ^^ pp_array_offset (idcs, [||])
+          ^^ string "]" ^^ string postfix
         in
         (empty, expr)
     | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = source_prec }, Some idcs) ->
@@ -625,7 +632,8 @@ module C_syntax (B : C_syntax_config) = struct
         let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
         let source_ident = string (get_ident tn) in
         let expr =
-          string prefix ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(") 
+          string prefix
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
           ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
         in
         (empty, expr)
@@ -716,9 +724,13 @@ module C_syntax (B : C_syntax_config) = struct
         let dims_val = Lazy.force dims in
         let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims_val) in
-        let ptr_str = Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec in
+        let ptr_str =
+          Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec
+        in
         let access_doc =
-          string prefix ^^ string ("(*(" ^ ptr_str ^ " + ") ^^ offset_doc ^^ string "))" ^^ string postfix
+          string prefix
+          ^^ string ("(*(" ^ ptr_str ^ " + ")
+          ^^ offset_doc ^^ string "))" ^^ string postfix
         in
         let expr_doc =
           string prefix ^^ string ("external[%u]{=" ^ B.float_log_style ^ "}") ^^ string postfix
@@ -727,10 +739,15 @@ module C_syntax (B : C_syntax_config) = struct
     | Access (Low_level.File_mapped (file, source_prec), Some idcs) ->
         let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
         let access_doc =
-          string prefix ^^ string ("file_mapped_data_" ^ file ^ "[") ^^ pp_array_offset (idcs, [||]) ^^ string "]" ^^ string postfix
+          string prefix
+          ^^ string ("file_mapped_data_" ^ file ^ "[")
+          ^^ pp_array_offset (idcs, [||])
+          ^^ string "]" ^^ string postfix
         in
         let expr_doc =
-          string prefix ^^ string ("file_mapped_" ^ file ^ "[%u]{=" ^ B.float_log_style ^ "}") ^^ string postfix
+          string prefix
+          ^^ string ("file_mapped_" ^ file ^ "[%u]{=" ^ B.float_log_style ^ "}")
+          ^^ string postfix
         in
         (expr_doc, [ `Accessor (idcs, [||]); `Value access_doc ])
     | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = source_prec }, Some idcs) ->
@@ -740,12 +757,16 @@ module C_syntax (B : C_syntax_config) = struct
         let offset_doc = pp_array_offset (idcs, dims) in
         let source_ident = string (get_ident tn) in
         let access_doc =
-          string prefix ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(") 
+          string prefix
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
           ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
         in
         let expr_doc =
-          string prefix ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(") 
-          ^^ source_ident ^^ brackets (string "%u") ^^ string "){=" ^^ string B.float_log_style ^^ string "}" ^^ string postfix
+          string prefix
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
+          ^^ source_ident
+          ^^ brackets (string "%u")
+          ^^ string "){=" ^^ string B.float_log_style ^^ string "}" ^^ string postfix
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
     | Access _ -> failwith "C_syntax: Access cases with wrong indices / FFI NOT IMPLEMENTED YET"

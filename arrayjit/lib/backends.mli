@@ -11,7 +11,10 @@ val finalize :
       and type event = 'event
       and type runner = 'runner
       and type optimize_ctx = 'optimize_ctx) ->
-  ('buffer_ptr, ('buffer_ptr, 'dev, 'runner, 'event) Ir.Backend_intf.stream, 'optimize_ctx) Ir.Backend_intf.context ->
+  ( 'buffer_ptr,
+    ('buffer_ptr, 'dev, 'runner, 'event) Ir.Backend_intf.stream,
+    'optimize_ctx )
+  Ir.Backend_intf.context ->
   unit
 (** Frees the arrays that are specific to the context -- not contained in the parent context. Note:
     use [finalize] to optimize memory, it is not obligatory because all arrays are freed when their

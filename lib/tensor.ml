@@ -409,8 +409,8 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-   ?values label =
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?values
+    label =
   let fetch_op_fn ~v:_ =
     match values with Some values -> Asgns.Constant_fill values | None -> Asgns.Range_over_offsets
   in

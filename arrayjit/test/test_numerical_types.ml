@@ -14,9 +14,7 @@ let test_bfloat16_conversions () =
       Stdio.printf "  %.6f -> 0x%04x -> %.6f\n" orig bf16 back);
 
   (* Test round-trip through ndarray *)
-  let arr =
-    Ndarray.create_array ~debug:"test" Ops.bfloat16 ~dims:[| 3; 2 |] ~padding:None
-  in
+  let arr = Ndarray.create_array ~debug:"test" Ops.bfloat16 ~dims:[| 3; 2 |] ~padding:None in
 
   Stdio.printf "\nBFloat16 array values:\n";
   let flat_values = Ndarray.retrieve_flat_values arr in
@@ -34,9 +32,7 @@ let test_fp8_conversions () =
       Stdio.printf "  %.6f -> 0x%02x -> %.6f\n" orig fp8 back);
 
   (* Test round-trip through ndarray *)
-  let arr =
-    Ndarray.create_array ~debug:"test" Ops.fp8 ~dims:[| 2; 2 |] ~padding:None
-  in
+  let arr = Ndarray.create_array ~debug:"test" Ops.fp8 ~dims:[| 2; 2 |] ~padding:None in
 
   Stdio.printf "\nFP8 array values:\n";
   let flat_values = Ndarray.retrieve_flat_values arr in
@@ -46,13 +42,15 @@ let test_padding () =
   Stdio.printf "\n\nTesting padding functionality:\n";
 
   (* Test padding with float32 array *)
-  let padding_config = [| { Ndarray.left = 1; right = 1 }; { left = 2; right = 1 } |] in (* left=1,right=1 for first dim; left=2,right=1 for second dim *)
+  let padding_config = [| { Ndarray.left = 1; right = 1 }; { left = 2; right = 1 } |] in
+  (* left=1,right=1 for first dim; left=2,right=1 for second dim *)
   let padding_value = -999.0 in
 
-  let padded_dims = [| 4; 6 |] in (* (2+1+1) x (3+2+1) *)
-  
+  let padded_dims = [| 4; 6 |] in
+  (* (2+1+1) x (3+2+1) *)
+
   let arr =
-    Ndarray.create_array ~debug:"padded_test" Ops.single ~dims:padded_dims 
+    Ndarray.create_array ~debug:"padded_test" Ops.single ~dims:padded_dims
       ~padding:(Some (padding_config, padding_value))
   in
 
@@ -62,12 +60,13 @@ let test_padding () =
     for j = 0 to dims.(1) - 1 do
       let idx = [| i; j |] in
       let value = Ndarray.get_as_float arr idx in
-      Stdio.printf "%8.1f " value;
+      Stdio.printf "%8.1f " value
     done;
     Stdio.printf "\n"
   done;
-  
-  Stdio.printf "\nExpected: padding value (-999.0) in margins, data values (1.0-6.0) in center region\n"
+
+  Stdio.printf
+    "\nExpected: padding value (-999.0) in margins, data values (1.0-6.0) in center region\n"
 
 let () =
   test_bfloat16_conversions ();

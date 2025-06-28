@@ -9,9 +9,16 @@ let%op a = [ (1, 2, 3); (4, 5, 6) ]
 let%op b = [| [ 7; 8 ]; [ 9; 10 ] |]
 let%op y = ("hey4" * 'q' 2.0) + 'p' 1.0
 let%op z = ('q' 2.0 * "hey5") + ("hey6" * 'p' 1.0)
-let stride = 2 and dilation = 3
+
+let stride = 2
+and dilation = 3
+
 let%op z2 = "hey7" *+ "stride*a+dilation*b,;b=>a," "hey8"
-let z3 = let s = 2 and d = 3 in [%op "hey9" *+ "is*a+d*bc;b=>iac" "hey10"]
+
+let z3 =
+  let s = 2 and d = 3 in
+  [%op "hey9" *+ "is*a+d*bc;b=>iac" "hey10"]
+
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 
 type mlp_layer_config = { label : string list; hid_dim : int }

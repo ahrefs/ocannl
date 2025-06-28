@@ -82,9 +82,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  let routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
-  in
+  let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
   (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
      ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
      **********"; Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;

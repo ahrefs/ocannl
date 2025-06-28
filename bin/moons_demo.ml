@@ -60,9 +60,7 @@ let demo () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"cuda" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  let routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
-  in
+  let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
 
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in

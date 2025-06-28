@@ -35,9 +35,7 @@ let benchmark_overhead backend () =
   let init_assign_x =
     Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty mock_update_x
   in
-  let f_routine =
-    Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f
-  in
+  let f_routine = Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in

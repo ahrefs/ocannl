@@ -43,8 +43,7 @@ type memory_type =
 
 type memory_mode =
   | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
-  | Virtual of { is_constant : bool }
-      (** The tensor node's computations are inlined on a per-scalar basis. *)
+  | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
   | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across
@@ -160,7 +159,7 @@ let debug_memory_mode = function
   | Some (mem, prov) ->
       (match mem with
       | Effectively_constant -> "Const"
-      | Virtual _ -> "Virt"
+      | Virtual -> "Virt"
       | Never_virtual -> "Non-virt"
       | Local -> "Local"
       | Device_only -> "Dev"
@@ -198,27 +197,26 @@ let log_debug_info ~from_log_level tn =
 (** The one exception to "most local" is that the sharing property is kept at [Unset]. *)
 let default_to_most_local tn provenance =
   match tn.memory_mode with
-  | None | Some (Effectively_constant, _) ->
-      tn.memory_mode <- Some (Virtual { is_constant = false }, provenance)
+  | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
   | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)
   | Some (Device_only, _) -> tn.memory_mode <- Some (Local, provenance)
   | Some (Materialized, _) -> tn.memory_mode <- Some (On_device Unset, provenance)
-  | Some ((Virtual _ | Local | On_device _ | Hosted _), _) -> ()
+  | Some ((Virtual | Local | On_device _ | Hosted _), _) -> ()
 
 let is_virtual_force tn provenance =
   match tn.memory_mode with
-  | Some (Virtual _, _) -> true
+  | Some (Virtual, _) -> true
   | None ->
-      tn.memory_mode <- Some (Virtual { is_constant = false }, provenance);
+      tn.memory_mode <- Some (Virtual, provenance);
       true
   | Some (Effectively_constant, _) ->
-      tn.memory_mode <- Some (Virtual { is_constant = true }, provenance);
+      tn.memory_mode <- Some (Virtual, provenance);
       true
   | _ -> false
 
 let rec is_hosted_force tn provenance =
   match tn.memory_mode with
-  | Some ((Virtual _ | Local | Device_only | On_device _), _) -> false
+  | Some ((Virtual | Local | Device_only | On_device _), _) -> false
   | Some (Hosted _, _) -> true
   | None | Some ((Never_virtual | Materialized | Effectively_constant), _) ->
       default_to_most_local tn provenance;
@@ -227,7 +225,7 @@ let rec is_hosted_force tn provenance =
 let rec is_materialized_force tn provenance =
   match tn.memory_mode with
   | None -> assert false
-  | Some ((Virtual _ | Local), _) -> false
+  | Some ((Virtual | Local), _) -> false
   | Some ((On_device _ | Hosted _ | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) ->
       default_to_most_local tn provenance;
@@ -240,14 +238,14 @@ let%debug3_sexp rec is_in_context_force ~(use_host_memory : 'a option) (tn : t) 
   | Some ((Materialized | Hosted Nonconstant), _) when Option.is_none use_host_memory -> true
   | Some (Hosted (Constant | Volatile), _) when Option.is_some use_host_memory -> false
   | Some (Hosted _, _) -> true
-  | Some ((Virtual _ | Local), _) -> false
+  | Some ((Virtual | Local), _) -> false
   | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
       default_to_most_local tn provenance;
       is_in_context_force ~use_host_memory tn provenance
   | Some (On_device _, _) -> true
 
 let known_not_materialized tn =
-  match tn.memory_mode with Some ((Virtual _ | Local), _) -> true | _ -> false
+  match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 
 let known_constant tn =
   match tn.memory_mode with
@@ -257,9 +255,7 @@ let known_constant tn =
 let known_volatile tn = match tn.memory_mode with Some (Hosted Volatile, _) -> true | _ -> false
 
 let known_non_virtual tn =
-  match tn.memory_mode with
-  | None | Some ((Virtual _ | Effectively_constant), _) -> false
-  | _ -> true
+  match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
 
 let known_shared_cross_streams tn =
   match tn.memory_mode with
@@ -286,22 +282,22 @@ let update_memory_mode tn mode provenance =
   match (tn.memory_mode, mode) with
   | None, _ -> tn.memory_mode <- Some (mode, provenance)
   | Some (m1, _), m2 when equal_memory_mode m1 m2 -> ()
-  | Some (Never_virtual, prov2), Virtual _ ->
+  | Some (Never_virtual, prov2), Virtual ->
       raise
       @@ Utils.User_error
            [%string
              "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{debug_name \
               tn}: cannot be virtual"]
-  | Some ((Virtual _ | Hosted Constant), _), Effectively_constant -> ()
+  | Some ((Virtual | Hosted Constant), _), Effectively_constant -> ()
   | Some ((Never_virtual | Materialized), _), Effectively_constant
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
       tn.memory_mode <- Some (Hosted Constant, provenance)
-  | Some (Effectively_constant, _), Virtual _ -> tn.memory_mode <- Some (mode, provenance)
+  | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
   | Some (Hosted Nonconstant, _), Hosted (Changed_on_devices _ | Volatile) ->
       tn.memory_mode <- Some (mode, provenance)
   | Some (Hosted (Changed_on_devices _ | Volatile), _), Hosted Nonconstant -> ()
   | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
-  | Some (Virtual _, prov2), Never_virtual ->
+  | Some (Virtual, prov2), Never_virtual ->
       raise
       @@ Utils.User_error
            [%string

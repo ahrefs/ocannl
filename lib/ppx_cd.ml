@@ -779,8 +779,8 @@ let translate (expr : expression) : result =
           vbs = no_vbs;
         }
     | [%expr [%e? expr1] **. [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-        (* We need to hardcode these two patterns (for **. ) to prevent the numbers from
-           being converted to tensors. *)
+        (* We need to hardcode these two patterns (for **. ) to prevent the numbers from being
+           converted to tensors. *)
         let res1 = loop ~proj_in_scope expr1 in
         {
           res1 with
@@ -792,8 +792,7 @@ let translate (expr : expression) : result =
         { res1 with typ = Tensor; expr = [%expr NTDSL.O.( **. ) [%e res1.expr] [%e expr2]] }
     | [%expr
         [%e? expr1]
-        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-             [%e? expr2]]
+        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
@@ -809,9 +808,7 @@ let translate (expr : expression) : result =
           expr = [%expr NTDSL.einsum [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-    | [%expr
-        [%e? expr1]
-        ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
+    | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
