@@ -117,6 +117,27 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
   in
   loop asgns
 
+(** Returns the nodes that are not read from after being written to. *)
+let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
+  let open Utils.Set_O in
+  let empty = Set.empty (module Tn) in
+  let one = Set.singleton (module Tn) in
+  let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
+  let rec loop = function
+    | Noop -> (empty, empty)
+    | Seq (t1, t2) ->
+        let i1, o1 = loop t1 in
+        let i2, o2 = loop t2 in
+        (i1 + i2, o1 + o2 - (i1 + i2))
+    | Block_comment (_, t) -> loop t
+    | Accum_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
+    | Accum_binop { lhs; rhs1; rhs2; _ } -> (of_node rhs1 + of_node rhs2, one lhs)
+    | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
+        (of_node rhs1 + of_node rhs2 + of_node rhs3, one lhs)
+    | Fetch { array; _ } -> (empty, one array)
+  in
+  snd @@ loop asgns
+
 let sequential l =
   Option.value ~default:Noop @@ List.reduce l ~f:(fun sts another_st -> Seq (sts, another_st))
 

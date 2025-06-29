@@ -69,8 +69,8 @@ let set_on_host ?(from_device = true) (a : Tn.t) =
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 
 let set_hosted (a : Tn.t) =
-  if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 41
-  else Tn.update_memory_mode a (Hosted (Changed_on_devices Unset)) 41
+  if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 411
+  else Tn.update_memory_mode a (Hosted (Changed_on_devices Unset)) 412
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
     label-derived comment. *)
@@ -346,7 +346,8 @@ let to_routine (type buffer_ptr dev runner event optimize_ctx)
        and type dev = dev
        and type runner = runner
        and type event = event
-       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?name bindings comp =
+       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?(hosted=true) ?name bindings comp =
+  if hosted then Set.iter (Asgns.guess_output_nodes comp.Asgns.asgns) ~f:set_hosted;
   Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
 type example_train_result = {

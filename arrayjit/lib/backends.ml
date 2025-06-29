@@ -455,7 +455,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         let data = Hashtbl.find_exn device.cross_stream_candidates key in
         Map.add_exn ctx_arrays ~key ~data)
       else (
-        Tn.update_memory_sharing key Tn.Per_stream 41;
+        Tn.update_memory_sharing key Tn.Per_stream 410;
         Hashtbl.remove device.cross_stream_candidates key;
         add_new ()))
     else ctx_arrays
