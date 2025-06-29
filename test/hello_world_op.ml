@@ -104,6 +104,7 @@ let%expect_test "Print constant tensor" =
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
+  (* ignore (failwith @@ Tn.debug_memory_mode hey.value.memory_mode); *)
   Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect
     {|
@@ -509,7 +510,7 @@ let%expect_test "Big matrix" =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = Tensor.param ~values:[| 0.5 |] "hey" in
+  let hey = Tensor.param ~value:0.5 "hey" in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   Train.forward_and_forget backend ctx y;

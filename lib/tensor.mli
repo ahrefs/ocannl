@@ -214,12 +214,16 @@ val param :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
+  ?value:float ->
   ?values:float array ->
   string ->
   t
 (* A tensor with no batch axes; input and output axes are by default inferred. [grad_spec] is set to
    [Require_grad]. The resulting tensor's label is the passed string, appended by [more_label] if
-   any. *)
+   any. If [value] is provided, the tensor is initialized to the given value. If [values] is
+   provided, the tensor is initialized to the given values. At most one of [value] or [values] can
+   be provided. Note: [values] will be looped over if necessary, but shape inference will try
+   incorporating the number of values as tensor size. *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.

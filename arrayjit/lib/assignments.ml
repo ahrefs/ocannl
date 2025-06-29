@@ -266,8 +266,10 @@ let%diagn2_sexp to_low_level code =
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
             set array idcs @@ Embed_index offset)
     | Fetch { array; fetch_op = Constant_fill values; dims = (lazy dims) } ->
+        (* TODO: consider failing here and strengthening shape inference. *)
+        let size = Array.length values in
         Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
-            set array idcs @@ Constant values.(offset))
+            set array idcs @@ Constant values.(offset % size))
   in
   loop code
 
