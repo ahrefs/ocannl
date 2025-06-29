@@ -488,7 +488,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   }
 
 (* Note: this will get nicer with modular explicits. *)
-let%track3_sexp forward_and_ctx ?(disable_rootness_check = false)
+let%track3_sexp forward_and_ctx ?(hosted=true) ?(disable_rootness_check = false)
     (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
@@ -496,6 +496,7 @@ let%track3_sexp forward_and_ctx ?(disable_rootness_check = false)
        and type runner = runner
        and type optimize_ctx = optimize_ctx
        and type event = event) ctx ?(bindings = IDX.empty) t =
+  if hosted then set_hosted t.Tensor.value;
   let routine =
     Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ forward ~disable_rootness_check t)
   in
@@ -503,6 +504,6 @@ let%track3_sexp forward_and_ctx ?(disable_rootness_check = false)
   Task.run routine.schedule;
   routine.context
 
-let forward_and_forget ?disable_rootness_check backend ctx ?bindings t =
+let forward_and_forget ?hosted ?disable_rootness_check backend ctx ?bindings t =
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
-  ignore @@ forward_and_ctx ?disable_rootness_check backend ctx ?bindings t
+  ignore @@ forward_and_ctx ?hosted ?disable_rootness_check backend ctx ?bindings t
