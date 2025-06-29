@@ -72,9 +72,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Tnode.prepare_read
           ~is_done:(fun () -> Backend.is_done e)
           ~sync:(fun () -> Backend.sync e)
-          ~transfer:(fun () ->
-            assert (to_host ctx tn);
-            Backend.await s)
+          ~transfer:(fun () -> if to_host ctx tn then Backend.await s)
           tn);
     (* To be on the safe side, record events for potentially cross-stream nodes. *)
     match tn with
