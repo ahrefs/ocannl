@@ -68,6 +68,8 @@ let%track7_sexp c_compile_and_load ~f_name =
       (optimization_level ()) libname log_fname
   in
   let rc : int = Stdlib.Sys.command cmdline in
+  (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
+     the logs. *)
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     Unix.sleepf 0.001
   done;
@@ -75,6 +77,26 @@ let%track7_sexp c_compile_and_load ~f_name =
     let errors =
       "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
       ^ Stdio.In_channel.read_all log_fname
+    in
+    Stdio.prerr_endline errors;
+    invalid_arg errors);
+  (* Expected to succeed on MacOS only. *)
+  let sign_log_fname = base_name ^ "_run_id_" ^ run_id ^ "-sign.log" in
+  let rc =
+    Stdlib.Sys.command @@ Printf.sprintf "codesign -s - %s >> %s 2>&1" libname sign_log_fname
+  in
+  while
+    rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists sign_log_fname))
+  do
+    Unix.sleepf 0.001
+  done;
+  let verify_codesign =
+    Utils.get_global_flag ~default:false ~arg_name:"cc_backend_verify_codesign"
+  in
+  if verify_codesign && rc <> 0 then (
+    let errors =
+      "Cc_backend.c_compile_and_load: codesign failed with errors:\n"
+      ^ Stdio.In_channel.read_all sign_log_fname
     in
     Stdio.prerr_endline errors;
     invalid_arg errors);
