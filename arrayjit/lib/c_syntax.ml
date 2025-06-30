@@ -413,7 +413,7 @@ struct
   let log_involves_file_management = true
 
   let for_log_trace_tree =
-    Bool.of_string (Utils.get_global_arg ~arg_name:"debug_log_to_stream_files" ~default:"false")
+    Utils.get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files"
 
   let pp_log_statement ~log_param_c_expr_doc:_ ~base_message_literal ~args_docs =
     let open PPrint in

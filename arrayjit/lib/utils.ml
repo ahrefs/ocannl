@@ -182,6 +182,13 @@ let get_global_arg ~default ~arg_name:n =
   Hash_set.add accessed_global_args n;
   result
 
+let get_global_flag ~default ~arg_name:n =
+  let s = get_global_arg ~default:(if default then "true" else "false") ~arg_name:n in
+  match String.lowercase s with
+  | "true" | "1" -> true
+  | "false" | "0" -> false
+  | _ -> invalid_arg @@ "ocannl_" ^ n ^ " setting should be a boolean; found: " ^ s
+
 let original_log_level =
   let log_level =
     let s = String.strip @@ get_global_arg ~default:"1" ~arg_name:"log_level" in
@@ -237,7 +244,7 @@ let diagn_log_file fname =
 let () =
   (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
   let clean_up_artifacts_on_startup =
-    Bool.of_string @@ get_global_arg ~arg_name:"clean_up_artifacts_on_startup" ~default:"true"
+    get_global_flag ~default:true ~arg_name:"clean_up_artifacts_on_startup"
   in
   if clean_up_artifacts_on_startup then (
     let remove_dir_if_exists dirname =
@@ -309,13 +316,13 @@ let get_local_debug_runtime =
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
   let print_entry_ids =
-    Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_print_entry_ids"
+    get_global_flag ~default:false ~arg_name:"logs_print_entry_ids"
   in
   let verbose_entry_ids =
-    Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"logs_verbose_entry_ids"
+    get_global_flag ~default:false ~arg_name:"logs_verbose_entry_ids"
   in
   let log_main_domain_to_stdout =
-    Bool.of_string @@ get_global_arg ~default:"false" ~arg_name:"log_main_domain_to_stdout"
+    get_global_flag ~default:false ~arg_name:"log_main_domain_to_stdout"
   in
   let file_stem =
     if log_main_domain_to_stdout then None
@@ -420,10 +427,9 @@ let%diagn_sexp set_log_level level =
 let restore_settings () =
   set_log_level original_log_level;
   settings.debug_log_from_routines <-
-    Bool.of_string @@ get_global_arg ~arg_name:"debug_log_from_routines" ~default:"false";
+    get_global_flag ~default:false ~arg_name:"debug_log_from_routines";
   settings.output_debug_files_in_build_directory <-
-    Bool.of_string
-    @@ get_global_arg ~arg_name:"output_debug_files_in_build_directory" ~default:"false";
+    get_global_flag ~default:false ~arg_name:"output_debug_files_in_build_directory";
   settings.fixed_state_for_init <-
     (let seed = get_global_arg ~arg_name:"fixed_state_for_init" ~default:"" in
      if String.is_empty seed then None else Some (Int.of_string seed));
@@ -433,14 +439,14 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.automatic_host_transfers <-
-    Bool.of_string @@ get_global_arg ~arg_name:"automatic_host_transfers" ~default:"true"
+    get_global_flag ~default:true ~arg_name:"automatic_host_transfers"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
 
 let never_capture_stdout () =
-  Bool.of_string @@ get_global_arg ~arg_name:"never_capture_stdout" ~default:"false"
+  get_global_flag ~default:false ~arg_name:"never_capture_stdout"
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
@@ -891,7 +897,7 @@ let capture_stdout_logs arg =
     result)
 
 let log_debug_routine_logs ~log_contents ~stream_name =
-  if Bool.of_string (get_global_arg ~arg_name:"debug_log_to_stream_files" ~default:"false") then
+  if get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files" then
     let stream_file_name = diagn_log_file @@ stream_name ^ ".log" in
     Stdio.Out_channel.with_file stream_file_name ~append:true ~f:(fun oc ->
         List.iter log_contents ~f:(fun line -> Stdio.Out_channel.output_line oc line))

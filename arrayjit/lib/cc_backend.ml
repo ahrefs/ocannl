@@ -95,8 +95,7 @@ struct
     let procs = Procs.procs
 
     let full_printf_support =
-      not @@ Bool.of_string
-      @@ Utils.get_global_arg ~default:"false" ~arg_name:"prefer_backend_uniformity"
+      not @@ Utils.get_global_flag ~default:false ~arg_name:"prefer_backend_uniformity"
   end)
 
   (* Override to add our custom type and conversion support *)

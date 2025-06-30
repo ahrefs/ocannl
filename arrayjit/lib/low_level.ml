@@ -101,13 +101,13 @@ let virtualize_settings =
     Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_tracing_dim" ~default:"5"
   in
   let enable_device_only =
-    Bool.of_string @@ Utils.get_global_arg ~arg_name:"enable_device_only" ~default:"true"
+    Utils.get_global_flag ~default:true ~arg_name:"enable_device_only"
   in
   let inline_scalar_constexprs =
-    Bool.of_string @@ Utils.get_global_arg ~arg_name:"inline_scalar_constexprs" ~default:"true"
+    Utils.get_global_flag ~default:true ~arg_name:"inline_scalar_constexprs"
   in
   let inline_simple_computations =
-    Bool.of_string @@ Utils.get_global_arg ~arg_name:"inline_simple_computations" ~default:"true"
+    Utils.get_global_flag ~default:true ~arg_name:"inline_simple_computations"
   in
   {
     enable_device_only;
