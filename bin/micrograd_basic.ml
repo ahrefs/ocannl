@@ -51,9 +51,12 @@ let%diagn_sexp () : unit =
   let%op g = g + (10. /. f) in
   List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ];
   (* Train.every_non_literal_on_host g; *)
+  let init_params = Tensor.init_params g in
   let update = Train.grad_update g in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
+  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
+  let routine = Train.to_routine (module Backend) init.context IDX.empty update in
   Utils.capture_stdout_logs @@ fun () ->
+  Train.run init;
   Train.run routine;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)
   Tensor.print ~with_code:false ~with_grad:false `Default @@ g;

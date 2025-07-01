@@ -57,9 +57,12 @@ let demo () =
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
 
-  let module Backend = (val Backends.fresh_backend ~backend_name:"cuda" ()) in
+  let module Backend = (val Backends.fresh_backend ~backend_name:"metal" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
+  let init_params = Tensor.init_params scalar_loss in
+  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
+  let ctx = init.context in
   let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
 
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
@@ -81,6 +84,7 @@ let demo () =
   let batch_ref = IDX.find_exn routine.bindings batch_n in
   let epoch_loss = ref 0. in
   step_ref := 0;
+  Train.run init;
   let%track_sexp _train_loop : unit =
     for epoch = 0 to epochs - 1 do
       for batch = 0 to n_batches - 1 do
@@ -95,7 +99,7 @@ let demo () =
     done
   in
 
-  let%op mlp_result = mlp "point" in
+  let%cd mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
   let result_routine =
     Train.to_routine

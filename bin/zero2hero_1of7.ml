@@ -154,8 +154,13 @@ let () =
   Train.every_non_literal_on_host l;
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let init_params = Tensor.init_params l in
   let update = Train.grad_update l in
-  let routine = Train.to_routine (module Backend) (Backend.make_context stream) IDX.empty update in
+  let ctx = Backend.make_context stream in
+  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
+  let ctx = init.context in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
+  Train.run init;
   Train.run routine;
   (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));
      Backend.await stream; *)
@@ -181,7 +186,6 @@ let () =
       only params values will change, compared to the above.|};
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let update = Train.grad_update l in
   let routine = Train.to_routine (module Backend) routine.context IDX.empty update in
   Train.run routine;
   (* Tensor.iter_embedded l ~f:(fun a -> ignore (Backend.to_host routine.context a : bool));

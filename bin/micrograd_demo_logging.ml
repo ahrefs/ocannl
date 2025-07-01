@@ -30,9 +30,13 @@ let () =
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
+  let init_params = Tensor.init_params g in
+  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
+  let ctx = init.context in
   let update = Train.grad_update g in
   let step = Train.to_routine (module Backend) ctx IDX.empty update in
   Utils.capture_stdout_logs @@ fun () ->
+  Train.run init;
   Train.run step;
   Tensor.print ~with_code:false ~with_grad:false `Default g;
   Tensor.print ~with_code:false ~with_grad:true `Default a;

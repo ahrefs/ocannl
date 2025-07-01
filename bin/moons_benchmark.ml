@@ -89,14 +89,14 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   in
   Stdlib.Format.printf "Initial backend global debug info: %a\n%!" Sexp.pp_hum
   @@ Backend.get_global_debug_info ();
-  let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ =
-    (* Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
-       learning_rate batch_loss epoch_loss; *)
+  let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
+    Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
+       learning_rate batch_loss epoch_loss;
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
-    if at_epoch % 10 = 9 then
+    (* if at_epoch % 10 = 9 then *)
       Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
         epoch_loss
   in

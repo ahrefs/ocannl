@@ -74,6 +74,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
       (scalar_loss, 0.0)
   in
   (* So that we can inspect them. *)
+  let init_params = Tensor.init_params scalar_loss in
   let update = Train.grad_update scalar_loss in
   let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
@@ -82,6 +83,9 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
+  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
+  let ctx = init.context in
+  Train.run init;
   let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
   (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
      ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
@@ -114,7 +118,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let%op mlp_result = mlp "point" in
+  let%cd mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
   (* By using jitted.context here, we don't need to copy the parameters back to the host. *)
   let result_routine =
