@@ -298,9 +298,11 @@ let update_memory_mode tn mode provenance =
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
       tn.memory_mode <- Some (Hosted Constant, provenance)
   | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
-  | Some (Hosted Nonconstant, _), Hosted (Changed_on_devices _ | Volatile) ->
+  | ( Some (Hosted (Nonconstant | Changed_on_devices Unset), _),
+      Hosted (Changed_on_devices _ | Volatile) ) ->
       tn.memory_mode <- Some (mode, provenance)
   | Some (Hosted (Changed_on_devices _ | Volatile), _), Hosted Nonconstant -> ()
+  | Some (Hosted (Changed_on_devices _), _), Hosted (Changed_on_devices Unset) -> ()
   | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
   | Some (Virtual, prov2), Never_virtual ->
       raise
@@ -310,6 +312,8 @@ let update_memory_mode tn mode provenance =
               tn} is already virtual"]
   | Some (_, _), Never_virtual -> ()
   | Some (Device_only, _), (Local | On_device _) -> tn.memory_mode <- Some (mode, provenance)
+  | Some (On_device _, _), On_device Unset -> ()
+  | Some (On_device Unset, _), On_device _ -> tn.memory_mode <- Some (mode, provenance)
   | Some (Materialized, _), (On_device _ | Hosted _) -> tn.memory_mode <- Some (mode, provenance)
   | Some ((Local | On_device _), _), Device_only -> ()
   | Some ((On_device _ | Hosted _), _), Materialized -> ()
@@ -330,8 +334,8 @@ let update_memory_sharing tn sharing provenance =
   | Some (On_device Shared_cross_streams, _), Shared_cross_streams
   | Some (On_device Per_stream, _), Per_stream ->
       ()
-  | Some ((On_device Unset | Device_only | Materialized), _), _ ->
-      tn.memory_mode <- Some (On_device sharing, provenance)
+  | Some ((On_device Unset | Device_only | Materialized), old_prov), _ ->
+      tn.memory_mode <- Some (On_device sharing, provenance + (old_prov * 1000))
   | Some (Hosted (Constant | Volatile), prov2), Per_stream ->
       raise
       @@ Utils.User_error
@@ -343,8 +347,8 @@ let update_memory_sharing tn sharing provenance =
   | Some (Hosted (Changed_on_devices Per_stream), _), Per_stream ->
       ()
   | Some (Hosted (Constant | Volatile), _), Shared_cross_streams -> ()
-  | Some (Hosted (Nonconstant | Changed_on_devices Unset), _), _ ->
-      tn.memory_mode <- Some (Hosted (Changed_on_devices sharing), provenance)
+  | Some (Hosted (Nonconstant | Changed_on_devices Unset), old_prov), _ ->
+      tn.memory_mode <- Some (Hosted (Changed_on_devices sharing), provenance + (old_prov * 1000))
   | Some (_, prov2), Unset ->
       invalid_arg
         [%string

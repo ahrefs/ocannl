@@ -29,13 +29,10 @@ let benchmark_overhead backend () =
   let ctx = Backend.make_context stream in
   let init_mem = Backend.(get_used_memory stream.device) in
   let update_f = Train.grad_update f in
-  (* Initialize the context with a mock update of x to ensure that it is not optimized as a
-     constant. *)
-  let%cd mock_update_x = x =: 42 in
-  let init_assign_x =
-    Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty mock_update_x
+  let init_x =
+    Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty @@ Tensor.init_params f
   in
-  let f_routine = Train.to_routine (module Backend) init_assign_x.context IDX.empty update_f in
+  let f_routine = Train.to_routine (module Backend) init_x.context IDX.empty update_f in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
@@ -78,7 +75,7 @@ let benchmarks =
   [
     (* benchmark_overhead (fresh_backend "gccjit" ()); *)
     benchmark_overhead (fresh_backend ~backend_name:"multicore_cc" ());
-    benchmark_overhead (fresh_backend ~backend_name:"cuda" ());
+    (* benchmark_overhead (fresh_backend ~backend_name:"cuda" ()); *)
   ]
 
 let () =
