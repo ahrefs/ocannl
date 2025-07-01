@@ -111,6 +111,7 @@ let assignment ~punned ~lhs ~rhses body =
     | _ -> (no_vbs, body)
   in
   let body =
+    (* Note: this is not a binding from an inline declaration, it's a temporary binding. *)
     if Option.is_some lhs.vb then
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc
@@ -200,7 +201,6 @@ let empty_comp ~loc = [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e
 
 let setup_array ~punned ~bad_pun_hints ~is_lhs
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
-  assert (Map.is_empty vbs);
   let loc = filler.pexp_loc in
   let opt_buffer tn =
     if is_lhs then [%expr Some [%e tn]] else [%expr Some (Ir.Assignments.Node [%e tn])]
@@ -220,17 +220,18 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       pun_hint_tnode;
     }
   in
-  match filler_typ with
-  | No_grad_tensor_intro _ when not is_lhs ->
+  match (Map.is_empty vbs, filler_typ) with
+  | (false, _ | _, No_grad_tensor_intro _) when not is_lhs ->
       {
         default_setup with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc
-               "ppx_ocannl %%cd: punning is only allowed in the assigned-to position";
+               "ppx_ocannl %%cd: inline tensor declarations are not allowed in assignment \
+                right-hand side, to prevent over-use in locations with less label information";
       }
-  | (Tensor | Unknown) when match filler with { pexp_desc = Pexp_ident _; _ } -> true | _ -> false
-    ->
+  | _, (Tensor | Unknown)
+    when match filler with { pexp_desc = Pexp_ident _; _ } -> true | _ -> false ->
       let t = filler in
       let fwd_code_or_noop =
         Some
@@ -241,7 +242,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             else [%e empty_comp ~loc]]
       in
       { default_setup with fwd_code_or_noop; tensor = Some t }
-  | Value_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
+  | _, Value_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
       let fwd_code_or_noop =
         Some
           [%expr
@@ -256,7 +257,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         array_opt = opt_buffer [%expr [%e t].Tensor.value];
         tensor = Some t;
       }
-  | Value_of_tensor t ->
+  | _, Value_of_tensor t ->
       {
         default_setup with
         array_opt =
@@ -266,7 +267,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
                 identifier";
         tensor = Some t;
       }
-  | Tensor | Unknown ->
+  | _, (Tensor | Unknown) ->
       (* Need to bind the expression computing the tensor so we don't recompute it. *)
       let v =
         match slot with
@@ -293,7 +294,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         array_opt = opt_buffer [%expr [%e t].Tensor.value];
         tensor = Some t;
       }
-  | No_grad_tensor_intro _ ->
+  | _, No_grad_tensor_intro _ ->
       (* Inline tensors are guaranteed to be leaf tensors, so they don't have forward code, but they
          are embedded. *)
       let fwd_code_or_noop =
@@ -306,7 +307,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
               }]
       in
       { default_setup with fwd_code_or_noop; tensor = Some filler }
-  | Code when Option.is_none array_opt_of_code ->
+  | _, Code when Option.is_none array_opt_of_code ->
       {
         default_setup with
         fwd_code_or_noop = Some filler;
@@ -315,16 +316,16 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
           @@ Location.error_extensionf ~loc
                "ppx_ocannl %%cd: could not determine a lead array of provided code";
       }
-  | Code ->
+  | _, Code ->
       {
         default_setup with
         fwd_code_or_noop = Some filler;
         array_opt = buffer (Option.value_exn array_opt_of_code);
       }
-  | Array -> { default_setup with array_opt = opt_buffer filler }
-  | Grad_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
+  | _, Array -> { default_setup with array_opt = opt_buffer filler }
+  | _, Grad_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
       { default_setup with array_opt = buffer filler; tensor = Some t }
-  | Grad_of_tensor t ->
+  | _, Grad_of_tensor t ->
       {
         default_setup with
         array_opt =
@@ -334,16 +335,16 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
                 identifier";
         tensor = Some t;
       }
-  | (Merge_value _ | Merge_grad _) when is_lhs ->
+  | _, (Merge_value _ | Merge_grad _) when is_lhs ->
       {
         default_setup with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: merge buffers cannot be assigned to";
       }
-  | Merge_value t ->
+  | _, Merge_value t ->
       { default_setup with array_opt = [%expr Some (Merge_buffer [%e filler])]; tensor = Some t }
-  | Merge_grad t ->
+  | _, Merge_grad t ->
       {
         default_setup with
         array_opt = [%expr Option.map [%e filler] ~f:(fun tn -> Ir.Assignments.Merge_buffer tn)];
@@ -440,7 +441,7 @@ let translate (expr : expression) : result =
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a ternary operator, one of: where, fma" ))
     in
-    (* FIXME: collapse these (code reuse) *)
+    (* TODO: collapse these (code reuse) *)
     let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
         () =
       let initialize_neutral, accu_op = assignment_op accu_op in
@@ -707,10 +708,16 @@ let translate (expr : expression) : result =
           slot = Scalar;
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
+        (* TODO: consider passing toplevel binding name as a hint label *)
+        let vbs =
+          Map.singleton (module String) name @@ make_vb ~loc ~name ~name_expr:expr ~hint_label:None
+        in
         {
-          default_result with
+          vbs;
           typ = No_grad_tensor_intro { name; name_expr = expr };
           expr = A.Exp.ident ~loc:str_loc { txt = Lident name; loc = str_loc };
+          array_opt_of_code = None;
+          slot = Undet;
         }
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
@@ -852,9 +859,8 @@ let translate (expr : expression) : result =
             }
         | Code ->
             {
-              default_result with
+              res1 with
               typ = Array;
-              slot = res1.slot;
               expr =
                 Ast_builder.Default.pexp_extension ~loc
                 @@ Location.error_extensionf ~loc
@@ -878,7 +884,7 @@ let translate (expr : expression) : result =
                 @@ Location.error_extensionf ~loc
                      "ppx_ocannl %%cd: only tensor nodes (e.g. `.value` or `.grad`) can be merged";
             }
-        | Grad_of_tensor t -> { res1 with vbs = no_vbs; typ = Merge_grad t }
+        | Grad_of_tensor t -> { res1 with typ = Merge_grad t }
         | Merge_value _ | Merge_grad _ ->
             {
               res1 with

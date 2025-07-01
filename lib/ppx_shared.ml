@@ -241,7 +241,7 @@ let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 
 let expr_expander_with_punning translate ~loc ~path:_ payload =
   match payload with
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
-      (* We are at the %op annotation level: do not tranlsate the body. *)
+      (* We are at the %op/%cd annotation level: do not tranlsate the body. *)
       let vbss, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun vb ->

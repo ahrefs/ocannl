@@ -59,13 +59,13 @@ let () =
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let init = Train.to_routine (module Backend) ctx bindings init_params in
+  let init_routine = Train.to_routine (module Backend) ctx bindings init_params in
   let sgd_routine =
-    Train.to_routine (module Backend) init.context bindings (Asgns.sequence [ update; sgd ])
+    Train.to_routine (module Backend) init_routine.context bindings (Asgns.sequence [ update; sgd ])
   in
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
-  Train.run init;
+  Train.run init_routine;
   for _epoch = 1 to epochs do
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;

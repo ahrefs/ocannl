@@ -255,7 +255,7 @@ When an extension is over a wildcard (ignore result) binding: `let%cd _ = ...` a
 
 Both `%cd` and `%op` syntaxes support inline declarations of tensors. For `%op` these are differentiable, for `%cd` non-differentiable tensors. A declaration site uses the string syntax, the content of the string is the is bound to the newly created tensor, and the string itself functions equivalently to using the newly introduced identifier. The scope of the binding is the full scope of the extension point, even if the declaring string appeared in the body of a function that's inside the extension point scope (except for `%op` there is a special case of `~config` labeled argument discussed below). The first element of the label of the created tensor is the string that introduced it.
 
-For `%cd`, the declaration is (currently) only allowed on the left-hand-side, i.e. in the assigned-to position, of an assignment. If possible, one of the tensors on the right-hand-side is picked to provide additional label information. In particular, tensors that are function parameters inside the scope of the extension point, cannot be picked to provide label information, as they would escape their scope at the point the tensor is created. Example showing two tensor nodes declared inline, both of them include the label of the param `p` in their labels:
+For `%cd`, inline declarations are allowed both in the assigned-to position (left-hand side) of assignments and in standalone tensor expressions. When used in assignments, one of the tensors on the right-hand-side is picked to provide additional label information if possible. In particular, tensors that are function parameters inside the scope of the extension point, cannot be picked to provide label information, as they would escape their scope at the point the tensor is created. Inline declarations are still prohibited within the right-hand side of assignments to discourage over-use in locations with less label information. Example showing two tensor nodes declared inline, both of them include the label of the param `p` in their labels:
 
 ```ocaml
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
@@ -265,6 +265,21 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
       "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
       if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
     p =- learning_rate *. sgd_delta]
+```
+
+Inline declarations can also be used outside of assignments for creating non-differentiable tensors, to mimic the behavior of `%op` but without the burden of initialization that a parameter would introduce:
+
+```ocaml
+  let%cd mlp_result = mlp "point" in
+  let result_routine =
+    Train.to_routine (module Backend) sgd_routine.context IDX.empty
+      [%cd ~~("mlp infer"; mlp_result.forward)]
+  in
+  let callback (x, y) =
+    Tn.set_values point [| x; y |];
+    Train.run result_routine;
+    Float.(mlp_result.@[0] >= 0.)
+  in
 ```
 
 For `%op`, the declaration is allowed anywhere. If there is a `~config` function parameter used inside the extension scope, for example as `fun ~config ... -> ...` or a more specific example `let%op mlp ~config x = ...`, the scope of an inline-declared tensor is no longer the full scope of the extension point. Instead, the tensor is defined right underneath the introduction of the `~config` parameter: `fun ~config -> let <definitions of the inline-declared tensors> in ...`. The config value passed to the generated code must be a record with at least a field `label : string list`. The inline-declared tensor that's defined under a `~config` parameter is defined as `TDSL.param ~more_label:config.label ...` Example showing two param tensors declared inline, including `config.label` in their labels:
