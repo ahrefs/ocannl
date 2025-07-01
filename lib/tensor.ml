@@ -116,10 +116,24 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
-let init_params _t =
-  (* Based on the interface documentation, this should collect forward code of t.params *)
-  (* For now, return empty since the 'params' field is missing from the current implementation *)
-  Asgns.empty_comp
+let rec init_params t =
+  let open Asgns in
+  let rem_embedded = ref @@ Set.empty (module Tn) in
+  let asgns =
+    Block_comment
+      ( "init params for " ^ Tn.debug_name t.value,
+        sequential
+        @@ Set.fold t.params ~init:[] ~f:(fun acc param ->
+               if Set.is_empty param.params then param.forward.asgns :: acc
+               else
+                 let asgns = init_params param in
+                 rem_embedded := Set.union !rem_embedded asgns.embedded_nodes;
+                 Seq (asgns.asgns, param.forward.asgns) :: acc) )
+  in
+  let embedded_nodes =
+    Set.fold ~init:!rem_embedded t.params ~f:(fun acc p -> Set.add acc p.value)
+  in
+  { asgns; embedded_nodes }
 
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -299,7 +313,8 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let tensor = { params = Set.empty (module T); forward; diff; id; value = v; shape; children } in
+    let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
+    let tensor = { params; forward; diff; id; value = v; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -409,10 +424,10 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?value ?values
-    label =
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?value
+    ?values label =
   let fetch_op_fn ~v:_ =
-    match values, value with
+    match (values, value) with
     | Some values, None -> Asgns.Constant_fill values
     | None, Some value -> Asgns.Constant value
     | None, None -> Asgns.Range_over_offsets
@@ -429,7 +444,8 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
      update computations. *)
   let g = (Option.value_exn ~here:[%here] t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
-  t
+  remove_fwd_root t;
+  { t with params = Set.singleton (module T) t }
 
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad

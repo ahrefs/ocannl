@@ -47,8 +47,8 @@ and comparator_witness
 val comparator : (t, comparator_witness) Base.Comparator.t
 
 val init_params : t -> comp
-(** [init_params t] simply collects the {!field:forward} code of [t.params] into a single sequence.
-*)
+(** [init_params t] collects into a single sequence the {!field:forward} code of [t.params], and
+    transitively the initializations of the parameters of the parameters. *)
 
 val is_fwd_root : t -> bool
 val remove_fwd_root : t -> unit

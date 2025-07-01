@@ -128,8 +128,8 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
-  if not @@ Set.mem p.Tensor.params p then
-    raise @@ Tensor.Session_error ("Train.sgd_one: not a parameter", Some p);
+  if Option.is_none p.Tensor.diff then
+  raise @@ Tensor.Session_error ("Train.sgd_one: not differentiable", Some p);
   [%cd
     ~~(p "param sgd step";
        "sgd_delta" =: p.grad + (!.weight_decay *. p);
@@ -254,6 +254,8 @@ let%track3_sexp parallel_update (type buffer_ptr dev runner event optimize_ctx)
       Array.for_all grad_updates ~f:(fun upd ->
           [%equal: Idx.static_symbol list] bindings @@ List.map ~f:fst upd.bindings))];
   let all_params : Tensor.t array = Set.to_array loss.Tensor.params in
+  if Array.is_empty all_params then
+    raise @@ Tensor.Session_error ("Train.parallel_update: no parameters", Some loss);
   let _occupancies_debug : bool array array = occupancies_dst_src in
   let ctxs = [%debug_notrace Array.map grad_updates ~f:(fun upd -> upd.context)] in
   let occupancy_dst ~dst_n = Array.exists ~f:Fn.id occupancies_dst_src.(dst_n) in
