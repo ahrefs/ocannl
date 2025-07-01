@@ -73,6 +73,7 @@ module type Device_config_common = sig
   (** An event tracks if a stream finished computing past a particular point in its schedue. These
       values are used internally for scheduling across streams of the backend, and can be used for
       explicit scheduling. *)
+
   val name : string
 end
 
@@ -315,6 +316,10 @@ module type With_buffer_retrieval_and_syncing = sig
       [^] On unified memory devices, the copy is not scheduled if the source and destination are the
       same buffer (note that this depends on the memory mode of the tensor node). *)
 
+  val init_from_host : context -> Tnode.t -> context
+  (** Schedules a copy from host to context: a variant of {!from_host} that requires the input
+      context to not contain the tensor node, and outputs the context with the tensor node. *)
+
   val to_host : context -> Tnode.t -> bool
   (** If the tensor node is both hosted and in-context, schedules a copy(^) from context to host and
       returns true, otherwise returns false.
@@ -338,6 +343,11 @@ module type With_buffer_retrieval_and_syncing = sig
         buffer, and initializes the merge buffer's streaming event.
       - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
         stream, and updates the writer event for the merge buffer. *)
+
+  val init_from_device : Tnode.t -> dst:context -> src:context -> context
+  (** Schedules a copy from [src] to [dst]: a variant of {!device_to_device} with
+      [into_merge_buffer=No] that requires the input [src] context to not contain the tensor node,
+      and outputs the [dst] context with the tensor node. *)
 
   val sync_device : device -> unit
   (** Synchronizes all the streams on a device, and cleans up (removes) all associated events. *)

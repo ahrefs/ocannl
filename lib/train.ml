@@ -129,7 +129,7 @@ let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   if Option.is_none p.Tensor.diff then
-  raise @@ Tensor.Session_error ("Train.sgd_one: not differentiable", Some p);
+    raise @@ Tensor.Session_error ("Train.sgd_one: not differentiable", Some p);
   [%cd
     ~~(p "param sgd step";
        "sgd_delta" =: p.grad + (!.weight_decay *. p);
@@ -348,7 +348,8 @@ let to_routine (type buffer_ptr dev runner event optimize_ctx)
        and type dev = dev
        and type runner = runner
        and type event = event
-       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?(hosted=true) ?name bindings comp =
+       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?(hosted = true) ?name
+    bindings comp =
   if hosted then Set.iter (Asgns.guess_output_nodes comp.Asgns.asgns) ~f:set_hosted;
   Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
@@ -397,6 +398,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let learning_rates = ref [] in
   let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
+  let init_params = Tensor.init_params scalar_loss in
   let update = grad_update ~disable_rootness_check ~setup_for_parallel:true scalar_loss in
   (* Define learning_rate after scalar_loss is compiled, to not trigger rootness sanitizer. *)
   let%op learning_rate =
@@ -408,7 +410,17 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
      Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let grad_update = Backend.compile Backend.empty_optimize_ctx ?name:None bindings update in
+  let init_routine = to_routine (module Backend) contexts.(0) bindings init_params in
+  let grad_update = Backend.compile init_routine.context.optimize_ctx ?name:None bindings update in
+  (* We initialize params on stream 0, and copy them to the other streams. *)
+  run init_routine;
+  let contexts =
+    Array.mapi contexts ~f:(fun to_ init ->
+        if to_ = 0 then init_routine.context
+        else
+          Set.fold scalar_loss.Tensor.params ~init ~f:(fun dst p ->
+              Backend.init_from_device p.value ~dst ~src:init_routine.context))
+  in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context ?name:None bindings sgd in
   Tensor.log_debug_info ~from_log_level:2 inputs;
@@ -452,7 +464,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (* This is now cleaned up by await. *)
     (* if per_epoch_debug_streams then _debug_at "after sync" *)
   done;
-  let%op model_result = model "infer" in
+  (* Using %cd instead of %op to avoid being asked to initialize [infer]. *)
+  let%cd model_result = model "infer" in
   let infer_fwd =
     if disable_rootness_check then model_result.Tensor.forward
     else Tensor.consume_forward_code model_result
@@ -491,7 +504,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   }
 
 (* Note: this will get nicer with modular explicits. *)
-let%track3_sexp forward_and_ctx ?(hosted=true) ?(disable_rootness_check = false)
+let%track3_sexp forward_and_ctx ?(hosted = true) ?(disable_rootness_check = false)
     (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr

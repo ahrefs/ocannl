@@ -98,6 +98,30 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
+  let%track2_sexp init_from_host (ctx : Backend.context) tn =
+    match (tn, Map.find ctx.ctx_arrays tn) with
+    | { Tn.array = (lazy (Some hosted)); _ }, None ->
+        let dst =
+          Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims:(Lazy.force tn.dims) ctx.stream
+        in
+        wait_for_all ctx ctx.stream.reader_streams tn;
+        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
+        (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
+        Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
+        update_writer_event ~from:`Host ctx @@ Node tn;
+        Hash_set.add tn.host_read_by_devices ctx.stream.device.device_id;
+        { ctx with ctx_arrays = Map.add_exn ctx.ctx_arrays ~key:tn ~data:dst }
+    | _, Some _ ->
+        raise
+        @@ Utils.User_error
+             ("init_from_host: input context already contains tensor node " ^ Tn.debug_name tn
+            ^ ", for stream " ^ Backend.get_name ctx.stream)
+    | _ ->
+        raise
+        @@ Utils.User_error
+             ("init_from_host: tensor node is not hosted: " ^ Tn.debug_name tn ^ ", for stream "
+            ^ Backend.get_name ctx.stream)
+
   let%diagn2_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
@@ -136,6 +160,47 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               update_writer_event ~from:(`Src src.stream) dst @@ Merge_buffer tn;
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
+
+  let%diagn2_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
+    let ordinal_of ctx = ctx.stream.device.ordinal in
+    let name_of ctx = Backend.(get_name ctx.stream) in
+    match Map.find src.ctx_arrays tn with
+    | None ->
+        raise
+        @@ Utils.User_error
+             ("init_from_device: tensor node " ^ Tn.debug_name tn ^ " is not in input context "
+            ^ Backend.get_name src.stream ^ ", for stream " ^ Backend.get_name dst.stream)
+    | Some s_arr ->
+        let same_device = ordinal_of dst = ordinal_of src in
+        if
+          same_device
+          && (Tn.known_shared_cross_streams tn || String.equal (name_of src) (name_of dst))
+        then
+          (* TODO: should we add s_arr to the output context? Failing now to be on the safe side. *)
+          raise
+          @@ Utils.User_error
+               ("init_from_device: tensor node " ^ Tn.debug_name tn
+              ^ " is shared across streams, for stream " ^ Backend.get_name src.stream)
+        else (
+          wait_for_ready ~dst ~src tn;
+          match Map.find dst.ctx_arrays tn with
+          | Some _ ->
+              raise
+              @@ Utils.User_error
+                   ("init_from_device: tensor node " ^ Tn.debug_name tn
+                  ^ " already in output context " ^ Backend.get_name dst.stream ^ ", for stream "
+                  ^ Backend.get_name src.stream)
+          | None ->
+              let d_arr =
+                Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims:(Lazy.force tn.dims)
+                  dst.stream
+              in
+              Backend.(
+                device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
+                  ~src);
+              update_writer_event ~from:(`Src src.stream) dst @@ Node tn;
+              [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
+              { dst with ctx_arrays = Map.add_exn dst.ctx_arrays ~key:tn ~data:d_arr })
 
   type r = Backend.context routine [@@deriving sexp_of]
 
