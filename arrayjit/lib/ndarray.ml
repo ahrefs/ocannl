@@ -385,6 +385,18 @@ let hash nd = Nativeint.hash (to_native nd)
 let hash_fold_t acc nd = hash_fold_nativeint acc (to_native nd)
 let hash_t nd = Nativeint.hash @@ to_native nd
 
+(** C function declarations for efficient copying *)
+external copy_with_padding_c : 
+  ('a, 'b) bigarray -> ('a, 'b) bigarray -> int array -> axis_padding array -> unit
+  = "arrayjit_copy_with_padding"
+
+let copy_with_padding ~source ~target ~padding =
+  let source_dims = dims source in
+  let copy_impl source_arr target_arr =
+    copy_with_padding_c source_arr target_arr source_dims padding
+  in
+  map2 { f2 = copy_impl } source target
+
 (** {2 *** Creating ***} *)
 
 let used_memory = Atomic.make 0

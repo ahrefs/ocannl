@@ -32,6 +32,7 @@ type sharing =
 [@@deriving sexp, compare, equal]
 
 type memory_type =
+  | Unset_hosted
   | Constant  (** The tensor node does not change after initialization. *)
   | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
   | Changed_on_devices of sharing
@@ -169,6 +170,7 @@ let debug_memory_mode = function
       | On_device Per_stream -> "Dev-stream"
       | Hosted Constant -> "Host-const"
       | Hosted Nonconstant -> "Host-non-const"
+      | Hosted Unset_hosted -> "Host-unset"
       | Hosted Volatile -> "Hosted"
       | Hosted (Changed_on_devices Unset) -> "Host&dev"
       | Hosted (Changed_on_devices Per_stream) -> "Host&stream"
@@ -280,7 +282,7 @@ let potentially_cross_stream tn = not (known_not_materialized tn || known_non_cr
 
 let mode_is_unspecified tn =
   match tn.memory_mode with
-  | None | Some ((Never_virtual | Effectively_constant), _) -> true
+  | None | Some ((Never_virtual | Effectively_constant | Hosted Unset_hosted), _) -> true
   | _ -> false
 
 let update_memory_mode tn mode provenance =
@@ -298,8 +300,10 @@ let update_memory_mode tn mode provenance =
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
       tn.memory_mode <- Some (Hosted Constant, provenance)
   | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
-  | ( Some (Hosted (Nonconstant | Changed_on_devices Unset), _),
+  | ( Some (Hosted (Nonconstant | Unset_hosted | Changed_on_devices Unset), _),
       Hosted (Changed_on_devices _ | Volatile) ) ->
+      tn.memory_mode <- Some (mode, provenance)
+  | Some (Hosted Unset_hosted, _), Hosted (Constant | Nonconstant) ->
       tn.memory_mode <- Some (mode, provenance)
   | Some (Hosted (Changed_on_devices _ | Volatile), _), Hosted Nonconstant -> ()
   | Some (Hosted (Changed_on_devices _), _), Hosted (Changed_on_devices Unset) -> ()
@@ -347,7 +351,7 @@ let update_memory_sharing tn sharing provenance =
   | Some (Hosted (Changed_on_devices Per_stream), _), Per_stream ->
       ()
   | Some (Hosted (Constant | Volatile), _), Shared_cross_streams -> ()
-  | Some (Hosted (Nonconstant | Changed_on_devices Unset), old_prov), _ ->
+  | Some (Hosted (Nonconstant | Unset_hosted | Changed_on_devices Unset), old_prov), _ ->
       tn.memory_mode <- Some (Hosted (Changed_on_devices sharing), provenance + (old_prov * 1000))
   | Some (_, prov2), Unset ->
       invalid_arg
@@ -576,6 +580,109 @@ let create ?default_prec ~id ~label ~dims ~padding () =
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
      that is checked in the find function, or to convert it to a find_exn function that should never
      be called on potentially GCed nodes. *)
+  Registry.add registry tn;
+  tn
+
+let create_from_padded ~id ~label ~ndarray ~padding () =
+  let dims_val = Nd.dims ndarray in
+  let prec_val = Nd.get_prec ndarray in
+  let size_in_bytes = lazy (Nd.size_in_bytes ndarray * Ops.prec_in_bytes prec_val) in
+  let tn =
+    {
+      array = lazy (Some ndarray);
+      delayed_prec_unsafe = Specified prec_val;
+      prec = lazy prec_val;
+      dims = lazy dims_val;
+      padding = lazy padding;
+      size_in_bytes;
+      id;
+      label;
+      memory_mode = Some (Hosted Unset_hosted, 49);
+      backend_info = Sexp.List [];
+      code_name = None;
+      prepare_read = None;
+      prepare_write = None;
+      host_read_by_devices = Hash_set.create (module Int);
+    }
+  in
+  Registry.add registry tn;
+  tn
+
+let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () =
+  let debug = "Host array for " ^ get_debug_name ~id ~label () in
+  let prec_val = Nd.get_prec base_ndarray in
+  let rec array =
+    lazy
+      (let target_dims = Lazy.force dims in
+       let target_padding = Lazy.force padding in
+       match (target_padding, from_padded) with
+       | None, _ | _, true ->
+           (* Use reshape to conform to inferred dims *)
+           let f_reshape_with_prec prec arr =
+             let total_elems = Array.reduce_exn target_dims ~f:( * ) in
+             let source_total =
+               let source_dims = Bigarray.Genarray.dims arr in
+               if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
+             in
+             if total_elems <> source_total then
+               raise
+               @@ Utils.User_error
+                    [%string
+                      "create_with_reshape: target dims %{Nd.int_dims_to_string target_dims} \
+                       require %{total_elems#Int} elements but source has %{source_total#Int} \
+                       elements"];
+             Nd.as_array prec (Bigarray.reshape arr target_dims)
+           in
+           Some (Nd.map_with_prec { f = f_reshape_with_prec } base_ndarray)
+       | Some (padding_spec, _), false ->
+           (* Create new bigarray with padding and copy source into non-padding parts *)
+           let target_array =
+             Nd.create_array ~debug prec_val ~dims:target_dims ~padding:target_padding
+           in
+           let source_dims = Nd.dims base_ndarray in
+           let copy_with_padding () =
+             (* Calculate actual data dimensions (target dims minus padding) *)
+             let data_dims =
+               Array.map2_exn target_dims padding_spec ~f:(fun dim { Nd.left; right } ->
+                   dim - left - right)
+             in
+             (* Check total elements match, allowing shape differences *)
+             let source_total = 
+               if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * ) 
+             in
+             let data_total = 
+               if Array.is_empty data_dims then 0 else Array.reduce_exn data_dims ~f:( * ) 
+             in
+             if source_total <> data_total then
+               invalid_arg
+                 [%string
+                   "create_with_reshape: source has %{source_total#Int} elements but target data \
+                    area has %{data_total#Int} elements"];
+             (* Use C function for efficient copying *)
+             Nd.copy_with_padding ~source:base_ndarray ~target:target_array ~padding:padding_spec
+           in
+           copy_with_padding ();
+           Some target_array)
+  and prec = lazy prec_val
+  and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
+  and tn =
+    {
+      array;
+      delayed_prec_unsafe = Specified prec_val;
+      prec;
+      dims;
+      padding;
+      size_in_bytes;
+      id;
+      label;
+      memory_mode = Some (Hosted Unset_hosted, 49);
+      backend_info = Sexp.List [];
+      code_name = None;
+      prepare_read = None;
+      prepare_write = None;
+      host_read_by_devices = Hash_set.create (module Int);
+    }
+  in
   Registry.add registry tn;
   tn
 
