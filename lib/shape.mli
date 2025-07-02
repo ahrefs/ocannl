@@ -165,6 +165,12 @@ type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp
     accessed. *)
 
 val to_dims : t -> int array
+(** Uses the matrix convention of putting the input axes last. *)
+
+val to_padding : t -> (Ir.Ndarray.axis_padding array * float) option
+(** Returns the padding of the shape, if any. Includes the padded value. Uses the matrix convention
+    of putting the input axes last. *)
+
 val propagate_shapes : update_step -> unit
 
 val derive_projections : update_step -> Ir.Indexing.projections
@@ -173,7 +179,9 @@ val derive_projections : update_step -> Ir.Indexing.projections
 
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
+
 val to_labels : t -> string array
+(** Uses the matrix convention of putting the input axes last. *)
 
 type 'a axis_map
 type parsed_axis_labels [@@deriving sexp]

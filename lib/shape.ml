@@ -704,13 +704,20 @@ let row_to_dims row =
              [ Row_mismatch [ row ] ] )
   | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
 
-(** Uses the matrix convention of putting the input axes last. *)
 let to_dims (sh : t) : int array =
   finish_inference ();
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
-(** Uses the matrix convention of putting the input axes last. *)
+let to_padding (sh : t) : (Ir.Ndarray.axis_padding array * float) option =
+  finish_inference ();
+  (* FIXME: NOT IMPLEMENTED YET -- e.g. this should not be None if any of the padding isn't None.
+     Also, the padded value should be inferred. *)
+  try
+    Option.map3 sh.batch_padding sh.output_padding sh.input_padding ~f:(fun batch output input ->
+        Array.concat [ batch; output; input ], 0.)
+  with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
+
 let to_labels (sh : t) : string array =
   Array.concat_map ~f:(Row.row_to_labels !state) [| sh.batch; sh.output; sh.input |]
 

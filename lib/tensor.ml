@@ -234,7 +234,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy None) () in
+  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy (Shape.to_padding shape)) () in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -275,7 +275,9 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
-      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims ~padding:(lazy None) ()
+      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims
+        ~padding:(lazy (Shape.to_padding shape))
+        ()
     in
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
