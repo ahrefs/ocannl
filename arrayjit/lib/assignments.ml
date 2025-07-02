@@ -15,10 +15,11 @@ type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 type fetch_op =
   | Constant of float
   | Constant_fill of float array
-      (** Fills in the numbers where the rightmost axis is contiguous. Does not loop over the
-          provided values; shape inference will require the assigned tensor to have the same number
-          of elements. This unrolls all assignments and should be used only for small arrays.
-          Consider using {!Tnode.set_values} instead for larger arrays. *)
+      (** Fills in the numbers where the rightmost axis is contiguous. Primes shape inference to
+          require the assigned tensor to have the same number of elements as the array, but in case
+          of "leaky" shape inference, will loop over the values. This unrolls all assignments and
+          should be used only for small arrays. Consider using {!Tnode.set_values} instead for
+          larger arrays. *)
   | Range_over_offsets
       (** Fills in the offset number of each cell, i.e. how many cells away it is from the
           beginning, in the logical representation of the tensor node. (The actual in-memory
@@ -268,6 +269,16 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Constant_fill values; dims = (lazy dims) } ->
         (* TODO: consider failing here and strengthening shape inference. *)
         let size = Array.length values in
+        let limit_constant_fill_size =
+          Int.of_string @@ Utils.get_global_arg ~default:"256" ~arg_name:"limit_constant_fill_size"
+        in
+        if size > limit_constant_fill_size then
+          raise
+          @@ Utils.User_error
+               [%string
+                 "Constant_fill size is too large to unroll for %{Tn.debug_name array} (size: \
+                  %{size#Int}, limit: %{limit_constant_fill_size#Int}), either increase \
+                  ocannl_limit_constant_fill_size or use Tnode.set_values instead"];
         Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
             set array idcs @@ Constant values.(offset % size))
   in

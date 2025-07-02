@@ -30,11 +30,11 @@ let sexp_of_bigarray (arr : ('a, 'b) bigarray) =
   Sexp.Atom ("bigarray_dims_" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string))
 
 type byte_nd = (char, Ops.uint8_elt) bigarray
-type uint16_nd = (int, Ops.uint16_elt) bigarray [@@ocaml.boxed]
-type int32_nd = (int32, Ops.int32_elt) bigarray [@@ocaml.boxed]
-type uint4x32_nd = (Stdlib.Complex.t, Bigarray.complex64_elt) bigarray [@@ocaml.boxed]
+type uint16_nd = (int, Ops.uint16_elt) bigarray
+type int32_nd = (int32, Ops.int32_elt) bigarray
+type uint4x32_nd = (Stdlib.Complex.t, Bigarray.complex64_elt) bigarray
 type half_nd = (float, Ops.float16_elt) bigarray
-type bfloat16_nd = (int, Ops.uint16_elt) bigarray [@@ocaml.boxed] (* Using uint16 representation *)
+type bfloat16_nd = (int, Ops.uint16_elt) bigarray (* Using uint16 representation *)
 type fp8_nd = (char, Ops.uint8_elt) bigarray (* Using uint8 representation *)
 type single_nd = (float, Ops.float32_elt) bigarray
 type double_nd = (float, Ops.float64_elt) bigarray

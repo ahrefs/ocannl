@@ -176,3 +176,7 @@ prefer_backend_uniformity=false
 # The initial value for the default precisions for tensors. The default precisions for values and
 # gradients can be changed separately via the `Tensor` API.
 default_prec=single
+
+# Limit on the allowed size of unrolled constant tensor nodes
+# (where the initialization code sets the values).
+limit_constant_fill_size=256
