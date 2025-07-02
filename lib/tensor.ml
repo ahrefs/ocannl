@@ -343,32 +343,29 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match fetch_op with
     | None -> Asgns.empty_comp
-    | Some fetch_op_fn ->
-        let fetch_op = fetch_op_fn ~v in
-        (match fetch_op with
-        | Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _
-        | Access (Uint4x32_to_prec_uniform _) ->
-            (* For these operations it makes sense to have a local / virtual tensor if the result is
-               consumed in the same computation. *)
-            ()
-        | Access _ ->
-            (* Note: [Access] can be used for merging across devices. But, some use cases of
-               [Access] will require a hosted tensor node. *)
-            Tn.update_memory_mode v Materialized 22);
+    | Some
+        (( Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _
+         | Access (Uint4x32_to_prec_uniform _) ) as fetch_op) ->
+        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
+    | Some (Access _ as fetch_op) ->
+        (* Note: [Access] can be used for merging across devices. But, some use cases of [Access]
+           will require a hosted tensor node. *)
+        Tn.update_memory_mode v Materialized 22;
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
-  op ~label ?compose_op:None ?transpose_op:None ~op_asn ~grad_asn ~grad_spec make_shape []
+  (* Note: fetch_op in op is used only for shape inference. *)
+  op ~label ?compose_op:None ?transpose_op:None ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
 
 let float_to_label v = Float.to_string v
 
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
-  let fetch_op ~v:_ = Ir.Assignments.Constant c in
+  let fetch_op = Ir.Assignments.Constant c in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
@@ -416,7 +413,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
       ~deduced:Not_constrained
-      ~fetch_op:(fun ~v:_ -> Asgns.Constant_fill values)
+      ~fetch_op:(Asgns.Constant_fill values)
       ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -428,7 +425,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?value
     ?values label =
-  let fetch_op_fn ~v:_ =
+  let fetch_op =
     match (values, value) with
     | Some values, None -> Asgns.Constant_fill values
     | None, Some value -> Asgns.Constant value
@@ -437,7 +434,7 @@ let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?
   in
   let t =
     term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
-      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op:fetch_op_fn ()
+      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

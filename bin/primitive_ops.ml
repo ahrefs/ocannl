@@ -27,7 +27,7 @@ let%debug_sexp graph_t () : unit =
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
   let x_flat =
     Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(fun ~v:_ -> Constant_fill xs)
+      ~fetch_op:(Constant_fill xs)
       ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in

@@ -25,7 +25,6 @@ let () =
   let steps = epochs * 2 * len / batch_size in
   let noise () = Rand.float_range (-0.1) 0.1 in
   let moons_flat =
-    Bigarray.Genarray.init in
     Array.concat_map (Array.create ~len ())
       ~f:
         Float.(

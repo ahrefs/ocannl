@@ -181,7 +181,7 @@ val term :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
-  ?fetch_op:(v:tn -> fetch_op) ->
+  ?fetch_op:fetch_op ->
   unit ->
   t
 (** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
