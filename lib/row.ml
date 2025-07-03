@@ -312,6 +312,9 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then
         Some (extras ~keep_constr1:true, constr1)
       else None
+  | Exact _, _ | _, Exact _ ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      None
 
 let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
     (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
@@ -387,6 +390,9 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
           else if d = 1 && Set.is_empty vars then constr
           else Total_elems { nominator; divided_by = Utils.Set_O.(divided_by + vars) }
       with Given_up -> Unconstrained)
+  | Exact _ ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      constr
 
 (* Inverts what [reduce_row_constraint] would do. *)
 let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
@@ -406,6 +412,9 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
         if d = 1 && Set.is_empty vars then constr
         else Total_elems { nominator = nominator * d; divided_by = Utils.Set_O.(divided_by - vars) }
   | Unconstrained -> Unconstrained
+  | Exact _ ->
+      (* FIXME: NOT IMPLEMENTED YET *)
+      constr
 
 let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
@@ -504,6 +513,10 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
+    | _, Exact _ ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+        if stored then (extras, env)
+        else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
@@ -585,7 +598,12 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
           })
   | _ -> in_
 
-let s_row_one_in_row_constr _v ~value:_ ~in_ = match in_ with Unconstrained | Total_elems _ -> in_
+let s_row_one_in_row_constr _v ~value:_ ~in_ = 
+  match in_ with 
+  | Unconstrained | Total_elems _ -> in_
+  | Exact _ -> 
+      (* FIXME: NOT IMPLEMENTED YET *)
+      in_
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
@@ -1390,6 +1408,9 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
                 | ineq -> [ ineq ])
           | _, [ v ], _ -> no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
           | _ -> [])
+      | Exact _ ->
+          (* FIXME: NOT IMPLEMENTED YET *)
+          []
       | _ -> [])
 
 let%debug5_sexp close_row_terminal ~(stage : stage) (env : environment)

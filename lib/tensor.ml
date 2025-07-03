@@ -206,7 +206,7 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?fetch_op ?init_data ?init_data_spec ~op_asn ~grad_asn
+    ?init_data ?fetch_op ~op_asn ~grad_asn
     ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
@@ -222,13 +222,10 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       |> Option.value ~default)
   in
   let terminal_logic () =
-    match fetch_op, init_data, init_data_spec with
-    | None, None, _ -> Shape.Terminal (`Fetch (Asgns.Constant 0.0))
-    | Some fetch_op, _, _ -> Shape.Terminal (`Fetch fetch_op)
-    | None, Some data, Some `Reshape -> Shape.Terminal (`Data (Asgns.Reshape data))
-    | None, Some data, None -> Shape.Terminal (`Data (Asgns.Reshape data))  (* default *)
-    | None, Some data, Some `Keep_shape_no_padding -> Shape.Terminal (`Data (Asgns.Keep_shape_no_padding data))
-    | None, Some data, Some (`Padded (padding, padded_value)) -> Shape.Terminal (`Data (Asgns.Padded { data; padding; padded_value }))
+    match fetch_op, init_data with
+    | None, None -> Shape.Terminal (`Fetch (Asgns.Constant 0.0))
+    | Some fetch_op, _ -> Shape.Terminal (`Fetch fetch_op)
+    | None, Some init_data -> Shape.Terminal (`Data init_data)
   in
   let rec shape_logics = function
     | [] -> [ terminal_logic () ]
@@ -245,15 +242,13 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   let padding = lazy (Shape.to_padding shape) in
   let v =
-    match (init_data, init_data_spec) with
-    | None, _ -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
-    | Some data, Some `Reshape ->
+    match init_data with
+    | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
+    | Some (Asgns.Reshape data) ->
         Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
-    | Some data, None ->  (* default to Reshape *)
-        Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
-    | Some data, Some `Keep_shape_no_padding ->
+    | Some (Asgns.Keep_shape_no_padding data) ->
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
-    | Some data, Some (`Padded (padding_spec, padded_value)) ->
+    | Some (Asgns.Padded { data; padding = padding_spec; padded_value }) ->
         let padding = Some (padding_spec, padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
   in
@@ -359,7 +354,7 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ?deduced ?init_data ?init_data_spec ?fetch_op () =
+    ?deduced ?init_data ?fetch_op () =
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
@@ -380,7 +375,7 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
   (* Note: fetch_op in op is used only for shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?init_data ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
 
 let float_to_label v = Float.to_string v
 
