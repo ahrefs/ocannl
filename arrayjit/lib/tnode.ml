@@ -586,7 +586,7 @@ let create ?default_prec ~id ~label ~dims ~padding () =
 let create_from_padded ~id ~label ~ndarray ~padding () =
   let dims_val = Nd.dims ndarray in
   let prec_val = Nd.get_prec ndarray in
-  let size_in_bytes = lazy (Nd.size_in_bytes ndarray * Ops.prec_in_bytes prec_val) in
+  let size_in_bytes = lazy (Nd.size_in_bytes ndarray) in
   let tn =
     {
       array = lazy (Some ndarray);

@@ -2,6 +2,7 @@
 
 open Base
 
+type ndarray = Ir.Ndarray.t
 type tn = Ir.Tnode.t
 type tn_set = Set.M(Ir.Tnode).t
 type asgns = Ir.Assignments.t
@@ -128,6 +129,7 @@ val op :
   ?ternary_op:Shape.ternary_type ->
   ?compose_op:Shape.compose_type ->
   ?transpose_op:Shape.transpose_type ->
+  ?init_data:Ir.Assignments.init_data ->
   ?fetch_op:fetch_op ->
   op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> projections:projections Lazy.t -> comp) ->
@@ -135,8 +137,8 @@ val op :
   (debug_name:string -> id:int -> Shape.t) ->
   t list ->
   t
-(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?fetch_op] should be
-    provided, except when the operation takes more than three arguments which uses both
+(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?init_data] or [?fetch_op]
+    should be provided, except when the operation takes more than three arguments which uses both
     [?compose_op] or [?transpose_op]. The defaults are pointwise operations. The [grad_asn] function
     receives the non-differentiable variant of the tensor as an argument, which can be used to
     access the tensor's value in a tensor expression. *)
@@ -181,11 +183,19 @@ val term :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
+  ?init_data:Ir.Assignments.init_data ->
   ?fetch_op:fetch_op ->
   unit ->
   t
 (** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
-    is the same as in {!Shape.make}, and by default the shape will be inferred. *)
+    is the same as in {!Shape.make}, and by default the shape will be inferred. At most one of
+    [init_data] or [fetch_op] should be provided. If [init_data] is provided, it is used to
+    initialize the tensor's [value] node. If [fetch_op] is provided, it is used to generate the
+    tensor's forward code. If [init_data] is provided, it is also used to verify the shape of the
+    tensor's [value] node: [Reshape] (the default) if the data is not padded and both the tensor's
+    shape and padding are inferred, [Keep_shape_no_padding] if the tensor should not be padded and
+    the shape is as given by the ndarray, and [Padded] if the data is already padded as given, and
+    the shape is as given by the ndarray. *)
 
 val number : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec -> float -> t
 (** A number: a tensor with a single axis of one dimension, initialized to the given value.

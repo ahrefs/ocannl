@@ -80,8 +80,9 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 type row_constraint =
   | Unconstrained
   | Total_elems of { nominator : int; divided_by : dim_var_set }
-      (** The row or remainder of a row, inclusive of the further row spec, has this many elements.
-      *)
+      (** The rows, inclusive of the further row spec, have this many elements. *)
+  | Exact of dim list
+      (** The concatenated rows have these axes. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
@@ -112,7 +113,8 @@ type constraint_ =
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
-  | Row_constr of { r : t; constr : row_constraint }
+  | Rows_constr of { r : t list; constr : row_constraint }
+      (** The constraint applies to the concatenation of the rows. *)
   | Terminal_dim of dim
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]

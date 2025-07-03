@@ -148,9 +148,9 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
-  | Terminal of Ir.Assignments.fetch_op
+  | Terminal of [ `Data of Ir.Assignments.init_data | `Fetch of Ir.Assignments.fetch_op ]
       (** Extracts any available shape information from the initialization. E.g. for
-          [File_mapped fn], opens the file [fn] to check its length. *)
+          [`Fetch (File_mapped fn)], opens the file [fn] to check its length. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]

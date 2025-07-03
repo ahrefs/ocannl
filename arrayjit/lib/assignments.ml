@@ -3,11 +3,18 @@ open Base
 
 module Lazy = Utils.Lazy
 module Tn = Tnode
+module Nd = Ndarray
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+
+type init_data =
+  | Reshape of Ndarray.t
+  | Keep_shape_no_padding of Ndarray.t
+  | Padded of { data : Nd.t; padding : Nd.axis_padding array; padded_value : float }
+[@@deriving sexp_of, equal]
 
 type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 

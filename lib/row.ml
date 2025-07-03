@@ -23,7 +23,7 @@ end
 
 type dim_var = Dim_var.t [@@deriving equal, hash, compare, sexp]
 type dim_cmp = Dim_var.comparator_witness
-type dim_var_set = Set.M(Dim_var).t [@@deriving equal, sexp]
+type dim_var_set = Set.M(Dim_var).t [@@deriving equal, hash, compare, sexp]
 type 'a dim_map = 'a Map.M(Dim_var).t [@@deriving equal, sexp]
 
 module Proj_id = struct
@@ -171,9 +171,8 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 
 type row_constraint =
   | Unconstrained
-  | Total_elems of { nominator : int; divided_by : Set.M(Dim_var).t }
-      (** The row or remainder of a row, inclusive of the further row spec, has this many elements.
-      *)
+  | Total_elems of { nominator : int; divided_by : dim_var_set }
+  | Exact of dim list
 [@@deriving equal, hash, compare, sexp, variants]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
@@ -212,7 +211,7 @@ type constraint_ =
   | Dim_ineq of { cur : dim; subr : dim }
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
-  | Row_constr of { r : t; constr : row_constraint }
+  | Rows_constr of { r : t list; constr : row_constraint }
   | Terminal_dim of dim
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]
@@ -304,8 +303,8 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
         else
           let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
           [
-            Row_constr
-              { r; constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) } };
+            Rows_constr
+              { r = [r]; constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) } };
           ]
       in
       let subsum = Set.symmetric_diff vars1 vars2 in
@@ -498,13 +497,13 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
           (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
              ~d:nominator () } :: extras, env) *)
           | _ :: _, _ when stored -> (extras, env)
-          | _, _ -> (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
+          | _, _ -> (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
         with Given_up ->
           if stored then (extras, env)
-          else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *)))
+          else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *)))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
-        else (Row_constr { r; constr } :: extras, env (* Wait for more shape inference. *))
+        else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
@@ -752,7 +751,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
     | Row_eq { r1; r2 } ->
         let more_ineqs, env = unify_row ~stage (r1, r2) env in
         (more_ineqs @ ineqs, env)
-    | (Dim_ineq _ | Row_ineq _ | Dim_constr _ | Row_constr _ | Terminal_dim _ | Terminal_row _) as
+    | (Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _ | Terminal_dim _ | Terminal_row _) as
       ineq ->
         (ineq :: ineqs, env)
   in
@@ -1353,8 +1352,12 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
       (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
       let ineqs, _env = apply_row_constraint ~stage:Stage5 r constr env in
       List.concat_map ineqs ~f:(function
-        | Row_constr { r = r'; constr } ->
-            if not (phys_equal r r') then eliminate_row_constraint ~lub:None r constr env else []
+        | Rows_constr { r = rows; constr } ->
+            (* FIXME: NOT IMPLEMENTED YET - handle multiple rows *)
+            if List.length rows = 1 then
+              let r' = List.hd_exn rows in
+              if not (phys_equal r r') then eliminate_row_constraint ~lub:None r' constr env else []
+            else []
         | ineq -> [ ineq ])
   | { bcast = Row_var { v; beg_dims }; dims; id } -> (
       let r1 = row_of_var v id in
@@ -1377,8 +1380,12 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
           | _, [], Some lub ->
               let ineqs, _env = apply_row_constraint ~stage:Stage5 lub constr env in
               List.concat_map ineqs ~f:(function
-                | Row_constr { r = r'; constr } ->
-                    if not (phys_equal r r') then eliminate_row_constraint ~lub:None r constr env
+                | Rows_constr { r = rows; constr } ->
+                    (* FIXME: NOT IMPLEMENTED YET - handle multiple rows *)
+                    if List.length rows = 1 then
+                      let r' = List.hd_exn rows in
+                      if not (phys_equal r r') then eliminate_row_constraint ~lub:None r' constr env
+                      else []
                     else []
                 | ineq -> [ ineq ])
           | _, [ v ], _ -> no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
@@ -1489,10 +1496,14 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
                 }
           in
           (extras @ ineqs, env)
-      | Row_constr { r; constr } ->
-          let r = subst_row env r in
-          let more_ineqs, env = apply_row_constraint ~stage r constr env in
-          (more_ineqs @ ineqs, env)
+      | Rows_constr { r = rows; constr } ->
+          (* FIXME: NOT IMPLEMENTED YET - handle multiple rows properly *)
+          if List.length rows = 1 then
+            let r = subst_row env (List.hd_exn rows) in
+            let more_ineqs, env = apply_row_constraint ~stage r constr env in
+            (more_ineqs @ ineqs, env)
+          else
+            (ineqs, env)
       | Terminal_dim d ->
           let more_ineqs = close_dim_terminal ~stage env @@ subst_dim env d in
           (more_ineqs @ ineqs, env)
@@ -1690,7 +1701,7 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
              | eq -> [ eq ])
     | Terminal_dim d -> [ Iterated (to_proj d) ]
     | Terminal_row { dims; _ } -> List.map ~f:(fun d -> Iterated (to_proj d)) dims
-    | Dim_constr _ | Row_constr _ -> []
+    | Dim_constr _ | Rows_constr _ -> []
   in
   List.concat_map inequalities ~f
 

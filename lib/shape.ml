@@ -240,7 +240,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of Ir.Assignments.fetch_op
+  | Terminal of [ `Data of Ir.Assignments.init_data | `Fetch of Ir.Assignments.fetch_op ]
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -394,52 +394,82 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
   match logic with
-  | Terminal Range_over_offsets -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Constant _c) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Constant_fill values) ->
-      let len = Array.length values in
-      let io_dims =
-        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
-        with Invalid_argument _ ->
-          raise
-          @@ Shape_error
-               ( "unify_shapes Constant_fill: non-batch dimensions must be known",
-                 [ Shape_mismatch [ cur_sh ] ] )
-      in
-      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
+  | Terminal (`Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Data (Reshape nd)) ->
       ( dim_map_empty,
-        Row_constr
+        Rows_constr
           {
-            r = cur_sh.batch;
-            constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
+            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+            constr =
+              Total_elems
+                {
+                  nominator = Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * );
+                  divided_by = dim_var_set_empty;
+                };
           }
         :: mark_terminal () )
-  | Terminal (Access (C_function _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (External_unsafe _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (Merge_buffer _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (Uint4x32_to_prec_uniform _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Access (File_mapped (filename, prec))) ->
+  | Terminal (`Data (Keep_shape_no_padding nd)) ->
+      (* FIXME: constrain padding to "not padded". *)
+      ( dim_map_empty,
+        Rows_constr
+          {
+            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+            constr =
+              Exact (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+          }
+        :: mark_terminal () )
+  | Terminal (`Data (Padded { data; padding; padded_value })) ->
+      (* FIXME: constrain padding. *)
+      ignore (padding, padded_value);
+      ( dim_map_empty,
+        Rows_constr
+          {
+            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+            constr =
+              Exact (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+          }
+        :: mark_terminal () )
+  | Terminal (`Fetch (Constant_fill values)) ->
+      let len = Array.length values in
+      ( dim_map_empty,
+        Rows_constr
+          {
+            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+            constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
+          }
+        :: mark_terminal () )
+  | Terminal (`Fetch (Access (C_function _))) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Access (External_unsafe _))) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Access (Merge_buffer _))) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Access (Uint4x32_to_prec_uniform _))) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Access (File_mapped (filename, prec)))) ->
       let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
       let len = Unix.lseek fd 0 Unix.SEEK_END / Ir.Ops.prec_in_bytes prec in
       Unix.close fd;
-      let io_dims =
-        try List.map ~f:dim_to_int_exn @@ cur_sh.output.dims @ cur_sh.input.dims
-        with Invalid_argument _ ->
-          raise
-          @@ Shape_error
-               ( "unify_shapes Constant_fill: non-batch dimensions must be known",
-                 [ Shape_mismatch [ cur_sh ] ] )
-      in
-      let batch_elems = len / abs (List.fold ~init:1 ~f:( * ) io_dims) in
       ( Row.dim_map_empty,
-        Row_constr
+        Rows_constr
           {
-            r = cur_sh.batch;
-            constr = Total_elems { nominator = batch_elems; divided_by = dim_var_set_empty };
+            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+            constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-  | Terminal (Slice _) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Embed_symbol _) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Slice { sliced = tn; batch_idx = _ })) ->
+      if Lazy.is_val tn.dims then
+        ( dim_map_empty,
+          Rows_constr
+            {
+              r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+              constr =
+                Exact
+                  (Lazy.force tn.dims
+                  |> Array.to_list |> List.tl_exn
+                  |> List.map ~f:(fun d -> get_dim ~d ())
+                  );
+            }
+          :: mark_terminal () )
+      else (Row.dim_map_empty, mark_terminal ())
+  | Terminal (`Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -715,7 +745,7 @@ let to_padding (sh : t) : (Ir.Ndarray.axis_padding array * float) option =
      Also, the padded value should be inferred. *)
   try
     Option.map3 sh.batch_padding sh.output_padding sh.input_padding ~f:(fun batch output input ->
-        Array.concat [ batch; output; input ], 0.)
+        (Array.concat [ batch; output; input ], 0.))
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
 let to_labels (sh : t) : string array =

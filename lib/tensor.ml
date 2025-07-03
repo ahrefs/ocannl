@@ -4,6 +4,7 @@ module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 
+type ndarray = Nd.t
 type tn = Tn.t
 type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
@@ -155,7 +156,6 @@ let lazy_to_dims shape = lazy (Shape.to_dims shape)
 let fetch_zeros array shape =
   Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 
-let default_init_op = Asgns.Constant 0.0
 let max_sublabel_length = ref 25
 
 let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
@@ -206,8 +206,8 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?(fetch_op = default_init_op) ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape
-    (orig_ts : t list) : t =
+    ?fetch_op ?init_data ?init_data_spec ~op_asn ~grad_asn
+    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let id = session_state.next_id in
@@ -221,8 +221,17 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       |> List.reduce ~f:Ir.Ops.promote_prec
       |> Option.value ~default)
   in
+  let terminal_logic () =
+    match fetch_op, init_data, init_data_spec with
+    | None, None, _ -> Shape.Terminal (`Fetch (Asgns.Constant 0.0))
+    | Some fetch_op, _, _ -> Shape.Terminal (`Fetch fetch_op)
+    | None, Some data, Some `Reshape -> Shape.Terminal (`Data (Asgns.Reshape data))
+    | None, Some data, None -> Shape.Terminal (`Data (Asgns.Reshape data))  (* default *)
+    | None, Some data, Some `Keep_shape_no_padding -> Shape.Terminal (`Data (Asgns.Keep_shape_no_padding data))
+    | None, Some data, Some (`Padded (padding, padded_value)) -> Shape.Terminal (`Data (Asgns.Padded { data; padding; padded_value }))
+  in
   let rec shape_logics = function
-    | [] -> [ Shape.Terminal fetch_op ]
+    | [] -> [ terminal_logic () ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
@@ -234,7 +243,20 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let dims = lazy_to_dims shape in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let v = Tn.create ~default_prec ~id ~label ~dims ~padding:(lazy (Shape.to_padding shape)) () in
+  let padding = lazy (Shape.to_padding shape) in
+  let v =
+    match (init_data, init_data_spec) with
+    | None, _ -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
+    | Some data, Some `Reshape ->
+        Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
+    | Some data, None ->  (* default to Reshape *)
+        Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
+    | Some data, Some `Keep_shape_no_padding ->
+        Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
+    | Some data, Some (`Padded (padding_spec, padded_value)) ->
+        let padding = Some (padding_spec, padded_value) in
+        Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
+  in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -337,7 +359,7 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ?deduced ?fetch_op () =
+    ?deduced ?init_data ?init_data_spec ?fetch_op () =
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
@@ -412,9 +434,7 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   in
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-      ~deduced:Not_constrained
-      ~fetch_op:(Asgns.Constant_fill values)
-      ()
+      ~deduced:Not_constrained ~fetch_op:(Asgns.Constant_fill values) ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
