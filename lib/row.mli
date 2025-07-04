@@ -114,7 +114,8 @@ type constraint_ =
   | Row_ineq of { cur : t; subr : t }
   | Dim_constr of { d : dim; constr : dim_constraint }
   | Rows_constr of { r : t list; constr : row_constraint }
-      (** The constraint applies to the concatenation of the rows. *)
+      (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
+          affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
   | Terminal_dim of dim
   | Terminal_row of t
 [@@deriving compare, equal, sexp, variants]

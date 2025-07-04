@@ -304,7 +304,10 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
           let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
           [
             Rows_constr
-              { r = [r]; constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) } };
+              {
+                r = [ r ];
+                constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) };
+              };
           ]
       in
       let subsum = Set.symmetric_diff vars1 vars2 in
@@ -312,9 +315,61 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else if Sequence.for_all ~f:Either.is_second subsum then
         Some (extras ~keep_constr1:true, constr1)
       else None
-  | Exact _, _ | _, Exact _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      None
+  | Exact dims1, Exact dims2 ->
+      if List.length dims1 <> List.length dims2 then
+        raise @@ Shape_error ("Exact constraint length mismatch", [])
+      else
+        let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) in
+        Some (eqs, constr1)
+  | Total_elems { nominator; divided_by }, Exact dims
+  | Exact dims, Total_elems { nominator; divided_by } -> (
+      (* Simple collect_factors logic - handle only basic Dim and Var cases *)
+      let rec collect_dim_factors (ds, vars) = function
+        | Dim { d; _ } -> Some (d :: ds, vars)
+        | Var v -> Some (ds, v :: vars)
+        | Conv_input _ -> None (* Too complex, give up *)
+      in
+      match
+        List.fold dims
+          ~init:(Some ([], []))
+          ~f:(fun acc dim ->
+            match acc with None -> None | Some (ds, vars) -> collect_dim_factors (ds, vars) dim)
+      with
+      | None -> None (* Give up on complex cases *)
+      | Some (ds, vars) ->
+          let known_product = List.fold ds ~init:1 ~f:( * ) in
+          if nominator <= 0 then
+            raise @@ Shape_error ([%string "Invalid Total_elems nominator: %{nominator#Int}"], [])
+          else if known_product = 0 then
+            raise @@ Shape_error ("Exact constraint has zero dimension", [])
+          else if nominator % known_product <> 0 then
+            raise
+            @@ Shape_error
+                 ( [%string
+                     "Total_elems nominator %{nominator#Int} not divisible by Exact dimensions \
+                      product %{known_product#Int}"],
+                   [] )
+          else
+            let reminder = nominator / known_product in
+            if reminder = 1 then
+              (* reminder is 1: equate all variables on both sides to 1 *)
+              let divided_by_eqs =
+                Set.to_list divided_by
+                |> List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+              in
+              let exact_vars_eqs =
+                List.map vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+              in
+              Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
+            else if Set.is_empty divided_by && List.length vars = 1 && reminder > 0 then
+              (* divided_by is empty and there is only one dim variable in Exact dims *)
+              let v = List.hd_exn vars in
+              Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
+            else if List.is_empty vars && Set.length divided_by = 1 && reminder > 0 then
+              (* Exact dims contain only known dimensions and divided_by has exactly one variable *)
+              let v = Set.choose_exn divided_by in
+              Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
+            else None (* Cannot handle this case *))
 
 let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
     (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
@@ -506,17 +561,19 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
           (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
              ~d:nominator () } :: extras, env) *)
           | _ :: _, _ when stored -> (extras, env)
-          | _, _ -> (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
+          | _, _ ->
+              (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
         with Given_up ->
           if stored then (extras, env)
-          else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *)))
+          else
+            (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *)))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
-        else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
+        else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
     | _, Exact _ ->
         (* FIXME: NOT IMPLEMENTED YET *)
         if stored then (extras, env)
-        else (Rows_constr { r = [r]; constr } :: extras, env (* Wait for more shape inference. *))
+        else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
@@ -598,12 +655,13 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
           })
   | _ -> in_
 
-let s_row_one_in_row_constr _v ~value:_ ~in_ = 
-  match in_ with 
+let s_row_one_in_row_constr _v ~value:_ ~in_ =
+  match in_ with
   | Unconstrained | Total_elems _ -> in_
-  | Exact _ -> 
+  | Exact _ ->
       (* FIXME: NOT IMPLEMENTED YET *)
       in_
+
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
@@ -1408,9 +1466,8 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
                 | ineq -> [ ineq ])
           | _, [ v ], _ -> no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
           | _ -> [])
-      | Exact _ ->
-          (* FIXME: NOT IMPLEMENTED YET *)
-          []
+      | Exact dims ->
+          [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
       | _ -> [])
 
 let%debug5_sexp close_row_terminal ~(stage : stage) (env : environment)
@@ -1523,8 +1580,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
             let r = subst_row env (List.hd_exn rows) in
             let more_ineqs, env = apply_row_constraint ~stage r constr env in
             (more_ineqs @ ineqs, env)
-          else
-            (ineqs, env)
+          else (ineqs, env)
       | Terminal_dim d ->
           let more_ineqs = close_dim_terminal ~stage env @@ subst_dim env d in
           (more_ineqs @ ineqs, env)
