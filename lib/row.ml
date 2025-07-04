@@ -317,14 +317,23 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       else None
   | Exact dims1, Exact dims2 ->
       if List.length dims1 <> List.length dims2 then
-        raise @@ Shape_error ("Exact constraint length mismatch", [])
+        raise
+        @@ Shape_error
+             ( "Exact row constraint length mismatch",
+               [
+                 Row_mismatch
+                   [
+                     { dims = dims1; bcast = Broadcastable; id };
+                     { dims = dims2; bcast = Broadcastable; id };
+                   ];
+               ] )
       else
         let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) in
         Some (eqs, constr1)
   | Total_elems { nominator; divided_by }, Exact dims
   | Exact dims, Total_elems { nominator; divided_by } -> (
       (* Simple collect_factors logic - handle only basic Dim and Var cases *)
-      let rec collect_dim_factors (ds, vars) = function
+      let collect_dim_factors (ds, vars) = function
         | Dim { d; _ } -> Some (d :: ds, vars)
         | Var v -> Some (ds, v :: vars)
         | Conv_input _ -> None (* Too complex, give up *)
@@ -445,9 +454,16 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
           else if d = 1 && Set.is_empty vars then constr
           else Total_elems { nominator; divided_by = Utils.Set_O.(divided_by + vars) }
       with Given_up -> Unconstrained)
-  | Exact _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      constr
+  | Exact exact_dims ->
+      let beg_len = List.length beg_dims in
+      let dims_len = List.length dims in
+      let exact_len = List.length exact_dims in
+      if beg_len + dims_len > exact_len then
+        raise
+        @@ Shape_error
+             ( "reduce_row_constraint: Exact constraint failed, shape is too long",
+               [ Dim_mismatch (beg_dims @ dims) ] )
+      else Exact (List.take (List.drop exact_dims beg_len) (exact_len - beg_len - dims_len))
 
 (* Inverts what [reduce_row_constraint] would do. *)
 let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
@@ -467,11 +483,51 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
         if d = 1 && Set.is_empty vars then constr
         else Total_elems { nominator = nominator * d; divided_by = Utils.Set_O.(divided_by - vars) }
   | Unconstrained -> Unconstrained
-  | Exact _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      constr
+  | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
-let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
+(** Helper function to convert a list of rows to a single row option.
+    Returns None if there is more than one row variable among the rows.
+    Otherwise, concatenates the leading dims to the beg_dims of the variable,
+    and the dims of the variable's row with the dims of the following rows. *)
+let rows_to_row (rows : row list) : row option =
+  let find_row_vars rows =
+    List.foldi rows ~init:([], []) ~f:(fun idx (var_indices, vars) row ->
+        match row.bcast with
+        | Row_var { v; _ } -> ((idx, v) :: var_indices, v :: vars)
+        | Broadcastable -> (var_indices, vars))
+  in
+  let var_indices, vars = find_row_vars rows in
+  match vars with
+  | [] ->
+      (* No row variables, concatenate all dims *)
+      let all_dims = List.concat_map rows ~f:(fun r -> r.dims) in
+      let id = match rows with [] -> phantom_row_id | r :: _ -> r.id in
+      Some { dims = all_dims; bcast = Broadcastable; id }
+  | [ _ ] ->
+      (* Exactly one row variable *)
+      let (var_idx, var) = List.hd_exn var_indices in
+      let var_row = List.nth_exn rows var_idx in
+      let (var_beg_dims, var_dims) = match var_row.bcast with
+        | Row_var { beg_dims; _ } -> (beg_dims, var_row.dims)
+        | Broadcastable -> assert false (* We know there's a row variable *)
+      in
+      let before_rows = List.take rows var_idx in
+      let after_rows = List.drop rows (var_idx + 1) in
+      let before_dims = List.concat_map before_rows ~f:(fun r -> r.dims) in
+      let after_dims = List.concat_map after_rows ~f:(fun r -> r.dims) in
+      let new_beg_dims = before_dims @ var_beg_dims in
+      let new_dims = var_dims @ after_dims in
+      Some { dims = new_dims; bcast = Row_var { v = var; beg_dims = new_beg_dims }; id = var_row.id }
+  | _ :: _ :: _ ->
+      (* More than one row variable *)
+      None
+
+let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint) (env : environment) : constraint_ list * environment =
+  match rows_to_row rows with
+  | Some single_row -> apply_row_constraint ~stage single_row constr env
+  | None -> ([ Rows_constr { r = rows; constr } ], env)
+
+and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
   else
     let reduce constr ~beg_dims ~dims =
@@ -570,10 +626,9 @@ let apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
-    | _, Exact _ ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-        if stored then (extras, env)
-        else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
+    | { dims; bcast = Broadcastable; _ }, Exact exact_dims ->
+        assert (not stored);
+        (List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) @ extras, env)
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
@@ -621,7 +676,8 @@ let rec s_dim_one_in_row_constr v ~value constr =
           else
             s_dim_one_in_row_constr v ~value:output
               (Total_elems { nominator = nominator / stride; divided_by = Set.(add divided_by v) }))
-  | _ -> constr
+  | Exact exact_dims -> Exact (List.map exact_dims ~f:(fun in_ -> s_dim_one v ~value ~in_))
+  | Total_elems _ | Unconstrained -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
   match in_ with
@@ -656,11 +712,7 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
   | _ -> in_
 
 let s_row_one_in_row_constr _v ~value:_ ~in_ =
-  match in_ with
-  | Unconstrained | Total_elems _ -> in_
-  | Exact _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      in_
+  match in_ with Unconstrained | Total_elems _ | Exact _ -> in_
 
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
@@ -1421,7 +1473,12 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
-let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env :
+let rec eliminate_rows_constraint ~lub (rows : row list) (constr : row_constraint) (env : environment) : constraint_ list =
+  match rows_to_row rows with
+  | Some single_row -> eliminate_row_constraint ~lub single_row constr env
+  | None -> [ Rows_constr { r = rows; constr } ]
+
+and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env :
     constraint_ list =
   match r with
   | { bcast = Broadcastable; _ } ->
@@ -1429,11 +1486,7 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
       let ineqs, _env = apply_row_constraint ~stage:Stage5 r constr env in
       List.concat_map ineqs ~f:(function
         | Rows_constr { r = rows; constr } ->
-            (* FIXME: NOT IMPLEMENTED YET - handle multiple rows *)
-            if List.length rows = 1 then
-              let r' = List.hd_exn rows in
-              if not (phys_equal r r') then eliminate_row_constraint ~lub:None r' constr env else []
-            else []
+            eliminate_rows_constraint ~lub:None rows constr env
         | ineq -> [ ineq ])
   | { bcast = Row_var { v; beg_dims }; dims; id } -> (
       let r1 = row_of_var v id in
@@ -1457,17 +1510,11 @@ let%debug5_sexp rec eliminate_row_constraint ~lub (r : row) (constr : row_constr
               let ineqs, _env = apply_row_constraint ~stage:Stage5 lub constr env in
               List.concat_map ineqs ~f:(function
                 | Rows_constr { r = rows; constr } ->
-                    (* FIXME: NOT IMPLEMENTED YET - handle multiple rows *)
-                    if List.length rows = 1 then
-                      let r' = List.hd_exn rows in
-                      if not (phys_equal r r') then eliminate_row_constraint ~lub:None r' constr env
-                      else []
-                    else []
+                    eliminate_rows_constraint ~lub:None rows constr env
                 | ineq -> [ ineq ])
           | _, [ v ], _ -> no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
           | _ -> [])
-      | Exact dims ->
-          [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
+      | Exact dims -> [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
       | _ -> [])
 
 let%debug5_sexp close_row_terminal ~(stage : stage) (env : environment)
@@ -1575,12 +1622,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           in
           (extras @ ineqs, env)
       | Rows_constr { r = rows; constr } ->
-          (* FIXME: NOT IMPLEMENTED YET - handle multiple rows properly *)
-          if List.length rows = 1 then
-            let r = subst_row env (List.hd_exn rows) in
-            let more_ineqs, env = apply_row_constraint ~stage r constr env in
-            (more_ineqs @ ineqs, env)
-          else (ineqs, env)
+          let substituted_rows = List.map rows ~f:(subst_row env) in
+          let more_ineqs, env = apply_rows_constraint ~stage substituted_rows constr env in
+          (more_ineqs @ ineqs, env)
       | Terminal_dim d ->
           let more_ineqs = close_dim_terminal ~stage env @@ subst_dim env d in
           (more_ineqs @ ineqs, env)
