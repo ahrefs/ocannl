@@ -462,10 +462,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
               r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
               constr =
                 Exact
-                  (Lazy.force tn.dims
-                  |> Array.to_list |> List.tl_exn
-                  |> List.map ~f:(fun d -> get_dim ~d ())
-                  );
+                  (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
+                  |> List.map ~f:(fun d -> get_dim ~d ()));
             }
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())

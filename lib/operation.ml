@@ -478,13 +478,16 @@ module TDSL = struct
   let number = Tensor.number ~grad_spec:If_needed
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
 
+  (** The default initialization operation for {!param} calls. *)
+  let default_param_init = ref @@ Tensor.fetch_param_init (Asgns.Constant 0.0)
+
   let param ?value ?values =
     let t =
       match (value, values) with
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
       | Some value, None -> Tensor.fetch_param_init (Asgns.Constant value)
       | None, Some values -> Tensor.fetch_param_init (Asgns.Constant_fill values)
-      | None, None -> !Tensor.default_param_init
+      | None, None -> !default_param_init
     in
     Tensor.param ~t
 
@@ -502,15 +505,15 @@ module TDSL = struct
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
     let t =
-      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[] ~init_data:(Reshape ndarray)
-        ?fetch_op:None
+      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
+        ~init_data:(Reshape ndarray) ?fetch_op:None
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l
 
   (** See {!wrap}. *)
   let wrap_param ~l ?i ?o ndarray =
     let t =
-      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[]
+      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
         ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l

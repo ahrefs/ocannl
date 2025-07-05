@@ -217,18 +217,6 @@ val ndarray :
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val default_param_init :
-  (label:string list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:Shape.deduce_within_shape ->
-  unit ->
-  t)
-  ref
-(** The default initialization operation for {!param} calls that do not pass a [t]. *)
-
 val fetch_param_init :
   fetch_op ->
   label:string list ->
@@ -239,7 +227,7 @@ val fetch_param_init :
   ?deduced:Shape.deduce_within_shape ->
   unit ->
   t
-(** Helper for {!param} wrappers or to set {!default_param_init}. *)
+(** Helper for {!param} wrappers. *)
 
 val param :
   ?more_label:string list ->
@@ -248,7 +236,7 @@ val param :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
-  ?t:
+  t:
     (label:string list ->
     ?input_dims:int list ->
     ?output_dims:int list ->
@@ -261,10 +249,9 @@ val param :
   t
 (** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
     should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
-    string, appended by [more_label] if any, other parameters are forwarded to [t]. If [t] is not
-    provided, {!default_param_init} is used. This function returns [t]'s result with the field
-    {!field:params} replaced by a singleton set containing that result, and it also updates the
-    memory modes. *)
+    string, appended by [more_label] if any, other parameters are forwarded to [t]. This function
+    returns [t]'s result with the field {!field:params} replaced by a singleton set containing that
+    result, and it also updates the memory modes. *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.

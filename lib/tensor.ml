@@ -440,18 +440,11 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   t
 
 let fetch_param_init fetch_op =
-  term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[] ?init_data:None ~fetch_op
+  term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?init_data:None ~fetch_op
 
-let default_param_init = ref @@ fetch_param_init (Asgns.Constant 0.0)
-
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?t label =
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ~t label =
   let t =
-    match t with
-    | Some t ->
-        t ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
-    | None ->
-        !default_param_init ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes
-          ?output_axes ?deduced ()
+    t ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

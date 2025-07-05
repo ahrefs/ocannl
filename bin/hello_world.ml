@@ -50,7 +50,7 @@ let hello3 () =
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   (* Hey is inferred to be a matrix. *)
-  let hey = Tensor.param "hey" in
+  let hey = TDSL.param "hey" in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;

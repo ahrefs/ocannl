@@ -149,8 +149,8 @@ let interpret_ternop op v1 v2 v3 =
 
 ```ocaml
   let hid_dim = 8 in
-  let w = Tensor.param "w" in
-  let b = Tensor.param ~output_dims:[ hid_dim ] "b" in
+  let w = TDSL.param "w" in
+  let b = TDSL.param ~output_dims:[ hid_dim ] "b" in
   let layer x = TDSL.O.( relu(w * x + b) ) in
   ...
 ```
@@ -159,8 +159,8 @@ Since `TDSL.O` is opened for the scope of an extension point `%op`:
 
 ```ocaml
   let hid_dim = 8 in
-  let w = Tensor.param "w" in
-  let b = Tensor.param ~output_dims:[ hid_dim ] "b" in
+  let w = TDSL.param "w" in
+  let b = TDSL.param ~output_dims:[ hid_dim ] "b" in
   let%op layer x = relu(w * x + b) in
   ...
 ```
@@ -413,7 +413,7 @@ If you recall, inline declared param tensors get lifted out of functions except 
 
 ```ocaml
 let mlp_layer ~config =
-  let w = Tensor.param "w" and b = Tensor.param ~output_dims:[ config.hid_dim ] in
+  let w = TDSL.param "w" and b = TDSL.param ~output_dims:[ config.hid_dim ] in
   fun x -> TDSL.O.(w * x + b)
 ```
 
