@@ -37,15 +37,6 @@ module Initial_NTDSL = struct
   module O = struct end
 end
 
-module Initial_TDSL = struct
-  let term = Tensor.term ~grad_spec:If_needed
-  let number = Tensor.number ~grad_spec:If_needed
-  let ndarray = Tensor.ndarray ~grad_spec:If_needed
-  let param = Tensor.param
-
-  module O = struct end
-end
-
 let add ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
@@ -452,9 +443,50 @@ module NDO = struct
   let ( <> ) = ne ~grad_spec:Prohibit_grad
 end
 
+(** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
+    omitted. Note: the data should have no padding and if padding is inferred, the data will be
+    copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
+let reshape ~l ?b ?(i = []) ?o ndarray =
+  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o ~init_data:(Reshape ndarray)
+    ()
+
+(** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
+    be inferred (or provided). Assumes no padding. See also: {!reshape} and {!TDSL.wrap_param}. *)
+let wrap ~l ?b ?(i = []) ?o ndarray =
+  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
+    ~init_data:(Keep_shape_no_padding ndarray) ()
+
+(** Assumes the ndarray is padded as given. This means the dimensions of the ndarray will differ
+    from the dimensions of the tensor by the padding. See also: {!TDSL.wrap}. *)
+let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
+  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
+    ~init_data:(Padded { data = ndarray; padding; padded_value })
+    ()
+
+(** The output dimensions are taken from the provided ndarray, assuming precisely the first axis is
+    a batch axis, assumes no input axes and the batch dimensions are inferred. Assumes the data has
+    no padding, and data is copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
+let rebatch ~l ndarray =
+  let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
+  if List.is_empty output_dims then invalid_arg "rebatch: ndarray has just one axis";
+  Tensor.term ~label:[ l ] ~input_dims:[] ~output_dims ~init_data:(Reshape ndarray) ()
+
 module TDSL = struct
-  include Initial_TDSL
   module O = DO
+
+  let term = Tensor.term ~grad_spec:If_needed
+  let number = Tensor.number ~grad_spec:If_needed
+  let ndarray = Tensor.ndarray ~grad_spec:If_needed
+
+  let param ?value ?values =
+    let t =
+      match (value, values) with
+      | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
+      | Some value, None -> Tensor.fetch_param_init (Asgns.Constant value)
+      | None, Some values -> Tensor.fetch_param_init (Asgns.Constant_fill values)
+      | None, None -> !Tensor.default_param_init
+    in
+    Tensor.param ~t
 
   let einsum = einsum ~grad_spec:If_needed
   let outer_sum = outer_sum ~grad_spec:If_needed
@@ -462,17 +494,26 @@ module TDSL = struct
   let range = range ~grad_spec:If_needed
   let range_of_shape = range_of_shape ~grad_spec:If_needed
   let stop_gradient = stop_gradient
+  let reshape = reshape ~grad_spec:If_needed
+  let wrap = wrap ~grad_spec:If_needed
+  let wrap_padded = wrap_padded ~grad_spec:If_needed
+  let rebatch = rebatch ~grad_spec:If_needed
 
-  (** The input [i] dimensions default to empty. The batch dimensions will be inferred if omitted.
-  *)
-  let init_const ~l ?b ?(i = []) ~o values =
-    Tensor.term ~label:[ l ] ~grad_spec:Prohibit_grad ?batch_dims:b ~input_dims:i ~output_dims:o
-      ~fetch_op:(Asgns.Constant_fill values) ()
+  (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
+  let reshape_param ~l ?i ?o ndarray =
+    let t =
+      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[] ~init_data:(Reshape ndarray)
+        ?fetch_op:None
+    in
+    Tensor.param ?input_dims:i ?output_dims:o ~t l
 
-  (** It's like `Tensor.param` but without shape inference. *)
-  let init_param ~l ?(b = []) ?(i = []) ?(o = []) values =
-    Tensor.term ~label:[ l ] ~grad_spec:Require_grad ~batch_dims:b ~input_dims:i ~output_dims:o
-      ~fetch_op:(Asgns.Constant_fill values) ()
+  (** See {!wrap}. *)
+  let wrap_param ~l ?i ?o ndarray =
+    let t =
+      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[]
+        ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
+    in
+    Tensor.param ?input_dims:i ?output_dims:o ~t l
 end
 
 module NTDSL = struct
@@ -485,6 +526,10 @@ module NTDSL = struct
   let term = Tensor.term ~grad_spec:Prohibit_grad
   let range = range ~grad_spec:Prohibit_grad
   let range_of_shape = range_of_shape ~grad_spec:Prohibit_grad
+  let reshape = reshape ~grad_spec:Prohibit_grad
+  let wrap = wrap ~grad_spec:Prohibit_grad
+  let wrap_padded = wrap_padded ~grad_spec:Prohibit_grad
+  let rebatch = rebatch ~grad_spec:Prohibit_grad
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in

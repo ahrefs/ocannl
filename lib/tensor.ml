@@ -205,9 +205,8 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
-    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un)
-    ?init_data ?fetch_op ~op_asn ~grad_asn
-    ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?init_data ?fetch_op
+    ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let id = session_state.next_id in
@@ -222,7 +221,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       |> Option.value ~default)
   in
   let terminal_logic () =
-    match fetch_op, init_data with
+    match (fetch_op, init_data) with
     | None, None -> Shape.Terminal (`Fetch (Asgns.Constant 0.0))
     | Some fetch_op, _ -> Shape.Terminal (`Fetch fetch_op)
     | None, Some init_data -> Shape.Terminal (`Data init_data)
@@ -319,7 +318,8 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
           diff.backprop)
     in
     let bcks =
-      List.filter_map ordered_ts ~f:(fun ti -> if is_bck_root ti then bprop ti else None)
+      List.filter_map ordered_ts ~f:(fun ti ->
+          if is_bck_root ti && not (Set.mem t.params ti) then bprop ti else None)
     in
     let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~projections :: bcks) in
     let backprop =
@@ -375,7 +375,8 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
   (* Note: fetch_op in op is used only for shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?init_data ?fetch_op ~op_asn ~grad_asn ~grad_spec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?init_data ?fetch_op ~op_asn ~grad_asn ~grad_spec
+    make_shape []
 
 let float_to_label v = Float.to_string v
 
@@ -438,18 +439,19 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?value
-    ?values label =
-  let fetch_op =
-    match (values, value) with
-    | Some values, None -> Asgns.Constant_fill values
-    | None, Some value -> Asgns.Constant value
-    | None, None -> Asgns.Range_over_offsets
-    | Some _, Some _ -> invalid_arg "Tensor.param: both values and value are set"
-  in
+let fetch_param_init fetch_op =
+  term ~grad_spec:Require_grad ~batch_dims:[] ~batch_axes:[] ?init_data:None ~fetch_op
+
+let default_param_init = ref @@ fetch_param_init (Asgns.Constant 0.0)
+
+let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ?t label =
   let t =
-    term ~label:(label :: more_label) ~grad_spec:Require_grad ~batch_dims:[] ?input_dims
-      ?output_dims ?input_axes ?output_axes ?deduced ~fetch_op ()
+    match t with
+    | Some t ->
+        t ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+    | None ->
+        !default_param_init ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes
+          ?output_axes ?deduced ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

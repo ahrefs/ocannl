@@ -189,7 +189,7 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
-  let hey = Tensor.param ~value:0.5 "hey" in
+  let hey = TDSL.param ~value:0.5 "hey" in
   let zero_to_twenty = TDSL.range 20 in
   let%op yd = (hey * zero_to_twenty) + zero_to_twenty in
   Train.forward_and_forget backend ctx yd;

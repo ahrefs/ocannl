@@ -217,6 +217,30 @@ val ndarray :
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
+val default_param_init :
+  (label:string list ->
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t)
+  ref
+(** The default initialization operation for {!param} calls that do not pass a [t]. *)
+
+val fetch_param_init :
+  fetch_op ->
+  label:string list ->
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t
+(** Helper for {!param} wrappers or to set {!default_param_init}. *)
+
 val param :
   ?more_label:string list ->
   ?input_dims:int list ->
@@ -224,16 +248,23 @@ val param :
   ?input_axes:(string * int) list ->
   ?output_axes:(string * int) list ->
   ?deduced:Shape.deduce_within_shape ->
-  ?value:float ->
-  ?values:float array ->
+  ?t:
+    (label:string list ->
+    ?input_dims:int list ->
+    ?output_dims:int list ->
+    ?input_axes:(string * int) list ->
+    ?output_axes:(string * int) list ->
+    ?deduced:Shape.deduce_within_shape ->
+    unit ->
+    t) ->
   string ->
   t
-(* A tensor with no batch axes; input and output axes are by default inferred. [grad_spec] is set to
-   [Require_grad]. The resulting tensor's label is the passed string, appended by [more_label] if
-   any. If [value] is provided, the tensor is initialized to the given value. If [values] is
-   provided, the tensor is initialized to the given values. At most one of [value] or [values] can
-   be provided. Note: [values] will be looped over if necessary, but shape inference will try
-   incorporating the number of values as tensor size. *)
+(** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
+    should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
+    string, appended by [more_label] if any, other parameters are forwarded to [t]. If [t] is not
+    provided, {!default_param_init} is used. This function returns [t]'s result with the field
+    {!field:params} replaced by a singleton set containing that result, and it also updates the
+    memory modes. *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.

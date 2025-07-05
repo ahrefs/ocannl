@@ -21,8 +21,8 @@ let make_p ~has_config ~loc =
 
 let make_vb ?value ~has_config ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let value = match value with Some c -> [%expr Some [| [%e c] |]] | None -> [%expr None] in
-  let v = [%expr [%e make_p ~has_config ~loc] ?values:[%e value] [%e string]] in
+  let value = match value with Some c -> [%expr Some [%e c] ] | None -> [%expr None] in
+  let v = [%expr [%e make_p ~has_config ~loc] ?value:[%e value] [%e string]] in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
