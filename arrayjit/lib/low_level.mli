@@ -4,25 +4,6 @@ open Base
 
 (** {2 Global references} *)
 
-(** A dedicated access that might need to be implemented differently for each backend. *)
-type dedicated_access =
-  | C_function of string  (** Calls a no-argument or indices-arguments C function. *)
-  | External_unsafe of { ptr : Ops.voidptr; prec : Ops.prec; dims : int array Lazy.t }
-  | Merge_buffer of { source : Tnode.t }
-      (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by
-          merge operations. The merge buffer is associated with the source node of the device's most
-          recent [device_to_device ~into_merge_buffer:true] operation. *)
-  | Uint4x32_to_prec_uniform of {
-      source : Tnode.t;
-      target_prec : Ops.prec;
-      target_dims : int array Lazy.t;
-    }
-      (** Converts the given Uint4x32 to the given precision in a bit-efficient manner. For random
-          bits, the result is uniform over the range of the precision for integer precisions, and
-          over the range \[0.0, 1.0) for floating point precisions. When used in an access pattern,
-          the indices are converted to a byte offset depending on the given precision. *)
-[@@deriving sexp_of, equal, compare]
-
 module Scope_id : sig
   type t = { tn : Tnode.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
   type comparator_witness
@@ -50,8 +31,8 @@ type t =
 and float_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
-  | Access of dedicated_access * Indexing.axis_index array option
   | Get of Tnode.t * Indexing.axis_index array
+  | Get_merge_buffer of Tnode.t * Indexing.axis_index array
   | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t

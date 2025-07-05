@@ -8,17 +8,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type dedicated_access =
-  | C_function of string
-  | External_unsafe of { ptr : Ops.voidptr; prec : Ops.prec; dims : int array Lazy.t }
-  | Merge_buffer of { source : Tnode.t }
-  | Uint4x32_to_prec_uniform of {
-      source : Tnode.t;
-      target_prec : Ops.prec;
-      target_dims : int array Lazy.t;
-    }
-[@@deriving sexp_of, equal, compare]
-
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
@@ -53,8 +42,8 @@ type t =
 and float_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
-  | Access of dedicated_access * Indexing.axis_index array option
   | Get of Tn.t * Indexing.axis_index array
+  | Get_merge_buffer of Tn.t * Indexing.axis_index array
   | Ternop of Ops.ternop * float_t * float_t * float_t
   | Binop of Ops.binop * float_t * float_t
   | Unop of Ops.unop * float_t

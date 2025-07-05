@@ -94,7 +94,13 @@ type transpose_type =
   | Pointwise_un
   | Permute of string
   | Batch_slice of Idx.static_symbol
+  | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
 [@@deriving equal, sexp]
+
+type terminal_type =
+  | Data of Ir.Assignments.init_data
+  | Fetch of Ir.Assignments.fetch_op
+[@@deriving equal, sexp_of]
 
 type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
 

@@ -295,6 +295,13 @@ type unop =
   | Neg
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
+  | Uint4x32_to_prec_uniform of prec
+      (** Converts the given Uint4x32 to the given precision in a bit-efficient manner. For random
+          bits, the result is uniform over the range of the precision for integer precisions, and
+          over the range \[0.0, 1.0) for floating point precisions. When used in an access pattern,
+          the indices are converted to a byte offset depending on the given precision. NOTE: this
+          operation, unlike any others, impacts projections and shape inference (one input cell
+          corresponds to a few output cells). *)
 [@@deriving sexp, compare, equal]
 
 type ternop =

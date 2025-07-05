@@ -129,19 +129,19 @@ val op :
   ?ternary_op:Shape.ternary_type ->
   ?compose_op:Shape.compose_type ->
   ?transpose_op:Shape.transpose_type ->
-  ?init_data:Ir.Assignments.init_data ->
-  ?fetch_op:fetch_op ->
+  ?terminal_op:Shape.terminal_type ->
   op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   (debug_name:string -> id:int -> Shape.t) ->
   t list ->
   t
-(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?init_data] or [?fetch_op]
-    should be provided, except when the operation takes more than three arguments which uses both
+(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?terminal_op] should be
+    provided, except when the operation takes more than three arguments which uses both
     [?compose_op] or [?transpose_op]. The defaults are pointwise operations. The [grad_asn] function
     receives the non-differentiable variant of the tensor as an argument, which can be used to
-    access the tensor's value in a tensor expression. *)
+    access the tensor's value in a tensor expression. The [terminal_op] is used to specify the
+    terminal operation of the tensor. *)
 
 val binop :
   label:string list ->

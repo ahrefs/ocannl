@@ -101,6 +101,10 @@ type transpose_type =
   | Pointwise_un  (** Preserves the shape. *)
   | Permute of string  (** The unary "einsum" syntax: RHS1=>LHS. *)
   | Batch_slice of Ir.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
+  | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
+      (** Converts precision in a bit-effient way, with a corresponding conversion in total number
+          of elements. Currently, assumes the incoming tensor (RHS) has just a single axis to not
+          force unnecessary minimum sizes on output axes. *)
 [@@deriving equal, sexp]
 
 (** If you miss expressivity here, leave a note on
@@ -109,6 +113,10 @@ type ternary_type =
   | Pointwise_tern  (** As in the operation [Where]. *)
   | Compose_accumulate  (** As in the operation [FMA]. *)
 [@@deriving equal, sexp]
+
+(** Extracts any available shape information from the initialization or fetch. *)
+type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
+[@@deriving equal, sexp_of]
 
 val make :
   ?batch_dims:int list ->
@@ -148,7 +156,7 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
-  | Terminal of [ `Data of Ir.Assignments.init_data | `Fetch of Ir.Assignments.fetch_op ]
+  | Terminal of terminal_type
       (** Extracts any available shape information from the initialization. *)
 [@@deriving equal, sexp_of]
 
