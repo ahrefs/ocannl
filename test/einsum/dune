@@ -5,7 +5,7 @@
  (name moons_demo_variant)
  (deps ocannl_config)
  (modules moons_demo_variant)
- (libraries ocannl)
+ (libraries ocannl datasets)
  (preprocess
   (pps ppx_ocannl)))
 

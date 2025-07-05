@@ -7,6 +7,7 @@ module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
 module Rand = Ir.Rand.Lib
+(* module Half_moons = Datasets.Half_moons *)
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -29,20 +30,10 @@ let demo () =
 
   let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
 
-  let noise () = Rand.float_range (-0.1) 0.1 in
-  let moons_flat =
-    Array.concat_map (Array.create ~len ())
-      ~f:
-        Float.(
-          fun () ->
-            let i = Rand.int len in
-            let v = of_int i * pi / of_int len in
-            let c = cos v and s = sin v in
-            [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
-  in
-  let moons_flat = TDSL.init_const ~l:"moons_flat" ~o:[ 2 ] moons_flat in
-  let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes = TDSL.init_const ~l:"moons_classes" ~o:[ 1 ] moons_classes in
+  let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
+  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config ~len () in
+  let moons_flat = TDSL.rebatch ~l:"moons_flat" (Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates) in
+  let moons_classes = TDSL.rebatch ~l:"moons_classes" (Ir.Ndarray.as_array Ir.Ops.Double moons_labels) in
 
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in

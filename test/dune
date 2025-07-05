@@ -5,7 +5,7 @@
  (package neural_nets_lib)
  (modules moons_demo_parallel_run)
  (deps ocannl_config)
- (libraries ocannl)
+ (libraries ocannl datasets)
  (preprocess
   (pps ppx_ocannl)))
 
@@ -83,7 +83,7 @@
  (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
- (libraries base dynlink ocannl)
+ (libraries base dynlink ocannl datasets)
  (modules
   einsum_trivia
   hello_world_op

@@ -3,4 +3,4 @@
 (library
  (name datasets)
  (public_name neural_nets_lib.datasets)
- (libraries unix zip curl csv))
+ (libraries unix zip curl csv bigarray))

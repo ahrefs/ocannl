@@ -56,20 +56,12 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   (* let epochs = 1 in *)
   (* let init_lr = 0.1 in *)
   let init_lr = 0.01 in
-  let noise () = Rand.float_range (-0.1) 0.1 in
-  let moons_flat =
-    Array.concat_map (Array.create ~len:flat_len ())
-      ~f:
-        Float.(
-          fun () ->
-            let i = Rand.int flat_len in
-            let v = of_int i * pi / of_int flat_len in
-            let c = cos v and s = sin v in
-            [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
-  in
-  let moons_flat ~b = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
-  let moons_classes = Array.init data_len ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
+  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
+  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len:flat_len () in
+  let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in
+  let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
+  let moons_flat ~b:_ = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray in
+  let moons_classes ~b:_ = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op mlp x =

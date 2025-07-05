@@ -20,20 +20,12 @@ let%expect_test "Half-moons data parallel" =
   (* let epochs = 10 in *)
   let epochs = 20 in
   (* let epochs = 1 in *)
-  let noise () = Rand.float_range (-0.1) 0.1 in
-  let moons_flat =
-    Array.concat_map (Array.create ~len ())
-      ~f:
-        Float.(
-          fun () ->
-            let i = Rand.int len in
-            let v = of_int i * pi / of_int len in
-            let c = cos v and s = sin v in
-            [| c + noise (); s + noise (); 1.0 - c + noise (); 0.5 - s + noise () |])
-  in
-  let moons_flat ~b = TDSL.init_const ~l:"moons_flat" ~b ~o:[ 2 ] moons_flat in
-  let moons_classes = Array.init (len * 2) ~f:(fun i -> if i % 2 = 0 then 1. else -1.) in
-  let moons_classes ~b = TDSL.init_const ~l:"moons_classes" ~b ~o:[ 1 ] moons_classes in
+  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
+  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len () in
+  let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in
+  let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
+  let moons_flat ~b:_ = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray in
+  let moons_classes ~b:_ = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray in
   let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
   (* let%op mlp x = "b" + ("w" * x) in *)
   let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
