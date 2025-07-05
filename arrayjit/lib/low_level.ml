@@ -10,16 +10,12 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 type dedicated_access =
   | C_function of string
-  | External_unsafe of {
-      ptr : Ops.voidptr;
-      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
-      dims : int array Lazy.t;
-    }
+  | External_unsafe of { ptr : Ops.voidptr; prec : Ops.prec; dims : int array Lazy.t }
   | Merge_buffer of { source : Tnode.t }
-  | File_mapped of string * Ops.prec
   | Uint4x32_to_prec_uniform of {
       source : Tnode.t;
-      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
+      target_prec : Ops.prec;
+      target_dims : int array Lazy.t;
     }
 [@@deriving sexp_of, equal, compare]
 
@@ -100,9 +96,7 @@ let virtualize_settings =
   let max_tracing_dim =
     Int.of_string @@ Utils.get_global_arg ~arg_name:"virtualize_max_tracing_dim" ~default:"5"
   in
-  let enable_device_only =
-    Utils.get_global_flag ~default:true ~arg_name:"enable_device_only"
-  in
+  let enable_device_only = Utils.get_global_flag ~default:true ~arg_name:"enable_device_only" in
   let inline_scalar_constexprs =
     Utils.get_global_flag ~default:true ~arg_name:"inline_scalar_constexprs"
   in
@@ -1083,16 +1077,11 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
     | Access (Merge_buffer { source }, Some idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Access (File_mapped (file, prec), None) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
-    | Access (File_mapped (file, prec), Some idcs) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
-        ^^ brackets (pp_indices idcs)
-    | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
-        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, None) ->
+        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
         ^^ doc_ident source ^^ string ")"
-    | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, Some idcs) ->
+        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
         ^^ doc_ident source ^^ string ")"
         ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
@@ -1170,16 +1159,11 @@ let to_doc ?name ?static_indices () llc =
     | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
     | Access (Merge_buffer { source }, Some idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Access (File_mapped (file, prec), None) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
-    | Access (File_mapped (file, prec), Some idcs) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string prec ^ ")")
-        ^^ brackets (pp_indices idcs)
-    | Access (Uint4x32_to_prec_uniform { source; prec }, None) ->
-        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, None) ->
+        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
         ^^ doc_ident source ^^ string ")"
-    | Access (Uint4x32_to_prec_uniform { source; prec }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
+    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, Some idcs) ->
+        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
         ^^ doc_ident source ^^ string ")"
         ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))

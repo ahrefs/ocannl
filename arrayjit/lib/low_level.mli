@@ -7,24 +7,20 @@ open Base
 (** A dedicated access that might need to be implemented differently for each backend. *)
 type dedicated_access =
   | C_function of string  (** Calls a no-argument or indices-arguments C function. *)
-  | External_unsafe of {
-      ptr : Ops.voidptr;
-      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
-      dims : int array Lazy.t;
-    }
+  | External_unsafe of { ptr : Ops.voidptr; prec : Ops.prec; dims : int array Lazy.t }
   | Merge_buffer of { source : Tnode.t }
       (** Each device has at most one merge buffer, which is re-used, and re-allocated as needed, by
           merge operations. The merge buffer is associated with the source node of the device's most
           recent [device_to_device ~into_merge_buffer:true] operation. *)
-  | File_mapped of string * Ops.prec
-      (** Reads the data using [Unix.openfile] and [Unix.map_file]. *)
   | Uint4x32_to_prec_uniform of {
       source : Tnode.t;
-      prec : (Ops.prec[@equal.ignore] [@compare.ignore]);
+      target_prec : Ops.prec;
+      target_dims : int array Lazy.t;
     }
       (** Converts the given Uint4x32 to the given precision in a bit-efficient manner. For random
           bits, the result is uniform over the range of the precision for integer precisions, and
-          over the range [[0.0, 1.0)] for floating point precisions. *)
+          over the range \[0.0, 1.0) for floating point precisions. When used in an access pattern,
+          the indices are converted to a byte offset depending on the given precision. *)
 [@@deriving sexp_of, equal, compare]
 
 module Scope_id : sig

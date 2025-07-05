@@ -343,7 +343,15 @@ let interpret_binop op v1 v2 =
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
-  | Threefry4x32 -> invalid_arg "interpret_binop: Threefry4x32 requires hardware implementation"
+  | Threefry4x32 ->
+      (* NOTE: the purpose of this code is to reflect the reference implementation that all backends
+         should implement. Due to precision constraints and the fact that threefry is inherently a
+         non-numerical, bit-level operation, this code reinterprets the arguments and the result as
+         the lower 64 bits of the 128-bit values; with the upper 64 bits being 0 for the arguments
+         and ignored for the result. This agrees with the Bigarray reinterpretation of the
+         [Uint4x32] precision as the [Complex.t] type with the real part exposed. *)
+      (* FIXME: NOT IMPLEMENTED YET *)
+      failwith "NOT IMPLEMENTED YET: Threefry4x32"
 
 let interpret_unop op v =
   let open Float in
@@ -461,7 +469,9 @@ let binop_c_syntax prec v =
   (* | Shr, _ -> ("((", ") / exp2(", "))") *)
   | Or, _ -> ("(", " ||", ")")
   | And, _ -> ("(", " &&", ")")
-  | Threefry4x32, _ -> ("threefry4x32(", ",", ")")
+  | Threefry4x32, _ ->
+      (* This corresponds to the pure C implementation in arrayjit_stubs.c. *)
+      ("arrayjit_threefry4x32(", ",", ")")
 
 let is_assign_op = function
   | Arg1 | Mod | Threefry4x32 (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne -> false

@@ -617,23 +617,14 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ offset_doc ^^ string "))" ^^ string postfix
         in
         (empty, expr)
-    | Access (Low_level.File_mapped (file, source_prec), Some idcs) ->
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let expr =
-          string prefix
-          ^^ string ("file_mapped_data_" ^ file ^ "[")
-          ^^ pp_array_offset (idcs, [||])
-          ^^ string "]" ^^ string postfix
-        in
-        (empty, expr)
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = source_prec }, Some idcs) ->
+    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims }, Some idcs) ->
         let tn = source in
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let prefix, postfix = B.convert_precision ~from:target_prec ~to_:prec in
+        let offset_doc = pp_array_offset (idcs, Lazy.force target_dims) in
         let source_ident = string (get_ident tn) in
         let expr =
           string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
           ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
         in
         (empty, expr)
@@ -736,34 +727,20 @@ module C_syntax (B : C_syntax_config) = struct
           string prefix ^^ string ("external[%u]{=" ^ B.float_log_style ^ "}") ^^ string postfix
         in
         (expr_doc, [ `Accessor (idcs, dims_val); `Value access_doc ])
-    | Access (Low_level.File_mapped (file, source_prec), Some idcs) ->
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let access_doc =
-          string prefix
-          ^^ string ("file_mapped_data_" ^ file ^ "[")
-          ^^ pp_array_offset (idcs, [||])
-          ^^ string "]" ^^ string postfix
-        in
-        let expr_doc =
-          string prefix
-          ^^ string ("file_mapped_" ^ file ^ "[%u]{=" ^ B.float_log_style ^ "}")
-          ^^ string postfix
-        in
-        (expr_doc, [ `Accessor (idcs, [||]); `Value access_doc ])
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = source_prec }, Some idcs) ->
+    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims }, Some idcs) ->
         let tn = source in
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let dims = Lazy.force tn.dims in
+        let prefix, postfix = B.convert_precision ~from:target_prec ~to_:prec in
+        let dims = Lazy.force target_dims in
         let offset_doc = pp_array_offset (idcs, dims) in
         let source_ident = string (get_ident tn) in
         let access_doc =
           string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
           ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
         in
         let expr_doc =
           string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string source_prec ^ "_uniform(")
+          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
           ^^ source_ident
           ^^ brackets (string "%u")
           ^^ string "){=" ^^ string B.float_log_style ^^ string "}" ^^ string postfix

@@ -442,18 +442,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   | Terminal (`Fetch (Access (C_function _))) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (`Fetch (Access (External_unsafe _))) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (`Fetch (Access (Merge_buffer _))) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Access (Uint4x32_to_prec_uniform _))) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Access (File_mapped (filename, prec)))) ->
-      let fd = Unix.openfile filename [ Unix.O_RDONLY ] 0o640 in
-      let len = Unix.lseek fd 0 Unix.SEEK_END / Ir.Ops.prec_in_bytes prec in
-      Unix.close fd;
-      ( Row.dim_map_empty,
-        Rows_constr
-          {
-            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-            constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
-          }
-        :: mark_terminal () )
+  | Terminal (`Fetch (Access (Uint4x32_to_prec_uniform _))) ->
+      (* FIXME: NOT IMPLEMENTED YET -- we need to propagate the precision-adjusted dimensions
+         between the source tensor and the target tensor. This is tricky because the dimensions
+         are not known at the time of the shape inference. *)
+      (Row.dim_map_empty, mark_terminal ())
   | Terminal (`Fetch (Slice { sliced = tn; batch_idx = _ })) ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,

@@ -149,8 +149,7 @@ type logic =
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
   | Terminal of [ `Data of Ir.Assignments.init_data | `Fetch of Ir.Assignments.fetch_op ]
-      (** Extracts any available shape information from the initialization. E.g. for
-          [`Fetch (File_mapped fn)], opens the file [fn] to check its length. *)
+      (** Extracts any available shape information from the initialization. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]

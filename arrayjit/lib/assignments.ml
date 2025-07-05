@@ -362,9 +362,7 @@ let to_doc ?name ?static_indices () c =
     | Access (Low_level.Merge_buffer { source }) -> string (ident source ^ ".merge")
     | Access (Low_level.External_unsafe { ptr; prec; dims = _ }) ->
         string (Ops.ptr_to_string_hum ptr prec)
-    | Access (Low_level.File_mapped (file, file_prec)) ->
-        string ("file_mapped(\"" ^ file ^ "\", " ^ Ops.prec_string file_prec ^ ")")
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; prec = target_prec }) ->
+    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }) ->
         string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(" ^ ident source ^ ")")
     | Slice { batch_idx; sliced } ->
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
