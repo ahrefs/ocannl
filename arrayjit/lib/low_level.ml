@@ -158,8 +158,11 @@ let is_constexpr_comp traced_store llv =
     | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
-    | Access (_, _) -> false
+
     | Get (tn, _) ->
+        let traced = get_node traced_store tn in
+        traced.is_scalar_constexpr
+    | Get_merge_buffer (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
     | Ternop (_, v1, v2, v3) -> loop v1 && loop v2 && loop v3
@@ -176,8 +179,10 @@ let is_complex_comp traced_store llv =
     | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
         let traced = get_node traced_store tn in
         traced.is_complex
-    | Access (_, _) -> true
     | Get (tn, _) ->
+        let traced = get_node traced_store tn in
+        not traced.is_scalar_constexpr
+    | Get_merge_buffer (tn, _) ->
         let traced = get_node traced_store tn in
         not traced.is_scalar_constexpr
     | Ternop (_, v1, v2, v3) -> loop v1 || loop v2 || loop v3
@@ -259,7 +264,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc ~first_visit:true env body
     | Get_local _ -> ()
-    | Access (Merge_buffer { source }, _) ->
+    | Get_merge_buffer (source, _) ->
         let source_node_id = source.Tn.id in
         Option.iter !merge_node_id ~f:(fun merge_node_id ->
             if merge_node_id <> source_node_id then
@@ -269,7 +274,6 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
                      "Low_evel.optimize_proc: currently only one merge buffer per routine is \
                       allowed, found node ids %{source_node_id#Int} and %{merge_node_id#Int}"]);
         merge_node_id := Some source_node_id
-    | Access _ -> ()
     | Embed_index _ -> ()
     | Binop (Arg1, llv1, _llv2) -> loop llv1
     | Binop (Arg2, _llv1, llv2) -> loop llv2
@@ -405,7 +409,19 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
             | _ -> ())
     | Local_scope { body; _ } -> loop_proc ~env_dom body
     | Get_local _ -> ()
-    | Access _ -> ()
+    | Get_merge_buffer (tn, idcs) ->
+        if Tn.equal tn top_tn then check_idcs idcs
+        else
+          (* Check for escaping variables. *)
+          Array.iter idcs ~f:(function
+            | Iterator s when not (Set.mem static_indices s) ->
+                if not @@ Set.mem env_dom s then (
+                  [%log2
+                    "Inlining candidate has an escaping variable",
+                    (s : Indexing.symbol),
+                    (top_llc : t)];
+                  raise @@ Non_virtual 9)
+            | _ -> ())
     | Embed_index (Fixed_idx _) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
@@ -530,7 +546,7 @@ let inline_computation ~id computations_table traced static_indices call_args =
               orig_indices = Array.map ~f:(subst env) orig_indices;
             }
       | Get_local _ -> llv
-      | Access _ -> llv
+      | Get_merge_buffer (tn, indices) -> Get_merge_buffer (tn, Array.map ~f:(subst env) indices)
       | Embed_index idx -> Embed_index (subst env idx)
       | Ternop (op, llv1, llv2, llv3) ->
           Ternop (op, loop_float env llv1, loop_float env llv2, loop_float env llv3)
@@ -607,7 +623,7 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
         Local_scope
           { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
     | Get_local _ -> llv
-    | Access _ -> llv
+    | Get_merge_buffer (_, _) -> llv
     | Embed_index _ -> llv
     | Ternop (op, llv1, llv2, llv3) ->
         Ternop
@@ -689,7 +705,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         assert (not @@ Tn.known_non_virtual id.tn);
         Tn.update_memory_mode id.tn Virtual 16;
         llv
-    | Access _ -> llv
+    | Get_merge_buffer (_, _) -> llv
     | Embed_index (Fixed_idx _) -> llv
     | Embed_index (Iterator s) ->
         assert (Set.mem env_dom s);
@@ -717,7 +733,7 @@ let rec substitute_float ~var ~value llv =
     | Get (_ptr, _indices) -> llv
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llv
-    | Access _ -> llv
+    | Get_merge_buffer (_, _) -> llv
     | Embed_index _ -> llv
     | Ternop (op, llv1, llv2, llv3) -> Ternop (op, loop_float llv1, loop_float llv2, loop_float llv3)
     | Binop (op, llv1, llv2) -> Binop (op, loop_float llv1, loop_float llv2)
@@ -779,7 +795,7 @@ let simplify_llc llc =
         loop_float @@ substitute_float ~var:(Get_local id) ~value:v1 v2
     | Local_scope opts -> Local_scope { opts with body = loop_proc local_scope_body }
     | Get_local _ -> llv
-    | Access _ -> llv
+    | Get_merge_buffer (_, _) -> llv
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
     | Embed_index (Iterator _) -> llv
     | Embed_index (Affine _) -> llv (* Cannot simplify affine expressions to constants *)
@@ -886,7 +902,7 @@ let simplify_llc llc =
         loop v2
     | Unop (_, v) -> loop v
     | Embed_index (Indexing.Fixed_idx i) -> check_constant tn (Float.of_int i)
-    | Embed_index _ | Get_local _ | Access (_, _) | Get (_, _) -> ()
+    | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> ()
   in
   let result = loop_proc llc in
   if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
@@ -984,7 +1000,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
     | Local_scope { id = { tn; _ }; body; orig_indices = _ } ->
         visit tn;
         loop body
-    | Access (_, _) -> ()
+    | Get_merge_buffer (la, _) -> visit la
     | Get (la, _) -> visit la
     | Ternop (_, f1, f2, f3) ->
         loop_float f1;
@@ -1057,22 +1073,8 @@ let to_doc_cstyle ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Access (C_function s, None) -> string (s ^ "()")
-    | Access (C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Access (External_unsafe { ptr; prec; dims = _ }, None) ->
-        string (Ops.ptr_to_string_hum ptr prec)
-    | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
-        string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
-    | Access (Merge_buffer { source }, Some idcs) ->
+    | Get_merge_buffer (source, idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, None) ->
-        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-        ^^ doc_ident source ^^ string ")"
-    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-        ^^ doc_ident source ^^ string ")"
-        ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx
@@ -1139,22 +1141,8 @@ let to_doc ?name ?static_indices () llc =
           ^^ nest 2 (break 1 ^^ doc_of_code body)
           ^^ break 1 ^^ string "}")
     | Get_local id -> doc_local id
-    | Access (C_function s, None) -> string (s ^ "()")
-    | Access (C_function s, Some idcs) -> string s ^^ parens (pp_indices idcs)
-    | Access (External_unsafe { ptr; prec; dims = _ }, None) ->
-        string (Ops.ptr_to_string_hum ptr prec)
-    | Access (External_unsafe { ptr; prec; dims = _ }, Some idcs) ->
-        string (Ops.ptr_to_string_hum ptr prec) ^^ brackets (pp_indices idcs)
-    | Access (Merge_buffer { source }, None) -> doc_ident source ^^ string ".merge"
-    | Access (Merge_buffer { source }, Some idcs) ->
+    | Get_merge_buffer (source, idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
-    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, None) ->
-        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-        ^^ doc_ident source ^^ string ")"
-    | Access (Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }, Some idcs) ->
-        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-        ^^ doc_ident source ^^ string ")"
-        ^^ brackets (pp_indices idcs)
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Embed_index idx -> pp_axis_index idx

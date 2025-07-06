@@ -447,14 +447,14 @@ end
     omitted. Note: the data should have no padding and if padding is inferred, the data will be
     copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
 let reshape ~l ?b ?(i = []) ?o ndarray =
-  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o ~init_data:(Reshape ndarray)
+  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o ~init_data:(Asgns.Reshape ndarray)
     ()
 
 (** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
     be inferred (or provided). Assumes no padding. See also: {!reshape} and {!TDSL.wrap_param}. *)
 let wrap ~l ?b ?(i = []) ?o ndarray =
   Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
-    ~init_data:(Keep_shape_no_padding ndarray) ()
+    ~init_data:(Asgns.Keep_shape_no_padding ndarray) ()
 
 (** Assumes the ndarray is padded as given. This means the dimensions of the ndarray will differ
     from the dimensions of the tensor by the padding. See also: {!TDSL.wrap}. *)

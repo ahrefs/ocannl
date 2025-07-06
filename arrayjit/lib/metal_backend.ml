@@ -555,6 +555,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, _ -> func_doc "rsqrt"
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
+      | Uint4x32_to_prec_uniform target_prec, _ ->
+          (* FIXME: NOT IMPLEMENTED YET - placeholder for Uint4x32_to_prec_uniform conversion *)
+          fun _v -> string ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0" ^ metal_prec_suffix_float target_prec ^ ")")
     (* Logical not *)
 
     let convert_precision ~from ~to_ =

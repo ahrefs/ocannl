@@ -381,6 +381,9 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
+  | Uint4x32_to_prec_uniform _ -> 
+      (* FIXME: NOT IMPLEMENTED YET *)
+      failwith "NOT IMPLEMENTED YET: Uint4x32_to_prec_uniform"
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
@@ -528,6 +531,8 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
   | Not -> "not"
+  | Uint4x32_to_prec_uniform target_prec -> 
+      "uint4x32_to_" ^ prec_string target_prec ^ "_uniform"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -573,6 +578,9 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
+  | Uint4x32_to_prec_uniform target_prec, _ -> 
+      (* FIXME: NOT IMPLEMENTED YET *)
+      ("uint4x32_to_" ^ prec_string target_prec ^ "_uniform(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

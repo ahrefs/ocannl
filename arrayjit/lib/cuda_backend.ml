@@ -477,6 +477,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
+      | Uint4x32_to_prec_uniform target_prec, _ ->
+          (* FIXME: NOT IMPLEMENTED YET - placeholder for Uint4x32_to_prec_uniform conversion *)
+          f ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0)") ""
 
     let ternop_syntax prec v =
       let open PPrint in

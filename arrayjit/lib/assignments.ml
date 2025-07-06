@@ -31,7 +31,6 @@ type fetch_op =
       (** Fills in the offset number of each cell, i.e. how many cells away it is from the
           beginning, in the logical representation of the tensor node. (The actual in-memory
           positions in a buffer instantiating the node can differ.) *)
-  | Access of Low_level.dedicated_access
   | Slice of { batch_idx : Indexing.static_symbol; sliced : Tn.t }
   | Embed_symbol of Indexing.static_symbol
 [@@deriving sexp_of, equal]
@@ -172,7 +171,9 @@ let%diagn2_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
-    | Merge_buffer tn -> Low_level.Access (Low_level.Merge_buffer { source = tn }, Some idcs)
+    | Merge_buffer tn -> 
+        (* FIXME: NOT IMPLEMENTED YET - need to handle merge buffer access differently now *)
+        Low_level.Get (tn, idcs)
   in
   let set tn idcs llv =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
@@ -266,9 +267,7 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
-    | Fetch { array; fetch_op = Access global; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            set array idcs @@ Access (global, Some idcs))
+
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
         Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
@@ -358,12 +357,6 @@ let to_doc ?name ?static_indices () c =
         in
         string ("constant_fill([" ^ values_str ^ "])")
     | Range_over_offsets -> string "range_over_offsets"
-    | Access (Low_level.C_function c) -> string (c ^ "()")
-    | Access (Low_level.Merge_buffer { source }) -> string (ident source ^ ".merge")
-    | Access (Low_level.External_unsafe { ptr; prec; dims = _ }) ->
-        string (Ops.ptr_to_string_hum ptr prec)
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims = _ }) ->
-        string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(" ^ ident source ^ ")")
     | Slice { batch_idx; sliced } ->
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->

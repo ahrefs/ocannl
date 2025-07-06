@@ -592,7 +592,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (empty, expr)
-    | Access (Low_level.Merge_buffer { source }, Some idcs) ->
+    | Get_merge_buffer (source, idcs) ->
         let tn = source in
         let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
@@ -601,34 +601,6 @@ module C_syntax (B : C_syntax_config) = struct
           string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
         in
         (empty, expr)
-    | Access (Low_level.C_function f_name, None) ->
-        let expr = string (f_name ^ "()") in
-        (empty, expr)
-    | Access (Low_level.External_unsafe { ptr; prec = source_prec; dims }, Some idcs) ->
-        let dims_val = Lazy.force dims in
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, dims_val) in
-        let ptr_str =
-          Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec
-        in
-        let expr =
-          string prefix
-          ^^ string ("(*(" ^ ptr_str ^ " + ")
-          ^^ offset_doc ^^ string "))" ^^ string postfix
-        in
-        (empty, expr)
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims }, Some idcs) ->
-        let tn = source in
-        let prefix, postfix = B.convert_precision ~from:target_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force target_dims) in
-        let source_ident = string (get_ident tn) in
-        let expr =
-          string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-          ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
-        in
-        (empty, expr)
-    | Access _ -> failwith "C_syntax: Access cases with wrong indices / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let from_prec = Lazy.force tn.prec in
@@ -672,6 +644,13 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
+    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
+        let defs, expr_v = pp_float prec v in
+        let expr = 
+          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(") ^^
+          expr_v ^^ string ")"
+        in
+        (defs, expr)
     | Unop (op, v) ->
         let defs, expr_v = pp_float prec v in
         let expr = group (B.unop_syntax prec op expr_v) in
@@ -692,7 +671,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
         (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
-    | Access (Low_level.Merge_buffer { source }, Some idcs) ->
+    | Get_merge_buffer (source, idcs) ->
         let tn = source in
         let from_prec = Lazy.force tn.prec in
         let dims = Lazy.force tn.dims in
@@ -708,45 +687,6 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ braces (string ("=" ^ B.float_log_style))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
-    | Access (Low_level.C_function f_name, None) ->
-        let expr_doc = string (f_name ^ "()") in
-        (expr_doc, [])
-    | Access (Low_level.External_unsafe { ptr; prec = source_prec; dims }, Some idcs) ->
-        let dims_val = Lazy.force dims in
-        let prefix, postfix = B.convert_precision ~from:source_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, dims_val) in
-        let ptr_str =
-          Ops.c_rawptr_to_string (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) source_prec
-        in
-        let access_doc =
-          string prefix
-          ^^ string ("(*(" ^ ptr_str ^ " + ")
-          ^^ offset_doc ^^ string "))" ^^ string postfix
-        in
-        let expr_doc =
-          string prefix ^^ string ("external[%u]{=" ^ B.float_log_style ^ "}") ^^ string postfix
-        in
-        (expr_doc, [ `Accessor (idcs, dims_val); `Value access_doc ])
-    | Access (Low_level.Uint4x32_to_prec_uniform { source; target_prec; target_dims }, Some idcs) ->
-        let tn = source in
-        let prefix, postfix = B.convert_precision ~from:target_prec ~to_:prec in
-        let dims = Lazy.force target_dims in
-        let offset_doc = pp_array_offset (idcs, dims) in
-        let source_ident = string (get_ident tn) in
-        let access_doc =
-          string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-          ^^ source_ident ^^ brackets offset_doc ^^ string ")" ^^ string postfix
-        in
-        let expr_doc =
-          string prefix
-          ^^ string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-          ^^ source_ident
-          ^^ brackets (string "%u")
-          ^^ string "){=" ^^ string B.float_log_style ^^ string "}" ^^ string postfix
-        in
-        (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
-    | Access _ -> failwith "C_syntax: Access cases with wrong indices / FFI NOT IMPLEMENTED YET"
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let from_prec = Lazy.force tn.prec in
@@ -778,6 +718,13 @@ module C_syntax (B : C_syntax_config) = struct
         let v1_doc, idcs1 = debug_float prec v1 in
         let v2_doc, idcs2 = debug_float prec v2 in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
+    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
+        let v_doc, idcs = debug_float prec v in
+        let expr_doc = 
+          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(") ^^
+          v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
+        in
+        (expr_doc, idcs)
     | Unop (op, v) ->
         let v_doc, idcs = debug_float prec v in
         (B.unop_syntax prec op v_doc, idcs)

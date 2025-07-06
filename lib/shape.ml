@@ -246,7 +246,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of [ `Data of Ir.Assignments.init_data | `Fetch of Ir.Assignments.fetch_op ]
+  | Terminal of terminal_type
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -258,6 +258,7 @@ let logic_to_spec = function
   | Broadcast (Einsum spec, _, _) | Transpose (Permute spec, _) -> spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
+  | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
   | Terminal _ -> "<terminal>"
 
 module Update_id = struct
@@ -400,9 +401,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
   match logic with
-  | Terminal (`Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Data (Reshape nd)) ->
+  | Terminal (Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Data (Reshape nd)) ->
       ( dim_map_empty,
         Rows_constr
           {
@@ -415,7 +416,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
           }
         :: mark_terminal () )
-  | Terminal (`Data (Keep_shape_no_padding nd)) ->
+  | Terminal (Data (Keep_shape_no_padding nd)) ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
         Rows_constr
@@ -425,7 +426,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
               Exact (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
           }
         :: mark_terminal () )
-  | Terminal (`Data (Padded { data; padding; padded_value })) ->
+  | Terminal (Data (Padded { data; padding; padded_value })) ->
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
       ( dim_map_empty,
@@ -436,7 +437,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
               Exact (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
           }
         :: mark_terminal () )
-  | Terminal (`Fetch (Constant_fill values)) ->
+  | Terminal (Fetch (Constant_fill values)) ->
       let len = Array.length values in
       ( dim_map_empty,
         Rows_constr
@@ -445,15 +446,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-  | Terminal (`Fetch (Access (C_function _))) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Access (External_unsafe _))) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Access (Merge_buffer _))) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Access (Uint4x32_to_prec_uniform _))) ->
-      (* FIXME: NOT IMPLEMENTED YET -- we need to propagate the precision-adjusted dimensions
-         between the source tensor and the target tensor. This is tricky because the dimensions
-         are not known at the time of the shape inference. *)
-      (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Slice { sliced = tn; batch_idx = _ })) ->
+
+  | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
           Rows_constr
@@ -466,7 +460,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             }
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())
-  | Terminal (`Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
+
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -589,6 +584,14 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_ineq { cur = cur_sh.output; subr = o_lhs };
             Row_ineq { cur = o_rhs; subr = sh.output };
           ] )
+  | Transpose (Uint4x32_to_prec _target_prec, sh) ->
+      (* FIXME: NOT IMPLEMENTED YET - need to handle precision conversion with dimension changes *)
+      ( Row.dim_map_empty,
+        [
+          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
+          Row_ineq { cur = cur_sh.input; subr = sh.input };
+          Row_ineq { cur = cur_sh.output; subr = sh.output };
+        ] )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with

@@ -205,7 +205,7 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
-    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?init_data ?fetch_op
+    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
     ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
@@ -221,10 +221,11 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       |> Option.value ~default)
   in
   let terminal_logic () =
-    match (fetch_op, init_data) with
-    | None, None -> Shape.Terminal (`Fetch (Asgns.Constant 0.0))
-    | Some fetch_op, _ -> Shape.Terminal (`Fetch fetch_op)
-    | None, Some init_data -> Shape.Terminal (`Data init_data)
+    let open Shape in
+    match terminal_op with
+    | None -> Terminal (Fetch (Asgns.Constant 0.0))
+    | Some (Fetch fetch_op) -> Terminal (Fetch fetch_op)
+    | Some (Data init_data) -> Terminal (Data init_data)
   in
   let rec shape_logics = function
     | [] -> [ terminal_logic () ]
@@ -241,15 +242,16 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   let padding = lazy (Shape.to_padding shape) in
   let v =
-    match init_data with
-    | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
-    | Some (Asgns.Reshape data) ->
+    match terminal_op with
+    | Some (Shape.Data (Asgns.Reshape data)) ->
         Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
-    | Some (Asgns.Keep_shape_no_padding data) ->
+    | Some (Shape.Data (Asgns.Keep_shape_no_padding data)) ->
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
-    | Some (Asgns.Padded { data; padding = padding_spec; padded_value }) ->
+    | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
         let padding = Some (padding_spec, padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
+    | Some (Shape.Fetch _) | None ->
+        Tn.create ~default_prec ~id ~label ~dims ~padding ()
   in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
@@ -355,27 +357,27 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
 
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?deduced ?init_data ?fetch_op () =
+  let terminal_op =
+    match init_data, fetch_op with
+    | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
+    | Some init_data, None -> Some (Shape.Data init_data)
+    | None, Some fetch_op -> Some (Shape.Fetch fetch_op)
+    | None, None -> None
+  in
   let op_asn ~v ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match fetch_op with
     | None -> Asgns.empty_comp
-    | Some
-        (( Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _
-         | Access (Uint4x32_to_prec_uniform _) ) as fetch_op) ->
-        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
-    | Some (Access _ as fetch_op) ->
-        (* Note: [Access] can be used for merging across devices. But, some use cases of [Access]
-           will require a hosted tensor node. *)
-        Tn.update_memory_mode v Materialized 22;
+    | Some (( Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _ ) as fetch_op) ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
-  (* Note: fetch_op in op is used only for shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?init_data ?fetch_op ~op_asn ~grad_asn ~grad_spec
+  (* Note: terminal_op is used for both tensor creation and shape inference. *)
+  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
     make_shape []
 
 let float_to_label v = Float.to_string v
