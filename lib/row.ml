@@ -307,7 +307,7 @@ let dim_conjunction constr1 constr2 =
   | _, Unconstrained_dim -> Some ([], constr1)
   | At_least_dim d1, At_least_dim d2 -> Some ([], At_least_dim (Int.max d1 d2))
 
-let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
+let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise
     @@ Shape_error
@@ -376,40 +376,77 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
               (* Neither coefficient divides the other - we can't make progress *)
               (* Keep both constraints - this will be resolved later *)
               None)
+  | Total_elems { nominator = Strided_var { coeff = c1; var = v1 }; divided_by = vars1 }, constr2
+    when Set.mem vars1 v1 ->
+      row_conjunction ~id
+        (Total_elems { nominator = Num_elems (Lazy.force c1); divided_by = Set.remove vars1 v1 })
+        constr2
+  | constr2, Total_elems { nominator = Strided_var { coeff = c1; var = v1 }; divided_by = vars1 }
+    when Set.mem vars1 v1 ->
+      row_conjunction ~id
+        (Total_elems { nominator = Num_elems (Lazy.force c1); divided_by = Set.remove vars1 v1 })
+        constr2
   | ( Total_elems { nominator = n1; divided_by = vars1 },
       Total_elems { nominator = n2; divided_by = vars2 } ) ->
-      let shared = Set.inter vars1 vars2 |> Set.to_list in
+      let vars1_only = Set.diff vars1 vars2 |> Set.to_list in
+      let vars2_only = Set.diff vars2 vars1 |> Set.to_list in
+      let extras ~keep_constr1 ?(extra_var = []) ?(div_by = []) ~n1_val ~n2_val () =
+        (* If we keep constr1, then it has fewer divided_by, i.e. vars1 ⊂ vars2. n1 / (product of
+           vars1) = n2 / (product of vars2) Since vars1 ⊂ vars2, we have vars2 = vars1 ∪ vars2_only
+           So: n1 / (product of vars1) = n2 / (product of vars1 × product of vars2_only) Thus: n1 =
+           n2 / (product of vars2_only) Which means: product of vars2_only = n2 / n1 *)
+        let diff_vars = extra_var @ if keep_constr1 then vars2_only else vars1_only in
+        let quotient = if keep_constr1 then n2_val / n1_val else n1_val / n2_val in
+        if quotient <= 0 then elems_mismatch n1 n2
+        else if quotient = 1 then
+          (* The difference variables must all be 1 *)
+          List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+        else if List.is_empty diff_vars then
+          (* No difference in variables but different nominators - this is a mismatch *)
+          elems_mismatch n1 n2
+        else
+          (* The product of difference variables equals the quotient *)
+          let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
+          [
+            Rows_constr
+              {
+                r = [ r ];
+                constr =
+                  Total_elems
+                    {
+                      nominator = Num_elems quotient;
+                      divided_by = Set.of_list (module Dim_var) div_by;
+                    };
+              };
+          ]
+      in
       let extras ~keep_constr1 =
-        (* If we keep constr1, then it has fewer divided_by, i.e. n1 > n2. *)
         match (n1, n2) with
-        | Num_elems n1_val, Num_elems n2_val ->
-            let nominator_val = if keep_constr1 then n1_val / n2_val else n2_val / n1_val in
-            if nominator_val <= 0 then elems_mismatch n1 n2
-            else if nominator_val = 1 then
-              List.map shared ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-            else if List.is_empty shared then []
-            else
-              let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
-              [
-                Rows_constr
-                  {
-                    r = [ r ];
-                    constr =
-                      Total_elems
-                        {
-                          nominator = Num_elems nominator_val;
-                          divided_by = Set.empty (module Dim_var);
-                        };
-                  };
-              ]
+        | Num_elems n1_val, Num_elems n2_val -> extras ~keep_constr1 ~n1_val ~n2_val ()
+        | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 }
+          when equal_dim_var v1 v2 ->
+            extras ~keep_constr1 ~n1_val:(Lazy.force c1) ~n2_val:(Lazy.force c2) ()
+        | Strided_var { coeff = c1; var = v1 }, Num_elems n2_val when keep_constr1 ->
+            (* v1 from the nominator joins v2_vars from the denominator. *)
+            extras ~keep_constr1 ~extra_var:[ v1 ] ~n1_val:(Lazy.force c1) ~n2_val ()
+        | Num_elems n1_val, Strided_var { coeff = c2; var = v2 } when not keep_constr1 ->
+            extras ~keep_constr1 ~extra_var:[ v2 ] ~n1_val ~n2_val:(Lazy.force c2) ()
+        | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 }
+          when keep_constr1 ->
+            (* v1 from the nominator joins v2_vars from the denominator. *)
+            extras ~keep_constr1 ~extra_var:[ v1 ] ~div_by:[ v2 ] ~n1_val:(Lazy.force c1)
+              ~n2_val:(Lazy.force c2) ()
+        | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 }
+          when not keep_constr1 ->
+            (* v2 from the nominator joins v1_vars from the denominator. *)
+            extras ~keep_constr1 ~extra_var:[ v2 ] ~div_by:[ v1 ] ~n1_val:(Lazy.force c1)
+              ~n2_val:(Lazy.force c2) ()
         | _ ->
-            (* TODO: Handle Strided_var cases - for now, return empty list *)
+            (* NOTE: being leaky here to not overcomplicate the code *)
             []
       in
-      let subsum = Set.symmetric_diff vars1 vars2 in
-      if Sequence.for_all ~f:Either.is_first subsum then Some (extras ~keep_constr1:false, constr2)
-      else if Sequence.for_all ~f:Either.is_second subsum then
-        Some (extras ~keep_constr1:true, constr1)
+      if List.is_empty vars1_only then Some (extras ~keep_constr1:false, constr2)
+      else if List.is_empty vars2_only then Some (extras ~keep_constr1:true, constr1)
       else None
   | Exact dims1, Exact dims2 ->
       if List.length dims1 <> List.length dims2 then
