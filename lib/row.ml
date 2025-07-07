@@ -485,10 +485,9 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
   | Unconstrained -> Unconstrained
   | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
-(** Helper function to convert a list of rows to a single row option.
-    Returns None if there is more than one row variable among the rows.
-    Otherwise, concatenates the leading dims to the beg_dims of the variable,
-    and the dims of the variable's row with the dims of the following rows. *)
+(** Helper function to convert a list of rows to a single row option. Returns None if there is more
+    than one row variable among the rows. Otherwise, concatenates the leading dims to the beg_dims
+    of the variable, and the dims of the variable's row with the dims of the following rows. *)
 let rows_to_row (rows : row list) : row option =
   let find_row_vars rows =
     List.foldi rows ~init:([], []) ~f:(fun idx (var_indices, vars) row ->
@@ -505,9 +504,10 @@ let rows_to_row (rows : row list) : row option =
       Some { dims = all_dims; bcast = Broadcastable; id }
   | [ _ ] ->
       (* Exactly one row variable *)
-      let (var_idx, var) = List.hd_exn var_indices in
+      let var_idx, var = List.hd_exn var_indices in
       let var_row = List.nth_exn rows var_idx in
-      let (var_beg_dims, var_dims) = match var_row.bcast with
+      let var_beg_dims, var_dims =
+        match var_row.bcast with
         | Row_var { beg_dims; _ } -> (beg_dims, var_row.dims)
         | Broadcastable -> assert false (* We know there's a row variable *)
       in
@@ -517,15 +517,69 @@ let rows_to_row (rows : row list) : row option =
       let after_dims = List.concat_map after_rows ~f:(fun r -> r.dims) in
       let new_beg_dims = before_dims @ var_beg_dims in
       let new_dims = var_dims @ after_dims in
-      Some { dims = new_dims; bcast = Row_var { v = var; beg_dims = new_beg_dims }; id = var_row.id }
+      Some
+        { dims = new_dims; bcast = Row_var { v = var; beg_dims = new_beg_dims }; id = var_row.id }
   | _ :: _ :: _ ->
       (* More than one row variable *)
       None
 
-let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint) (env : environment) : constraint_ list * environment =
+let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
+
+let check_empty_row r =
+  if not (List.is_empty r.dims) then
+    raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ]);
+  match r.bcast with
+  | Broadcastable -> []
+  | Row_var { v; beg_dims } ->
+      if List.is_empty beg_dims then
+        [ Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } } ]
+      else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
+
+let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint) (env : environment)
+    : constraint_ list * environment =
   match rows_to_row rows with
   | Some single_row -> apply_row_constraint ~stage single_row constr env
-  | None -> ([ Rows_constr { r = rows; constr } ], env)
+  | None -> (
+      match constr with
+      | Exact [ single_dim ] -> (
+          match List.rev rows with
+          | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
+              apply_rows_constraint ~stage (List.rev more_rows) constr env
+          | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Input; _ } as id }
+            :: more_rows ->
+              let more_eqs, env = apply_rows_constraint ~stage (List.rev more_rows) constr env in
+              ( Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
+                :: more_eqs,
+                env )
+          | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Output; _ } as id }
+            :: more_rows ->
+              (* TODO: we could check if there is a non-empty output row later on. *)
+              ( Row_eq
+                  {
+                    r1 = row_of_var v id;
+                    r2 = { dims = [ single_dim ]; bcast = Broadcastable; id };
+                  }
+                :: List.concat_map ~f:check_empty_row more_rows,
+                env )
+          | {
+              dims = [ single_other ];
+              bcast = Row_var { v; beg_dims = [] };
+              id = { kind = `Output; _ } as id;
+            }
+            :: more_rows
+          | {
+              dims = [];
+              bcast = Row_var { v; beg_dims = [ single_other ] };
+              id = { kind = `Output; _ } as id;
+            }
+            :: more_rows ->
+              ( Dim_eq { d1 = single_other; d2 = single_dim }
+                :: Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
+                :: List.concat_map ~f:check_empty_row more_rows,
+                env )
+          | _ -> raise @@ Shape_error ("apply_rows_constraint: shape too big", [ Row_mismatch rows ])
+          )
+      | _ -> ([ Rows_constr { r = rows; constr } ], env))
 
 and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
@@ -623,6 +677,18 @@ and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
           if stored then (extras, env)
           else
             (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *)))
+    | { dims; bcast = Row_var { v; beg_dims }; _ }, Exact exact_dims
+      when List.length beg_dims + List.length dims >= List.length exact_dims ->
+        assert (not stored);
+        if List.length dims + List.length beg_dims > List.length exact_dims then
+          raise
+          @@ Shape_error
+               ( "apply_row_constraint: Exact constraint failed, shape is too long",
+                 [ Row_mismatch [ r ] ] );
+        ( Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } }
+          :: List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 -> Dim_eq { d1; d2 })
+          @ extras,
+          env )
     | { bcast = Row_var _; _ }, _ | _, Total_elems { nominator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
@@ -713,8 +779,6 @@ let s_row_one v ~value:{ dims = more_dims; bcast; id = _ } ~in_ =
 
 let s_row_one_in_row_constr _v ~value:_ ~in_ =
   match in_ with Unconstrained | Total_elems _ | Exact _ -> in_
-
-let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
     constraint_ list * row_entry =
@@ -1473,20 +1537,19 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
-let rec eliminate_rows_constraint ~lub (rows : row list) (constr : row_constraint) (env : environment) : constraint_ list =
+let rec eliminate_rows_constraint ~lub (rows : row list) (constr : row_constraint)
+    (env : environment) : constraint_ list =
   match rows_to_row rows with
   | Some single_row -> eliminate_row_constraint ~lub single_row constr env
   | None -> [ Rows_constr { r = rows; constr } ]
 
-and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env :
-    constraint_ list =
+and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
   match r with
   | { bcast = Broadcastable; _ } ->
       (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
       let ineqs, _env = apply_row_constraint ~stage:Stage5 r constr env in
       List.concat_map ineqs ~f:(function
-        | Rows_constr { r = rows; constr } ->
-            eliminate_rows_constraint ~lub:None rows constr env
+        | Rows_constr { r = rows; constr } -> eliminate_rows_constraint ~lub:None rows constr env
         | ineq -> [ ineq ])
   | { bcast = Row_var { v; beg_dims }; dims; id } -> (
       let r1 = row_of_var v id in

@@ -97,9 +97,7 @@ type transpose_type =
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
 [@@deriving equal, sexp]
 
-type terminal_type =
-  | Data of Ir.Assignments.init_data
-  | Fetch of Ir.Assignments.fetch_op
+type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
 [@@deriving equal, sexp_of]
 
 type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
@@ -446,7 +444,6 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
-
   | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
@@ -461,7 +458,6 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
-
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
