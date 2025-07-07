@@ -49,6 +49,35 @@ let test_conv_parsing () =
 
   printf "All conv syntax parsing tests passed!\n%!"
 
+let test_strided_iteration_parsing () =
+  printf "\nTesting strided iteration syntax parsing...\n%!";
+
+  (* Test 1: Basic strided iteration (multichar mode due to multiplication) *)
+  let spec1 = "2*output" in
+  let labels1 = Shape.axis_labels_of_spec spec1 in
+  printf "Test 1: Parsed strided iteration '%s' successfully\n%!" spec1;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels1));
+
+  (* Test 2: Single-char strided iteration (works if stride != 1) *)
+  let spec2 = "3*i" in
+  let labels2 = Shape.axis_labels_of_spec spec2 in
+  printf "Test 2: Parsed single-char strided iteration '%s' successfully\n%!" spec2;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels2));
+
+  (* Test 3: Strided iteration in einsum context *)
+  let spec3 = "input->2*output" in
+  let labels3 = Shape.axis_labels_of_spec spec3 in
+  printf "Test 3: Parsed einsum with strided iteration '%s' successfully\n%!" spec3;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels3));
+
+  (* Test 4: Mixed regular labels and strided iteration (multichar due to comma) *)
+  let spec4 = "regular, 3*strided" in
+  let labels4 = Shape.axis_labels_of_spec spec4 in
+  printf "Test 4: Parsed mixed labels with strided iteration '%s' successfully\n%!" spec4;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels4));
+
+  printf "\nAll strided iteration parsing tests completed!\n%!"
+
 let test_conv_multichar_detection () =
   printf "\nTesting multichar mode detection...\n%!";
 
@@ -113,6 +142,7 @@ let test_single_char_conv_equivalence () =
 
 let () =
   test_conv_parsing ();
+  test_strided_iteration_parsing ();
   test_conv_multichar_detection ();
   test_single_char_conv_equivalence ();
   printf "\nAll conv syntax tests completed!\n%!"

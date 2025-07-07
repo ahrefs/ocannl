@@ -118,8 +118,12 @@ let scaled_identifier ~multichar =
 let conv_term ~multichar =
   let open Angstrom in
   let* stride, output_label = scaled_identifier ~multichar in
-  char '+' *> scaled_identifier ~multichar >>| fun (dilation, kernel_label) ->
-  Conv_spec { stride; output_label; dilation; kernel_label }
+  char '+' *> scaled_identifier ~multichar
+  >>| (fun (dilation, kernel_label) -> Conv_spec { stride; output_label; dilation; kernel_label })
+  <|>
+  if stride <> 1 then
+    return (Conv_spec { stride; output_label; dilation = 0; kernel_label = "_stride_only" })
+  else fail "neither convolution nor strided iteration"
 
 let opt_separators = Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
 
@@ -372,9 +376,13 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
                  Row.get_var ~label:output_label ()))
         in
         let kernel_dim =
-          Row.Var
-            (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                 Row.get_var ~label:kernel_label ()))
+          if String.equal kernel_label "_stride_only" then
+            (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
+            Row.get_dim ~d:0 ()
+          else
+            Row.Var
+              (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                   Row.get_var ~label:kernel_label ()))
         in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
@@ -963,9 +971,13 @@ let shape_spec_to_dims_bio labels =
                  Row.get_var ~label:output_label ()))
         in
         let kernel_dim =
-          Row.Var
-            (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                 Row.get_var ~label:kernel_label ()))
+          if String.equal kernel_label "_stride_only" then
+            (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
+            Row.get_dim ~d:0 ()
+          else
+            Row.Var
+              (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                   Row.get_var ~label:kernel_label ()))
         in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in

@@ -110,12 +110,14 @@ let rec dim_to_string style = function
   | Var { id; label = None } -> "$" ^ Int.to_string id
   | Conv_input { stride; output; dilation; kernel } ->
       let output_str = dim_to_string style output in
-      let kernel_str = dim_to_string style kernel in
       let output_str = if stride = 1 then output_str else Int.to_string stride ^ "*" ^ output_str in
-      let kernel_str =
-        if dilation = 1 then kernel_str else Int.to_string dilation ^ "*" ^ kernel_str
-      in
-      [%string "conv(%{output_str}+%{kernel_str})"]
+      if dilation = 0 then output_str
+      else
+        let kernel_str = dim_to_string style kernel in
+        let kernel_str =
+          if dilation = 1 then kernel_str else Int.to_string dilation ^ "*" ^ kernel_str
+        in
+        [%string "conv(%{output_str}+%{kernel_str})"]
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -341,14 +343,35 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
             (* Different variables - try to derive equations if one coeff divides the other *)
             let c1_val = Lazy.force c1 in
             let c2_val = Lazy.force c2 in
-            if c1_val % c2_val = 0 then
+            if c1_val = c2_val then Some ([], constr2)
+            else if c1_val % c2_val = 0 then
               (* c1 * v1 = c2 * v2, and c1 = k * c2, so k * c2 * v1 = c2 * v2, thus k * v1 = v2 *)
               let k = c1_val / c2_val in
-              Some ([ Dim_eq { d1 = Var v2; d2 = get_dim ~d:k () } ], constr1)
+              Some
+                ( [
+                    Dim_eq
+                      {
+                        d1 = Var v2;
+                        d2 =
+                          Conv_input
+                            { stride = k; output = Var v1; dilation = 0; kernel = get_dim ~d:0 () };
+                      };
+                  ],
+                  constr1 )
             else if c2_val % c1_val = 0 then
               (* c1 * v1 = c2 * v2, and c2 = k * c1, so c1 * v1 = k * c1 * v2, thus v1 = k * v2 *)
               let k = c2_val / c1_val in
-              Some ([ Dim_eq { d1 = Var v1; d2 = get_dim ~d:k () } ], constr2)
+              Some
+                ( [
+                    Dim_eq
+                      {
+                        d1 = Var v1;
+                        d2 =
+                          Conv_input
+                            { stride = k; output = Var v2; dilation = 0; kernel = get_dim ~d:0 () };
+                      };
+                  ],
+                  constr2 )
             else
               (* Neither coefficient divides the other - we can't make progress *)
               (* Keep both constraints - this will be resolved later *)
@@ -869,6 +892,7 @@ let s_dim_one_in_row_entry v ~value in_ =
 let rec vars_of_dim = function
   | Dim _ -> Set.empty (module Dim_var)
   | Var v -> Set.singleton (module Dim_var) v
+  | Conv_input { output; dilation; _ } when dilation = 0 -> vars_of_dim output
   | Conv_input { output; kernel; _ } -> Set.union (vars_of_dim output) (vars_of_dim kernel)
 
 let subst_dim ?(keep_conv = false) env dim =
@@ -1937,7 +1961,22 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
      environment. *)
   let rec to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
+    | Dim { d = 0; _ } ->
+        (* Dummy: don't do anything for 0-dimensional axes *)
+        Solved (Fixed_idx 0)
     | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
+    | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+        (* Strided iteration: ignore kernel since dilation=0 *)
+        Conv_input
+          {
+            stride;
+            output = to_proj output;
+            dilation = 0;
+            kernel = Solved (Fixed_idx 0);
+            (* dummy kernel *)
+            kernel_size = 0;
+            input_id = None;
+          }
     | Conv_input { stride; output; dilation; kernel } ->
         let kernel_size =
           match subst_dim env kernel with
@@ -2027,6 +2066,37 @@ let get_proj_index proj_env =
         | Some i -> i
         | None -> unknown_projection proj_id d)
     | Solved idx -> idx
+    | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _ } -> (
+        (* Strided iteration: skip kernel computation since dilation=0 *)
+        let output_idx = loop output in
+        let symbols = ref [] in
+        let offset = ref 0 in
+
+        (* Expand output index - multiply by stride *)
+        (match output_idx with
+        | Idx.Fixed_idx i -> offset := !offset + (stride * i)
+        | Idx.Iterator s -> symbols := (stride, s) :: !symbols
+        | Idx.Affine { symbols = output_syms; offset = output_offset } ->
+            symbols := List.map output_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
+            offset := !offset + (stride * output_offset));
+
+        (* Combine and simplify symbols *)
+        let symbols =
+          !symbols
+          |> List.filter ~f:(fun (c, _) -> c <> 0)
+          |> List.sort ~compare:(fun (_, s1) (_, s2) -> Idx.compare_symbol s1 s2)
+          |> List.group ~break:(fun (_, s1) (_, s2) -> not (Idx.equal_symbol s1 s2))
+          |> List.map ~f:(fun group ->
+                 let s = snd (List.hd_exn group) in
+                 let coeff = List.sum (module Int) group ~f:fst in
+                 (coeff, s))
+          |> List.filter ~f:(fun (c, _) -> c <> 0)
+        in
+
+        match symbols with
+        | [] -> Idx.Fixed_idx !offset
+        | [ (1, s) ] when !offset = 0 -> Idx.Iterator s
+        | _ -> Idx.Affine { symbols; offset = !offset })
     | Conv_input { stride; output; dilation; kernel; kernel_size; input_id } -> (
         let output_idx = loop output in
         let kernel_idx = loop kernel in
@@ -2129,6 +2199,18 @@ let rec dim_to_proj proj_env : dim -> proj = function
   | Var v -> Var v
   | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
   | Dim s -> Proj (Proj_id.fresh (), s)
+  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+      (* Strided iteration: ignore kernel since dilation=0 *)
+      Conv_input
+        {
+          stride;
+          output = dim_to_proj proj_env output;
+          dilation = 0;
+          kernel = dim_to_proj proj_env (get_dim ~d:0 ());
+          (* dummy kernel *)
+          kernel_size = 0;
+          input_id = None;
+        }
   | Conv_input { stride; output; dilation; kernel } ->
       (* FIXME: is this sufficient? *)
       let kernel_size = match kernel with Dim { d; _ } -> d | _ -> assert false in
@@ -2222,6 +2304,9 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | Some p2 -> loop (Proj_eq (p, p2)))
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
+    | Iterated (Conv_input { output; dilation = 0; kernel = _; _ }) ->
+        (* Strided iteration: only process output since dilation=0 *)
+        loop (Iterated output)
     | Iterated (Conv_input { output; kernel; _ }) ->
         loop (Iterated output);
         loop (Iterated kernel)

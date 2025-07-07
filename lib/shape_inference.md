@@ -23,7 +23,10 @@ type dim =
   | Dim of solved_dim
   | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
       (** The offset is implicit, automatically derived. If [!use_padding] is [true], the offset is
-          the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
+          the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. If
+          [!use_padding] is [true], the value stands for dimensions size [stride * output],
+          otherwise for dimensions size [stride * output + dilation * kernel]. If [dilation = 0],
+          the value stands for projections of strided iteration rather than convolution. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
