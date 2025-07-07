@@ -77,13 +77,19 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 type dim_constraint = Unconstrained_dim | At_least_dim of int
 [@@deriving equal, hash, compare, sexp, variants]
 
+type total_elems =
+  | Num_elems of int
+  | Strided_var of { coeff : int Lazy.t; var : dim_var }
+      (** The total number of elements is the coefficient times the number of dimensions the
+          variable represents. *)
+[@@deriving equal, hash, compare, sexp]
+
 type row_constraint =
   | Unconstrained
-  | Total_elems of { nominator : int; divided_by : dim_var_set }
+  | Total_elems of { nominator : total_elems; divided_by : dim_var_set }
       (** The rows, inclusive of the further row spec, have this many elements. *)
-  | Exact of dim list
-      (** The concatenated rows have these axes. *)
-[@@deriving equal, hash, compare, sexp, variants]
+  | Exact of dim list  (** The concatenated rows have these axes. *)
+[@@deriving equal, hash, compare, sexp]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
     [subr] must be sorted using the [@@deriving compare] comparison. *)

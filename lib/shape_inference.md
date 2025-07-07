@@ -138,7 +138,11 @@ The above mechanisms (excluding `dim_constraint` and `row_constraint`) are suffi
 ```ocaml
 type dim_constraint = Unconstrained_dim | At_least_dim of int
 
-type total_elems = Num_elems of int | Delayed of { coeff : int Lazy.t; var : dim_var }
+type total_elems =
+  | Num_elems of int
+  | Strided_var of { coeff : int Lazy.t; var : dim_var }
+      (** The total number of elements is the coefficient times the number of dimensions the
+          variable represents. *)
 
 type row_constraint =
   | Unconstrained

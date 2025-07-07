@@ -169,9 +169,12 @@ let dims_label_assoc dims =
 type dim_constraint = Unconstrained_dim | At_least_dim of int
 [@@deriving equal, hash, compare, sexp, variants]
 
+type total_elems = Num_elems of int | Strided_var of { coeff : int Lazy.t; var : dim_var }
+[@@deriving equal, hash, compare, sexp]
+
 type row_constraint =
   | Unconstrained
-  | Total_elems of { nominator : int; divided_by : dim_var_set }
+  | Total_elems of { nominator : total_elems; divided_by : dim_var_set }
   | Exact of dim list
 [@@deriving equal, hash, compare, sexp, variants]
 
@@ -272,6 +275,29 @@ let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
       | res -> res)
   | Dim _ | Var _ -> in_
 
+(* Helper functions for total_elems operations *)
+let total_elems_to_string = function
+  | Num_elems n -> Int.to_string n
+  | Strided_var { coeff; var } ->
+      let var_str = match var.label with Some l -> l | None -> "$" ^ Int.to_string var.id in
+      [%string "%{Lazy.force coeff#Int}*%{var_str}"]
+
+let total_elems_divide t d =
+  if d <= 0 then raise @@ Shape_error ([%string "Division by non-positive number: %{d#Int}"], [])
+  else
+    match t with
+    | Num_elems n -> Num_elems (n / d)
+    | Strided_var { coeff; var } -> Strided_var { coeff = lazy (Lazy.force coeff / d); var }
+
+let total_elems_multiply t d =
+  match t with
+  | Num_elems n -> Num_elems (n * d)
+  | Strided_var { coeff; var } -> Strided_var { coeff = lazy (Lazy.force coeff * d); var }
+
+let total_elems_is_zero = function
+  | Num_elems n -> n <= 0
+  | Strided_var { coeff; _ } -> Lazy.force coeff <= 0
+
 (* For future flexibility *)
 let dim_conjunction constr1 constr2 =
   match (constr1, constr2) with
@@ -281,34 +307,81 @@ let dim_conjunction constr1 constr2 =
 
 let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
   let elems_mismatch n1 n2 =
-    raise @@ Shape_error ([%string "Total_elems constraint conflict: %{n1#Int} vs. %{n2#Int}"], [])
+    raise
+    @@ Shape_error
+         ( [%string
+             "Total_elems constraint conflict: %{total_elems_to_string n1} vs. \
+              %{total_elems_to_string n2}"],
+           [] )
   in
   match (constr1, constr2) with
   | Unconstrained, _ -> Some ([], constr2)
   | _, Unconstrained -> Some ([], constr1)
   | ( Total_elems { nominator = n1; divided_by = vars1 },
       Total_elems { nominator = n2; divided_by = vars2 } )
-    when [%equal: Set.M(Dim_var).t] vars1 vars2 ->
-      if n1 <> n2 then elems_mismatch n1 n2 else Some ([], constr2)
+    when [%equal: Set.M(Dim_var).t] vars1 vars2 -> (
+      match (n1, n2) with
+      | n1, n2 when [%equal: total_elems] n1 n2 -> Some ([], constr2)
+      | Num_elems _, Num_elems _ ->
+          (* Both are solved and different - this is a mismatch *)
+          elems_mismatch n1 n2
+      | Num_elems n, Strided_var { coeff; var } | Strided_var { coeff; var }, Num_elems n ->
+          (* One is solved, one is not - we can derive an equation *)
+          let coeff_val = Lazy.force coeff in
+          if n % coeff_val = 0 then
+            Some ([ Dim_eq { d1 = Var var; d2 = get_dim ~d:(n / coeff_val) () } ], constr1)
+          else
+            (* n is not divisible by coeff - this is a mismatch *)
+            elems_mismatch n1 n2
+      | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 } ->
+          if equal_dim_var v1 v2 then
+            (* Same variable but different coefficients - this is a mismatch *)
+            if Lazy.force c1 <> Lazy.force c2 then elems_mismatch n1 n2 else Some ([], constr2)
+          else
+            (* Different variables - try to derive equations if one coeff divides the other *)
+            let c1_val = Lazy.force c1 in
+            let c2_val = Lazy.force c2 in
+            if c1_val % c2_val = 0 then
+              (* c1 * v1 = c2 * v2, and c1 = k * c2, so k * c2 * v1 = c2 * v2, thus k * v1 = v2 *)
+              let k = c1_val / c2_val in
+              Some ([ Dim_eq { d1 = Var v2; d2 = get_dim ~d:k () } ], constr1)
+            else if c2_val % c1_val = 0 then
+              (* c1 * v1 = c2 * v2, and c2 = k * c1, so c1 * v1 = k * c1 * v2, thus v1 = k * v2 *)
+              let k = c2_val / c1_val in
+              Some ([ Dim_eq { d1 = Var v1; d2 = get_dim ~d:k () } ], constr2)
+            else
+              (* Neither coefficient divides the other - we can't make progress *)
+              (* Keep both constraints - this will be resolved later *)
+              None)
   | ( Total_elems { nominator = n1; divided_by = vars1 },
       Total_elems { nominator = n2; divided_by = vars2 } ) ->
       let shared = Set.inter vars1 vars2 |> Set.to_list in
       let extras ~keep_constr1 =
         (* If we keep constr1, then it has fewer divided_by, i.e. n1 > n2. *)
-        let nominator = if keep_constr1 then n1 / n2 else n2 / n1 in
-        if nominator <= 0 then elems_mismatch n1 n2
-        else if nominator = 1 then
-          List.map shared ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-        else if List.is_empty shared then []
-        else
-          let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
-          [
-            Rows_constr
-              {
-                r = [ r ];
-                constr = Total_elems { nominator; divided_by = Set.empty (module Dim_var) };
-              };
-          ]
+        match (n1, n2) with
+        | Num_elems n1_val, Num_elems n2_val ->
+            let nominator_val = if keep_constr1 then n1_val / n2_val else n2_val / n1_val in
+            if nominator_val <= 0 then elems_mismatch n1 n2
+            else if nominator_val = 1 then
+              List.map shared ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+            else if List.is_empty shared then []
+            else
+              let r = { dims = List.map shared ~f:(fun v -> Var v); bcast = Broadcastable; id } in
+              [
+                Rows_constr
+                  {
+                    r = [ r ];
+                    constr =
+                      Total_elems
+                        {
+                          nominator = Num_elems nominator_val;
+                          divided_by = Set.empty (module Dim_var);
+                        };
+                  };
+              ]
+        | _ ->
+            (* TODO: Handle Strided_var cases - for now, return empty list *)
+            []
       in
       let subsum = Set.symmetric_diff vars1 vars2 in
       if Sequence.for_all ~f:Either.is_first subsum then Some (extras ~keep_constr1:false, constr2)
@@ -345,40 +418,56 @@ let row_conjunction ?(id = phantom_row_id) constr1 constr2 =
             match acc with None -> None | Some (ds, vars) -> collect_dim_factors (ds, vars) dim)
       with
       | None -> None (* Give up on complex cases *)
-      | Some (ds, vars) ->
+      | Some (ds, vars) -> (
           let known_product = List.fold ds ~init:1 ~f:( * ) in
-          if nominator <= 0 then
-            raise @@ Shape_error ([%string "Invalid Total_elems nominator: %{nominator#Int}"], [])
-          else if known_product = 0 then
-            raise @@ Shape_error ("Exact constraint has zero dimension", [])
-          else if nominator % known_product <> 0 then
-            raise
-            @@ Shape_error
-                 ( [%string
-                     "Total_elems nominator %{nominator#Int} not divisible by Exact dimensions \
-                      product %{known_product#Int}"],
-                   [] )
-          else
-            let reminder = nominator / known_product in
-            if reminder = 1 then
-              (* reminder is 1: equate all variables on both sides to 1 *)
-              let divided_by_eqs =
-                Set.to_list divided_by
-                |> List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-              in
-              let exact_vars_eqs =
-                List.map vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-              in
-              Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
-            else if Set.is_empty divided_by && List.length vars = 1 && reminder > 0 then
-              (* divided_by is empty and there is only one dim variable in Exact dims *)
-              let v = List.hd_exn vars in
-              Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
-            else if List.is_empty vars && Set.length divided_by = 1 && reminder > 0 then
-              (* Exact dims contain only known dimensions and divided_by has exactly one variable *)
-              let v = Set.choose_exn divided_by in
-              Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
-            else None (* Cannot handle this case *))
+          match nominator with
+          | Num_elems n ->
+              if n <= 0 then
+                raise @@ Shape_error ([%string "Invalid Total_elems nominator: %{n#Int}"], [])
+              else if known_product = 0 then
+                raise @@ Shape_error ("Exact constraint has zero dimension", [])
+              else if n % known_product <> 0 then
+                raise
+                @@ Shape_error
+                     ( [%string
+                         "Total_elems nominator %{n#Int} not divisible by Exact dimensions product \
+                          %{known_product#Int}"],
+                       [] )
+              else
+                let reminder = n / known_product in
+                if reminder = 1 then
+                  (* reminder is 1: equate all variables on both sides to 1 *)
+                  let divided_by_eqs =
+                    Set.to_list divided_by
+                    |> List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+                  in
+                  let exact_vars_eqs =
+                    List.map vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+                  in
+                  Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
+                else if Set.is_empty divided_by && List.length vars = 1 && reminder > 0 then
+                  (* divided_by is empty and there is only one dim variable in Exact dims *)
+                  let v = List.hd_exn vars in
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
+                else if List.is_empty vars && Set.length divided_by = 1 && reminder > 0 then
+                  (* Exact dims contain only known dimensions and divided_by has exactly one
+                     variable *)
+                  let v = Set.choose_exn divided_by in
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
+                else None
+          | Strided_var { coeff; var } ->
+              (* Handle simple cases with Strided_var *)
+              if known_product = 0 then
+                raise @@ Shape_error ("Exact constraint has zero dimension", [])
+              else if
+                List.mem vars var ~equal:equal_dim_var
+                && Set.is_empty divided_by
+                && List.length vars = 1
+                && Lazy.force coeff = known_product
+              then
+                (* Simple case: coeff * var = known_product * var, trivially satisfied *)
+                Some ([], Exact dims)
+              else None))
 
 let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
     (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
@@ -445,8 +534,8 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
         if not @@ Set.(is_empty @@ inter vars divided_by) then Unconstrained
         else
           let d : int = List.fold ds ~init:1 ~f:( * ) in
-          let nominator : int = nominator / d in
-          if nominator = 0 then
+          let nominator = total_elems_divide nominator d in
+          if total_elems_is_zero nominator then
             raise
             @@ Shape_error
                  ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
@@ -481,7 +570,12 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
       else
         let d = List.fold ds ~init:1 ~f:( * ) in
         if d = 1 && Set.is_empty vars then constr
-        else Total_elems { nominator = nominator * d; divided_by = Utils.Set_O.(divided_by - vars) }
+        else
+          Total_elems
+            {
+              nominator = total_elems_multiply nominator d;
+              divided_by = Utils.Set_O.(divided_by - vars);
+            }
   | Unconstrained -> Unconstrained
   | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
@@ -647,32 +741,33 @@ and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
         try
           let ds, (vars : dim_var list) = collect_factors ~beg_dims:[] ~dims in
           let d : int = List.fold ds ~init:1 ~f:( * ) in
-          let nominator : int = nominator / d in
-          if nominator = 0 then
+          let nominator = total_elems_divide nominator d in
+          if total_elems_is_zero nominator then
             raise
             @@ Shape_error
                  ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
                    [ Dim_mismatch dims ] );
-          match (vars, Set.elements divided_by) with
-          | [], [] ->
-              if nominator = 1 then (extras, env)
-              else
-                raise
-                @@ Shape_error
-                     ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
-                       [ Row_mismatch [ r ] ] )
-          | [ v ], [] | [], [ v ] ->
-              (Dim_eq { d1 = Var v; d2 = get_dim ~d:nominator () } :: extras, env)
-          | vs1, vs2 when nominator = 1 ->
+          match (nominator, vars, Set.elements divided_by) with
+          | Num_elems 1, [], [] -> (extras, env)
+          | Num_elems _, [], [] ->
+              raise
+              @@ Shape_error
+                   ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
+                     [ Row_mismatch [ r ] ] )
+          | Num_elems n, [ v ], [] | Num_elems n, [], [ v ] ->
+              (Dim_eq { d1 = Var v; d2 = get_dim ~d:n () } :: extras, env)
+          | Num_elems 1, vs1, vs2 ->
               ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2)
                 @ extras,
                 env )
-          (* TODO: we can work harder making assumptions here if necessary... *)
-          (* | v :: _, [] | [], v :: _ when (is_stage4_up stage) -> (Dim_eq { d1 = Var v; d2 = get_dim
-             ~d:nominator () } :: extras, env) *)
-          | _ :: _, _ when stored -> (extras, env)
-          | _, _ ->
-              (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
+          | Strided_var { coeff; var }, [], [ v ] when equal_dim_var var v ->
+              (* Total = coeff * v / v = coeff *)
+              (Dim_eq { d1 = Var v; d2 = get_dim ~d:(Lazy.force coeff) () } :: extras, env)
+          | _ ->
+              if stored then (extras, env)
+              else
+                ( Rows_constr { r = [ r ]; constr } :: extras,
+                  env (* Wait for more shape inference. *) )
         with Given_up ->
           if stored then (extras, env)
           else
@@ -725,25 +820,44 @@ let s_dim_one_in_row v ~value in_ =
 
 let rec s_dim_one_in_row_constr v ~value constr =
   match constr with
-  | Total_elems { nominator; divided_by } when Set.mem divided_by v -> (
-      let divided_by = Set.remove divided_by v in
-      match value with
-      | Var v' -> Total_elems { nominator; divided_by = Set.(add divided_by v') }
-      | Dim { d; _ } ->
-          let nominator = nominator / d in
-          if nominator <= 0 then
-            raise
-            @@ Shape_error
-                 ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
-                   [ Dim_mismatch [ value ] ] )
-          else Total_elems { nominator; divided_by }
-      | Conv_input { stride; output; _ } ->
-          if not !use_padding then Unconstrained
-          else
-            s_dim_one_in_row_constr v ~value:output
-              (Total_elems { nominator = nominator / stride; divided_by = Set.(add divided_by v) }))
+  | Total_elems { nominator; divided_by } -> (
+      (* Check if the variable being substituted appears in the nominator *)
+      match nominator with
+      | Strided_var { coeff; var = nom_var } when equal_dim_var v nom_var -> (
+          (* The variable being substituted appears in the nominator *)
+          match value with
+          | Dim { d; _ } ->
+              (* Replace coeff * v with coeff * d *)
+              Total_elems { nominator = Num_elems (Lazy.force coeff * d); divided_by }
+          | Var v' -> Total_elems { nominator = Strided_var { coeff; var = v' }; divided_by }
+          | Conv_input _ ->
+              (* Complex case, give up for now *)
+              Unconstrained)
+      | _ when Set.mem divided_by v -> (
+          (* Variable is in divided_by *)
+          let divided_by = Set.remove divided_by v in
+          match value with
+          | Var v' -> Total_elems { nominator; divided_by = Set.(add divided_by v') }
+          | Dim { d; _ } ->
+              let nominator = total_elems_divide nominator d in
+              if total_elems_is_zero nominator then
+                raise
+                @@ Shape_error
+                     ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
+                       [ Dim_mismatch [ value ] ] )
+              else Total_elems { nominator; divided_by }
+          | Conv_input { stride; output; _ } ->
+              if not !use_padding then Unconstrained
+              else
+                s_dim_one_in_row_constr v ~value:output
+                  (Total_elems
+                     {
+                       nominator = total_elems_divide nominator stride;
+                       divided_by = Set.(add divided_by v);
+                     }))
+      | _ -> constr)
   | Exact exact_dims -> Exact (List.map exact_dims ~f:(fun in_ -> s_dim_one v ~value ~in_))
-  | Total_elems _ | Unconstrained -> constr
+  | Unconstrained -> constr
 
 let s_dim_one_in_row_entry v ~value in_ =
   match in_ with
@@ -1556,26 +1670,34 @@ and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : cons
       let no_further_axes = Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } } in
       (* Note: the reduced constraint applies to just the row variable. *)
       match reduce_row_constraint constr ~beg_dims ~dims with
-      | Total_elems { nominator = d; divided_by } -> (
-          match (d, Set.elements divided_by, lub) with
-          | 1, vs, _ ->
+      | Total_elems { nominator; divided_by } -> (
+          match (nominator, Set.elements divided_by, lub) with
+          | Num_elems 1, vs, _ ->
               no_further_axes
               :: List.map vs ~f:(fun v ->
                      let d2 = get_dim ~d:1 () in
                      Dim_eq { d1 = Var v; d2 })
-          | _, [], None ->
+          | Num_elems d, [], None ->
               let dim = get_dim ~d () in
               [ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ]
-          | _, [], Some { dims; _ } when last_dim_is dims d ->
+          | Num_elems d, [], Some { dims; _ } when last_dim_is dims d ->
               let dim = get_dim ~d () in
               [ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ]
-          | _, [], Some lub ->
+          | Num_elems _, [], Some lub ->
               let ineqs, _env = apply_row_constraint ~stage:Stage5 lub constr env in
               List.concat_map ineqs ~f:(function
                 | Rows_constr { r = rows; constr } ->
                     eliminate_rows_constraint ~lub:None rows constr env
                 | ineq -> [ ineq ])
-          | _, [ v ], _ -> no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
+          | Num_elems d, [ v ], _ ->
+              no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
+          | Strided_var { coeff = _; var = _ }, [], _ ->
+              (* The row variable should have coeff * var elements total *)
+              (* We can't determine the exact shape without knowing var *)
+              []
+          | Strided_var { coeff; var }, [ v ], _ when equal_dim_var var v ->
+              (* coeff * var / var = coeff *)
+              no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(Lazy.force coeff) () } ]
           | _ -> [])
       | Exact dims -> [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
       | _ -> [])

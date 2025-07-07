@@ -409,7 +409,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr =
               Total_elems
                 {
-                  nominator = Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * );
+                  nominator = Num_elems (Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * ));
                   divided_by = dim_var_set_empty;
                 };
           }
@@ -441,7 +441,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-            constr = Total_elems { nominator = len; divided_by = dim_var_set_empty };
+            constr = Total_elems { nominator = Num_elems len; divided_by = dim_var_set_empty };
           }
         :: mark_terminal () )
   | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
@@ -580,13 +580,19 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_ineq { cur = cur_sh.output; subr = o_lhs };
             Row_ineq { cur = o_rhs; subr = sh.output };
           ] )
-  | Transpose (Uint4x32_to_prec _target_prec, sh) ->
-      (* FIXME: NOT IMPLEMENTED YET - need to handle precision conversion with dimension changes *)
+  | Transpose (Uint4x32_to_prec target_prec, sh) ->
+      let var = get_var () in
+      let coeff = lazy (16 / Ir.Ops.prec_in_bytes (Lazy.force target_prec)) in
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh.input };
-          Row_ineq { cur = cur_sh.output; subr = sh.output };
+          Rows_constr { r = [ sh.batch; sh.output; sh.input ]; constr = Row.Exact [ Var var ] };
+          Rows_constr
+            {
+              r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+              constr =
+                Total_elems
+                  { nominator = Row.Strided_var { coeff; var }; divided_by = dim_var_set_empty };
+            };
         ] )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
