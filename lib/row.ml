@@ -390,7 +390,7 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
       Total_elems { nominator = n2; divided_by = vars2 } ) ->
       let vars1_only = Set.diff vars1 vars2 |> Set.to_list in
       let vars2_only = Set.diff vars2 vars1 |> Set.to_list in
-      let extras ~keep_constr1 ?(extra_var = []) ?(div_by = []) ~n1_val ~n2_val () =
+      let extras ~keep_constr1 ?nom_var ?(extra_var = []) ~n1_val ~n2_val () =
         (* If we keep constr1, then it has fewer divided_by, i.e. vars1 ⊂ vars2. n1 / (product of
            vars1) = n2 / (product of vars2) Since vars1 ⊂ vars2, we have vars2 = vars1 ∪ vars2_only
            So: n1 / (product of vars1) = n2 / (product of vars1 × product of vars2_only) Thus: n1 =
@@ -414,8 +414,11 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
                 constr =
                   Total_elems
                     {
-                      nominator = Num_elems quotient;
-                      divided_by = Set.of_list (module Dim_var) div_by;
+                      nominator =
+                        (match nom_var with
+                        | Some v -> Strided_var { coeff = lazy quotient; var = v }
+                        | None -> Num_elems quotient);
+                      divided_by = Set.empty (module Dim_var);
                     };
               };
           ]
@@ -434,16 +437,21 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
         | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 }
           when keep_constr1 ->
             (* v1 from the nominator joins v2_vars from the denominator. *)
-            extras ~keep_constr1 ~extra_var:[ v1 ] ~div_by:[ v2 ] ~n1_val:(Lazy.force c1)
+            extras ~keep_constr1 ~extra_var:[ v1 ] ~nom_var:v2 ~n1_val:(Lazy.force c1)
               ~n2_val:(Lazy.force c2) ()
         | Strided_var { coeff = c1; var = v1 }, Strided_var { coeff = c2; var = v2 }
-          when not keep_constr1 ->
+        (* when not keep_constr1 *) ->
             (* v2 from the nominator joins v1_vars from the denominator. *)
-            extras ~keep_constr1 ~extra_var:[ v2 ] ~div_by:[ v1 ] ~n1_val:(Lazy.force c1)
+            extras ~keep_constr1 ~extra_var:[ v2 ] ~nom_var:v1 ~n1_val:(Lazy.force c1)
               ~n2_val:(Lazy.force c2) ()
-        | _ ->
-            (* NOTE: being leaky here to not overcomplicate the code *)
-            []
+        | Strided_var { coeff = c1; var = v1 }, Num_elems n2_val (* when not keep_constr1 *) ->
+            extras ~keep_constr1
+              ~nom_var:v1
+              ~n1_val:(Lazy.force c1) ~n2_val ()
+        | Num_elems n1_val, Strided_var { coeff = c2; var = v2 } (* when keep_constr1 *) ->
+            extras ~keep_constr1
+              ~nom_var:v2
+              ~n1_val ~n2_val:(Lazy.force c2) ()
       in
       if List.is_empty vars1_only then Some (extras ~keep_constr1:false, constr2)
       else if List.is_empty vars2_only then Some (extras ~keep_constr1:true, constr1)
