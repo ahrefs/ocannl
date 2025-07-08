@@ -417,8 +417,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             constr =
               Total_elems
                 {
-                  nominator = Num_elems (Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * ));
-                  divided_by = dim_var_set_empty;
+                  numerator = Num_elems (Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * ));
+                  divided_by = [];
                 };
           }
         :: mark_terminal () )
@@ -449,7 +449,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-            constr = Total_elems { nominator = Num_elems len; divided_by = dim_var_set_empty };
+            constr = Total_elems { numerator = Num_elems len; divided_by = [] };
           }
         :: mark_terminal () )
   | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
@@ -599,7 +599,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
               r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
               constr =
                 Total_elems
-                  { nominator = Row.Strided_var { coeff; var }; divided_by = dim_var_set_empty };
+                  { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
             };
         ] )
   | Broadcast (Einsum spec, sh1, sh2) ->

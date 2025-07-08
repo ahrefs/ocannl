@@ -487,6 +487,14 @@ let sorted_diff ~compare l1 l2 =
   in
   (loop [] l1 l2 [@nontail])
 
+(** Removes the first occurrence of an element from the list that is equal to the given element. *)
+let remove_elem ~equal elem l =
+  let rec loop acc = function
+    | [] -> List.rev acc
+    | hd :: tl -> if equal elem hd then List.rev_append acc tl else loop (hd :: acc) tl
+  in
+  loop [] l
+
 (** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback,
     converging on the 0th position, with [from] ranging from [1] to [num_devices - 1], and
     [to_ < from]. *)

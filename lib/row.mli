@@ -79,15 +79,16 @@ type dim_constraint = Unconstrained_dim | At_least_dim of int
 
 type total_elems =
   | Num_elems of int
-  | Strided_var of { coeff : int Lazy.t; var : dim_var }
-      (** The total number of elements is the coefficient times the number of dimensions the
-          variable represents. *)
+  | Strided_var of { coeff : int Lazy.t; var : dim_var; denom : int }
+      (** The total number of elements is (coefficient * variable) / denominator. *)
 [@@deriving equal, hash, compare, sexp]
 
 type row_constraint =
   | Unconstrained
-  | Total_elems of { nominator : total_elems; divided_by : dim_var_set }
-      (** The rows, inclusive of the further row spec, have this many elements. *)
+  | Total_elems of { numerator : total_elems; divided_by : dim_var list }
+      (** The rows, inclusive of the further row spec, have this many elements.
+          The total is numerator / (product of divided_by variables).
+          divided_by has multiset semantics - the same variable can appear multiple times. *)
   | Exact of dim list  (** The concatenated rows have these axes. *)
 [@@deriving equal, hash, compare, sexp]
 
