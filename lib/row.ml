@@ -764,39 +764,33 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
     than one row variable among the rows. Otherwise, concatenates the leading dims to the beg_dims
     of the variable, and the dims of the variable's row with the dims of the following rows. *)
 let rows_to_row (rows : row list) : row option =
-  let find_row_vars rows =
-    List.foldi rows ~init:([], []) ~f:(fun idx (var_indices, vars) row ->
+  let rec process_rows before_dims first_id rows =
+    match rows with
+    | [] -> 
+        (* No row variables found, concatenate all dims *)
+        Some { dims = List.rev before_dims; bcast = Broadcastable; id = first_id }
+    | row :: remaining_rows -> (
         match row.bcast with
-        | Row_var { v; _ } -> ((idx, v) :: var_indices, v :: vars)
-        | Broadcastable -> (var_indices, vars))
+        | Broadcastable -> 
+            (* Regular row, add its dims and continue *)
+            process_rows (List.rev_append row.dims before_dims) first_id remaining_rows
+        | Row_var { v; beg_dims } -> 
+            (* Found a row variable - check if there are more *)
+            let has_more_row_vars = 
+              List.exists remaining_rows ~f:(fun r -> 
+                match r.bcast with Row_var _ -> true | Broadcastable -> false)
+            in
+            if has_more_row_vars then None (* More than one row variable *)
+            else
+              (* Exactly one row variable - build the result *)
+              let new_beg_dims = List.rev_append before_dims beg_dims in
+              let after_dims = List.concat_map remaining_rows ~f:(fun r -> r.dims) in
+              let new_dims = row.dims @ after_dims in
+              Some { dims = new_dims; bcast = Row_var { v; beg_dims = new_beg_dims }; id = row.id })
   in
-  let var_indices, vars = find_row_vars rows in
-  match vars with
-  | [] ->
-      (* No row variables, concatenate all dims *)
-      let all_dims = List.concat_map rows ~f:(fun r -> r.dims) in
-      let id = match rows with [] -> phantom_row_id | r :: _ -> r.id in
-      Some { dims = all_dims; bcast = Broadcastable; id }
-  | [ _ ] ->
-      (* Exactly one row variable *)
-      let var_idx, var = List.hd_exn var_indices in
-      let var_row = List.nth_exn rows var_idx in
-      let var_beg_dims, var_dims =
-        match var_row.bcast with
-        | Row_var { beg_dims; _ } -> (beg_dims, var_row.dims)
-        | Broadcastable -> assert false (* We know there's a row variable *)
-      in
-      let before_rows = List.take rows var_idx in
-      let after_rows = List.drop rows (var_idx + 1) in
-      let before_dims = List.concat_map before_rows ~f:(fun r -> r.dims) in
-      let after_dims = List.concat_map after_rows ~f:(fun r -> r.dims) in
-      let new_beg_dims = before_dims @ var_beg_dims in
-      let new_dims = var_dims @ after_dims in
-      Some
-        { dims = new_dims; bcast = Row_var { v = var; beg_dims = new_beg_dims }; id = var_row.id }
-  | _ :: _ :: _ ->
-      (* More than one row variable *)
-      None
+  match rows with
+  | [] -> Some { dims = []; bcast = Broadcastable; id = phantom_row_id }
+  | first_row :: _ -> process_rows [] first_row.id rows
 
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
@@ -922,8 +916,11 @@ and apply_row_constraint ~stage (r : row) (constr : row_constraint) env : constr
     | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
       when List.length divided_by <= 1 -> (
         try
-          let ds, (vars : dim_var list) = collect_factors ~beg_dims:[] ~dims in
-          let d : int = List.fold ds ~init:1 ~f:( * ) in
+          let d, vars = 
+            match collect_factors dims with
+            | Some (d, vars) -> (d, vars)
+            | None -> raise Given_up
+          in
           let numerator = total_elems_divide numerator d in
           if total_elems_known_zero numerator then
             raise
