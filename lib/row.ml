@@ -13,6 +13,9 @@ module Dim_var = struct
   type t = { id : int; label : string option [@compare.ignore] [@equal.ignore] [@hash.ignore] }
   [@@deriving equal, hash, compare, sexp]
 
+  let to_string { id; label } =
+    match label with None -> "$" ^ Int.to_string id | Some l -> [%string "$%{id#Int}:%{l}"]
+
   include Comparator.Make (struct
     type nonrec t = t
 
@@ -171,16 +174,16 @@ let dims_label_assoc dims =
 type dim_constraint = Unconstrained_dim | At_least_dim of int
 [@@deriving equal, hash, compare, sexp, variants]
 
-type total_elems = 
-  | Num_elems of int 
-  | Strided_var of { coeff : int Lazy.t; var : dim_var; denom : int }
-[@@deriving equal, hash, compare, sexp]
+type total_elems =
+  | Num_elems of int
+  | Strided_var of { coeff : int Utils.safe_lazy; var : dim_var; denom : int }
+[@@deriving equal, hash, compare, sexp_of]
 
 type row_constraint =
   | Unconstrained
   | Total_elems of { numerator : total_elems; divided_by : dim_var list }
   | Exact of dim list
-[@@deriving equal, hash, compare, sexp, variants]
+[@@deriving equal, hash, compare, sexp_of, variants]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
     [subr] must be sorted using the [@@deriving compare] comparison. *)
@@ -202,12 +205,12 @@ type row_entry =
       lub : t option;
       constr : row_constraint;
     }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
-type dim_env = dim_entry Map.M(Dim_var).t [@@deriving sexp]
-type row_env = row_entry Map.M(Row_var).t [@@deriving sexp]
+type dim_env = dim_entry Map.M(Dim_var).t [@@deriving sexp_of]
+type row_env = row_entry Map.M(Row_var).t [@@deriving sexp_of]
 
-type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp]
+type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp_of]
 (** The environment is only in resolved wrt. variables that are solved: [v -> Solved ...] do not
     appear elsewhere in the environment. In particular, per-dim and per-row constraints might not
     have been applied. *)
@@ -221,7 +224,7 @@ type constraint_ =
   | Rows_constr of { r : t list; constr : row_constraint }
   | Terminal_dim of dim
   | Terminal_row of t
-[@@deriving compare, equal, sexp, variants]
+[@@deriving compare, equal, sexp_of, variants]
 
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
@@ -284,10 +287,8 @@ let total_elems_to_string = function
   | Num_elems n -> Int.to_string n
   | Strided_var { coeff; var; denom } ->
       let var_str = match var.label with Some l -> l | None -> "$" ^ Int.to_string var.id in
-      if denom = 1 then
-        [%string "%{Lazy.force coeff#Int}*%{var_str}"]
-      else
-        [%string "(%{Lazy.force coeff#Int}*%{var_str})/%{denom#Int}"]
+      if denom = 1 then [%string "%{Utils.safe_force coeff#Int}*%{var_str}"]
+      else [%string "(%{Utils.safe_force coeff#Int}*%{var_str})/%{denom#Int}"]
 
 let total_elems_divide t d =
   if d <= 0 then raise @@ Shape_error ([%string "Division by non-positive number: %{d#Int}"], [])
@@ -296,16 +297,17 @@ let total_elems_divide t d =
     | Num_elems n -> Num_elems (n / d)
     | Strided_var { coeff; var; denom } -> Strided_var { coeff; var; denom = denom * d }
 
+let safe_multiply coeff d = Utils.safe_map ~upd:[%string "*%{d#Int}"] ~f:(( * ) d) coeff
+
 let total_elems_multiply t d =
   match t with
   | Num_elems n -> Num_elems (n * d)
-  | Strided_var { coeff; var; denom } ->
-      (* For now, just multiply the coefficient *)
-      Strided_var { coeff = lazy (Lazy.force coeff * d); var; denom }
+  | Strided_var { coeff; var; denom } -> Strided_var { coeff = safe_multiply coeff d; var; denom }
 
-let total_elems_is_zero = function
+let total_elems_known_zero = function
   | Num_elems n -> n <= 0
-  | Strided_var { coeff; denom; _ } -> Lazy.force coeff <= 0 || denom <= 0
+  | Strided_var { coeff; denom; _ } -> (
+      denom <= 0 || match coeff.value with `Callback _ -> false | `Value v -> v <= 0)
 
 (* Helper to remove a dimension variable from a list *)
 let remove_var v vars = Utils.remove_elem ~equal:equal_dim_var v vars
@@ -317,7 +319,24 @@ let dim_conjunction constr1 constr2 =
   | _, Unconstrained_dim -> Some ([], constr1)
   | At_least_dim d1, At_least_dim d2 -> Some ([], At_least_dim (Int.max d1 d2))
 
-let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
+let rec collect_dim_factors (known, vars) = function
+  | Dim { d; _ } -> Some (d * known, vars)
+  | Var v -> Some (known, v :: vars)
+  | Conv_input { stride; output; _ } when !use_padding ->
+      Option.map
+        (collect_dim_factors (known, vars) output)
+        ~f:(fun (known, vars) -> (known * stride, vars))
+  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+      Option.map
+        (collect_dim_factors (known, vars) output)
+        ~f:(fun (known, vars) -> (known * stride, vars))
+  | _ -> None
+
+let collect_factors dims =
+  let f acc d = Result.of_option ~error:() @@ collect_dim_factors acc d in
+  Result.ok @@ List.fold_result dims ~init:(1, []) ~f
+
+let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise
     @@ Shape_error
@@ -326,39 +345,46 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
               %{total_elems_to_string n2}"],
            [] )
   in
+  let late = is_stage2_up stage in
   match (constr1, constr2) with
+  | _ when [%equal: row_constraint] constr1 constr2 -> Some ([], constr2)
   | Unconstrained, _ -> Some ([], constr2)
   | _, Unconstrained -> Some ([], constr1)
   | ( Total_elems { numerator = n1; divided_by = vars1 },
       Total_elems { numerator = n2; divided_by = vars2 } )
-    when [%equal: dim_var list] (List.sort ~compare:compare_dim_var vars1) 
-         (List.sort ~compare:compare_dim_var vars2) -> (
+    when [%equal: dim_var list]
+           (List.sort ~compare:compare_dim_var vars1)
+           (List.sort ~compare:compare_dim_var vars2) -> (
       match (n1, n2) with
       | n1, n2 when [%equal: total_elems] n1 n2 -> Some ([], constr2)
       | Num_elems _, Num_elems _ ->
           (* Both are solved and different - this is a mismatch *)
           elems_mismatch n1 n2
-      | Num_elems n, Strided_var { coeff; var; denom } | Strided_var { coeff; var; denom }, Num_elems n ->
+      | Num_elems n, Strided_var { coeff; var; denom }
+      | Strided_var { coeff; var; denom }, Num_elems n
+        when late ->
           (* One is solved, one is not - we can derive an equation *)
-          let coeff_val = Lazy.force coeff in
+          let coeff_val = Utils.safe_force coeff in
           (* The actual value represented is coeff * var / denom = n *)
           (* So var = n * denom / coeff *)
-          if (n * denom) % coeff_val = 0 then
-            Some ([ Dim_eq { d1 = Var var; d2 = get_dim ~d:((n * denom) / coeff_val) () } ], constr1)
+          if n * denom % coeff_val = 0 then
+            Some ([ Dim_eq { d1 = Var var; d2 = get_dim ~d:(n * denom / coeff_val) () } ], constr1)
           else
             (* n * denom is not divisible by coeff - this is a mismatch *)
             elems_mismatch n1 n2
-      | Strided_var { coeff = c1; var = v1; denom = d1 }, Strided_var { coeff = c2; var = v2; denom = d2 } ->
+      | ( Strided_var { coeff = c1; var = v1; denom = d1 },
+          Strided_var { coeff = c2; var = v2; denom = d2 } )
+        when late ->
           if equal_dim_var v1 v2 then
             (* Same variable but different coefficients/denominators - check if they're equal *)
-            let val1 = (Lazy.force c1 * d2) and val2 = (Lazy.force c2 * d1) in
+            let val1 = Utils.safe_force c1 * d2 and val2 = Utils.safe_force c2 * d1 in
             if val1 <> val2 then elems_mismatch n1 n2 else Some ([], constr2)
           else
             (* Different variables - try to derive equations *)
             (* c1 * v1 / d1 = c2 * v2 / d2 *)
             (* c1 * v1 * d2 = c2 * v2 * d1 *)
-            let c1_val = Lazy.force c1 in
-            let c2_val = Lazy.force c2 in
+            let c1_val = Utils.safe_force c1 in
+            let c2_val = Utils.safe_force c2 in
             let lhs = c1_val * d2 in
             let rhs = c2_val * d1 in
             if lhs = rhs then Some ([], constr2)
@@ -395,92 +421,124 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
             else
               (* Neither divides the other - we can't make progress *)
               (* Keep both constraints - this will be resolved later *)
-              None)
-  | Total_elems { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 }, constr2
+              None
+      | _ ->
+          (* We don't want to force delayed values - keep both constraints *)
+          None)
+  | ( Total_elems { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 },
+      constr2 )
     when List.mem vars1 v1 ~equal:equal_dim_var ->
       (* Variable appears in both numerator and denominator, they cancel out *)
       (* (c1 * v1 / d1) / (... * v1 * ...) = c1 / (d1 * ... * ...) *)
       let vars1' = remove_var v1 vars1 in
-      row_conjunction ~id
-        (Total_elems { numerator = Num_elems (Lazy.force c1); divided_by = vars1' })
+      row_conjunction ~id stage
+        (Total_elems { numerator = Num_elems (Utils.safe_force c1); divided_by = vars1' })
         constr2
-  | constr2, Total_elems { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 }
+  | ( constr2,
+      Total_elems
+        { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 } )
     when List.mem vars1 v1 ~equal:equal_dim_var ->
       let vars1' = remove_var v1 vars1 in
-      row_conjunction ~id
-        (Total_elems { numerator = Num_elems (Lazy.force c1); divided_by = vars1' })
+      row_conjunction ~id stage
+        (Total_elems { numerator = Num_elems (Utils.safe_force c1); divided_by = vars1' })
         constr2
   | ( Total_elems { numerator = n1; divided_by = vars1 },
       Total_elems { numerator = n2; divided_by = vars2 } ) ->
       (* Helper function to compute multiset difference *)
-      let list_diff l1 l2 =
-        List.fold l2 ~init:l1 ~f:(fun acc x -> remove_var x acc)
-      in
+      let list_diff l1 l2 = List.fold l2 ~init:l1 ~f:(fun acc x -> remove_var x acc) in
       let vars1_only = list_diff vars1 vars2 in
       let vars2_only = list_diff vars2 vars1 in
-      let extras ~keep_constr1 ?nom_var ?(extra_var = []) ~n1_val ~n2_val () =
+      let extras ~keep_constr1 ?v1 ?v2 ~n1_val ~n2_val () =
+        (* If we keep constr1, then it has fewer divided_by, i.e. vars1 ⊂ vars2. n1 / (product of
+           vars1) = n2 / (product of vars2) Since vars1 ⊂ vars2, we have vars2 = vars1 ∪ vars2_only
+           So: n1 / (product of vars1) = n2 / (product of vars1 × product of vars2_only) Thus: n1 =
+           n2 / (product of vars2_only) Which means: product of vars2_only = n2 / n1 *)
+        let extra_var = Option.to_list @@ if keep_constr1 then v1 else v2 in
+        let num_var = if keep_constr1 then v2 else v1 in
+        let diff_vars = extra_var @ if keep_constr1 then vars2_only else vars1_only in
+        if List.is_empty diff_vars then (
+          (* No difference in variables but different numerators - this is a mismatch *)
+          match num_var with
+          | None -> elems_mismatch n1 n2
+          | Some v ->
+              let d = if keep_constr1 then n1_val / n2_val else n2_val / n1_val in
+              if d <= 0 then elems_mismatch n1 n2;
+              [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ])
+        else
+          let quotient = if keep_constr1 then n2_val / n1_val else n1_val / n2_val in
+          if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
+          else if quotient = 1 && Option.is_none num_var then
+            (* The difference variables must all be 1 *)
+            List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+          else
+            (* The product of difference variables equals the quotient *)
+            let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
+            let numerator =
+              match num_var with
+              | None -> Num_elems quotient
+              | Some var ->
+                  let value = if keep_constr1 then n2_val else n1_val in
+                  let coeff = Utils.{ value = `Value value; unique_id = Int.to_string value } in
+                  let denom = if keep_constr1 then n1_val else n2_val in
+                  Strided_var { coeff; var; denom }
+            in
+            [ Rows_constr { r = [ r ]; constr = Total_elems { numerator; divided_by = [] } } ]
+      in
+      let lazy_extras ~keep_constr1 ~num_var ?(extra_var = []) ~coeff ~denom () =
         (* If we keep constr1, then it has fewer divided_by, i.e. vars1 ⊂ vars2. n1 / (product of
            vars1) = n2 / (product of vars2) Since vars1 ⊂ vars2, we have vars2 = vars1 ∪ vars2_only
            So: n1 / (product of vars1) = n2 / (product of vars1 × product of vars2_only) Thus: n1 =
            n2 / (product of vars2_only) Which means: product of vars2_only = n2 / n1 *)
         let diff_vars = extra_var @ if keep_constr1 then vars2_only else vars1_only in
-        let quotient = if keep_constr1 then n2_val / n1_val else n1_val / n2_val in
-        if quotient <= 0 then elems_mismatch n1 n2
-        else if quotient = 1 then
-          (* The difference variables must all be 1 *)
-          List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-        else if List.is_empty diff_vars then
-          (* No difference in variables but different nominators - this is a mismatch *)
-          elems_mismatch n1 n2
-        else
-          (* The product of difference variables equals the quotient *)
-          let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
-          [
-            Rows_constr
-              {
-                r = [ r ];
-                constr =
-                  Total_elems
-                    {
-                      numerator =
-                        (match nom_var with
-                        | Some v -> Strided_var { coeff = lazy quotient; var = v; denom = 1 }
-                        | None -> Num_elems quotient);
-                      divided_by = [];
-                    };
-              };
-          ]
+        (* The product of difference variables equals the quotient *)
+        let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
+        let constr =
+          Total_elems { numerator = Strided_var { coeff; var = num_var; denom }; divided_by = [] }
+        in
+        [ Rows_constr { r = [ r ]; constr } ]
       in
-      let extras ~keep_constr1 =
+      let extras ~keep_constr1 : _ option =
         match (n1, n2) with
-        | Num_elems n1_val, Num_elems n2_val -> extras ~keep_constr1 ~n1_val ~n2_val ()
-        | Strided_var { coeff = c1; var = v1; denom = d1 }, Strided_var { coeff = c2; var = v2; denom = d2 }
+        | Num_elems n1_val, Num_elems n2_val -> Some (extras ~keep_constr1 ~n1_val ~n2_val ())
+        | ( Strided_var { coeff = c1; var = v1; denom = d1 },
+            Strided_var { coeff = c2; var = v2; denom = d2 } )
           when equal_dim_var v1 v2 ->
             (* c1*v1/d1 = c2*v2/d2, and v1 = v2, so c1/d1 = c2/d2 *)
-            extras ~keep_constr1 ~n1_val:(Lazy.force c1 * d2) ~n2_val:(Lazy.force c2 * d1) ()
-        | Strided_var { coeff = c1; var = v1; denom = d1 }, Num_elems n2_val when keep_constr1 ->
+            if late then
+              Some
+                (extras ~keep_constr1
+                   ~n1_val:(Utils.safe_force c1 * d2)
+                   ~n2_val:(Utils.safe_force c2 * d1)
+                   ())
+            else None
+        | Strided_var { coeff = c1; var = v1; denom = d1 }, Num_elems n2_val ->
             (* v1 from the numerator joins vars from the denominator. *)
-            (* c1*v1/d1 = n2_val, so v1 = n2_val*d1/c1 *)
-            extras ~keep_constr1 ~extra_var:[ v1 ] ~n1_val:(Lazy.force c1) ~n2_val:(n2_val * d1) ()
-        | Num_elems n1_val, Strided_var { coeff = c2; var = v2; denom = d2 } when not keep_constr1 ->
-            extras ~keep_constr1 ~extra_var:[ v2 ] ~n1_val:(n1_val * d2) ~n2_val:(Lazy.force c2) ()
-        | Strided_var { coeff = c1; var = v1; denom = d1 }, Strided_var { coeff = c2; var = v2; denom = d2 }
-          when keep_constr1 ->
-            (* v1 from the numerator joins vars from the denominator. *)
-            extras ~keep_constr1 ~extra_var:[ v1 ] ~nom_var:v2 ~n1_val:(Lazy.force c1 * d2)
-              ~n2_val:(Lazy.force c2 * d1) ()
-        | Strided_var { coeff = c1; var = v1; denom = d1 }, Strided_var { coeff = c2; var = v2; denom = d2 }
-        (* when not keep_constr1 *) ->
-            (* v2 from the numerator joins vars from the denominator. *)
-            extras ~keep_constr1 ~extra_var:[ v2 ] ~nom_var:v1 ~n1_val:(Lazy.force c1 * d2)
-              ~n2_val:(Lazy.force c2 * d1) ()
-        | Strided_var { coeff = c1; var = v1; denom = d1 }, Num_elems n2_val (* when not keep_constr1 *) ->
-            extras ~keep_constr1 ~nom_var:v1 ~n1_val:(Lazy.force c1) ~n2_val:(n2_val * d1) ()
-        | Num_elems n1_val, Strided_var { coeff = c2; var = v2; denom = d2 } (* when keep_constr1 *) ->
-            extras ~keep_constr1 ~nom_var:v2 ~n1_val:(n1_val * d2) ~n2_val:(Lazy.force c2) ()
+            (* c1*v1/d1 = n2_val, so c1 = n2_val*d1/v1 *)
+            if late then
+              Some (extras ~keep_constr1 ~v1 ~n1_val:(Utils.safe_force c1) ~n2_val:(n2_val * d1) ())
+            else if not keep_constr1 then
+              Some (lazy_extras ~keep_constr1 ~num_var:v1 ~coeff:c1 ~denom:(n2_val * d1) ())
+            else None
+        | Num_elems n1_val, Strided_var { coeff = c2; var = v2; denom = d2 } ->
+            if late then
+              Some (extras ~keep_constr1 ~v2 ~n1_val:(n1_val * d2) ~n2_val:(Utils.safe_force c2) ())
+            else if keep_constr1 then
+              Some (lazy_extras ~keep_constr1 ~num_var:v2 ~coeff:c2 ~denom:(n1_val * d2) ())
+            else None
+        | ( Strided_var { coeff = c1; var = v1; denom = d1 },
+            Strided_var { coeff = c2; var = v2; denom = d2 } ) ->
+            if late then
+              Some
+                (extras ~keep_constr1 ~v1 ~v2
+                   ~n1_val:(Utils.safe_force c1 * d2)
+                   ~n2_val:(Utils.safe_force c2 * d1)
+                   ())
+            else None
       in
-      if List.is_empty vars1_only then Some (extras ~keep_constr1:false, constr2)
-      else if List.is_empty vars2_only then Some (extras ~keep_constr1:true, constr1)
+      if List.is_empty vars2_only then
+        Option.map ~f:(fun x -> (x, constr2)) (extras ~keep_constr1:false)
+      else if List.is_empty vars1_only then
+        Option.map ~f:(fun x -> (x, constr1)) (extras ~keep_constr1:true)
       else None
   | Exact dims1, Exact dims2 ->
       if List.length dims1 <> List.length dims2 then
@@ -499,21 +557,9 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
         Some (eqs, constr1)
   | Total_elems { numerator; divided_by }, Exact dims
   | Exact dims, Total_elems { numerator; divided_by } -> (
-      (* Simple collect_factors logic - handle only basic Dim and Var cases *)
-      let collect_dim_factors (ds, vars) = function
-        | Dim { d; _ } -> Some (d :: ds, vars)
-        | Var v -> Some (ds, v :: vars)
-        | Conv_input _ -> None (* Too complex, give up *)
-      in
-      match
-        List.fold dims
-          ~init:(Some ([], []))
-          ~f:(fun acc dim ->
-            match acc with None -> None | Some (ds, vars) -> collect_dim_factors (ds, vars) dim)
-      with
+      match collect_factors dims with
       | None -> None (* Give up on complex cases *)
-      | Some (ds, vars) -> (
-          let known_product = List.fold ds ~init:1 ~f:( * ) in
+      | Some (known_product, vars) -> (
           match numerator with
           | Num_elems n ->
               if n <= 0 then
@@ -549,17 +595,68 @@ let rec row_conjunction ?(id = phantom_row_id) constr1 constr2 =
                   Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder () } ], Exact dims)
                 else None
           | Strided_var { coeff; var; denom } ->
-              (* Handle simple cases with Strided_var *)
               if known_product = 0 then
                 raise @@ Shape_error ("Exact constraint has zero dimension", [])
+              else if late && List.is_empty vars && List.is_empty divided_by then
+                (* Exact dims contain only known dimensions and divided_by is empty *)
+                (* coeff * var / denom = known_product, so var = known_product * denom / coeff *)
+                let coeff_val = Utils.safe_force coeff in
+                if known_product * denom % coeff_val = 0 then
+                  let d = known_product * denom / coeff_val in
+                  Some ([ Dim_eq { d1 = Var var; d2 = get_dim ~d () } ], Exact dims)
+                else elems_mismatch numerator (Num_elems known_product)
               else if
-                List.mem vars var ~equal:equal_dim_var
+                late
+                && List.mem vars var ~equal:equal_dim_var
                 && List.is_empty divided_by
                 && List.length vars = 1
-                && Lazy.force coeff * known_product = denom * known_product
               then
-                (* Simple case: (coeff * var / denom) = known_product * var, trivially satisfied if coeff = denom *)
-                Some ([], Exact dims)
+                (* Simple case: (coeff * var / denom) = known_product * var, trivially satisfied if
+                   coeff = denom *)
+                if Utils.safe_force coeff = denom * known_product then Some ([], Exact dims)
+                else
+                  raise
+                  @@ Shape_error
+                       ( [%string
+                           "Total_elems vs. exact dims mismatch: %{Utils.safe_force coeff#Int} * \
+                            %{var#Dim_var} / %{denom#Int} = %{known_product#Int} * %{var#Dim_var}"],
+                         [ Dim_mismatch dims ] )
+              else if late && List.is_empty divided_by && List.length vars = 1 then
+                (* Handle case: length vars = 1 and it's not equal var from Strided_var (while
+                   divided_by is empty), derive the coefficient between the two *)
+                let single_var = List.hd_exn vars in
+                let coeff_val = Utils.safe_force coeff in
+                (* coeff * var / denom = known_product * single_var *)
+                (* So: var = (known_product * denom / coeff) * single_var *)
+                if known_product * denom % coeff_val = 0 then
+                  let coefficient = known_product * denom / coeff_val in
+                  if coefficient = 1 then
+                    (* Simple equality *)
+                    Some ([ Dim_eq { d1 = Var var; d2 = Var single_var } ], Exact dims)
+                  else if coefficient > 1 then
+                    (* Use Conv_input with stride and dilation=0 *)
+                    Some
+                      ( [
+                          Dim_eq
+                            {
+                              d1 = Var var;
+                              d2 =
+                                Conv_input
+                                  {
+                                    stride = coefficient;
+                                    output = Var single_var;
+                                    dilation = 0;
+                                    kernel = get_dim ~d:0 ();
+                                  };
+                            };
+                        ],
+                        Exact dims )
+                  else
+                    (* coefficient <= 0, which is invalid *)
+                    elems_mismatch numerator (Num_elems known_product)
+                else
+                  (* Not divisible, mismatch *)
+                  elems_mismatch numerator (Num_elems known_product)
               else None))
 
 let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
@@ -598,39 +695,25 @@ let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
 
 exception Given_up
 
-let collect_factors ~beg_dims ~dims =
-  (* FIXME: this is all wrong, we should track a single constant factor and a list of variables, and
-     we should not give up at all if !use_padding is true. *)
-  let rec f (ds, vars) = function
-    | Dim { d; _ } -> (d :: ds, vars)
-    | Var v -> (ds, v :: vars)
-    | Conv_input { stride; output; _ } when !use_padding ->
-        let ds', vars' = f ([], []) output in
-        if stride <> 1 && not (List.is_empty vars') then raise Given_up;
-        (List.map ~f:(( * ) stride) ds' @ ds, vars' @ vars)
-    | Conv_input { stride; output; dilation; kernel } ->
-        let ds', vars' = f ([], []) output in
-        if stride <> 1 && not (List.is_empty vars') then raise Given_up;
-        let margin = match kernel with Dim { d; _ } -> dilation * d | _ -> raise Given_up in
-        (List.map ~f:(fun d -> (stride * d) + margin) ds' @ ds, vars' @ vars)
-  in
-  List.fold ~f ~init:([], []) (beg_dims @ dims)
-
 let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
     row_constraint =
   match constr with
   | Unconstrained -> Unconstrained
   | Total_elems { numerator; divided_by } -> (
       try
-        let ds, (vars : dim_var list) = collect_factors ~beg_dims ~dims in
+        let d, vars =
+          match collect_factors (beg_dims @ dims) with
+          | Some (d, vars) -> (d, vars)
+          | None -> raise Given_up
+        in
         (* Check if any vars appear in divided_by (multiset intersection) *)
-        let has_common_var = List.exists vars ~f:(fun v -> 
-          List.mem divided_by v ~equal:equal_dim_var) in
+        let has_common_var =
+          List.exists vars ~f:(fun v -> List.mem divided_by v ~equal:equal_dim_var)
+        in
         if has_common_var then Unconstrained
         else
-          let d : int = List.fold ds ~init:1 ~f:( * ) in
           let numerator = total_elems_divide numerator d in
-          if total_elems_is_zero numerator then
+          if total_elems_known_zero numerator then
             raise
             @@ Shape_error
                  ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
@@ -663,22 +746,17 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
       (* Check if all vars are in divided_by - for multiset, need to count occurrences *)
       let remove_all vars from_list =
         List.fold vars ~init:(Some from_list) ~f:(fun acc v ->
-          match acc with
-          | None -> None
-          | Some lst ->
-            if List.mem lst v ~equal:equal_dim_var then Some (remove_var v lst) else None)
+            match acc with
+            | None -> None
+            | Some lst ->
+                if List.mem lst v ~equal:equal_dim_var then Some (remove_var v lst) else None)
       in
       match remove_all vars divided_by with
       | None -> Unconstrained
       | Some remaining ->
-        let d = List.fold ds ~init:1 ~f:( * ) in
-        if d = 1 && List.is_empty vars then constr
-        else
-          Total_elems
-            {
-              numerator = total_elems_multiply numerator d;
-              divided_by = remaining;
-            })
+          let d = List.fold ds ~init:1 ~f:( * ) in
+          if d = 1 && List.is_empty vars then constr
+          else Total_elems { numerator = total_elems_multiply numerator d; divided_by = remaining })
   | Unconstrained -> Unconstrained
   | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
@@ -778,7 +856,7 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
           )
       | _ -> ([ Rows_constr { r = rows; constr } ], env))
 
-and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : constraint_ list * _ =
+and apply_row_constraint ~stage (r : row) (constr : row_constraint) env : constraint_ list * _ =
   if is_unconstrained constr then ([], env)
   else
     let reduce constr ~beg_dims ~dims =
@@ -821,7 +899,9 @@ and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
                 true,
                 false )
           | Some (Bounds_row bounds) -> (
-              match row_conjunction ~id:r.id (reduce constr ~beg_dims ~dims) bounds.constr with
+              match
+                row_conjunction ~id:r.id stage (reduce constr ~beg_dims ~dims) bounds.constr
+              with
               | None -> ([], constr, env, false, false)
               | Some (extras, constr) ->
                   if phys_equal constr bounds.constr then (extras, constr, env, true, false)
@@ -845,7 +925,7 @@ and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
           let ds, (vars : dim_var list) = collect_factors ~beg_dims:[] ~dims in
           let d : int = List.fold ds ~init:1 ~f:( * ) in
           let numerator = total_elems_divide numerator d in
-          if total_elems_is_zero numerator then
+          if total_elems_known_zero numerator then
             raise
             @@ Shape_error
                  ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
@@ -865,12 +945,15 @@ and apply_row_constraint ~stage:_ (r : row) (constr : row_constraint) env : cons
                 env )
           | Strided_var { coeff; var; denom }, [], [ v ] when equal_dim_var var v ->
               (* Total = (coeff * v / denom) / v = coeff / denom *)
-              if (Lazy.force coeff) % denom = 0 then
-                (Dim_eq { d1 = Var v; d2 = get_dim ~d:((Lazy.force coeff) / denom) () } :: extras, env)
-              else
+              if Utils.safe_force coeff % denom = 0 then
+                ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () }
+                  :: extras,
+                  env )
+              else if
                 (* coeff not divisible by denom - keep as constraint *)
-                if stored then (extras, env)
-                else (Rows_constr { r = [ r ]; constr } :: extras, env)
+                stored
+              then (extras, env)
+              else (Rows_constr { r = [ r ]; constr } :: extras, env)
           | _ ->
               if stored then (extras, env)
               else
@@ -931,12 +1014,12 @@ let rec s_dim_one_in_row_constr v ~value constr =
   | Total_elems { numerator; divided_by } -> (
       (* Check if the variable being substituted appears in the numerator *)
       match numerator with
-      | Strided_var { coeff; var = nom_var; denom } when equal_dim_var v nom_var -> (
+      | Strided_var { coeff; var = num_var; denom } when equal_dim_var v num_var -> (
           (* The variable being substituted appears in the numerator *)
           match value with
           | Dim { d; _ } ->
               (* Replace (coeff * v / denom) with (coeff * d / denom) *)
-              let new_num = (Lazy.force coeff * d) in
+              let new_num = Utils.safe_force coeff * d in
               if new_num % denom = 0 then
                 Total_elems { numerator = Num_elems (new_num / denom); divided_by }
               else
@@ -949,25 +1032,25 @@ let rec s_dim_one_in_row_constr v ~value constr =
       | _ when List.mem divided_by v ~equal:equal_dim_var -> (
           (* Variable is in divided_by - remove one occurrence *)
           let divided_by = remove_var v divided_by in
-            match value with
-            | Var v' -> Total_elems { numerator; divided_by = v' :: divided_by }
-            | Dim { d; _ } ->
-                let numerator = total_elems_divide numerator d in
-                if total_elems_is_zero numerator then
-                  raise
-                  @@ Shape_error
-                       ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
-                         [ Dim_mismatch [ value ] ] )
-                else Total_elems { numerator; divided_by }
-            | Conv_input { stride; output; _ } ->
-                if not !use_padding then Unconstrained
-                else
-                  s_dim_one_in_row_constr v ~value:output
-                    (Total_elems
-                       {
-                         numerator = total_elems_divide numerator stride;
-                         divided_by = v :: divided_by;
-                       }))
+          match value with
+          | Var v' -> Total_elems { numerator; divided_by = v' :: divided_by }
+          | Dim { d; _ } ->
+              let numerator = total_elems_divide numerator d in
+              if total_elems_known_zero numerator then
+                raise
+                @@ Shape_error
+                     ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
+                       [ Dim_mismatch [ value ] ] )
+              else Total_elems { numerator; divided_by }
+          | Conv_input { stride; output; _ } ->
+              if not !use_padding then Unconstrained
+              else
+                s_dim_one_in_row_constr v ~value:output
+                  (Total_elems
+                     {
+                       numerator = total_elems_divide numerator stride;
+                       divided_by = v :: divided_by;
+                     }))
       | _ -> constr)
   | Exact exact_dims -> Exact (List.map exact_dims ~f:(fun in_ -> s_dim_one v ~value ~in_))
   | Unconstrained -> constr
@@ -1811,7 +1894,8 @@ and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : cons
               []
           | Strided_var { coeff; var; denom }, [ v ], _ when equal_dim_var var v ->
               (* coeff * var / var = coeff *)
-              no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:((Lazy.force coeff) / denom) () } ]
+              no_further_axes
+              :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () } ]
           | _ -> [])
       | Exact dims -> [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
       | _ -> [])

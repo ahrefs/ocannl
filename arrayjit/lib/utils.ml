@@ -315,12 +315,8 @@ let get_local_debug_runtime =
         @@ "ocannl_debug_backend setting should be text, html, markdown or flushing; found: " ^ s
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
-  let print_entry_ids =
-    get_global_flag ~default:false ~arg_name:"logs_print_entry_ids"
-  in
-  let verbose_entry_ids =
-    get_global_flag ~default:false ~arg_name:"logs_verbose_entry_ids"
-  in
+  let print_entry_ids = get_global_flag ~default:false ~arg_name:"logs_print_entry_ids" in
+  let verbose_entry_ids = get_global_flag ~default:false ~arg_name:"logs_verbose_entry_ids" in
   let log_main_domain_to_stdout =
     get_global_flag ~default:false ~arg_name:"log_main_domain_to_stdout"
   in
@@ -444,9 +440,7 @@ let restore_settings () =
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
-
-let never_capture_stdout () =
-  get_global_flag ~default:false ~arg_name:"never_capture_stdout"
+let never_capture_stdout () = get_global_flag ~default:false ~arg_name:"never_capture_stdout"
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
@@ -942,3 +936,55 @@ let weak_iter (arr : 'a weak_dynarray) ~f =
   for i = 0 to W.length !arr - 1 do
     Option.iter (W.get !arr i) ~f
   done
+
+type 'a safe_lazy = {
+  mutable value : [ `Callback of unit -> 'a | `Value of 'a ];
+  unique_id : string;
+}
+
+let safe_lazy unique_id f = { value = `Callback f; unique_id }
+
+let safe_force gated =
+  match gated.value with
+  | `Value v -> v
+  | `Callback f ->
+      let v = f () in
+      gated.value <- `Value v;
+      v
+
+let safe_map ~upd ~f gated =
+  let unique_id = gated.unique_id ^ "_" ^ upd in
+  match gated.value with
+  | `Value v -> { value = `Value (f v); unique_id }
+  | `Callback callback -> { value = `Callback (fun () -> f (callback ())); unique_id }
+
+let equal_safe_lazy equal_elem g1 g2 =
+  match (g1.value, g2.value) with
+  | `Value v1, `Value v2 ->
+      (* Both values are forced - assert uniqueness *)
+      let id_equal = String.equal g1.unique_id g2.unique_id in
+      if id_equal then assert (equal_elem v1 v2);
+      id_equal
+  | _ -> String.equal g1.unique_id g2.unique_id
+
+let compare_safe_lazy compare_elem g1 g2 =
+  match (g1.value, g2.value) with
+  | `Value v1, `Value v2 ->
+      (* Both values are forced - assert uniqueness *)
+      let id_cmp = String.compare g1.unique_id g2.unique_id in
+      if id_cmp = 0 then assert (compare_elem v1 v2 = 0);
+      id_cmp
+  | _ -> String.compare g1.unique_id g2.unique_id
+
+let hash_fold_safe_lazy _hash_elem state gated = hash_fold_string state gated.unique_id
+
+let sexp_of_safe_lazy sexp_of_elem gated =
+  let status =
+    match gated.value with `Callback _ -> Sexp.Atom "pending" | `Value v -> sexp_of_elem v
+  in
+  Sexp.List
+    [
+      Sexp.Atom "safe_lazy";
+      Sexp.List [ Sexp.Atom "id"; Sexp.Atom gated.unique_id ];
+      Sexp.List [ Sexp.Atom "value"; status ];
+    ]

@@ -62,7 +62,7 @@ type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash
 
 val dims_label_assoc : t -> (string * dim) list
 
-type environment [@@deriving sexp]
+type environment [@@deriving sexp_of]
 type error_trace = ..
 
 type error_trace +=
@@ -75,13 +75,13 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 type dim_constraint = Unconstrained_dim | At_least_dim of int
-[@@deriving equal, hash, compare, sexp, variants]
+[@@deriving equal, hash, compare, sexp_of, variants]
 
 type total_elems =
   | Num_elems of int
-  | Strided_var of { coeff : int Lazy.t; var : dim_var; denom : int }
+  | Strided_var of { coeff : int Utils.safe_lazy; var : dim_var; denom : int }
       (** The total number of elements is (coefficient * variable) / denominator. *)
-[@@deriving equal, hash, compare, sexp]
+[@@deriving equal, hash, compare, sexp_of]
 
 type row_constraint =
   | Unconstrained
@@ -90,7 +90,7 @@ type row_constraint =
           The total is numerator / (product of divided_by variables).
           divided_by has multiset semantics - the same variable can appear multiple times. *)
   | Exact of dim list  (** The concatenated rows have these axes. *)
-[@@deriving equal, hash, compare, sexp]
+[@@deriving equal, hash, compare, sexp_of]
 
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
     [subr] must be sorted using the [@@deriving compare] comparison. *)
@@ -102,7 +102,7 @@ type dim_entry =
       lub : dim option;
       constr : dim_constraint;
     }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 type row_entry =
   | Solved_row of t
@@ -112,7 +112,7 @@ type row_entry =
       lub : t option;
       constr : row_constraint;
     }
-[@@deriving sexp]
+[@@deriving sexp_of]
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
@@ -125,7 +125,7 @@ type constraint_ =
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
   | Terminal_dim of dim
   | Terminal_row of t
-[@@deriving compare, equal, sexp, variants]
+[@@deriving compare, equal, sexp_of, variants]
 
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]

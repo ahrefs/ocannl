@@ -590,7 +590,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           ] )
   | Transpose (Uint4x32_to_prec target_prec, sh) ->
       let var = get_var () in
-      let coeff = lazy (16 / Ir.Ops.prec_in_bytes (Lazy.force target_prec)) in
+      let coeff =
+        Utils.safe_lazy [%string "Uint4x32 %{sh.id#Int} to_prec_of %{cur_sh.id#Int}"] (fun () ->
+            16 / Ir.Ops.prec_in_bytes (Lazy.force target_prec))
+      in
       ( Row.dim_map_empty,
         [
           Rows_constr { r = [ sh.batch; sh.output; sh.input ]; constr = Row.Exact [ Var var ] };
