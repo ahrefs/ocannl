@@ -760,21 +760,21 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
   | Unconstrained -> Unconstrained
   | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
-(** Helper function to convert a list of rows to either a single row or information about multiple 
-    row variables. Returns Either.First with a single row if there are zero or one row variables. 
-    Returns Either.Second with (all_dims, row_vars) if there are multiple row variables, where 
-    all_dims is a concatenation of all dims and beg_dims in proper order, and row_vars is a list 
-    of (row_var * row_id) pairs. *)
+(** Helper function to convert a list of rows to either a single row or information about multiple
+    row variables. Returns Either.First with a single row if there are zero or one row variables.
+    Returns Either.Second with (all_dims, row_vars) if there are multiple row variables, where
+    all_dims is a concatenation of all dims and beg_dims in proper order, and row_vars is a list of
+    (row_var * row_id) pairs. *)
 let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) list) Either.t =
   let rec collect_info before_dims row_vars rows =
     match rows with
     | [] -> (List.rev before_dims, List.rev row_vars)
     | row :: remaining_rows -> (
         match row.bcast with
-        | Broadcastable -> 
+        | Broadcastable ->
             (* Regular row, add its dims and continue *)
             collect_info (List.rev_append row.dims before_dims) row_vars remaining_rows
-        | Row_var { v; beg_dims } -> 
+        | Row_var { v; beg_dims } ->
             (* Row variable - collect it and continue *)
             let new_before_dims = List.rev_append row.dims (List.rev_append beg_dims before_dims) in
             let new_row_vars = (v, row.id) :: row_vars in
@@ -782,7 +782,7 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) 
   in
   let all_dims, row_vars = collect_info [] [] rows in
   match row_vars with
-  | [] -> 
+  | [] ->
       (* No row variables found *)
       let first_id = match rows with [] -> phantom_row_id | first_row :: _ -> first_row.id in
       Either.First { dims = all_dims; bcast = Broadcastable; id = first_id }
@@ -793,18 +793,17 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) 
         | [] -> failwith "rows_to_row_or_vars: single row variable not found during reconstruction"
         | row :: remaining_rows -> (
             match row.bcast with
-            | Broadcastable -> 
+            | Broadcastable ->
                 reconstruct_single_var (List.rev_append row.dims before_dims) remaining_rows
             | Row_var { v = found_v; beg_dims } when equal_row_var found_v v ->
                 let new_beg_dims = List.rev_append before_dims beg_dims in
                 let after_dims = List.concat_map remaining_rows ~f:(fun r -> r.dims) in
                 let new_dims = row.dims @ after_dims in
                 { dims = new_dims; bcast = Row_var { v; beg_dims = new_beg_dims }; id }
-            | Row_var _ ->
-                reconstruct_single_var before_dims remaining_rows)
+            | Row_var _ -> reconstruct_single_var before_dims remaining_rows)
       in
       Either.First (reconstruct_single_var [] rows)
-  | _ -> 
+  | _ ->
       (* Multiple row variables *)
       Either.Second (all_dims, row_vars)
 
@@ -824,9 +823,55 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
     : constraint_ list * environment =
   match rows_to_row_or_vars rows with
   | Either.First single_row -> apply_row_constraint ~stage single_row constr env
-  | Either.Second (_all_dims, _row_vars) -> (
+  | Either.Second (all_dims, row_vars) -> (
       match constr with
+      | Exact dims when List.length dims < List.length all_dims ->
+          (* Case 1: Exact dims has fewer axes than all_dims - raise mismatch *)
+          raise
+          @@ Shape_error
+               ("apply_rows_constraint: Exact constraint has too few axes", [ Row_mismatch rows ])
+      | Exact dims when List.length dims = List.length all_dims ->
+          (* Case 2: Exact dims has same length as all_dims - derive pairwise equations *)
+          let dim_eqs = List.map2_exn dims all_dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) in
+          let row_eqs =
+            List.map row_vars ~f:(fun (v, id) ->
+                Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } })
+          in
+          (dim_eqs @ row_eqs, env)
+      | Total_elems { numerator = Num_elems n; divided_by } -> (
+          (* Case 3: Total_elems with known numerator *)
+          match collect_factors all_dims with
+          | None -> ([ Rows_constr { r = rows; constr } ], env) (* Give up on complex cases *)
+          | Some (known_product, product_vars) ->
+              (* Move divided_by variables to the other side by combining with product_vars *)
+              let all_product_vars = product_vars @ divided_by in
+              if n % known_product <> 0 then
+                raise
+                @@ Shape_error
+                     ( [%string
+                         "Total_elems constraint: %{n#Int} not divisible by known product \
+                          %{known_product#Int}"],
+                       [] )
+              else if n = known_product then
+                (* Equate all product vars to d=1 and add Total_elems 1 for each row var *)
+                let var_eqs =
+                  List.map all_product_vars ~f:(fun v ->
+                      Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+                in
+                let row_constrs =
+                  List.map row_vars ~f:(fun (v, id) ->
+                      Rows_constr
+                        {
+                          r = [ row_of_var v id ];
+                          constr = Total_elems { numerator = Num_elems 1; divided_by = [] };
+                        })
+                in
+                (var_eqs @ row_constrs, env)
+              else
+                (* Cannot deduce no_further_axes, return unchanged *)
+                ([ Rows_constr { r = rows; constr } ], env))
       | Exact [ single_dim ] -> (
+          (* Keep existing logic for single_dim case *)
           match List.rev rows with
           | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
               apply_rows_constraint ~stage (List.rev more_rows) constr env
@@ -838,7 +883,6 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
                 env )
           | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Output; _ } as id }
             :: more_rows ->
-              (* TODO: we could check if there is a non-empty output row later on. *)
               ( Row_eq
                   {
                     r1 = row_of_var v id;
@@ -846,22 +890,9 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
                   }
                 :: List.concat_map ~f:check_empty_row more_rows,
                 env )
-          | {
-              dims = [ single_other ];
-              bcast = Row_var { v; beg_dims = [] };
-              id = { kind = `Output; _ } as id;
-            }
-            :: more_rows
-          | {
-              dims = [];
-              bcast = Row_var { v; beg_dims = [ single_other ] };
-              id = { kind = `Output; _ } as id;
-            }
-            :: more_rows ->
-              ( Dim_eq { d1 = single_other; d2 = single_dim }
-                :: Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
-                :: List.concat_map ~f:check_empty_row more_rows,
-                env )
+          | { dims = _; bcast = Row_var { v = _; beg_dims = _ }; id = { kind = `Output; _ } } :: _
+            ->
+              assert false
           | _ -> raise @@ Shape_error ("apply_rows_constraint: shape too big", [ Row_mismatch rows ])
           )
       | _ -> ([ Rows_constr { r = rows; constr } ], env))
@@ -932,10 +963,8 @@ and apply_row_constraint ~stage (r : row) (constr : row_constraint) env : constr
     | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
       when List.length divided_by <= 1 -> (
         try
-          let d, vars = 
-            match collect_factors dims with
-            | Some (d, vars) -> (d, vars)
-            | None -> raise Given_up
+          let d, vars =
+            match collect_factors dims with Some (d, vars) -> (d, vars) | None -> raise Given_up
           in
           let numerator = total_elems_divide numerator d in
           if total_elems_known_zero numerator then
