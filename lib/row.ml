@@ -760,37 +760,53 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
   | Unconstrained -> Unconstrained
   | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
-(** Helper function to convert a list of rows to a single row option. Returns None if there is more
-    than one row variable among the rows. Otherwise, concatenates the leading dims to the beg_dims
-    of the variable, and the dims of the variable's row with the dims of the following rows. *)
-let rows_to_row (rows : row list) : row option =
-  let rec process_rows before_dims first_id rows =
+(** Helper function to convert a list of rows to either a single row or information about multiple 
+    row variables. Returns Either.First with a single row if there are zero or one row variables. 
+    Returns Either.Second with (all_dims, row_vars) if there are multiple row variables, where 
+    all_dims is a concatenation of all dims and beg_dims in proper order, and row_vars is a list 
+    of (row_var * row_id) pairs. *)
+let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) list) Either.t =
+  let rec collect_info before_dims row_vars rows =
     match rows with
-    | [] -> 
-        (* No row variables found, concatenate all dims *)
-        Some { dims = List.rev before_dims; bcast = Broadcastable; id = first_id }
+    | [] -> (List.rev before_dims, List.rev row_vars)
     | row :: remaining_rows -> (
         match row.bcast with
         | Broadcastable -> 
             (* Regular row, add its dims and continue *)
-            process_rows (List.rev_append row.dims before_dims) first_id remaining_rows
+            collect_info (List.rev_append row.dims before_dims) row_vars remaining_rows
         | Row_var { v; beg_dims } -> 
-            (* Found a row variable - check if there are more *)
-            let has_more_row_vars = 
-              List.exists remaining_rows ~f:(fun r -> 
-                match r.bcast with Row_var _ -> true | Broadcastable -> false)
-            in
-            if has_more_row_vars then None (* More than one row variable *)
-            else
-              (* Exactly one row variable - build the result *)
-              let new_beg_dims = List.rev_append before_dims beg_dims in
-              let after_dims = List.concat_map remaining_rows ~f:(fun r -> r.dims) in
-              let new_dims = row.dims @ after_dims in
-              Some { dims = new_dims; bcast = Row_var { v; beg_dims = new_beg_dims }; id = row.id })
+            (* Row variable - collect it and continue *)
+            let new_before_dims = List.rev_append row.dims (List.rev_append beg_dims before_dims) in
+            let new_row_vars = (v, row.id) :: row_vars in
+            collect_info new_before_dims new_row_vars remaining_rows)
   in
-  match rows with
-  | [] -> Some { dims = []; bcast = Broadcastable; id = phantom_row_id }
-  | first_row :: _ -> process_rows [] first_row.id rows
+  let all_dims, row_vars = collect_info [] [] rows in
+  match row_vars with
+  | [] -> 
+      (* No row variables found *)
+      let first_id = match rows with [] -> phantom_row_id | first_row :: _ -> first_row.id in
+      Either.First { dims = all_dims; bcast = Broadcastable; id = first_id }
+  | [ (v, id) ] ->
+      (* Exactly one row variable - reconstruct the proper row structure *)
+      let rec reconstruct_single_var before_dims rows =
+        match rows with
+        | [] -> failwith "rows_to_row_or_vars: single row variable not found during reconstruction"
+        | row :: remaining_rows -> (
+            match row.bcast with
+            | Broadcastable -> 
+                reconstruct_single_var (List.rev_append row.dims before_dims) remaining_rows
+            | Row_var { v = found_v; beg_dims } when equal_row_var found_v v ->
+                let new_beg_dims = List.rev_append before_dims beg_dims in
+                let after_dims = List.concat_map remaining_rows ~f:(fun r -> r.dims) in
+                let new_dims = row.dims @ after_dims in
+                { dims = new_dims; bcast = Row_var { v; beg_dims = new_beg_dims }; id }
+            | Row_var _ ->
+                reconstruct_single_var before_dims remaining_rows)
+      in
+      Either.First (reconstruct_single_var [] rows)
+  | _ -> 
+      (* Multiple row variables *)
+      Either.Second (all_dims, row_vars)
 
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
@@ -806,9 +822,9 @@ let check_empty_row r =
 
 let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint) (env : environment)
     : constraint_ list * environment =
-  match rows_to_row rows with
-  | Some single_row -> apply_row_constraint ~stage single_row constr env
-  | None -> (
+  match rows_to_row_or_vars rows with
+  | Either.First single_row -> apply_row_constraint ~stage single_row constr env
+  | Either.Second (_all_dims, _row_vars) -> (
       match constr with
       | Exact [ single_dim ] -> (
           match List.rev rows with
@@ -1847,9 +1863,9 @@ let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d
 
 let rec eliminate_rows_constraint ~lub (rows : row list) (constr : row_constraint)
     (env : environment) : constraint_ list =
-  match rows_to_row rows with
-  | Some single_row -> eliminate_row_constraint ~lub single_row constr env
-  | None -> [ Rows_constr { r = rows; constr } ]
+  match rows_to_row_or_vars rows with
+  | Either.First single_row -> eliminate_row_constraint ~lub single_row constr env
+  | Either.Second (_all_dims, _row_vars) -> [ Rows_constr { r = rows; constr } ]
 
 and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
   match r with
