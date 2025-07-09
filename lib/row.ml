@@ -871,7 +871,7 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
                 (* Cannot deduce no_further_axes, return unchanged *)
                 ([ Rows_constr { r = rows; constr } ], env))
       | Exact [ single_dim ] -> (
-          (* Keep existing logic for single_dim case *)
+          (* Shapes must have non-empty output rows. *)
           match List.rev rows with
           | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
               apply_rows_constraint ~stage (List.rev more_rows) constr env
@@ -985,7 +985,8 @@ and apply_row_constraint ~stage (r : row) (constr : row_constraint) env : constr
               ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2)
                 @ extras,
                 env )
-          | Strided_var { coeff; var; denom }, [], [ v ] when equal_dim_var var v ->
+          | Strided_var { coeff; var; denom }, [], [ v ]
+            when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
               (* Total = (coeff * v / denom) / v = coeff / denom *)
               if Utils.safe_force coeff % denom = 0 then
                 ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () }
@@ -1890,11 +1891,35 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) (env : environment) (dim : d
 
 let last_dim_is dims d2 = match List.last dims with Some (Dim { d; _ }) -> d = d2 | _ -> false
 
+let r_dims r =
+  match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
+
 let rec eliminate_rows_constraint ~lub (rows : row list) (constr : row_constraint)
     (env : environment) : constraint_ list =
   match rows_to_row_or_vars rows with
   | Either.First single_row -> eliminate_row_constraint ~lub single_row constr env
-  | Either.Second (_all_dims, _row_vars) -> [ Rows_constr { r = rows; constr } ]
+  | Either.Second (_all_dims, row_vars) -> (
+      let rev_row_vars = List.rev row_vars in
+      match
+        ( constr,
+          List.findi rev_row_vars ~f:(fun _ -> function
+            | _, { kind = `Output; _ } -> true
+            | _ -> false) )
+      with
+      | Total_elems _, Some (idx, (v, id)) ->
+          let other_vars = List.filteri rev_row_vars ~f:(fun i _ -> i <> idx) in
+          let other_vars = List.map other_vars ~f:(fun (v, id) -> row_of_var v id) in
+          let other_eqs =
+            List.map other_vars ~f:(fun r ->
+                Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id } })
+          in
+          let rows =
+            List.map rows ~f:(function
+              | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
+              | r -> { r with dims = r_dims r; bcast = Broadcastable })
+          in
+          other_eqs @ eliminate_rows_constraint ~lub rows constr env
+      | _ -> [ Rows_constr { r = rows; constr } ])
 
 and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : constraint_ list =
   match r with
@@ -1935,9 +1960,15 @@ and eliminate_row_constraint ~lub (r : row) (constr : row_constraint) env : cons
               (* We can't determine the exact shape without knowing var *)
               []
           | Strided_var { coeff; var; denom }, [ v ], _ when equal_dim_var var v ->
-              (* coeff * var / var = coeff *)
-              no_further_axes
-              :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () } ]
+              let coeff = Utils.safe_force coeff in
+              if coeff % denom <> 0 then
+                raise
+                @@ Shape_error
+                     ( [%string "Strided_var constraint: %{coeff#Int} not divisible by %{denom#Int}"],
+                       [ Row_mismatch [ r ] ] )
+              else
+                (* coeff * var / var = coeff *)
+                no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(coeff / denom) () } ]
           | _ -> [])
       | Exact dims -> [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
       | _ -> [])

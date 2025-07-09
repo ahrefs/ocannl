@@ -952,6 +952,8 @@ let safe_force gated =
       gated.value <- `Value v;
       v
 
+let is_safe_val = function { value = `Value _; _ } -> true | _ -> false
+
 let safe_map ~upd ~f gated =
   let unique_id = gated.unique_id ^ "_" ^ upd in
   match gated.value with
