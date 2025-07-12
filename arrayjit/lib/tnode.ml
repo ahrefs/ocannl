@@ -633,7 +633,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
                        elements"];
              Nd.as_array prec (Bigarray.reshape arr target_dims)
            in
-           Some (Nd.map_with_prec { f = f_reshape_with_prec } base_ndarray)
+           Some (Nd.apply_with_prec { f = f_reshape_with_prec } base_ndarray)
        | Some (padding, _), false ->
            (* Create new bigarray with padding and copy source into non-padding parts *)
            let target = Nd.create_array ~debug prec_val ~dims:target_dims ~padding:target_padding in

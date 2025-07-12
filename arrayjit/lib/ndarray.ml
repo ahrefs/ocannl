@@ -111,11 +111,11 @@ let get_prec = function
   | Single_nd _ -> Ops.single
   | Double_nd _ -> Ops.double
 
-type 'r map_with_prec = {
+type 'r apply_with_prec = {
   f : 'ocaml 'elt_t. ('ocaml, 'elt_t) Ops.precision -> ('ocaml, 'elt_t) bigarray -> 'r;
 }
 
-let map_with_prec { f } = function
+let apply_with_prec { f } = function
   | Byte_nd arr -> f Ops.Byte arr
   | Uint16_nd arr -> f Ops.Uint16 arr
   | Int32_nd arr -> f Ops.Int32 arr
@@ -163,9 +163,9 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
 
 (** {2 *** Accessing ***} *)
 
-type 'r map_as_bigarray = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) bigarray -> 'r }
+type 'r apply_as_bigarray = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) bigarray -> 'r }
 
-let map { f } = function
+let apply { f } = function
   | Byte_nd arr -> f arr
   | Uint16_nd arr -> f arr
   | Int32_nd arr -> f arr
@@ -176,11 +176,11 @@ let map { f } = function
   | Single_nd arr -> f arr
   | Double_nd arr -> f arr
 
-type 'r map2_as_bigarray = {
+type 'r apply2_as_bigarray = {
   f2 : 'ocaml 'elt_t. ('ocaml, 'elt_t) bigarray -> ('ocaml, 'elt_t) bigarray -> 'r;
 }
 
-let map2 { f2 } x1 x2 =
+let apply2 { f2 } x1 x2 =
   match (x1, x2) with
   | Byte_nd arr1, Byte_nd arr2 -> f2 arr1 arr2
   | Uint16_nd arr1, Uint16_nd arr2 -> f2 arr1 arr2
@@ -191,15 +191,15 @@ let map2 { f2 } x1 x2 =
   | Fp8_nd arr1, Fp8_nd arr2 -> f2 arr1 arr2
   | Single_nd arr1, Single_nd arr2 -> f2 arr1 arr2
   | Double_nd arr1, Double_nd arr2 -> f2 arr1 arr2
-  | _ -> invalid_arg "Ndarray.map2: precision mismatch"
+  | _ -> invalid_arg "Ndarray.apply2: precision mismatch"
 
-let dims = map { f = A.dims }
+let dims = apply { f = A.dims }
 
 let get_fatptr_not_managed nd =
   let f arr =
     Ctypes_memory.make_unmanaged ~reftyp:Ctypes_static.void @@ bigarray_start_not_managed arr
   in
-  map { f } nd
+  apply { f } nd
 
 let get_voidptr_not_managed nd : unit Ctypes.ptr =
   Ctypes_static.CPointer (get_fatptr_not_managed nd)
@@ -278,7 +278,7 @@ let size_in_bytes v =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative
      to report the cases differently. *)
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
-  map { f } v
+  apply { f } v
 
 let get_as_float arr idx =
   match arr with
@@ -371,14 +371,14 @@ let set_flat_values _arr _values = ()
 let c_ptr_to_string nd =
   let prec = get_prec nd in
   let f arr = Ops.c_rawptr_to_string (bigarray_start_not_managed arr) prec in
-  map { f } nd
+  apply { f } nd
 
 let ptr_to_string_hum nd =
   let prec = get_prec nd in
   let f arr = Ops.rawptr_to_string_hum (bigarray_start_not_managed arr) prec in
-  map { f } nd
+  apply { f } nd
 
-let to_native = map { f = bigarray_start_not_managed }
+let to_native = apply { f = bigarray_start_not_managed }
 let equal a1 a2 = equal_nativeint (to_native a1) (to_native a2)
 let compare a1 a2 = compare_nativeint (to_native a1) (to_native a2)
 let hash nd = Nativeint.hash (to_native nd)
@@ -393,7 +393,7 @@ external copy_with_padding_c : ('a, 'b) bigarray -> ('a, 'b) bigarray -> axis_pa
     requires that source dimensions + padding = target dimensions. *)
 let copy_with_padding ~source ~target ~padding =
   let copy_impl source_arr target_arr = copy_with_padding_c source_arr target_arr padding in
-  map2 { f2 = copy_impl } source target
+  apply2 { f2 = copy_impl } source target
 
 (** {2 *** Creating ***} *)
 
@@ -422,7 +422,7 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
 (** See {!Bigarray.reshape}. *)
 let reshape nd dims =
   let f prec arr = as_array prec @@ Bigarray.reshape arr dims in
-  map_with_prec { f } nd
+  apply_with_prec { f } nd
 
 let get_used_memory () = Atomic.get used_memory
 

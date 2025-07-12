@@ -178,12 +178,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   let from_host ~dst_ptr ~dst hosted =
     set_ctx @@ ctx_of dst;
     let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
-    Ndarray.map { f } hosted
+    Ndarray.apply { f } hosted
 
   let to_host ~src_ptr ~src hosted =
     set_ctx @@ ctx_of src;
     let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
-    Ndarray.map { f } hosted
+    Ndarray.apply { f } hosted
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
     let dev = dst.stream.device in
