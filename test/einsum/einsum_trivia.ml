@@ -9,6 +9,9 @@ module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
+(* FIXME: after all tests are brought to pass again with properly updated expectations, remove this
+   file and rename the test einsum_trivia_exec to einsum_trivia. *)
+
 let%expect_test "einsum1 permute axes" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in

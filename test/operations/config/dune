@@ -1,0 +1,2 @@
+(copy_files
+ (files ../../config/ocannl_config))

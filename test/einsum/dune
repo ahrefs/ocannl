@@ -24,3 +24,22 @@
  (libraries ocannl)
  (preprocess
   (pps ppx_ocannl)))
+
+(test
+ (name test_print_style)
+ (deps ocannl_config)
+ (modules test_print_style)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(library
+ (name einsum_tutorials)
+ (package neural_nets_lib)
+ (inline_tests
+  (deps ocannl_config))
+ (libraries base dynlink ocannl)
+ (modules einsum_trivia)
+ (preprocess
+  (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
+ (modes best))

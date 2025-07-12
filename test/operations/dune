@@ -1,13 +1,5 @@
-; A non-crash run counts as a success for moons_demo_parallel_run.
-
-(test
- (name moons_demo_parallel_run)
- (package neural_nets_lib)
- (modules moons_demo_parallel_run)
- (deps ocannl_config)
- (libraries ocannl datasets)
- (preprocess
-  (pps ppx_ocannl)))
+(copy_files
+ (files ../config/ocannl_config))
 
 (executable
  (name micrograd_demo_logging)
@@ -22,10 +14,7 @@
   (target ocannl_backend.txt)
   (deps ocannl_config)
   (action
-   (run %{dep:../../arrayjit/bin/read_config.exe} "--read=backend"))))
-
-(copy_files
- (files config/ocannl_config))
+   (run %{dep:../../../arrayjit/bin/read_config.exe} "--read=backend"))))
 
 (rule
  (alias runtest)
@@ -45,19 +34,19 @@
  (action
   (progn
    (run
-    %{dep:../tools/minised.exe}
+    %{dep:../../tools/minised.exe}
     " = 0x[0-9a-fA-F]+"
     " = 0xNNNN"
     "log_files/%{read:config/ocannl_backend.txt}-0-0.log"
     "%{read:config/ocannl_backend.txt}-0-0.log.actual")
    (run
-    %{dep:../tools/minised.exe}
+    %{dep:../../tools/minised.exe}
     " = 00[0-9a-fA-F]+"
     " = 0xNNNN"
     "%{read:config/ocannl_backend.txt}-0-0.log.actual"
     "%{read:config/ocannl_backend.txt}-0-0.log.actual")
    (run
-    %{dep:../tools/minised.exe}
+    %{dep:../../tools/minised.exe}
     "\\([a-z0-9_]+\\)\\[0\\]{=[-.e0-9]+} = "
     "\\1[0]{=MAYBE UNINITIALIZED} = "
     "%{read:config/ocannl_backend.txt}-0-0.log.actual"
@@ -70,27 +59,13 @@
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
    "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
-(test
- (name test_print_style)
- (deps ocannl_config)
- (modules test_print_style)
- (libraries ocannl)
- (preprocess
-  (pps ppx_ocannl)))
-
 (library
- (name tutorials)
+ (name operations_tutorials)
  (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
- (libraries base dynlink ocannl datasets)
- (modules
-  einsum_trivia
-  hello_world_op
-  micrograd_demo
-  zero2hero_1of7
-  primitive_ops
-  moons_demo_parallel)
+ (libraries base dynlink ocannl)
+ (modules hello_world_op zero2hero_1of7 primitive_ops)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))

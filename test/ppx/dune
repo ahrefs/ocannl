@@ -1,3 +1,6 @@
+(copy_files
+ (files ../config/ocannl_config))
+
 (executable
  (name pp)
  (public_name pp)
