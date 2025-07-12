@@ -31,7 +31,7 @@
  (deps ocannl_config)
  (libraries ocannl)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name test_ppx_op_expected)

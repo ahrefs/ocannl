@@ -24,7 +24,7 @@ let hello1 () =
   Train.forward_and_forget (module Backend) ctx hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   Tensor.print_tree ~with_grad:false ~depth:99 hoo;
-  Tensor.print ~with_code:false ~with_grad:false `Default hoo
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hoo
 
 let hello2 () =
   Rand.init 0;
@@ -39,8 +39,8 @@ let hello2 () =
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.every_non_literal_on_host y;
   Train.forward_and_forget (module Backend) ctx y;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y
 
 let hello3 () =
   Rand.init 0;
@@ -55,12 +55,12 @@ let hello3 () =
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
   let routine = Train.to_routine (module Backend) ctx IDX.empty @@ Train.forward y in
-  Tensor.print ~with_code:true ~with_grad:false `Inline zero_to_twenty;
-  Tensor.print ~with_code:true ~with_grad:false `Default zero_to_twenty;
+  Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Inline zero_to_twenty;
+  Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Default zero_to_twenty;
   Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdio.printf "\n%!";
   Train.run routine;
-  Tensor.print ~with_code:true ~with_grad:false `Default y;
+  Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Default y;
   Stdio.printf "\n%!";
   Tensor.print_tree ~with_grad:false ~depth:9 y;
   Stdio.printf "\n%!"
@@ -91,11 +91,11 @@ let hello4 () =
   Train.set_hosted tk.value;
   Train.forward_and_forget backend ctx positions;
   Stdio.print_endline "positions:";
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ positions;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ positions;
   Stdio.print_endline "tk:";
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ tk;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ tk;
   Stdio.print_endline "ti:";
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ti;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ti;
   Stdio.printf "\n%!"
 
 let hello5 () =
@@ -117,8 +117,8 @@ let hello5 () =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   Train.forward_and_forget backend ctx ho;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ ho
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho
 
 let hello6 () =
   Utils.set_log_level 2;
@@ -139,8 +139,8 @@ let hello6 () =
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
   Train.forward_and_forget backend ctx y;
-  (* Tensor.print ~with_code:false ~with_grad:false `Default @@ hey; *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y
+  (* Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey; *)
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y
 
 let () =
   ignore (hello1, hello2, hello3, hello4, hello5, hello6);

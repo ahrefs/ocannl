@@ -525,7 +525,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
-      | Threefry4x32, _ -> func "threefry4x32" (* Metal implementation of Threefry4x32 *)
+      | Threefry4x32, _ ->
+        (* FIXME: NOT IMPLEMENTED YET *)
+         func "threefry4x32" (* Metal implementation of Threefry4x32 *)
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =

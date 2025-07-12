@@ -6,7 +6,7 @@
  (modules moons_benchmark)
  (libraries ocannl base stdio time_now datasets)
  (preprocess
-  (pps ppx_here ppx_sexp_conv ppx_string ppx_ocannl ppx_minidebug))
+  (pps ppx_here ppx_sexp_conv ppx_string ppx_ocannl ppx_minidebug ppx_here))
  (modes exe))
 
 (executable
@@ -14,7 +14,7 @@
  (modules sanity_check)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_ocannl))
+  (pps ppx_here ppx_ocannl))
  (modes exe))
 
 (executable
@@ -22,7 +22,7 @@
  (modules hello_world)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_ocannl))
+  (pps ppx_here ppx_ocannl))
  (modes exe))
 
 (executable
@@ -30,7 +30,7 @@
  (modules hello_world_op)
  (libraries ocannl base stdio ppx_minidebug.runtime)
  (preprocess
-  (pps ppx_minidebug ppx_ocannl ppx_sexp_conv))
+  (pps ppx_here ppx_minidebug ppx_ocannl ppx_sexp_conv))
  (modes exe))
 
 (executable
@@ -46,7 +46,7 @@
  (modules compilation_speed)
  (libraries ocannl base stdio time_now)
  (preprocess
-  (pps ppx_sexp_conv ppx_ocannl))
+  (pps ppx_here ppx_sexp_conv ppx_ocannl))
  (modes exe))
 
 (executable
@@ -54,7 +54,7 @@
  (modules einsum_trivia)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_ocannl))
+  (pps ppx_here ppx_ocannl))
  (modes exe))
 
 (executable
@@ -70,7 +70,7 @@
  (modules micrograd_basic)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_ocannl ppx_minidebug))
+  (pps ppx_here ppx_ocannl ppx_minidebug))
  (modes exe))
 
 (executable
@@ -78,7 +78,7 @@
  (modules micrograd_demo)
  (libraries ocannl base stdio datasets)
  (preprocess
-  (pps ppx_sexp_conv ppx_ocannl ppx_minidebug))
+  (pps ppx_here ppx_sexp_conv ppx_ocannl ppx_minidebug))
  (modes exe))
 
 (executable
@@ -86,7 +86,7 @@
  (modules moons_demo)
  (libraries ocannl base stdio datasets)
  (preprocess
-  (pps ppx_sexp_conv ppx_ocannl ppx_minidebug))
+  (pps ppx_here ppx_sexp_conv ppx_ocannl ppx_minidebug))
  (modes exe))
 
 (executable
@@ -94,7 +94,7 @@
  (modules moons_demo_parallel)
  (libraries ocannl base stdio datasets)
  (preprocess
-  (pps ppx_ocannl))
+  (pps ppx_here ppx_ocannl))
  (modes exe))
 
 (executable
@@ -102,4 +102,4 @@
  (modules micrograd_demo_logging)
  (libraries ocannl)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))

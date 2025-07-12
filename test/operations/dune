@@ -6,7 +6,7 @@
  (modules micrograd_demo_logging)
  (libraries ocannl)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))
 
 (subdir
  config

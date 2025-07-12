@@ -136,7 +136,7 @@ typedef struct
   uint32_t v[4];
 } uint4x32_t;
 
-/* Threefry4x32 implementation (C function) */
+/* Threefry4x32 implementation (pure C function) */
 uint4x32_t arrayjit_threefry4x32(uint4x32_t v1, uint4x32_t v2)
 {
   /* FIXME: NOT IMPLEMENTED YET */

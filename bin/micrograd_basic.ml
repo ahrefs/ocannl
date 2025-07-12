@@ -29,9 +29,9 @@ let%diagn_sexp _suspended () =
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 d;
   Stdio.print_endline "\n";
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ d;
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ b
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ d;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ b
 
 let%diagn_sexp () : unit =
   let module Backend = (val Backends.fresh_backend ()) in
@@ -59,6 +59,6 @@ let%diagn_sexp () : unit =
   Train.run init;
   Train.run routine;
   (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ g;
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ a;
-  Tensor.print ~with_code:false ~with_grad:true `Default @@ b
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ g;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ a;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ b

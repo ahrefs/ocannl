@@ -276,7 +276,8 @@ type binop =
   | And
   | Threefry4x32
       (** 4x32-bit Threefry PRNG. Requires a 128-bit key and a 128-bit counter and outputs a 128-bit
-          value (precision [Uint4x32]). *)
+          value (precision [Uint4x32]). Note: this complex operation might be removed feom
+          primitives if the underlying bit manipulation operations get introduced. *)
 [@@deriving sexp, compare, equal]
 
 type unop =
@@ -381,7 +382,7 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
-  | Uint4x32_to_prec_uniform _ -> 
+  | Uint4x32_to_prec_uniform _ ->
       (* FIXME: NOT IMPLEMENTED YET *)
       failwith "NOT IMPLEMENTED YET: Uint4x32_to_prec_uniform"
 
@@ -531,8 +532,7 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
   | Not -> "not"
-  | Uint4x32_to_prec_uniform target_prec -> 
-      "uint4x32_to_" ^ prec_string target_prec ^ "_uniform"
+  | Uint4x32_to_prec_uniform target_prec -> "uint4x32_to_" ^ prec_string target_prec ^ "_uniform"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -578,7 +578,7 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
-  | Uint4x32_to_prec_uniform target_prec, _ -> 
+  | Uint4x32_to_prec_uniform target_prec, _ ->
       (* FIXME: NOT IMPLEMENTED YET *)
       ("uint4x32_to_" ^ prec_string target_prec ^ "_uniform(", ")")
 

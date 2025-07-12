@@ -3,7 +3,7 @@
  (modules test_numerical_types)
  (libraries base stdio arrayjit.ir)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_here ppx_jane)))
 
 (rule
  (target test_numerical_types.output)

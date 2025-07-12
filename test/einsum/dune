@@ -7,7 +7,7 @@
  (modules moons_demo_variant)
  (libraries ocannl datasets)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name einsum_trivia_exec)
@@ -23,7 +23,7 @@
  (modules test_conv_syntax)
  (libraries ocannl)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name test_print_style)
@@ -31,7 +31,7 @@
  (modules test_print_style)
  (libraries ocannl)
  (preprocess
-  (pps ppx_ocannl)))
+  (pps ppx_here ppx_ocannl)))
 
 (library
  (name einsum_tutorials)

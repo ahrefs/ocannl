@@ -31,7 +31,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let%op y = 2 *. "hey" 7.0 in
   Train.forward_and_forget backend ctx y;
 
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌────────────────────┐
@@ -62,7 +62,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   let%op y = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
   Train.forward_and_forget backend ctx y;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────┐
@@ -74,7 +74,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │└──────┴──────┘         │
     └────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌───────────────────┐
@@ -105,7 +105,7 @@ let%expect_test "Print constant tensor" =
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   Train.forward_and_forget backend ctx hey;
   (* ignore (failwith @@ Tn.debug_memory_mode hey.value.memory_mode); *)
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hey;
   [%expect
     {|
     [0]: [  1.00 , 2.00 , 3.00  ;  4.00 , 5.00 , 6.00  ]_hey shape 1:3->0:2  [
@@ -113,7 +113,7 @@ let%expect_test "Print constant tensor" =
       ;  4.00 , 5.00 , 6.00
     ]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────────────┐
@@ -128,7 +128,7 @@ let%expect_test "Print constant tensor" =
     |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   Train.forward_and_forget backend ctx hoo;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hoo;
   [%expect
     {|
     [1]: [| [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] |]_hoo shape 0:2|1:3  [|
@@ -136,7 +136,7 @@ let%expect_test "Print constant tensor" =
       ; [ 4.00 ; 5.00 ; 6.00 ]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hoo;
   [%expect
     {|
     ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -158,7 +158,7 @@ let%expect_test "Print constant tensor" =
     ]
   in
   Train.forward_and_forget backend ctx hey2;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hey2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hey2;
   [%expect
     {|
     [2]: c4x2x3_hey2 shape 1:2,2:3->0:4  [
@@ -168,7 +168,7 @@ let%expect_test "Print constant tensor" =
       ;  ( 19.00 , 20.00 , 21.00 ) , ( 22.00 , 23.00 , 24.00 )
     ]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey2;
   [%expect
     {|
     ┌────────────────────────────────────────────────────────────────┐
@@ -193,7 +193,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx hoo2;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ hoo2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hoo2;
   [%expect
     {|
     [3]: c4x2x3_hoo2 shape 0:4|1:2,2:3  [|
@@ -203,7 +203,7 @@ let%expect_test "Print constant tensor" =
       ; [ [ 19.00 ; 20.00 ; 21.00 ] ; [ 22.00 ; 23.00 ; 24.00 ] ]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hoo2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hoo2;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -226,7 +226,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   [%expect
     {|
     [4]: c4x2x3_heyhoo shape 0:4,1:2|2:3  [|
@@ -236,7 +236,7 @@ let%expect_test "Print constant tensor" =
       ; [| [ 19.00 ; 20.00 ; 21.00 ] ; [ 22.00 ; 23.00 ; 24.00 ] |]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -259,7 +259,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo2;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   [%expect
     {|
     [5]: c4x2x3x2_heyhoo2 shape 0:4,1:2|2:3,3:2  [|
@@ -281,7 +281,7 @@ let%expect_test "Print constant tensor" =
       |]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo2;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   [%expect
     {|
     ┌──────────────────────────────────────────────┐
@@ -321,7 +321,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo3;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   [%expect
     {|
     [6]: c2x2x2x3x2_heyhoo3 shape 0:2,1:2|2:2,3:3,4:2  [|
@@ -347,7 +347,7 @@ let%expect_test "Print constant tensor" =
       |]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo3;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   [%expect
     {|
     ┌──────────────────────────────────────────────────┐
@@ -392,7 +392,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   Train.forward_and_forget backend ctx heyhoo4;
-  Tensor.print ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   [%expect
     {|
     [7]: c2x2x2x3x2_heyhoo4 shape 0:2|4:2->1:2,2:2,3:3  [|
@@ -418,7 +418,7 @@ let%expect_test "Print constant tensor" =
       ]
     |]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ heyhoo4;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo4;
   [%expect
     {|
     ┌───────────────────────────────────────────────────┐
@@ -468,7 +468,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   (* Hey is inferred to be a matrix. *)
   let%op y = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
   Train.forward_and_forget backend ctx y;
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
     ┌────────────────────────┐
@@ -482,7 +482,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │└──────┴────────────┘   │
     └────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default @@ y;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y;
   [%expect
     {|
     ┌──────────────────────────────┐
@@ -514,7 +514,7 @@ let%expect_test "Big matrix" =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   Train.forward_and_forget backend ctx y;
-  Tensor.print ~with_code:false ~with_grad:false `Inline zero_to_twenty;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline zero_to_twenty;
   [%expect
     {|
     [2]: 0...20 shape 0:21  [
@@ -541,7 +541,7 @@ let%expect_test "Big matrix" =
       ; 20.00
     ]
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default zero_to_twenty;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default zero_to_twenty;
   [%expect
     {|
     ┌──────────────────────────────────────┐
@@ -553,7 +553,7 @@ let%expect_test "Big matrix" =
     │└┴───────────────────────────────────┘│
     └──────────────────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
     ┌──────────────────────────────────────────────────┐
@@ -569,7 +569,7 @@ let%expect_test "Big matrix" =
     │└──────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default y;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default y;
   [%expect
     {|
     ┌────────────────────────────────────────────┐
@@ -601,7 +601,7 @@ let%expect_test "Very big tensor" =
   in
   let%op hoo = (hey * (1 + 1)) - 10 in
   Train.forward_and_forget backend ctx hoo;
-  Tensor.print ~with_code:false ~with_grad:false `Default hey;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -737,7 +737,7 @@ let%expect_test "Very big tensor" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴──────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}];
-  Tensor.print ~with_code:false ~with_grad:false `Default hoo;
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   [%expect
     {|
