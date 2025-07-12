@@ -634,35 +634,31 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
              Nd.as_array prec (Bigarray.reshape arr target_dims)
            in
            Some (Nd.map_with_prec { f = f_reshape_with_prec } base_ndarray)
-       | Some (padding_spec, _), false ->
+       | Some (padding, _), false ->
            (* Create new bigarray with padding and copy source into non-padding parts *)
-           let target_array =
-             Nd.create_array ~debug prec_val ~dims:target_dims ~padding:target_padding
-           in
+           let target = Nd.create_array ~debug prec_val ~dims:target_dims ~padding:target_padding in
            let source_dims = Nd.dims base_ndarray in
-           let copy_with_padding () =
-             (* Calculate actual data dimensions (target dims minus padding) *)
-             let data_dims =
-               Array.map2_exn target_dims padding_spec ~f:(fun dim { Nd.left; right } ->
-                   dim - left - right)
-             in
-             (* Check total elements match, allowing shape differences *)
-             let source_total = 
-               if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * ) 
-             in
-             let data_total = 
-               if Array.is_empty data_dims then 0 else Array.reduce_exn data_dims ~f:( * ) 
-             in
-             if source_total <> data_total then
-               invalid_arg
-                 [%string
-                   "create_with_reshape: source has %{source_total#Int} elements but target data \
-                    area has %{data_total#Int} elements"];
-             (* Use C function for efficient copying *)
-             Nd.copy_with_padding ~source:base_ndarray ~target:target_array ~padding:padding_spec
+           (* Calculate actual data dimensions (target dims minus padding) *)
+           let data_dims =
+             Array.map2_exn target_dims padding ~f:(fun dim { Nd.left; right } ->
+                 dim - left - right)
            in
-           copy_with_padding ();
-           Some target_array)
+           (* Check total elements match, allowing shape differences *)
+           let source_total =
+             if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
+           in
+           let data_total =
+             if Array.is_empty data_dims then 0 else Array.reduce_exn data_dims ~f:( * )
+           in
+           if source_total <> data_total then
+             invalid_arg
+               [%string
+                 "create_with_reshape: source has %{source_total#Int} elements but target data \
+                  area has %{data_total#Int} elements"];
+           (* Use C function for efficient copying *)
+           let source = Nd.reshape base_ndarray data_dims in
+           Nd.copy_with_padding ~source ~target ~padding;
+           Some target)
   and prec = lazy prec_val
   and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =

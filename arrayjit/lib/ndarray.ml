@@ -385,15 +385,14 @@ let hash nd = Nativeint.hash (to_native nd)
 let hash_fold_t acc nd = hash_fold_nativeint acc (to_native nd)
 let hash_t nd = Nativeint.hash @@ to_native nd
 
-(** C function declarations for efficient copying *)
-external copy_with_padding_c : 
-  ('a, 'b) bigarray -> ('a, 'b) bigarray -> axis_padding array -> unit
+external copy_with_padding_c : ('a, 'b) bigarray -> ('a, 'b) bigarray -> axis_padding array -> unit
   = "arrayjit_copy_with_padding"
+(** C function declarations for efficient copying *)
 
+(** Copies the whole of [source] onto the parts of [target] skipping over padding margins --
+    requires that source dimensions + padding = target dimensions. *)
 let copy_with_padding ~source ~target ~padding =
-  let copy_impl source_arr target_arr =
-    copy_with_padding_c source_arr target_arr padding
-  in
+  let copy_impl source_arr target_arr = copy_with_padding_c source_arr target_arr padding in
   map2 { f2 = copy_impl } source target
 
 (** {2 *** Creating ***} *)
@@ -419,6 +418,11 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
       "create_array";
       [%log _debug, ptr_to_string_hum result]]];
   result
+
+(** See {!Bigarray.reshape}. *)
+let reshape nd dims =
+  let f prec arr = as_array prec @@ Bigarray.reshape arr dims in
+  map_with_prec { f } nd
 
 let get_used_memory () = Atomic.get used_memory
 
