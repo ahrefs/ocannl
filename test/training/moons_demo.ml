@@ -71,7 +71,7 @@ let main () =
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  (* %cd instead of %op to not get complaints about uninitialized point tensor node. *)
+  (* %cd instead of %op to not get complaints about point being uninitialized. *)
   let%cd mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
   let result_routine =

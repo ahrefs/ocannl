@@ -74,7 +74,7 @@ opam install cudajit gccjit  # for CUDA and GCC backends
 
 ### Testing
 
-- Tests are implemented as inline expectations using `ppx_expect`
+- Tests are implemented either as inline expectations using `ppx_expect`; or as cram-style tests where an `.ml` file is compiled, executed, and its output compared against an `.expected` file
 - Tutorial files in `test/` serve as both documentation and integration tests
 - Use `dune promote` to accept test output changes
 
