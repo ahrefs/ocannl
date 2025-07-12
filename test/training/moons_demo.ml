@@ -42,15 +42,21 @@ let main () =
      computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
+  let init_params = Tensor.init_params scalar_loss in
   let update = Train.grad_update scalar_loss in
+  (* TODO(#321): Define learning_rate above the call to grad_update to test the consume_forward_code
+     fix *)
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
+  (* TODO: is set_hosted needed? *)
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
+  let init_routine = Train.to_routine (module Backend) ctx bindings init_params in
   let sgd_routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
+    Train.to_routine (module Backend) init_routine.context bindings (Asgns.sequence [ update; sgd ])
   in
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
+  Train.run init_routine;
   for _epoch = 1 to epochs do
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;
@@ -65,7 +71,8 @@ let main () =
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let%op mlp_result = mlp "point" in
+  (* %cd instead of %op to not get complaints about uninitialized point tensor node. *)
+  let%cd mlp_result = mlp "point" in
   Train.set_on_host mlp_result.value;
   let result_routine =
     Train.to_routine
@@ -114,7 +121,7 @@ let main () =
   Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name mlp_result;
   (* Note: mlp_result is not included in the resulting tensor's label, because the identifier label
      does not propagate across function calls. *)
-  (Stdio.printf "(mlp moons_input) name: %s\n%!"
+  Stdio.printf "(mlp moons_input) name: %s\n%!"
   @@ Tensor.debug_name
   @@
   match margin_loss.children with
@@ -126,6 +133,6 @@ let main () =
    };
   ] ->
       subtensor
-  | _ -> assert false)
+  | _ -> assert false
 
 let () = main ()

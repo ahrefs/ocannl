@@ -205,8 +205,8 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
-    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
-    ~op_asn ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
+    ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let id = session_state.next_id in
@@ -250,8 +250,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
         let padding = Some (padding_spec, padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
-    | Some (Shape.Fetch _) | None ->
-        Tn.create ~default_prec ~id ~label ~dims ~padding ()
+    | Some (Shape.Fetch _) | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
   in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
@@ -358,7 +357,7 @@ let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
 let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?deduced ?init_data ?fetch_op () =
   let terminal_op =
-    match init_data, fetch_op with
+    match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
     | Some init_data, None -> Some (Shape.Data init_data)
     | None, Some fetch_op -> Some (Shape.Fetch fetch_op)
@@ -369,7 +368,9 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     let dims = lazy (Lazy.force projections).Idx.lhs_dims in
     match fetch_op with
     | None -> Asgns.empty_comp
-    | Some (( Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _ ) as fetch_op) ->
+    | Some
+        ((Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _) as fetch_op)
+      ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
@@ -377,8 +378,8 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
-    make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec make_shape
+    []
 
 let float_to_label v = Float.to_string v
 
@@ -467,6 +468,8 @@ let consume_forward_code t =
     @@ Session_error
          ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
            Some t );
+  (* FIXME(#321): this is too aggressive, instead we should check if the code contains any
+     non-embedded nodes that are embedded nodes of the other roots. *)
   let unsafe_roots =
     Map.data session_state.forward_roots
     |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
