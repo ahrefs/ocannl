@@ -205,11 +205,11 @@ let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   | Single -> single
   | Double -> double
 
-type 'r map_prec = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) precision -> 'r }
+type 'r apply_prec = { f : 'ocaml 'elt_t. ('ocaml, 'elt_t) precision -> 'r }
 
-let map_prec ?default { f } = function
+let apply_prec ?default { f } = function
   | Void_prec ->
-      Option.value_or_thunk default ~default:(fun () -> invalid_arg "map_prec: Void_prec")
+      Option.value_or_thunk default ~default:(fun () -> invalid_arg "apply_prec: Void_prec")
   | Byte_prec Byte -> f Byte
   | Uint16_prec Uint16 -> f Uint16
   | Int32_prec Int32 -> f Int32
@@ -219,7 +219,7 @@ let map_prec ?default { f } = function
   | Single_prec Single -> f Single
   | Double_prec Double -> f Double
   (* FIXME: this is a hack to get the code to compile. *)
-  | _ -> invalid_arg "map_prec: unknown precision"
+  | _ -> invalid_arg "apply_prec: unknown precision"
 
 let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"

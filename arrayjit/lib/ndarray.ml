@@ -410,7 +410,7 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
     [%log3 "Deleting", _debug, ptr_to_string_hum _result]
   in
   let f prec = as_array prec @@ create_bigarray prec ~dims ~padding in
-  let result = Ops.map_prec { f } prec in
+  let result = Ops.apply_prec { f } prec in
   Stdlib.Gc.finalise finalizer result;
   let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
   [%debug3_sexp
