@@ -193,8 +193,6 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
   let zero_to_twenty = TDSL.range 20 in
   let%op yd = (hey * zero_to_twenty) + zero_to_twenty in
   Train.forward_and_forget backend ctx yd;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline zero_to_twenty;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default zero_to_twenty;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default yd
 
@@ -215,7 +213,6 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] () in
   let%op ye = (hey * (1 + 1)) - 10 in
   Train.forward_and_forget backend ctx ye;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default ye
 
 let _suspended (() : unit) : unit =

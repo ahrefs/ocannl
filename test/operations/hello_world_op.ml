@@ -514,45 +514,6 @@ let%expect_test "Big matrix" =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   Train.forward_and_forget backend ctx y;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline zero_to_twenty;
-  [%expect
-    {|
-    [2]: 0...20 shape 0:21  [
-      0.00
-      ; 1.00
-      ; 2.00
-      ; 3.00
-      ; 4.00
-      ; 5.00
-      ; 6.00
-      ; 7.00
-      ; 8.00
-      ; 9.00
-      ; 10.00
-      ; 11.00
-      ; 12.00
-      ; 13.00
-      ; 14.00
-      ; 15.00
-      ; 16.00
-      ; 17.00
-      ; 18.00
-      ; 19.00
-      ; 20.00
-    ]
-    |}];
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default zero_to_twenty;
-  [%expect
-    {|
-    ┌──────────────────────────────────────┐
-    │[2]: 0...20 shape 0:21                │
-    │┌┬───────────────────────────────────┐│
-    │││axis 0                             ││
-    │├┼───────────────────────────────────┤│
-    │││ 0.00  1.00  ...  1.90e+1  2.00e+1 ││
-    │└┴───────────────────────────────────┘│
-    └──────────────────────────────────────┘
-    |}];
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   [%expect
     {|
@@ -600,6 +561,7 @@ let%expect_test "Very big tensor" =
     TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()
   in
   let%op hoo = (hey * (1 + 1)) - 10 in
+  Train.set_hosted hey.value;
   Train.forward_and_forget backend ctx hoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   [%expect

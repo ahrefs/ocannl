@@ -55,9 +55,6 @@ let hello3 () =
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
   let routine = Train.to_routine (module Backend) ctx IDX.empty @@ Train.forward y in
-  Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Inline zero_to_twenty;
-  Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Default zero_to_twenty;
-  Tensor.print_tree ~with_grad:false ~depth:9 zero_to_twenty;
   Stdio.printf "\n%!";
   Train.run routine;
   Tensor.print ~here:[%here] ~with_code:true ~with_grad:false `Default y;
@@ -117,7 +114,6 @@ let hello5 () =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   Train.forward_and_forget backend ctx ho;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho
 
 let hello6 () =
