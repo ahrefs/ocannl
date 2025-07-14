@@ -38,9 +38,7 @@ let () =
   let%cd _ = moons_input =: 0 ++ "i=>2|i" in
   let%op moons_class = moons_classes @| batch_n in
   let%cd _ = moons_class =: 0 ++ "i=>2|i" in
-  let losses = ref [] in
-  let log_losses = ref [] in
-  let learning_rates = ref [] in
+  let losses = Array.create ~len:epochs 0. in
   let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)
@@ -58,15 +56,13 @@ let () =
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
   Train.run init_routine;
-  for _epoch = 1 to epochs do
+  for epoch = 1 to epochs do
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;
         (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
            step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
            scalar_loss.@[0]; *)
-        learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
-        losses := scalar_loss.@[0] :: !losses;
-        log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
+        losses.(epoch - 1) <- losses.(epoch - 1) +. scalar_loss.@[0];
         Int.incr step_ref)
   done;
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
@@ -86,7 +82,7 @@ let () =
     Train.run result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in
-  let plot_moons =
+  let _plot_moons =
     PrintBox_utils.plot ~as_canvas:true
       [
         Scatterplot { points = points1; content = PrintBox.line "#" };
@@ -95,27 +91,9 @@ let () =
           { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
       ]
   in
-  Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
-
-  Stdio.printf "Loss:\n%!";
-  let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"loss"
-      [ Line_plot { points = Array.of_list_rev !losses; content = PrintBox.line "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "Log-loss, for better visibility:\n%!";
-  let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"log loss"
-      [ Line_plot { points = Array.of_list_rev !log_losses; content = PrintBox.line "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nLearning rate:\n%!";
-  let plot_lr =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate"
-      [ Line_plot { points = Array.of_list_rev !learning_rates; content = PrintBox.line "-" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_lr;
+  (* PrintBox_text.output Stdio.stdout _plot_moons; *)
+  (* Stdio.printf "Losses: %f, %f\n%!" losses.(epochs / 2) losses.(epochs - 1); *)
+  Tn.print_accessible_headers ();
 
   (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
   Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name mlp_result;

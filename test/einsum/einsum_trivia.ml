@@ -32,6 +32,7 @@ let%expect_test "einsum1 permute axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:32:21
     ┌───────────────────────────────────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:4|2:2->1:3                                              │
     │┌──────┬───────────────┬───────────────┬───────────────┬──────────────────┐│
@@ -52,6 +53,7 @@ let%expect_test "einsum1 permute axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:53:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: =>_ho2 shape 0:4,1:7|4:2,5:6->2:5,3:3                                                  │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -178,6 +180,7 @@ let%expect_test "einsum1 sum out axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:180:21
     ┌────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|1:3            │
     │┌──────┬───────────────────────────┐│
@@ -198,6 +201,7 @@ let%expect_test "einsum1 sum out axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:201:21
     ┌────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: =>_ho2 shape 0:4|2:2->1:5                                                      │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -234,6 +238,7 @@ let%expect_test "einsum outer product" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:238:21
     ┌──────────────────────────┐
     │[4]: ;=>_c shape 1:2->0:3 │
     │┌──────┬────────────┐     │
@@ -252,6 +257,7 @@ let%expect_test "einsum outer product" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:257:21
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[7]: ;=>_c shape 0:2,1:5|4:3,5:6->2:4,3:7                                                                                             │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -430,6 +436,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ a2;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:436:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_a2 shape 0:2|2:3->1:4                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -446,6 +453,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:453:21
     ┌────────────────────────────────────────────────────────────────┐
     │[3]: ;=>_c shape 0:2|2:3->1:5                                   │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -463,6 +471,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ d;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:471:21
     ┌────────────────────────────────────────────────────────────────┐
     │[4]: ;=>_d shape 0:2,1:2|3:3->2:5                               │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -486,6 +495,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ e;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:495:21
     ┌────────────────────────────────────┐
     │[5]: ;=>_e shape 1:3->0:5           │
     │┌──────┬───────────────────────────┐│
@@ -502,6 +512,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ f;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:512:21
     ┌────────────────────────────────────┐
     │[6]: ;=>_f shape 1:3->0:5           │
     │┌──────┬───────────────────────────┐│
@@ -536,6 +547,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:547:21
     ┌─────────────────────────────────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|2:4->1:3                                            │
     │┌──────┬───────────────────────────┬────────────────────────────────────┐│
@@ -553,6 +565,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:565:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: =>_ho2 shape 0:4|2:3->1:2                                                                                          │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -573,6 +586,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:586:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: =>_ho3 shape 0:2,1:5|4:4,5:7->2:6,3:3                                                                                                                                      │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -702,6 +716,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:716:21
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[5]: =>_ho4 shape 0:5|2:7->1:3                                                                                                                                                                                            │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -719,22 +734,13 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   [%expect
     {|
-    ┌─────────────────────────────────────────────────────────────┐
-    │[0]: r2x4x3 shape 0:2|2:3->1:4                               │
-    │┌──────┬────────────────────────┬───────────────────────────┐│
-    ││      │0 @ 0                   │1 @ 0                      ││
-    ││      │axis 2                  │axis 2                     ││
-    │├──────┼────────────────────────┼───────────────────────────┤│
-    ││axis 1│ 0.00  1.00     2.00    │ 1.20e+1  1.30e+1  1.40e+1 ││
-    ││      │ 3.00  4.00     5.00    │ 1.50e+1  1.60e+1  1.70e+1 ││
-    ││      │ 6.00  7.00     8.00    │ 1.80e+1  1.90e+1  2.00e+1 ││
-    ││      │ 9.00  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
-    │└──────┴────────────────────────┴───────────────────────────┘│
-    └─────────────────────────────────────────────────────────────┘
+    HERE: test/einsum/einsum_trivia.ml:734:21
+    [0]: r2x4x3 shape 0:2|2:3->1:4  <virtual>
     |}];
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho5;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:740:21
     ┌───────────────────────────────────────┐
     │[6]: =>_ho5 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
@@ -750,6 +756,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho6;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:756:21
     ┌───────────────────────────────────────┐
     │[8]: =>_ho6 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
@@ -766,6 +773,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho7;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:773:21
     ┌─────────────────────────────────────────────┐
     │[10]: =>_ho7 shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
@@ -804,6 +812,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:812:21
     ┌─────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -823,6 +832,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ f;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:832:21
     ┌─────────────────────────────────────────────┐
     │[5]: ;=>_f shape 0:3,1:2,2:4                 │
     │┌──────┬────────────────────────────────────┐│
@@ -860,6 +870,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:870:21
     ┌─────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -875,6 +886,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:886:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: =>_ho2 shape 0:2|2:3->1:1                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -891,6 +903,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:903:21
     ┌──────────────────────┐
     │[4]: =>_ho3 shape 0:1 │
     │┌┬─────────┐          │
@@ -905,6 +918,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho4;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:918:21
     ┌──────────────────────────────┐
     │[5]: =>_ho4 shape 0:2,1:1,2:3 │
     │┌──────┬──────────────────┐   │
@@ -940,6 +954,7 @@ let%expect_test "einsum with fixed dim axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:954:21
     ┌─────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -980,6 +995,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ positions;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:995:21
     ┌────────────────────────────────┐
     │[9]: ;=>+ shape 0:4,1:5,2:6,3:3 │
     │┌──────┬──────────────────┐     │
@@ -1122,6 +1138,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ti;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:1138:21
     ┌───────────────────────────┐
     │[1]: =>_ti shape 0:4,1:3   │
     │┌──────┬──────────────────┐│
@@ -1137,6 +1154,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ tk;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:1154:21
     ┌───────────────────────────┐
     │[7]: =>_tk shape 0:6,1:3   │
     │┌──────┬──────────────────┐│
@@ -1175,6 +1193,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:1193:21
     ┌─────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4,2:2                                     │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -1209,6 +1228,7 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
+    HERE: test/einsum/einsum_trivia.ml:1228:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 2:4->0:3,1:2                                                                                          │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
