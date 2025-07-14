@@ -683,9 +683,7 @@ let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
             if d_min <= 0 then ([], Unconstrained_dim)
             else
               let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
-              apply_dim_constraint ~source ~stage output
-                (At_least_dim (quotient + (dilation * d_k)))
-                env
+              apply_dim_constraint ~source ~stage output (At_least_dim quotient) env
         | _ -> apply_dim_constraint ~source ~stage output (At_least_dim quotient) env)
     | Var v, _ -> (
         match Map.find env.dim_env v with
