@@ -456,17 +456,24 @@ let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
         let extra_var = Option.to_list @@ if keep_constr1 then v1 else v2 in
         let num_var = if keep_constr1 then v2 else v1 in
         let diff_vars = extra_var @ if keep_constr1 then vars2_only else vars1_only in
-        if List.is_empty diff_vars then (
-          (* No difference in variables but different numerators - this is a mismatch *)
-          match num_var with
-          | None -> elems_mismatch n1 n2
-          | Some v ->
-              let d = if keep_constr1 then n1_val / n2_val else n2_val / n1_val in
-              if d <= 0 then elems_mismatch n1 n2;
-              [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ])
+        let n_big = if keep_constr1 then n2_val else n1_val in
+        let n_small = if keep_constr1 then n1_val else n2_val in
+        if n_small = 0 then
+          raise @@ Shape_error ([%string "Division by zero in constraint solving"], [])
+        else if n_big % n_small <> 0 then
+          raise
+          @@ Shape_error
+               ([%string "Total_elems constraint: %{n_big#Int} not divisible by %{n_small#Int}"], [])
         else
-          let quotient = if keep_constr1 then n2_val / n1_val else n1_val / n2_val in
-          if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
+          let quotient = n_big / n_small in
+          if List.is_empty diff_vars then (
+            (* No difference in variables but different numerators - this is a mismatch *)
+            match num_var with
+            | None -> elems_mismatch n1 n2
+            | Some v ->
+                if quotient <= 0 then elems_mismatch n1 n2;
+                [ Dim_eq { d1 = Var v; d2 = get_dim ~d:quotient () } ])
+          else if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
           else if quotient = 1 && Option.is_none num_var then
             (* The difference variables must all be 1 *)
             List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
@@ -477,10 +484,8 @@ let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
               match num_var with
               | None -> Num_elems quotient
               | Some var ->
-                  let value = if keep_constr1 then n2_val else n1_val in
-                  let coeff = Utils.{ value = `Value value; unique_id = Int.to_string value } in
-                  let denom = if keep_constr1 then n1_val else n2_val in
-                  Strided_var { coeff; var; denom }
+                  let coeff = Utils.{ value = `Value n_big; unique_id = Int.to_string n_big } in
+                  Strided_var { coeff; var; denom = n_small }
             in
             [ Rows_constr { r = [ r ]; constr = Total_elems { numerator; divided_by = [] } } ]
       in
@@ -671,12 +676,17 @@ let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
     | Conv_input { stride; output; dilation; kernel }, At_least_dim d_min -> (
+        let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
         match kernel with
         | Dim { d = d_k; _ } when not !use_padding ->
-            apply_dim_constraint ~source ~stage output
-              (At_least_dim ((d_min / stride) + (dilation * d_k)))
-              env
-        | _ -> apply_dim_constraint ~source ~stage output (At_least_dim (d_min / stride)) env)
+            let d_min = d_min - (dilation * d_k) in
+            if d_min <= 0 then ([], Unconstrained_dim)
+            else
+              let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
+              apply_dim_constraint ~source ~stage output
+                (At_least_dim (quotient + (dilation * d_k)))
+                env
+        | _ -> apply_dim_constraint ~source ~stage output (At_least_dim quotient) env)
     | Var v, _ -> (
         match Map.find env.dim_env v with
         | None -> ([], constr)
