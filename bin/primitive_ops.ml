@@ -22,7 +22,7 @@ let%debug_sexp graph_t () : unit =
   let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
-  let%op f x = recip x in
+  let%op f x = sin x in
   let size = 50 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
   let x_flat =
