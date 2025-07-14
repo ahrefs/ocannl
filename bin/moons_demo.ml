@@ -31,14 +31,21 @@ let demo () =
   let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
 
   let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
-  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config ~len () in
-  let moons_flat = TDSL.rebatch ~l:"moons_flat" (Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates) in
-  let moons_classes = TDSL.rebatch ~l:"moons_classes" (Ir.Ndarray.as_array Ir.Ops.Double moons_labels) in
+  let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in
+  let moons_flat =
+    TDSL.rebatch ~l:"moons_flat" (Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates)
+  in
+  let moons_classes =
+    TDSL.rebatch ~l:"moons_classes" (Ir.Ndarray.as_array Ir.Ops.Single moons_labels)
+  in
 
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let%op moons_input = moons_flat @| batch_n in
+  (* THIS IS THE SPECIFIC SHAPE INFERENCE ASPECT OF THE TEST. *)
+  let%cd _ = moons_input =: 0 ++ "i=>6|i" in
   let%op moons_class = moons_classes @| batch_n in
+  let%cd _ = moons_class =: 0 ++ "i=>6|i" in
 
   let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in

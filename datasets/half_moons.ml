@@ -15,8 +15,9 @@ module Config = struct
   }
 end
 
-(** Generate the half moons dataset with the specified parameters.
+(** Internal helper function to generate half moons with specified precision.
     
+    @param kind The bigarray kind (float32 or float64)
     @param config Configuration for noise and randomization
     @param len Number of samples per moon (total samples = len * 2)
     @return A tuple of (coordinates, labels) where:
@@ -24,7 +25,7 @@ end
             - labels is a bigarray of shape [len*2; 1] (batch_axis, output_axis)
             - First moon has label 1.0, second moon has label -1.0
 *)
-let generate ?(config = Config.default) ~len () =
+let generate_with_kind kind ?(config = Config.default) ~len () =
   (* Initialize random seed if specified *)
   (match config.seed with
   | Some seed -> Random.init seed
@@ -34,8 +35,8 @@ let generate ?(config = Config.default) ~len () =
   let total_samples = len * 2 in
   
   (* Create bigarrays with batch axis first, then output axis *)
-  let coordinates = Genarray.create float64 c_layout [| total_samples; 2 |] in
-  let labels = Genarray.create float64 c_layout [| total_samples; 1 |] in
+  let coordinates = Genarray.create kind c_layout [| total_samples; 2 |] in
+  let labels = Genarray.create kind c_layout [| total_samples; 1 |] in
   
   (* Generate first moon (label = 1.0) *)
   for i = 0 to len - 1 do
@@ -62,6 +63,30 @@ let generate ?(config = Config.default) ~len () =
   
   (coordinates, labels)
 
+(** Generate the half moons dataset with the specified parameters.
+    
+    @param config Configuration for noise and randomization
+    @param len Number of samples per moon (total samples = len * 2)
+    @return A tuple of (coordinates, labels) where:
+            - coordinates is a bigarray of shape [len*2; 2] (batch_axis, output_axis)
+            - labels is a bigarray of shape [len*2; 1] (batch_axis, output_axis)
+            - First moon has label 1.0, second moon has label -1.0
+*)
+let generate ?(config = Config.default) ~len () =
+  generate_with_kind float64 ~config ~len ()
+
+(** Generate the half moons dataset with single precision floats.
+    
+    @param config Configuration for noise and randomization
+    @param len Number of samples per moon (total samples = len * 2)
+    @return A tuple of (coordinates, labels) where:
+            - coordinates is a bigarray of shape [len*2; 2] (batch_axis, output_axis) with float32 elements
+            - labels is a bigarray of shape [len*2; 1] (batch_axis, output_axis) with float32 elements
+            - First moon has label 1.0, second moon has label -1.0
+*)
+let generate_single_prec ?(config = Config.default) ~len () =
+  generate_with_kind float32 ~config ~len ()
+
 (** Generate half moons dataset using the old array-based approach for compatibility.
     This function is deprecated and provided for backwards compatibility.
     
@@ -79,4 +104,4 @@ let generate_arrays ?(noise_range = 0.1) ~len () =
         [| c +. noise (); s +. noise (); 1.0 -. c +. noise (); 0.5 -. s +. noise () |])))
   in
   let labels = Array.init (len * 2) (fun i -> if i mod 2 = 0 then 1. else -1.) in
-  (coordinates, labels) 
+  (coordinates, labels)
