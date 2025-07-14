@@ -458,7 +458,9 @@ let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
 let dims_to_string ?(with_axis_numbers = false) arr =
   let dims_s =
-    if Lazy.is_val arr.dims then Nd.int_dims_to_string ~with_axis_numbers @@ Lazy.force arr.dims
+    if Lazy.is_val arr.dims then 
+      let padding = Option.map ~f:fst (Lazy.force arr.padding) in
+      Nd.int_dims_to_string ~with_axis_numbers ?padding @@ Lazy.force arr.dims
     else "<not-in-yet>"
   in
   Ops.prec_string (Lazy.force arr.prec) ^ " prec " ^ dims_s
@@ -723,29 +725,35 @@ let do_write tn =
 
 let points_1d ?from_axis ~xdim tn =
   do_read tn;
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ~xdim arr)
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ?padding ~xdim arr)
   @@ Lazy.force tn.array
 
 let points_2d ?from_axis ~xdim ~ydim tn =
   do_read tn;
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ~xdim ~ydim arr)
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr)
   @@ Lazy.force tn.array
 
 let set_value tn =
   do_write tn;
-  Nd.set_from_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Nd.set_from_float ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
 
 let get_value tn =
   do_read tn;
-  Nd.get_as_float @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Nd.get_as_float ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
 
 let set_values tn values =
   do_write tn;
-  Nd.(set_flat_values values @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Nd.(set_flat_values ?padding (Option.value_exn ~here:[%here] @@ Lazy.force tn.array) values)
 
 let get_values tn =
   do_read tn;
-  Nd.(retrieve_flat_values @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
+  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
+  Nd.(retrieve_flat_values ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
 
 let print_accessible_headers () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";

@@ -15,6 +15,7 @@ let test_bfloat16_conversions () =
 
   (* Test round-trip through ndarray *)
   let arr = Ndarray.create_array ~debug:"test" Ops.bfloat16 ~dims:[| 3; 2 |] ~padding:None in
+  Ndarray.set_flat_values arr (Array.of_list test_values);
 
   Stdio.printf "\nBFloat16 array values:\n";
   let flat_values = Ndarray.retrieve_flat_values arr in
@@ -33,6 +34,7 @@ let test_fp8_conversions () =
 
   (* Test round-trip through ndarray *)
   let arr = Ndarray.create_array ~debug:"test" Ops.fp8 ~dims:[| 2; 2 |] ~padding:None in
+  Ndarray.set_flat_values arr (Array.of_list test_values);
 
   Stdio.printf "\nFP8 array values:\n";
   let flat_values = Ndarray.retrieve_flat_values arr in
@@ -53,7 +55,7 @@ let test_padding () =
     Ndarray.create_array ~debug:"padded_test" Ops.single ~dims:padded_dims
       ~padding:(Some (padding_config, padding_value))
   in
-
+  Ndarray.set_flat_values ~padding:padding_config arr [| 1.0; 2.0; 3.0; 4.0; 5.0; 6.0 |];
   Stdio.printf "Padded array (dims 4x6, unpadded region 2x3):\n";
   let dims = Ndarray.dims arr in
   for i = 0 to dims.(0) - 1 do

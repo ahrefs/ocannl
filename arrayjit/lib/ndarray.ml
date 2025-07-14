@@ -200,17 +200,36 @@ let get_voidptr_not_managed nd : unit Ctypes.ptr =
 (* let open Ctypes in coerce (ptr @@ typ_of_bigarray_kind @@ Bigarray.Genarray.kind arr) (ptr void)
    (bigarray_start genarray arr) *)
 
-let set_from_float arr idx v =
+(** Helper function to adjust indices by adding left padding when padding is specified *)
+let adjust_idx_for_padding ?padding idx =
+  match padding with
+  | None -> idx
+  | Some padding_arr -> 
+      Array.mapi idx ~f:(fun i dim_idx -> 
+        if i < Array.length padding_arr then
+          dim_idx + padding_arr.(i).left
+        else dim_idx)
+
+(** Helper function to compute end index for iteration, respecting padding margins *)
+let compute_end_idx ?padding dims axis =
+  match padding with
+  | None -> dims.(axis) - 1
+  | Some padding_arr when axis < Array.length padding_arr -> 
+      dims.(axis) - padding_arr.(axis).left - padding_arr.(axis).right - 1
+  | Some _ -> dims.(axis) - 1
+
+let set_from_float ?padding arr idx v =
+  let adjusted_idx = adjust_idx_for_padding ?padding idx in
   match arr with
-  | Byte_nd arr -> A.set arr idx @@ Char.of_int_exn @@ Int.of_float v
-  | Uint16_nd arr -> A.set arr idx @@ Int.of_float v
-  | Int32_nd arr -> A.set arr idx @@ Int32.of_float v
-  | Uint4x32_nd arr -> A.set arr idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
-  | Half_nd arr -> A.set arr idx v
-  | Bfloat16_nd arr -> A.set arr idx @@ float_to_bfloat16 v
-  | Fp8_nd arr -> A.set arr idx @@ Char.of_int_exn @@ float_to_fp8 v
-  | Single_nd arr -> A.set arr idx v
-  | Double_nd arr -> A.set arr idx v
+  | Byte_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Int.of_float v
+  | Uint16_nd arr -> A.set arr adjusted_idx @@ Int.of_float v
+  | Int32_nd arr -> A.set arr adjusted_idx @@ Int32.of_float v
+  | Uint4x32_nd arr -> A.set arr adjusted_idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
+  | Half_nd arr -> A.set arr adjusted_idx v
+  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ float_to_bfloat16 v
+  | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ float_to_fp8 v
+  | Single_nd arr -> A.set arr adjusted_idx v
+  | Double_nd arr -> A.set arr adjusted_idx v
 
 let fill_from_float arr v =
   match arr with
@@ -224,13 +243,17 @@ let fill_from_float arr v =
   | Single_nd arr -> A.fill arr v
   | Double_nd arr -> A.fill arr v
 
-let fold_bigarray arr ~init ~f =
+let fold_bigarray ?padding arr ~init ~f =
   let dims = A.dims arr in
   let accu = ref init in
   let rec cloop idx col =
-    if col = Array.length idx then accu := f !accu idx @@ A.get arr idx
+    if col = Array.length idx then 
+      let adjusted_idx = adjust_idx_for_padding ?padding idx in
+      accu := f !accu idx @@ A.get arr adjusted_idx
     else
-      for j = 0 to Int.pred dims.(col) do
+      let end_idx = compute_end_idx ?padding dims col
+      in
+      for j = 0 to end_idx do
         idx.(col) <- j;
         cloop idx (Int.succ col)
       done
@@ -239,20 +262,20 @@ let fold_bigarray arr ~init ~f =
   cloop (Array.create ~len 0) 0;
   !accu
 
-let fold_as_float ~init ~f arr =
+let fold_as_float ?padding ~init ~f arr =
   match arr with
   | Byte_nd arr ->
-      fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
-  | Uint16_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
-  | Int32_nd arr -> fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
-  | Uint4x32_nd arr -> fold_bigarray ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
-  | Half_nd arr -> fold_bigarray ~init ~f arr
+      fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
+  | Uint16_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
+  | Int32_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
+  | Uint4x32_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
+  | Half_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Bfloat16_nd arr ->
-      fold_bigarray ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
+      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
   | Fp8_nd arr ->
-      fold_bigarray ~init ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c) arr
-  | Single_nd arr -> fold_bigarray ~init ~f arr
-  | Double_nd arr -> fold_bigarray ~init ~f arr
+      fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c) arr
+  | Single_nd arr -> fold_bigarray ?padding ~init ~f arr
+  | Double_nd arr -> fold_bigarray ?padding ~init ~f arr
 
 let size_in_bytes v =
   (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative
@@ -260,19 +283,20 @@ let size_in_bytes v =
   let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
   apply { f } v
 
-let get_as_float arr idx =
+let get_as_float ?padding arr idx =
+  let adjusted_idx = adjust_idx_for_padding ?padding idx in
   match arr with
-  | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr idx
-  | Uint16_nd arr -> Float.of_int @@ A.get arr idx
-  | Int32_nd arr -> Int32.to_float @@ A.get arr idx
-  | Uint4x32_nd arr -> (A.get arr idx).Stdlib.Complex.re
-  | Half_nd arr -> A.get arr idx
-  | Bfloat16_nd arr -> bfloat16_to_float @@ A.get arr idx
-  | Fp8_nd arr -> fp8_to_float @@ Char.to_int @@ A.get arr idx
-  | Single_nd arr -> A.get arr idx
-  | Double_nd arr -> A.get arr idx
+  | Byte_nd arr -> Float.of_int @@ Char.to_int @@ A.get arr adjusted_idx
+  | Uint16_nd arr -> Float.of_int @@ A.get arr adjusted_idx
+  | Int32_nd arr -> Int32.to_float @@ A.get arr adjusted_idx
+  | Uint4x32_nd arr -> (A.get arr adjusted_idx).Stdlib.Complex.re
+  | Half_nd arr -> A.get arr adjusted_idx
+  | Bfloat16_nd arr -> bfloat16_to_float @@ A.get arr adjusted_idx
+  | Fp8_nd arr -> fp8_to_float @@ Char.to_int @@ A.get arr adjusted_idx
+  | Single_nd arr -> A.get arr adjusted_idx
+  | Double_nd arr -> A.get arr adjusted_idx
 
-let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
+let retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr =
   let dims = dims arr in
   if Array.is_empty dims then [||]
   else
@@ -284,16 +308,18 @@ let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
       if axis = n_axes then
         let x =
           idx.(from_axis) <- xdim;
-          get_as_float arr idx
+          get_as_float ?padding arr idx
         in
         let y =
           idx.(from_axis) <- ydim;
-          get_as_float arr idx
+          get_as_float ?padding arr idx
         in
         result := (x, y) :: !result
       else if axis = from_axis then iter (axis + 1)
       else
-        for p = 0 to dims.(axis) - 1 do
+        let end_idx = compute_end_idx ?padding dims axis
+        in
+        for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
         done
@@ -301,7 +327,7 @@ let retrieve_2d_points ?from_axis ~xdim ~ydim arr =
     iter 0;
     Array.of_list_rev !result
 
-let retrieve_1d_points ?from_axis ~xdim arr =
+let retrieve_1d_points ?from_axis ?padding ~xdim arr =
   let dims = dims arr in
   if Array.is_empty dims then [||]
   else
@@ -313,12 +339,14 @@ let retrieve_1d_points ?from_axis ~xdim arr =
       if axis = n_axes then
         let x =
           idx.(from_axis) <- xdim;
-          get_as_float arr idx
+          get_as_float ?padding arr idx
         in
         result := x :: !result
       else if axis = from_axis then iter (axis + 1)
       else
-        for p = 0 to dims.(axis) - 1 do
+       let end_idx = compute_end_idx ?padding dims axis
+        in
+        for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
         done
@@ -326,7 +354,7 @@ let retrieve_1d_points ?from_axis ~xdim arr =
     iter 0;
     Array.of_list_rev !result
 
-let retrieve_flat_values arr =
+let retrieve_flat_values ?padding arr =
   let dims = dims arr in
   if Array.is_empty dims then [||]
   else
@@ -335,10 +363,12 @@ let retrieve_flat_values arr =
     let idx = Array.create ~len:n_axes 0 in
     let rec iter axis =
       if axis = n_axes then
-        let x = get_as_float arr idx in
+        let x = get_as_float ?padding arr idx in
         result := x :: !result
       else
-        for p = 0 to dims.(axis) - 1 do
+        let end_idx = compute_end_idx ?padding dims axis
+        in
+        for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
         done
@@ -346,7 +376,27 @@ let retrieve_flat_values arr =
     iter 0;
     Array.of_list_rev !result
 
-let set_flat_values _arr _values = ()
+let set_flat_values ?padding arr values =
+  let dims = dims arr in
+  if not (Array.is_empty dims) then
+    let n_axes = Array.length dims in
+    let idx = Array.create ~len:n_axes 0 in
+    let values_idx = ref 0 in
+    let rec iter axis =
+      if axis = n_axes then (
+        if !values_idx < Array.length values then (
+          set_from_float ?padding arr idx values.(!values_idx);
+          Int.incr values_idx
+        ))
+      else
+        let end_idx = compute_end_idx ?padding dims axis
+        in
+        for p = 0 to end_idx do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done
+    in
+    iter 0
 
 let c_ptr_to_string nd =
   let prec = get_prec nd in
@@ -410,12 +460,25 @@ let get_used_memory () = Atomic.get used_memory
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
-let int_dims_to_string ?(with_axis_numbers = false) dims =
+let int_dims_to_string ?(with_axis_numbers = false) ?padding dims =
   if Array.is_empty dims then "-"
   else if with_axis_numbers then
     String.concat_array ~sep:" x "
     @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
-  else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
+  else
+    let dim_strings = Array.mapi dims ~f:(fun i dim ->
+      match padding with
+      | None -> Int.to_string dim
+      | Some padding_arr when i < Array.length padding_arr ->
+          let unpadded_dim = dim - padding_arr.(i).left - padding_arr.(i).right in
+          let total_padding = padding_arr.(i).left + padding_arr.(i).right in
+          if total_padding > 0 then
+            Int.to_string unpadded_dim ^ "+" ^ Int.to_string total_padding
+          else
+            Int.to_string dim
+      | Some _ -> Int.to_string dim
+    ) in
+    String.concat_array ~sep:"x" dim_strings
 
 (** Logs information about the array on the default ppx_minidebug runtime, if
     [from_log_level > Utlis.settings.with_log_level]. *)
