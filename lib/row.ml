@@ -664,7 +664,7 @@ let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
                   elems_mismatch numerator (Num_elems known_product)
               else None))
 
-let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
+let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
     (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
@@ -696,10 +696,12 @@ let rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
             | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
     | _, Unconstrained_dim -> ([], constr)
   in
-  match (dim, constr, stage) with
+  (* FIXME: *)
+  (* match (dim, constr, stage) with
   | Var _, At_least_dim d, Stage4 ->
       (Dim_eq { d1 = dim; d2 = get_dim ~d () } :: extras, Unconstrained_dim)
-  | _ -> (extras, constr)
+  | _ -> *)
+  (extras, constr)
 
 exception Given_up
 
@@ -2012,7 +2014,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) (env : environment)
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
           Terminal_row r1 :: term_dims ())
 
-let%debug5_sexp eliminate_dim_entry v ~lub constr =
+let%debug5_sexp eliminate_dim_entry ~final v ~lub constr =
   match (lub, constr) with
   | _, Unconstrained_dim | _, At_least_dim 1 -> None
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
@@ -2021,7 +2023,7 @@ let%debug5_sexp eliminate_dim_entry v ~lub constr =
            ( [%string "dereferenced at dimension %{d2#Int}, higher than use site"],
              [ Dim_mismatch [ lub; Var v ] ] )
   | Some lub, At_least_dim _ -> Some (Dim_eq { d1 = Var v; d2 = lub })
-  | None, At_least_dim d -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d () })
+  | None, At_least_dim d -> if final then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d () }) else None
 
 let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as _r : row) :
     constraint_ list =
@@ -2030,8 +2032,8 @@ let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as 
         Some
           (match Map.find env.dim_env v with
           | Some (Bounds_dim { lub; constr; _ }) ->
-              Option.value_or_thunk (eliminate_dim_entry v ~lub constr) ~default:(fun () ->
-                  Dim_eq { d1; d2 = get_dim ~d:1 () })
+              Option.value_or_thunk (eliminate_dim_entry ~final:true v ~lub constr)
+                ~default:(fun () -> Dim_eq { d1; d2 = get_dim ~d:1 () })
           | Some (Solved_dim _) -> assert false
           | None -> Dim_eq { d1; d2 = get_dim ~d:1 () })
     | _ -> None
@@ -2109,13 +2111,14 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
   match stage with
   | Stage1 | Stage2 | Stage3 | Stage6 | Stage7 -> solve ineqs env
   | Stage4 ->
-      let finalize_lower_bound (v : dim_var) = function
-        | Bounds_dim { lub; constr; _ } -> Option.to_list @@ eliminate_dim_entry v ~lub constr
+      let finalize_upper_lower_bound (v : dim_var) = function
+        | Bounds_dim { lub; constr; _ } ->
+            Option.to_list @@ eliminate_dim_entry ~final:false v ~lub constr
         | _ -> []
       in
       let finalizing_entries : constraint_ list =
         Map.fold env.dim_env ~init:[] ~f:(fun ~key ~data accu ->
-            finalize_lower_bound key data @ accu)
+            finalize_upper_lower_bound key data @ accu)
       in
       solve (finalizing_entries @ ineqs) env
   | Stage5 ->
