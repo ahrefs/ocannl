@@ -130,13 +130,6 @@ let create_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precis
     (ocaml, elt_t) bigarray =
   A.create (precision_to_bigarray_kind prec) Bigarray.C_layout dims
 
-let init_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) dims
-    ~(f : int array -> ocaml) : (ocaml, elt_t) bigarray =
-  A.init (precision_to_bigarray_kind prec) Bigarray.C_layout dims f
-
-let indices_to_offset ~dims ~idcs =
-  Array.fold2_exn dims idcs ~init:0 ~f:(fun accu dim idx -> (accu * dim) + idx)
-
 (** {2 *** Initialization ***} *)
 
 type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
@@ -230,19 +223,6 @@ let fill_from_float arr v =
   | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ float_to_fp8 v
   | Single_nd arr -> A.fill arr v
   | Double_nd arr -> A.fill arr v
-
-let set_bigarray arr ~f =
-  let dims = A.dims arr in
-  let rec cloop idx f col =
-    if col = Array.length idx then A.set arr idx (f idx)
-    else
-      for j = 0 to Int.pred dims.(col) do
-        idx.(col) <- j;
-        cloop idx f (Int.succ col)
-      done
-  in
-  let len = Array.length dims in
-  cloop (Array.create ~len 0) f 0
 
 let fold_bigarray arr ~init ~f =
   let dims = A.dims arr in
