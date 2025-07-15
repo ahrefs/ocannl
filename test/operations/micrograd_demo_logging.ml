@@ -39,4 +39,5 @@ let () =
   Train.run step;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default g;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default a;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default b
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default b;
+  Utils.restore_settings ()

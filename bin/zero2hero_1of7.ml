@@ -48,7 +48,6 @@ let _suspended () =
 
 let _suspended () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
-  Utils.settings.output_debug_files_in_build_directory <- true;
   Rand.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
@@ -92,9 +91,6 @@ let _suspended () =
   Stdio.print_endline ""
 
 let _suspended () =
-  (* Utils.set_log_level 2; *)
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  (* Utils.settings.debug_log_from_routines <- true; *)
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
@@ -145,9 +141,6 @@ let _suspended () =
 
 let () =
   Rand.init 0;
-  Utils.set_log_level 2;
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in

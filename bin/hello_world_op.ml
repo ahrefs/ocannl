@@ -13,10 +13,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let setup (() : unit) : unit =
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  Utils.settings.debug_log_from_routines <- true
-
 let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
@@ -216,12 +212,10 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default ye
 
 let _suspended (() : unit) : unit =
-  setup ();
   _Matrix_multiplication_dims_2x3 ();
   _Big_matrix ()
 
 let _suspended (() : unit) : unit =
-  setup ();
   _Pointwise_multiplication_dims_1 ();
   _Matrix_multiplication_dims_1x1 ();
   _Print_constant_tensor ();
@@ -230,7 +224,6 @@ let _suspended (() : unit) : unit =
   _Very_big_tensor ()
 
 let (() : unit) : unit =
-  setup ();
   _Matrix_multiplication_dims_2x3 ();
   _Big_matrix ();
   _Very_big_tensor ()

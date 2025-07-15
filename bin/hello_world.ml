@@ -12,8 +12,6 @@ module type Backend = Ir.Backend_intf.Backend
 let hello1 () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  (* Utils.set_log_level 2; *)
-  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.TDSL in
@@ -29,9 +27,6 @@ let hello1 () =
 let hello2 () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  (* Utils.set_log_level 2; *)
-  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
-  (* Utils.settings.debug_log_from_routines <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   (* Hey is inferred to be a matrix. *)
@@ -45,8 +40,6 @@ let hello2 () =
 let hello3 () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  (* Utils.settings.debug_log_from_routines <- true; *)
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   (* Hey is inferred to be a matrix. *)
@@ -96,9 +89,6 @@ let hello4 () =
   Stdio.printf "\n%!"
 
 let hello5 () =
-  Utils.set_log_level 2;
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
@@ -117,9 +107,6 @@ let hello5 () =
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho
 
 let hello6 () =
-  Utils.set_log_level 2;
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend

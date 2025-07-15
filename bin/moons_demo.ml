@@ -15,13 +15,10 @@ let demo () =
   let seed = 3 in
   Rand.init seed;
   Utils.settings.fixed_state_for_init <- Some seed;
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  (* Utils.enable_runtime_debug (); *)
   let hid_dim = 16 in
   let len = 512 in
   let batch_size = 32 in
   let epochs = 75 in
-  (* Utils.settings.debug_log_from_routines <- true; *)
   (* TINY for debugging: *)
   (* let hid_dim = 2 in let len = 16 in let batch_size = 2 in let epochs = 2 in *)
   let n_batches = 2 * len / batch_size in

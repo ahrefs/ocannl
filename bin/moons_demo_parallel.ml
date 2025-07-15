@@ -8,8 +8,6 @@ module CDSL = Train.CDSL
 module Rand = Ir.Rand.Lib
 
 let experiment ~seed ~backend_name ~config () =
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
   let batch_size = 120 in

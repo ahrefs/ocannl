@@ -12,8 +12,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   Rand.init 0;
-  (* Utils.enable_runtime_debug (); *)
-  (* Utils.settings.debug_log_from_routines <- true; *)
   let hid_dim = 16 in
   let len = 300 in
   let batch_size = 20 in
@@ -21,7 +19,6 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let epochs = 75 in
   let steps = epochs * n_batches in
   (* let weight_decay = 0.0002 in *)
-  Utils.settings.fixed_state_for_init <- Some seed;
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len () in
   let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in

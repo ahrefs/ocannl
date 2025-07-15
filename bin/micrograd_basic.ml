@@ -12,9 +12,6 @@ let%diagn_sexp _suspended () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  Utils.settings.output_debug_files_in_build_directory <- true;
-  Utils.settings.debug_log_from_routines <- true;
-  Utils.set_log_level 2;
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = c + c + 1 in
@@ -37,7 +34,6 @@ let%diagn_sexp () : unit =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in

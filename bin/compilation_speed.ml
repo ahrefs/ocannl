@@ -14,9 +14,6 @@ let fresh_backend = Backends.fresh_backend
 let benchmark_overhead backend () =
   let n_data = 20 in
   let module Backend = (val backend : Backend) in
-  (* Utils.settings.with_debug <- true; *)
-  (* Utils.settings.output_debug_files_in_build_directory <- true; *)
-  (* Utils.settings.debug_log_from_routines <- true; *)
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ Backend.name ^ " ******";
   Rand.init 0;
