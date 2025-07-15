@@ -761,10 +761,17 @@ let get_values tn =
 let print_accessible_headers ?(pred = fun _ -> true) () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";
   Stdlib.Gc.full_major ();
-  Registry.iter (fun arr -> if pred arr then Stdio.print_endline @@ header arr) registry;
+  let results =
+    Registry.fold (fun arr acc -> if pred arr then (arr.id, header arr) :: acc else acc) registry []
+  in
+  List.sort results ~compare:(fun (a, _) (b, _) -> compare_int a b)
+  |> List.iter ~f:(fun (_, header) -> Stdio.print_endline header);
   Stdio.printf "Tnode: Finished printing headers.%!\n"
 
 let%debug_sexp log_accessible_headers ?(pred = fun _ -> true) () =
   Stdlib.Gc.full_major ();
-  Registry.iter (fun arr -> if pred arr then [%log header arr]) registry;
-  ()
+  let results =
+    Registry.fold (fun arr acc -> if pred arr then (arr.id, header arr) :: acc else acc) registry []
+  in
+  List.sort results ~compare:(fun (a, _) (b, _) -> compare_int a b)
+  |> List.iter ~f:(fun (_, header) -> [%log header])
