@@ -695,7 +695,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
       string prefix_str ^^ string " <not-in-yet>" ^^ space
     else
       match (style, Lazy.force t.value.array) with
-      | _, None -> string prefix_str ^^ string " <virtual>" ^^ space
+      | _, None -> string prefix_str ^^ string " <not-hosted>" ^^ space
       | `Inline, Some arr ->
           Tn.do_read t.value;
           string prefix_str ^^ space
@@ -714,7 +714,7 @@ let to_doc ?(spy = false) ~with_grad ~with_code ?(with_low_level = false)
             string (grad_txt diff) ^^ string " <not-in-yet>" ^^ space
           else
             match Lazy.force diff.grad.array with
-            | None -> string (grad_txt diff) ^^ string " <virtual>" ^^ space
+            | None -> string (grad_txt diff) ^^ string " <not-hosted>" ^^ space
             | Some arr -> (
                 match style with
                 | `Inline ->
