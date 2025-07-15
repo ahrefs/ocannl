@@ -87,8 +87,10 @@ type t = {
   mutable code_name : string option;
   mutable prepare_read : prepare option;
   mutable prepare_write : prepare option;
-  mutable host_read_by_devices : Hash_set.M(Int).t;
-      (** The unique ids of devices that read the most recent modification of the host array. *)
+  mutable devices_not_lagging_host : Hash_set.M(Int).t;
+      (** The unique ids of devices that either read the most recent modification of the host
+          buffer, or computed the most recent modification of the node themselves, whether or not it
+          has been transferred to the host yet. *)
 }
 [@@deriving sexp_of]
 
@@ -458,7 +460,7 @@ let has a = match a.array with (lazy (Some _)) -> true | _ -> false
 
 let dims_to_string ?(with_axis_numbers = false) arr =
   let dims_s =
-    if Lazy.is_val arr.dims then 
+    if Lazy.is_val arr.dims then
       let padding = Option.map ~f:fst (Lazy.force arr.padding) in
       Nd.int_dims_to_string ~with_axis_numbers ?padding @@ Lazy.force arr.dims
     else "<not-in-yet>"
@@ -576,7 +578,7 @@ let create ?default_prec ~id ~label ~dims ~padding () =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_read_by_devices = Hash_set.create (module Int);
+      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
@@ -604,7 +606,7 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_read_by_devices = Hash_set.create (module Int);
+      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   Registry.add registry tn;
@@ -678,7 +680,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_read_by_devices = Hash_set.create (module Int);
+      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   Registry.add registry tn;
@@ -703,7 +705,7 @@ let find =
       code_name = None;
       prepare_read = None;
       prepare_write = None;
-      host_read_by_devices = Hash_set.create (module Int);
+      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }
@@ -721,7 +723,7 @@ let do_read tn =
 let do_write tn =
   Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
   tn.prepare_write <- None;
-  Hash_set.clear tn.host_read_by_devices
+  Hash_set.clear tn.devices_not_lagging_host
 
 let points_1d ?from_axis ~xdim tn =
   do_read tn;
@@ -732,7 +734,8 @@ let points_1d ?from_axis ~xdim tn =
 let points_2d ?from_axis ~xdim ~ydim tn =
   do_read tn;
   let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr)
+  Option.value_map ~default:[||] ~f:(fun arr ->
+      Nd.retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr)
   @@ Lazy.force tn.array
 
 let set_value tn =

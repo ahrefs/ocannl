@@ -81,6 +81,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
           Hashtbl.update s.device.shared_writer_streams tn ~f:(fun l ->
               (s, e) :: Option.value ~default:[] l)
         else Hashtbl.remove s.device.shared_writer_streams tn;
+        Hash_set.add tn.devices_not_lagging_host ctx.stream.device.device_id;
         Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
     | Merge_buffer tn ->
         (* Note: the previous event does not need to be done! *)
@@ -94,7 +95,6 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ~from:`Host ctx @@ Node tn;
-        Hash_set.add tn.host_read_by_devices ctx.stream.device.device_id;
         true
     | _ -> false
 
@@ -109,7 +109,6 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ~from:`Host ctx @@ Node tn;
-        Hash_set.add tn.host_read_by_devices ctx.stream.device.device_id;
         { ctx with ctx_arrays = Map.add_exn ctx.ctx_arrays ~key:tn ~data:dst }
     | _, Some _ ->
         raise
@@ -211,7 +210,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       assert (Domain.is_main_domain ());
       if Utils.settings.automatic_host_transfers then
         Set.iter hosted_inputs ~f:(fun tn ->
-            if not (Hash_set.mem tn.host_read_by_devices s.device.device_id) then
+            if not (Hash_set.mem tn.devices_not_lagging_host s.device.device_id) then
               assert (from_host r.context tn));
       Set.iter r.inputs ~f:(fun tn ->
           if Tn.potentially_cross_stream tn then
@@ -480,7 +479,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            match key.array with
            | (lazy (Some hosted)) ->
                Device.from_host ~dst_ptr ~dst:parent_context hosted;
-               Hash_set.add key.host_read_by_devices stream.device.device_id
+               Hash_set.add key.devices_not_lagging_host stream.device.device_id
            | _ -> ());
         dst_ptr
       in

@@ -204,22 +204,22 @@ Unless disabled via setting `automatic_host_transfers` to false, `arrayjit` auto
 
 - `prepare_read` for synchronization and `to_host` transfers right before a host array is read,
 - `prepare_write` for synchronization right before a host array is written to,
-- `host_read_by_devices` for tracking which devices have scheduled transferring the data already.
+- `devices_not_lagging_host` for tracking which devices have scheduled transferring the data already, or don't need transferring because they computed or scheduled computing the data themselves.
 
-Since currently the tagging is per-device, for per-stream tensor nodes might need supplementary `from_host` (or `device_to_device`) calls in rare situations.
+Since currently the tagging is per-device, for per-stream, tensor nodes might need supplementary `from_host` (or `device_to_device`) calls in rare situations.
 
 There are three code components to the automation.
 
 - Within `Tnode`:
-  - The helper function `do_read` unconditionally invokes synchronization code, and if `automatic_host_transfers` invokes data transfer code, as stored in the `prepare_read` field of a node; then clears the field.
+  - The helper function `do_read` unconditionally invokes synchronization code, and if `automatic_host_transfers` it invokes data transfer code, as stored in the `prepare_read` field of a node; then clears the field.
   - The helper function `do_write` unconditionally invokes synchronization code as stored in the `prepare_write` field of a node, then clears the field.
   - `do_read` is invoked from `points_1d`, `points_2d`, `get_value`, `get_values` of `Tnode`; and also from `to_dag` and `print` of `Tensor`.
   - `do_write` is invoked from `set_value`, `set_values`.
   - `Tnode` exposes `prepare_read` and `prepare_write` for updating the fields: only the new data transfer is preserved, but the synchronization codes are combined.
 - Within `Backends.Add_buffer_retrieval_and_syncing`:
   - The `update_writer_event` helper adds the after-modification event to synchronization and sets data transfer to `to_host` from the stream, using `prepare_read`. This happens for `device_to_device` and `sync_routine` (after scheduling the routine) scheduling calls, and independently of `automatic_host_transfers`.
-  - Moreover, `sync_routine`, before scheduling the routine and only if `automatic_host_transfers`, directly schedules `from_host` for input nodes that are not tagged with the device (via `host_read_by_devices`). Note that input nodes are the "read only" and "read before write" nodes that are not constants.
+  - Moreover, `sync_routine`, before scheduling the routine and only if `automatic_host_transfers`, directly schedules `from_host` for input nodes that are not tagged with the device (via `devices_not_lagging_host`). Note that input nodes are the "read only" and "read before write" nodes that are not constants.
 - Within `Backends.Raise_backend.alloc_if_needed`:
-  - If `automatic_host_transfers` and the node allocated for the context is a constant, `alloc_if_needed` directly schedules `from_host` for the node regardless of whether it is tagged with the device (via `host_read_by_devices`); it does add the device tag to the node (if missing).
+  - If `automatic_host_transfers` and the node allocated for the context is a constant, `alloc_if_needed` directly schedules `from_host` for the node regardless of whether it is tagged with the device (via `devices_not_lagging_host`); it does add the device tag to the node (if missing).
 
   **Note:** we do **not** invoke `Tnode.do_read` from within `Backends.Add_buffer_retrieval_and_syncing.from_host`, since to adequately handle such transfers one should deliberately use `device_to_device` functions. This can lead to confusing behavior, in particular observing (or not) a tensor node (on host) can change later computations by inserting (or not) an additional `to_host` before a `from_host`. This aspect of the design might change in the future.
