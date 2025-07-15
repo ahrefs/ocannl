@@ -735,7 +735,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:734:21
-    [0]: r2x4x3 shape 0:2|2:3->1:4  <virtual>
+    [0]: r2x4x3 shape 0:2|2:3->1:4  <not-hosted>
     |}];
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho5;
   [%expect

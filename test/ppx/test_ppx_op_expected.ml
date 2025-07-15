@@ -2,20 +2,20 @@ open Base
 open Ocannl
 module TDSL = Operation.TDSL
 let y0 =
-  let hey1 = TDSL.param ?values:None "hey1" in
+  let hey1 = TDSL.param ?value:None "hey1" in
   let open! TDSL.O in
     ((+) ?label:(Some ["y0"]))
       ((( *. ) ?label:None) (TDSL.number (Float.of_int 2)) hey1)
       (TDSL.number (Float.of_int 3))
 let y1 =
-  let hey2 = TDSL.param ?values:None "hey2" in
+  let hey2 = TDSL.param ?value:None "hey2" in
   let open! TDSL.O in
     fun x ->
       ((+) ?label:(Some
                      (List.concat [["y1"]; (x.Tensor.value).Ir.Tnode.label])))
         ((( * ) ?label:None) hey2 (TDSL.number (Float.of_int 2))) x
 let y2 =
-  let hey3 = TDSL.param ?values:None "hey3" in
+  let hey3 = TDSL.param ?value:None "hey3" in
   let open! TDSL.O in
     fun x1 x2 ->
       ((+) ?label:(Some
@@ -36,14 +36,14 @@ let b =
       ~output_dims:[2]
       [|(Float.of_int 7);(Float.of_int 8);(Float.of_int 9);(Float.of_int 10)|]
 let y =
-  let hey4 = TDSL.param ?values:None "hey4" in
+  let hey4 = TDSL.param ?value:None "hey4" in
   let open! TDSL.O in
     ((+) ?label:(Some ["y"]))
       ((( * ) ?label:None) hey4 (TDSL.number ?label:None ~axis_label:"q" 2.0))
       (TDSL.number ?label:None ~axis_label:"p" 1.0)
 let z =
-  let hey5 = TDSL.param ?values:None "hey5"
-  and hey6 = TDSL.param ?values:None "hey6" in
+  let hey5 = TDSL.param ?value:None "hey5"
+  and hey6 = TDSL.param ?value:None "hey6" in
   let open! TDSL.O in
     ((+) ?label:(Some ["z"]))
       ((( * ) ?label:None) (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
@@ -51,8 +51,8 @@ let z =
 let stride = 2
 and dilation = 3
 let z2 =
-  let hey7 = TDSL.param ?values:None "hey7"
-  and hey8 = TDSL.param ?values:None "hey8" in
+  let hey7 = TDSL.param ?value:None "hey7"
+  and hey8 = TDSL.param ?value:None "hey8" in
   let open! TDSL.O in
     TDSL.einsum ?label:(Some ["z2"])
       (String.concat ~sep:""
@@ -61,8 +61,8 @@ let z2 =
 let z3 =
   let s = 2
   and d = 3 in
-  let hey10 = TDSL.param ?values:None "hey10"
-  and hey9 = TDSL.param ?values:None "hey9" in
+  let hey10 = TDSL.param ?value:None "hey10"
+  and hey9 = TDSL.param ?value:None "hey9" in
   let open! TDSL.O in
     TDSL.einsum ?label:(Some [])
       (String.concat ~sep:""
@@ -78,7 +78,7 @@ let mlp_layer =
       let b =
         (TDSL.param ~more_label:(config.label)) ~output_dims:[config.hid_dim]
           "b"
-      and w = (TDSL.param ~more_label:(config.label)) ?values:None "w" in
+      and w = (TDSL.param ~more_label:(config.label)) ?value:None "w" in
       fun x ->
         (relu
            ?label:(Some
