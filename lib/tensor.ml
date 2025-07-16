@@ -381,7 +381,7 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
   op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec make_shape
     []
 
-let float_to_label v = Float.to_string v
+let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
 let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
   (* Note: no axis label so that we do not conflict with user labels. *)
@@ -401,31 +401,12 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
 
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
     ?batch_axes ?input_axes ?output_axes values =
-  let to_dim_list dims axes =
-    Option.value ~default:[] @@ Option.first_some dims @@ Option.map axes ~f:(List.map ~f:snd)
+  let num_label =
+    String.concat ~sep:"," @@ List.map ~f:float_to_label @@ Fn.flip List.take 5
+    @@ Array.to_list values
   in
-  let batch_ds = to_dim_list batch_dims batch_axes in
-  let output_ds = to_dim_list output_dims output_axes in
-  let input_ds = to_dim_list input_dims input_axes in
-  let op_label =
-    (* TODO:~max_indent:!max_sublabel ~margin:(!max_sublabel_length * 2); *)
-    let dims = Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list in
-    let debug = "Temporary array for pretty-printing" in
-    let ndarr = Nd.create_array ~debug Ir.Ops.double ~dims ~padding:None in
-    let ( ! ) = List.length in
-    let b = Buffer.create 1024 in
-    Nd.to_doc_inline ~num_batch_axes:!batch_ds ~num_output_axes:!output_ds ~num_input_axes:!input_ds
-      ndarr
-    |> PPrint.ToBuffer.pretty 0.7 100 b;
-    Buffer.contents b
-  in
-  let op_label =
-    if String.contains op_label '\n' then
-      "c" ^ Idx.dims_to_string
-      @@ Array.concat_map [| batch_ds; output_ds; input_ds |] ~f:Array.of_list
-    else op_label
-  in
-  let label = op_label :: label in
+  let num_label = if Array.length values > 5 then num_label ^ "..." else num_label in
+  let label = num_label :: label in
   let batch_dims = Option.first_some batch_dims @@ Option.some_if (Option.is_none batch_axes) [] in
   let input_dims = Option.first_some input_dims @@ Option.some_if (Option.is_none input_axes) [] in
   let output_dims =
