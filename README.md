@@ -1,7 +1,5 @@
 # ocannl
 
-NOTE TO POTENTIAL CONTRIBUTORS: reach out so I can adjust my work style -- start using branches for refactoring. Otherwise you face frustration as the code might be broken. Tagged versions of the code are guaranteed to work as well as the given stage of the project permitted.
-
 OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scale-web-crawler)! [Visit the Ahrefs website.](https://ahrefs.com/)
 
 ## OCANNL -- OCaml Compiles Algorithms for Neural Networks Learning
@@ -66,11 +64,13 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* 0.6: more precisions, convolution, block tensors, improvements to dimension labels.
-  * DONE at head: BF16, FP8.
-  * Requires extending expressivity of projections and the generalized einsum notation.
-  * Then, we can add convnet building blocks and corresponding examples starting with MNIST.
-  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
+* 0.6: more precisions, initialization, counter-based randomness, convolution, block tensors, improvements to dimension labels.
+  * DONE: BF16, FP8.
+  * DONE: Extended expressivity of projections and the generalized einsum notation to cover strided iteration and convolution.
+  * DONE: Parameter initialization on devices.
+  * TODO: counter-based randomness via threefry.
+  * TODO: Add convnet building blocks and corresponding examples starting with MNIST.
+  * TODO: Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
 * 0.7: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
   * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
   * A language model example.
@@ -81,16 +81,14 @@ This is very tentative.
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will require splitting a routine into multiple CUDA kernels.
-* 0.9: A new abstraction layer automating compilation/linking, execution, and some data transfers.
-  * E.g. host-device transfers: copy from host if host update is later than the previous device update.
-  * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
-  * At the end of 0.8.x, OCANNL has a REPL.
-* 0.10: Optimize performance: program search.
+* 0.9: Optimize performance: program search.
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
-* 1.0: Few documentation gaps, some degree of feature completeness.
+* 1.0: Few documentation gaps, some degree of feature completeness, ergonomics, safety.
   * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
+  * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
+  * Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
 
 ### Releases
 
@@ -130,7 +128,7 @@ For more details, see [CHANGES](CHANGES.md).
 
 OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For example:
 
-* OCANNL is not functorized.
+* OCANNL is not functorized, except that it uses first-class modules for backends.
 * OCANNL has fewer abstraction layers.
 * OCANNL has a more powerful shape inference.
 * OCANNL only supports backpropagation, while OWL supports full forward and backward auto-diff.
@@ -148,4 +146,8 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 
 Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
 
-The dependency on `ocaml-cudajit` is optional, so you have to install it first to enable the Cuda backend.
+The dependency on `cudajit` and `metal` is optional, so you have to install them first to enable the CUDA or Apple Metal backends.
+
+## Development
+
+NOTE TO POTENTIAL CONTRIBUTORS: while I am starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness. We allow for failing tests on the main branch, although going forward this should be happening less for unit tests. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases.
