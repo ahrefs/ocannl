@@ -551,27 +551,27 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
         `Vlist (false, nodes @ [ shape ])
       else `Vlist (false, nodes)
     in
-    let should_elide, is_non_embedded =
-      if embedded_only then (not embedded, not embedded)
+    let should_elide =
+      if embedded_only then not embedded
       else if
         (* If this tensor appears embedded anywhere, use embedded logic for consistency *)
         Hash_set.mem tensors_with_embedded_occurrence t.id
-      then (not embedded, not embedded)
+      then not embedded
       else
         (* Only use visited tracking for tensors that are never embedded anywhere *)
         match visited with
-        | None -> (not embedded, not embedded)
+        | None -> not embedded
         | Some visited_set ->
-            if Hash_set.mem visited_set t.id then (true, not embedded)
+            if Hash_set.mem visited_set t.id then true
             else (
               Hash_set.add visited_set t.id;
-              (false, not embedded))
+              false)
     in
-    let eid = id ^ if is_non_embedded then " non-emb" else "" in
+    let txt = txt ^ if (not should_elide) && not embedded then " non-emb" else "" in
     match (should_elide, with_value, with_grad, t.diff) with
-    | true, _, _, _ -> `Embed_subtree_ID id
+    | true, _, _, _ -> `Embed_subtree_ID txt
     | _, false, false, _ | _, false, true, None ->
-        `Subtree_with_ID (eid, `Tree (add_shape [ `Text txt ], children))
+        `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
           lazy_optional_payload t.value.array ~spy
@@ -581,9 +581,11 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
                 (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
         in
-        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
     | _, false, true, Some diff ->
-        let prefix = grad_txt diff in
+        let prefix =
+          grad_txt diff ^ if (not should_elide) && not embedded then " non-emb" else ""
+        in
         let node =
           match Lazy.force diff.grad.array with
           | Some g_array ->
@@ -591,7 +593,7 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
               `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
           | None -> `Text (prefix ^ " " ^ where_located diff.grad)
         in
-        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
     | _, true, true, Some diff ->
         let node =
           let value =
@@ -614,7 +616,7 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
           in
           `Vlist (false, [ value; grad ])
         in
-        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
   in
   to_dag { subtensor = t; embedded = true }
 
