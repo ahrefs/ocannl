@@ -317,6 +317,7 @@ type array_print_style =
 
 val to_printbox :
   ?single_node:bool ->
+  ?embedded_only:bool ->
   ?entries_per_axis:int ->
   ?with_id:bool ->
   ?spy:bool ->
@@ -356,6 +357,7 @@ val print_tree :
   ?spy:bool ->
   ?with_shape:bool ->
   ?with_value:bool ->
+  ?embedded_only:bool ->
   with_grad:bool ->
   depth:int ->
   t ->

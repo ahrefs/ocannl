@@ -517,8 +517,17 @@ let lazy_optional_payload ~spy ~present ~missing v =
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 
-let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~with_value ~with_grad
-    t =
+let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~spy ~with_shape
+    ~with_id ~with_value ~with_grad t =
+  (* First scan to identify which tensors appear embedded anywhere *)
+  let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
+  let rec scan_for_embedded { subtensor = t; embedded } =
+    if embedded then Hash_set.add tensors_with_embedded_occurrence t.id;
+    if not single_node then List.iter ~f:scan_for_embedded t.children
+  in
+  if not embedded_only then scan_for_embedded { subtensor = t; embedded = true };
+
+  let visited = if embedded_only then None else Some (Hash_set.create (module Int)) in
   let rec to_dag { subtensor = t; embedded } : PrintBox_utils.dag =
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
@@ -542,10 +551,27 @@ let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~w
         `Vlist (false, nodes @ [ shape ])
       else `Vlist (false, nodes)
     in
-    match (not embedded, with_value, with_grad, t.diff) with
-    | true, _, _, _ -> `Embed_subtree_ID (Int.to_string t.id)
+    let should_elide, is_non_embedded =
+      if embedded_only then (not embedded, not embedded)
+      else if
+        (* If this tensor appears embedded anywhere, use embedded logic for consistency *)
+        Hash_set.mem tensors_with_embedded_occurrence t.id
+      then (not embedded, not embedded)
+      else
+        (* Only use visited tracking for tensors that are never embedded anywhere *)
+        match visited with
+        | None -> (not embedded, not embedded)
+        | Some visited_set ->
+            if Hash_set.mem visited_set t.id then (true, not embedded)
+            else (
+              Hash_set.add visited_set t.id;
+              (false, not embedded))
+    in
+    let eid = id ^ if is_non_embedded then " non-emb" else "" in
+    match (should_elide, with_value, with_grad, t.diff) with
+    | true, _, _, _ -> `Embed_subtree_ID id
     | _, false, false, _ | _, false, true, None ->
-        `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
+        `Subtree_with_ID (eid, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
           lazy_optional_payload t.value.array ~spy
@@ -555,7 +581,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~w
                 (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
         in
-        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
     | _, false, true, Some diff ->
         let prefix = grad_txt diff in
         let node =
@@ -565,7 +591,7 @@ let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~w
               `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
           | None -> `Text (prefix ^ " " ^ where_located diff.grad)
         in
-        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
     | _, true, true, Some diff ->
         let node =
           let value =
@@ -588,13 +614,14 @@ let to_dag ?(single_node = false) ?entries_per_axis ~spy ~with_shape ~with_id ~w
           in
           `Vlist (false, [ value; grad ])
         in
-        `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
+        `Subtree_with_ID (eid, `Tree (add_shape [ node ], children))
   in
   to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?entries_per_axis ?(with_id = false) ?(spy = false)
+let to_printbox ?single_node ?embedded_only ?entries_per_axis ?(with_id = false) ?(spy = false)
     ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
-  to_dag ?single_node ?entries_per_axis ~with_id ~spy ~with_shape ~with_value ~with_grad t
+  to_dag ?single_node ?embedded_only ?entries_per_axis ~with_id ~spy ~with_shape ~with_value
+    ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
 let log_debug_info ~from_log_level t =
@@ -777,10 +804,10 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       print ~with_grad ~with_code style root)
 
 let print_tree ?here ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(spy = false)
-    ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
+    ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
-  @@ to_dag ?entries_per_axis ~with_id ~spy ~with_shape ~with_value ~with_grad t
+  @@ to_dag ?entries_per_axis ?embedded_only ~with_id ~spy ~with_shape ~with_value ~with_grad t
