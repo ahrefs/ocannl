@@ -67,7 +67,12 @@ let gcc_typ_of_prec =
   let open Gccjit in
   function
   | Ops.Byte_prec _ -> Type.Unsigned_char
+  | Uint16_prec _ -> Type.Unsigned_short
+  | Int32_prec _ -> Type.Int
+  | Uint4x32_prec _ -> (* FIXME: GCC backend doesn't support Uint4x32 yet *) Type.Void_ptr
   | Half_prec _ -> (* FIXME: *) Type.Float
+  | Bfloat16_prec _ -> (* FIXME: *) Type.Float
+  | Fp8_prec _ -> (* FIXME: *) Type.Float
   | Single_prec _ -> Type.Float
   | Double_prec _ -> Type.Double
   | Void_prec -> Type.Void
@@ -162,7 +167,7 @@ let prec_to_kind prec =
 let is_builtin_op = function
   | Ops.Add | Sub | Mul | Div -> true
   | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpne | Cmpeq | Or
-  | And ->
+  | And | Threefry4x32 ->
       false
 
 let builtin_op = function
@@ -171,7 +176,7 @@ let builtin_op = function
   | Mul -> Gccjit.Mult
   | Div -> Gccjit.Divide
   | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Arg1 | Max | Min | Mod | Cmplt | Cmpne | Cmpeq | Or
-  | And ->
+  | And | Threefry4x32 ->
       invalid_arg "Exec_as_gccjit.builtin_op: not a builtin"
 
 let node_debug_name get_ident node = get_ident node.tn
@@ -310,6 +315,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
     | Cmpeq, _ -> RValue.comparison ctx Eq v1 v2
     | Or, _ -> RValue.binary_op ctx Logical_or num_typ v1 v2
     | And, _ -> RValue.binary_op ctx Logical_and num_typ v1 v2
+    | Threefry4x32, _ ->
+        (* FIXME: GCC backend doesn't support Threefry4x32 yet - would need external function linkage *)
+        raise @@ Utils.User_error "gccjit_backend: Threefry4x32 operation not supported yet"
   in
   let log_comment c =
     match log_functions with
@@ -589,6 +597,9 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         cast_bool num_typ
         @@ RValue.unary_op ctx Logical_negate (Type.get ctx Type.Bool)
              (RValue.comparison ctx Eq v (RValue.zero ctx num_typ))
+    | Unop (Uint4x32_to_prec_uniform _, _c) ->
+        (* FIXME: GCC backend doesn't support Uint4x32_to_prec_uniform conversion yet *)
+        raise @@ Utils.User_error "gccjit_backend: Uint4x32_to_prec_uniform conversion not supported yet"
   and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =
     let open Gccjit in
     let i = Indexing.symbol_ident key in
