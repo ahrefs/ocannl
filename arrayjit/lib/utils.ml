@@ -112,15 +112,20 @@ let filename_of_parts = function
   | root :: rest -> List.fold rest ~init:root ~f:Stdlib.Filename.concat
 
 let config_file_args =
+  let suppress_welcome_message () =
+    Option.value_map ~default:false ~f:Bool.of_string
+    @@ read_cmdline_or_env_var "suppress_welcome_message"
+  in
   match read_cmdline_or_env_var "no_config_file" with
-  | None | Some "false" -> (
+  | None | Some "false" ->
       let read = Stdio.In_channel.read_lines in
       let fname, config_lines =
         let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
         let rec find_up = function
           | [] ->
-              Stdio.printf
-                "\nWelcome to OCANNL! No ocannl_config file found along current path.\n%!";
+              if not (suppress_welcome_message ()) then
+                Stdio.printf
+                  "\nWelcome to OCANNL! No ocannl_config file found along current path.\n%!";
               ("", [])
           | _ :: tl as rev_dirs -> (
               let fname = filename_of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
@@ -128,36 +133,45 @@ let config_file_args =
         in
         find_up rev_dirs
       in
-      if String.length fname > 0 then
-        Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
-      config_lines
-      |> List.filter ~f:(fun l ->
-             not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
-      |> List.map ~f:(String.split ~on:'=')
-      |> List.filter_map ~f:(function
-           | [] -> None
-           | [ s ] when String.is_empty s -> None
-           | key :: [ v ] ->
-               let key =
-                 String.(
-                   lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
-               in
-               let key =
-                 if String.is_prefix key ~prefix:"ocannl" then
-                   String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
-                 else key
-               in
-               str_nonempty ~f:(pair key) v
-           | l ->
-               failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
-               ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
-      |> Hashtbl.of_alist (module String)
-      |> function
-      | `Ok h -> h
-      | `Duplicate_key key ->
-          failwith @@ "OCANNL: duplicate key in config file " ^ fname ^ ": " ^ key)
+      let result =
+        config_lines
+        |> List.filter ~f:(fun l ->
+               not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
+        |> List.map ~f:(String.split ~on:'=')
+        |> List.filter_map ~f:(function
+             | [] -> None
+             | [ s ] when String.is_empty s -> None
+             | key :: [ v ] ->
+                 let key =
+                   String.(
+                     lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
+                 in
+                 let key =
+                   if String.is_prefix key ~prefix:"ocannl" then
+                     String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
+                   else key
+                 in
+                 str_nonempty ~f:(pair key) v
+             | l ->
+                 failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
+                 ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
+        |> Hashtbl.of_alist (module String)
+        |> function
+        | `Ok h -> h
+        | `Duplicate_key key ->
+            failwith @@ "OCANNL: duplicate key in config file " ^ fname ^ ": " ^ key
+      in
+      if
+        String.length fname > 0
+        && (not (suppress_welcome_message ()))
+        && not
+             (Option.value_map ~default:false ~f:Bool.of_string
+             @@ Hashtbl.find result "suppress_welcome_message")
+      then Stdio.printf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
+      result
   | Some _ ->
-      Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
+      if not (suppress_welcome_message ()) then
+        Stdio.printf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
       Hashtbl.create (module String)
 
 (** Retrieves [arg_name] argument from the command line or from an environment variable, returns

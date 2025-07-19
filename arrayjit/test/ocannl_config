@@ -1,3 +1,4 @@
+suppress_welcome_message=true
 randomness_lib=for_tests
 log_main_domain_to_stdout=true
 backend=multicore_cc

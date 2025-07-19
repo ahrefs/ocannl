@@ -1,5 +1,3 @@
-
-Welcome to OCANNL! Reading configuration defaults from /Users/lukstafi/ocannl/_build/default/test/einsum/ocannl_config.
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 Testing conv syntax parsing...
