@@ -218,7 +218,7 @@ val ndarray :
     over to populate the [value] node. *)
 
 val fetch_param_init :
-  fetch_op ->
+  float array ->
   label:string list ->
   ?input_dims:int list ->
   ?output_dims:int list ->

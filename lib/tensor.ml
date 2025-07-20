@@ -399,6 +399,22 @@ let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
     if Tn.exceeds_fp16_cutoff t.value c then Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
+let constant_fill ~debug values =
+  match Array.length values with
+  | 0 -> (None, None)
+  | 1 -> (None, Some (Asgns.Constant values.(0)))
+  | n
+    when n
+         <= Int.of_string @@ Utils.get_global_arg ~default:"16" ~arg_name:"limit_constant_fill_size"
+    ->
+      (None, Some (Asgns.Constant_fill values))
+  | _ ->
+      let nd =
+        Nd.create_array ~debug ~dims:[| Array.length values |] ~padding:None !default_value_prec
+      in
+      Nd.set_flat_values nd values;
+      (Some (Asgns.Reshape nd), None)
+
 let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
     ?batch_axes ?input_axes ?output_axes values =
   let num_label =
@@ -412,9 +428,10 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
   let output_dims =
     Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
   in
+  let init_data, fetch_op = constant_fill ~debug:"Tensor.ndarray" values in
   let t =
     term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-      ~deduced:Not_constrained ~fetch_op:(Asgns.Constant_fill values) ()
+      ~deduced:Not_constrained ?init_data ?fetch_op ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
@@ -423,8 +440,9 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let fetch_param_init fetch_op =
-  term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?init_data:None ~fetch_op
+let fetch_param_init values =
+  let init_data, fetch_op = constant_fill ~debug:"Tensor.fetch_param_init" values in
+  term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?init_data ?fetch_op
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ~t label =
   let t =

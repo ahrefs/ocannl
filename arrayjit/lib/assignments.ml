@@ -276,7 +276,7 @@ let%diagn2_sexp to_low_level code =
         (* TODO: consider failing here and strengthening shape inference. *)
         let size = Array.length values in
         let limit_constant_fill_size =
-          Int.of_string @@ Utils.get_global_arg ~default:"256" ~arg_name:"limit_constant_fill_size"
+          Int.of_string @@ Utils.get_global_arg ~default:"16" ~arg_name:"limit_constant_fill_size"
         in
         if size > limit_constant_fill_size then
           raise

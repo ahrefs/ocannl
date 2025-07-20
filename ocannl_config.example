@@ -179,4 +179,4 @@ default_prec=single
 
 # Limit on the allowed size of unrolled constant tensor nodes
 # (where the initialization code sets the values).
-limit_constant_fill_size=256
+limit_constant_fill_size=16
