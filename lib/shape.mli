@@ -15,7 +15,9 @@
     - separators_with_comma: commas and whitespaces containing at least one comma.
     - axes_spec_single_char: separators? identifier+ separators?
     - axes_spec_multichar: separators? (identifier separators_with_comma)* identifier separators?
-    - conv_expression: term '+' term where term is [coeff '*'] identifier and coeff is integer
+    - conv_expression: term '+' term
+    - term: (coeff '*')? identifier
+    - coeff: integer -- note that syntax extensions will splice in the value of an OCaml identifier
     - ellipsis_spec: '...' <|> '..' identifier '..'
     - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
     - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|'

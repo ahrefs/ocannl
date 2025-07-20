@@ -344,16 +344,18 @@ The syntax of an axis spec:
 
 Examples:
 
-- `...|...->... => 0`, `...|... => 0` and `... => 0` are equivalent: reduce all axes of the argument into a single number. Useful e.g. for reducing losses to a single number.
+- `...|...->... => 0`: reduce all axes of the argument into a single number. Useful e.g. for reducing losses to a single number.
+- `...|... => 0`, `...->... => 0`, `... => 0` do the same but will fail if the argument has axes of the kind for which the ellipsis is missing.
 - `...|...->... => ...|...->...`: fully pointwise unary operation.
+- `...->... => ...->...`, `...|... => ...|...`, `... => ...`: fully pointwise but will fail if the argument has axes of the kind for which the ellipsis is missing.
 - `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
-- `...|...->... => ...->...` and `...->... => ...->...` are equivalent: reduce the batch axes into the result.
+- `...|...->... => ...->...`: reduce the batch axes into the result.
 - `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
-- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignment (reduction) operator.
-- `ijk => kji`: reverse the three rightmost output axes, reduce any other axes.
+- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignment (reduction) operator, here with ones.
+- `ijk => kji`: reverse the three output axes, fails if the argument has any other axes.
 - `ijk => ki`: as above but also reduce the second-leftmost output axis.
-- `..v..|ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output and input axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result.
-- `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its input and output axes, preserve its other batch axes as output axes.
+- `..v..|...ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result. Fails if the argument has input axes.
+- `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its output axes, preserve its other batch axes as output axes. Fails if the argument has input axes.
 
 ## Further features of the syntax extension %cd
 
@@ -413,7 +415,7 @@ If you recall, inline declared param tensors get lifted out of functions except 
 
 ```ocaml
 let mlp_layer ~config =
-  let w = TDSL.param "w" and b = TDSL.param ~output_dims:[ config.hid_dim ] in
+  let w = TDSL.param "w" and b = TDSL.param ~output_dims:[ config.hid_dim ] "b" in
   fun x -> TDSL.O.(w * x + b)
 ```
 
@@ -519,4 +521,4 @@ type comp = {
 }
 ```
 
-The tensor nodes that are in `asgns` but not in `embedded_nodes`, and are on-device, must already be present in contexts with which the computation is linked. Such non-embedded nodes can be seen as inputs to the computation -- except that for `backprop` code of a tensor, they are actually the outputs! Embedded nodes are closely related to _rootness_ -- when a node has not been used in the code of another tensor, it is a root (a forward root for value nodes and a backprop root for grad nodes). `embedded_nodes` were roots the first time they were used in `asgns`.
+The tensor nodes that are in `asgns` but not in `embedded_nodes`, and are on-device, must already be present in contexts with which the computation is linked. Such non-embedded nodes can be seen as inputs to the computation -- except that for `backprop` code of a tensor, they are actually the outputs! Embedded nodes are closely related to _rootness_ -- when a node has not been used in the code of another tensor, it is a root (a forward root for value nodes and a backprop root for grad nodes). `embedded_nodes` were roots the first time they were used in `asgns`. Parameters, as created by `Tensor.param`, are not embedded in the code that uses them and thus will not be in `embedded_nodes` of the forward and backprop code over the parameters; however, they will constitute the `embedded_nodes` of the `Tensor.init_params` code.
