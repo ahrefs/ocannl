@@ -1,6 +1,7 @@
 (** {1 Tensor shape types, shape inference, projection inference.} *)
 
 open Base
+module Lazy = Utils.Lazy
 module Idx = Ir.Indexing
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime

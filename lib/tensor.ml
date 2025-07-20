@@ -1,4 +1,5 @@
 open Base
+module Lazy = Utils.Lazy
 module Nd = Ir.Ndarray
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
