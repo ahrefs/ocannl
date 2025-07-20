@@ -479,14 +479,14 @@ module TDSL = struct
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
 
   (** The default initialization operation for {!param} calls. *)
-  let default_param_init = ref @@ Tensor.fetch_param_init [| 0.0 |]
+  let default_param_init = ref @@ Tensor.param_init [| 0.0 |]
 
   let param ?value ?values =
     let t =
       match (value, values) with
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
-      | Some value, None -> Tensor.fetch_param_init [| value |]
-      | None, Some values -> Tensor.fetch_param_init values
+      | Some value, None -> Tensor.param_init [| value |]
+      | None, Some values -> Tensor.param_init values
       | None, None -> !default_param_init
     in
     Tensor.param ~t

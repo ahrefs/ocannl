@@ -440,9 +440,13 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let fetch_param_init values =
-  let init_data, fetch_op = constant_fill ~debug:"Tensor.fetch_param_init" values in
+let param_init values =
+  let init_data, fetch_op = constant_fill ~debug:"Tensor.param_init" values in
   term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?init_data ?fetch_op
+
+let term_init values =
+  let init_data, fetch_op = constant_fill ~debug:"Tensor.term_init" values in
+  term ?init_data ?fetch_op
 
 let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ~t label =
   let t =

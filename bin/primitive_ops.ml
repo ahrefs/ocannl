@@ -25,11 +25,7 @@ let%debug_sexp graph_t () : unit =
   let%op f x = sin x in
   let size = 50 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
-  let x_flat =
-    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill xs)
-      ()
-  in
+  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op xkcd = x_flat @| step_sym in
   let%op fx = f xkcd in

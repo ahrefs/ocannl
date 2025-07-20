@@ -21,11 +21,7 @@ let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   let xs =
     Array.init size ~f:Float.(fun i -> x_min + (of_int i * (x_max - x_min) / (of_int size - 1.)))
   in
-  let x_flat =
-    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill xs)
-      ()
-  in
+  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   let%op fx = f x in

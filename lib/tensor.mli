@@ -217,7 +217,7 @@ val ndarray :
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val fetch_param_init :
+val param_init :
   float array ->
   label:string list ->
   ?input_dims:int list ->
@@ -252,6 +252,22 @@ val param :
     string, appended by [more_label] if any, other parameters are forwarded to [t]. This function
     returns [t]'s result with the field {!field:params} replaced by a singleton set containing that
     result, and it also updates the memory modes. *)
+
+val term_init :
+  float array ->
+  label:string list ->
+  grad_spec:grad_spec ->
+  ?batch_dims:int list ->
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?batch_axes:(string * int) list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t
+(** A {!term} wrapper that generalizes {!param_init} to tensors with batch axes and {!ndarray} to
+    tensors with inferred shapes. *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.
