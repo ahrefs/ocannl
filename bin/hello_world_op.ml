@@ -29,7 +29,7 @@ let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op ya = 2 *. "hey" 7.0 in
-  Train.forward_and_forget backend ctx ya;
+  Train.forward_and_force backend ctx ya;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ya
 
 let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
@@ -48,10 +48,24 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
   Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op yb = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
-  Train.forward_and_forget backend ctx yb;
+  Train.forward_and_force backend ctx yb;
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ yb
+
+let%track2_sexp _Print_constant_tensor_too_early (() : unit) : unit =
+  Tensor.unsafe_reinitialize ();
+  let module Backend = (val Backends.fresh_backend ()) in
+  let print_tensor = Tensor.print ~with_code:false ~with_grad:false in
+
+  let%op a = [| 1.; 2.; 3.; 4. |] in
+  let%op b = [| 2.; 3.; 4.; 5. |] in
+  print_tensor ~here:[%here] `Default a;
+  print_tensor ~here:[%here] `Default b;
+  let%op c = a *. b in
+  let ctx = Train.init_params (module Backend) IDX.empty c in
+  Train.forward_and_force (module Backend) ctx c;
+  print_tensor ~here:[%here] `Default c
 
 let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   Tensor.unsafe_reinitialize ();
@@ -68,11 +82,11 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   let ctx = Backend.make_context stream in
   Rand.init 0;
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
-  Train.forward_and_forget backend ctx hey;
+  Train.forward_and_force backend ctx hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
-  Train.forward_and_forget backend ctx hoo;
+  Train.forward_and_force backend ctx hoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hoo;
   let%op hey2 =
@@ -83,7 +97,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       ((19, 20, 21), (22, 23, 24));
     ]
   in
-  Train.forward_and_forget backend ctx hey2;
+  Train.forward_and_force backend ctx hey2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hey2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey2;
   let%op hoo2 =
@@ -94,7 +108,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
     |]
   in
-  Train.forward_and_forget backend ctx hoo2;
+  Train.forward_and_force backend ctx hoo2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ hoo2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hoo2;
   let%op heyhoo =
@@ -105,7 +119,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
     |]
   in
-  Train.forward_and_forget backend ctx heyhoo;
+  Train.forward_and_force backend ctx heyhoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo;
   let%op heyhoo2 =
@@ -116,7 +130,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
     |]
   in
-  Train.forward_and_forget backend ctx heyhoo2;
+  Train.forward_and_force backend ctx heyhoo2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo2;
   let%op heyhoo3 =
@@ -131,7 +145,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       |];
     |]
   in
-  Train.forward_and_forget backend ctx heyhoo3;
+  Train.forward_and_force backend ctx heyhoo3;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo3;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo3;
   let%op heyhoo4 =
@@ -146,7 +160,7 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
       ];
     |]
   in
-  Train.forward_and_forget backend ctx heyhoo4;
+  Train.forward_and_force backend ctx heyhoo4;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline @@ heyhoo4;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ heyhoo4
 
@@ -166,7 +180,7 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let%op yc = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  Train.forward_and_forget backend ctx yc;
+  Train.forward_and_force backend ctx yc;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ yc
 
@@ -188,7 +202,7 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
   let hey = TDSL.param ~value:0.5 "hey" in
   let zero_to_twenty = TDSL.range 20 in
   let%op yd = (hey * zero_to_twenty) + zero_to_twenty in
-  Train.forward_and_forget backend ctx yd;
+  Train.forward_and_force backend ctx yd;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default yd
 
@@ -208,7 +222,7 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] () in
   let%op ye = (hey * (1 + 1)) - 10 in
-  Train.forward_and_forget backend ctx ye;
+  Train.forward_and_force backend ctx ye;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default ye
 
 let _suspended (() : unit) : unit =
@@ -223,7 +237,4 @@ let _suspended (() : unit) : unit =
   _Big_matrix ();
   _Very_big_tensor ()
 
-let (() : unit) : unit =
-  _Matrix_multiplication_dims_2x3 ();
-  _Big_matrix ();
-  _Very_big_tensor ()
+let (() : unit) : unit = _Print_constant_tensor_too_early ()

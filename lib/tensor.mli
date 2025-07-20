@@ -345,7 +345,7 @@ val to_printbox :
   PrintBox.t
 
 val to_doc :
-  ?spy:bool ->
+  ?force_read:bool ->
   with_grad:bool ->
   with_code:bool ->
   ?with_low_level:bool ->
@@ -355,7 +355,7 @@ val to_doc :
 
 val print :
   ?here:Ppx_here_lib.position ->
-  ?spy:bool ->
+  ?force_read:bool ->
   with_grad:bool ->
   with_code:bool ->
   ?with_low_level:bool ->

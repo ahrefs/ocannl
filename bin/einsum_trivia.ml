@@ -15,7 +15,7 @@ let _suspended () =
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
   let%op c = a *+ "i->1; ij...->0 => ...->ji" b in
-  Train.forward_and_forget (module Backend) ctx c;
+  Train.forward_and_force (module Backend) ctx c;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c;
   Stdio.printf "\n%!"
 
@@ -40,7 +40,7 @@ let _suspended () =
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
   Utils.capture_stdout_logs @@ fun () ->
-  Train.forward_and_forget backend ctx ho2;
+  Train.forward_and_force backend ctx ho2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2
 
 let () =
@@ -61,11 +61,11 @@ let () =
   let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
   let ctx = Utils.capture_stdout_logs (fun () -> Train.forward_and_ctx backend ctx a2) in
   let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
-  Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx c);
+  Utils.capture_stdout_logs (fun () -> Train.forward_and_force backend ctx c);
   (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in Utils.capture_stdout_logs (fun () ->
-     Train.forward_and_forget backend ctx d); let%op e = a *+ "b|i->h; b|h->o => i->o" b in
-     Utils.capture_stdout_logs (fun () -> Train.forward_and_forget backend ctx e); let%op f = a *+
-     "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> Train.forward_and_forget
+     Train.forward_and_force backend ctx d); let%op e = a *+ "b|i->h; b|h->o => i->o" b in
+     Utils.capture_stdout_logs (fun () -> Train.forward_and_force backend ctx e); let%op f = a *+
+     "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> Train.forward_and_force
      backend ctx f); *)
   (* Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ a2; *)
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ c

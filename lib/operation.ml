@@ -375,6 +375,7 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
+(* 
 let random_seed =
   let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
   let res =
@@ -384,7 +385,7 @@ let random_seed =
   in
   Tn.update_memory_mode res.value Tn.Effectively_constant 24;
   Tn.update_prec res.value Ir.Ops.uint4x32;
-  ref res
+  ref res *)
 
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed

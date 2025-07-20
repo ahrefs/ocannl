@@ -19,7 +19,7 @@ let hello1 () =
   let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
   let%op hoo = ((1 + 1) * hey) - 10 in
   (* For convenience, Train.forward will set hoo.value as fully on host. *)
-  Train.forward_and_forget (module Backend) ctx hoo;
+  Train.forward_and_force (module Backend) ctx hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   Tensor.print_tree ~with_grad:false ~depth:99 hoo;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default hoo
@@ -33,7 +33,7 @@ let hello2 () =
   let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.every_non_literal_on_host y;
-  Train.forward_and_forget (module Backend) ctx y;
+  Train.forward_and_force (module Backend) ctx y;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y
 
@@ -79,7 +79,7 @@ let hello4 () =
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
   Train.set_hosted ti.value;
   Train.set_hosted tk.value;
-  Train.forward_and_forget backend ctx positions;
+  Train.forward_and_force backend ctx positions;
   Stdio.print_endline "positions:";
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ positions;
   Stdio.print_endline "tk:";
@@ -103,7 +103,7 @@ let hello5 () =
   Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
-  Train.forward_and_forget backend ctx ho;
+  Train.forward_and_force backend ctx ho;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho
 
 let hello6 () =
@@ -121,7 +121,7 @@ let hello6 () =
   Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
-  Train.forward_and_forget backend ctx y;
+  Train.forward_and_force backend ctx y;
   (* Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ hey; *)
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ y
 

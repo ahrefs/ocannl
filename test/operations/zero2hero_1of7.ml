@@ -27,7 +27,7 @@ let%expect_test "Graph drawing recompile" =
   let open Operation.At in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
-  Train.forward_and_forget backend ctx f_nd;
+  Train.forward_and_force backend ctx f_nd;
   Tensor.print_tree ~with_grad:true ~depth:9 f_nd;
   [%expect
     {|
@@ -161,7 +161,7 @@ let%expect_test "Graph drawing fetch" =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget (module Backend) ctx f5;
+  Train.forward_and_force (module Backend) ctx f5;
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|

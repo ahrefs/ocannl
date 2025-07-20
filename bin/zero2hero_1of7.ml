@@ -38,7 +38,7 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Backends.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget
+  Train.forward_and_force
     (module Backend)
     Backend.(make_context @@ new_stream @@ get_device ~ordinal:0)
     f5;
@@ -100,7 +100,7 @@ let _suspended () =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_forget (module Backend) ctx f5;
+  Train.forward_and_force (module Backend) ctx f5;
   Tensor.print_tree ~with_grad:false ~depth:9 f5;
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
