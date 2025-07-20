@@ -301,6 +301,8 @@ let update_memory_mode tn mode provenance =
   | Some ((Never_virtual | Materialized), _), Effectively_constant
   | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
       tn.memory_mode <- Some (Hosted Constant, provenance)
+  | Some (Hosted Unset_hosted, old_prov), Effectively_constant ->
+      tn.memory_mode <- Some (Hosted Constant, (old_prov * 1000) + provenance)
   | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
   | ( Some (Hosted (Nonconstant | Unset_hosted | Changed_on_devices Unset), _),
       Hosted (Changed_on_devices _ | Volatile) ) ->
