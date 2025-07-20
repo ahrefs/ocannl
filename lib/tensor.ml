@@ -611,11 +611,12 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
         in
         let node =
           if Lazy.is_val diff.grad.array then
-          match Lazy.force diff.grad.array with
-          | Some g_array ->
-              Tn.do_read diff.grad;
-              `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
-          | None -> `Text (prefix ^ " " ^ where_located diff.grad)
+            match Lazy.force diff.grad.array with
+            | Some g_array ->
+                Tn.do_read diff.grad;
+                `Box
+                  (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
+            | None -> `Text (prefix ^ " " ^ where_located diff.grad)
           else `Text (prefix ^ " <not-in-yet> " ^ where_located diff.grad)
         in
         `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
@@ -725,19 +726,22 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
 
   let open PPrint in
   (* Create document for tensor value *)
+  let has_grad = with_grad && Option.is_some t.diff in
   let value_doc =
-    if not force_read && not (Lazy.is_val t.value.array) then
-      string prefix_str ^^ string " <not-in-yet>" ^^ space
+    if (not force_read) && not (Lazy.is_val t.value.array) then
+      string prefix_str ^^ string " <not-in-yet>" ^^ break 1
     else
       match (style, Lazy.force t.value.array) with
-      | _, None -> string prefix_str ^^ string " <not-hosted>" ^^ space
+      | _, None ->
+          string prefix_str ^^ string " <not-hosted>" ^^ if has_grad then break 1 else empty
       | `Inline, Some arr ->
           Tn.do_read t.value;
           string prefix_str ^^ space
           ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
+          ^^ if has_grad then break 1 else empty
       | _, Some arr ->
           Tn.do_read t.value;
-          Nd.to_doc ~prefix:prefix_str ~labels ~indices arr
+          Nd.to_doc ~prefix:prefix_str ~labels ~indices arr ^^ if has_grad then break 1 else empty
   in
 
   (* Create document for gradient *)
@@ -745,11 +749,11 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
     if with_grad then
       match t.diff with
       | Some diff -> (
-          if not force_read && not (Lazy.is_val diff.grad.array) then
-            string (grad_txt diff) ^^ string " <not-in-yet>" ^^ space
+          if (not force_read) && not (Lazy.is_val diff.grad.array) then
+            string (grad_txt diff) ^^ string " <not-in-yet>"
           else
             match Lazy.force diff.grad.array with
-            | None -> string (grad_txt diff) ^^ string " <not-hosted>" ^^ space
+            | None -> string (grad_txt diff) ^^ string " <not-hosted>"
             | Some arr -> (
                 match style with
                 | `Inline ->
@@ -758,11 +762,10 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
                     ^^ space
                     ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec
                          arr
-                    ^^ string "\n"
                 | `Default | `N5_layout _ | `Label_layout _ ->
                     Tn.do_read diff.grad;
                     let prefix = prefix_str ^ " " ^ grad_txt diff in
-                    Nd.to_doc ~prefix ~labels ~indices arr ^^ string "\n"))
+                    Nd.to_doc ~prefix ~labels ~indices arr))
       | None -> empty
     else empty
   in
@@ -774,15 +777,15 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
         match t.forward.asgns with
         | Noop -> empty
         | fwd_code ->
-            string "@[<v 2>Current forward body:"
-            ^^ hardline ^^ Asgns.to_doc () fwd_code ^^ string "@]" ^^ hardline
+            group (string "Current forward body:" ^^ nest 2 (hardline ^^ Asgns.to_doc () fwd_code))
+            ^^ hardline
       in
       let bwd_doc =
         match t.diff with
         | Some { backprop = { asgns = Noop; _ }; _ } -> empty
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
-            string "@[<v 2>Current backprop body:"
-            ^^ hardline ^^ Asgns.to_doc () bwd_code ^^ string "@]" ^^ hardline
+            group (string "Current backprop body:" ^^ nest 2 (hardline ^^ Asgns.to_doc () bwd_code))
+            ^^ hardline
         | None -> empty
       in
       fwd_doc ^^ bwd_doc
@@ -796,19 +799,19 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
         match t.forward.asgns with
         | Noop -> empty
         | fwd_code ->
-            string "@[<v 2>Current forward low-level body:"
+            group
+              (string "Current forward low-level body:"
+              ^^ nest 2 (hardline ^^ Ir.Low_level.to_doc () (Asgns.to_low_level fwd_code)))
             ^^ hardline
-            ^^ Ir.Low_level.to_doc () (Asgns.to_low_level fwd_code)
-            ^^ string "@]" ^^ hardline
       in
       let bwd_doc =
         match t.diff with
         | Some { backprop = { asgns = Noop; _ }; _ } -> empty
         | Some { backprop = { asgns = bwd_code; _ }; _ } ->
-            string "@[<v 2>Current backprop low-level body:"
+            group
+              (string "Current backprop low-level body:"
+              ^^ nest 2 (hardline ^^ Ir.Low_level.to_doc () (Asgns.to_low_level bwd_code)))
             ^^ hardline
-            ^^ Ir.Low_level.to_doc () (Asgns.to_low_level bwd_code)
-            ^^ string "@]" ^^ hardline
         | None -> empty
       in
       fwd_doc ^^ bwd_doc
@@ -816,7 +819,10 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
   in
 
   (* Combine all documents and print *)
-  group (value_doc ^^ break 1 ^^ grad_doc ^^ break 1 ^^ code_doc ^^ break 1 ^^ low_level_doc)
+  group
+    (value_doc ^^ grad_doc
+    ^^ (if is_empty value_doc && is_empty grad_doc then empty else hardline)
+    ^^ code_doc ^^ low_level_doc)
 
 let print ?here ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =

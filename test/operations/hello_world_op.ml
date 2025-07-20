@@ -101,7 +101,9 @@ let%expect_test "Print tensor too early" =
   print_tensor ~here:[%here] `Default b;
   [%expect {|
     HERE: test/operations/hello_world_op.ml:100:21
-    [0]: 1,2,3,4_a shape 0:4|  <not-in-yet>HERE: test/operations/hello_world_op.ml:101:21
+    [0]: 1,2,3,4_a shape 0:4|  <not-in-yet>
+
+    HERE: test/operations/hello_world_op.ml:101:21
     [1]: 2,3,4,5_b shape 0:4|  <not-in-yet>
     |}];
   let%op c = a *. b in
