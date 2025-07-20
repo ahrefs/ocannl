@@ -18,8 +18,6 @@ let%debug_sexp graph_t () : unit =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = sin x in
@@ -32,8 +30,10 @@ let%debug_sexp graph_t () : unit =
   Train.set_hosted xkcd.value;
   Train.set_hosted x_flat.value;
   Train.set_hosted (Option.value_exn ~here:[%here] xkcd.diff).grad;
+  let ctx = Train.init_params (module Backend) IDX.empty fx in
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
+  Train.run fx_routine;
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   Tensor.print_tree ~with_shape:true ~with_grad:true ~depth:9 xkcd;
   let ys, dys =

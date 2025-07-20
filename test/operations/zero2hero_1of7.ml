@@ -1,6 +1,7 @@
 open Base
 open Ocannl
-module Tn = Ir.Tnode
+module Nd = Ir.Ndarray
+module Asgns = Ir.Assignments
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
@@ -509,14 +510,11 @@ let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
-  let f_init = Train.to_routine (module Backend) ctx IDX.empty @@ Tensor.init_params v in
-  let routine = Train.to_routine (module Backend) f_init.context IDX.empty update in
-  Train.run f_init;
+  let ctx = Train.init_params (module Backend) IDX.empty v in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect
@@ -539,13 +537,10 @@ let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in
-  let f_init = Train.to_routine (module Backend) ctx IDX.empty @@ Tensor.init_params v in
-  let routine = Train.to_routine (module Backend) f_init.context IDX.empty update in
-  Train.run f_init;
+  let ctx = Train.init_params (module Backend) IDX.empty v in
+  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
   Tensor.print_tree ~with_grad:true ~depth:9 v;
   [%expect

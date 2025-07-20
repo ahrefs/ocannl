@@ -353,6 +353,28 @@ let to_routine (type buffer_ptr dev runner event optimize_ctx)
   if hosted then Set.iter (Asgns.guess_output_nodes comp.Asgns.asgns) ~f:set_hosted;
   Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
+let init_params (type buffer_ptr dev runner event optimize_ctx)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type event = event
+       and type optimize_ctx = optimize_ctx) ?(ctx : Backend.context option) ?hosted ?name bindings
+    t =
+  let ctx =
+    match ctx with
+    | Some ctx -> ctx
+    | None -> Backend.make_context @@ Backend.new_stream @@ Backend.get_device ~ordinal:0
+  in
+  let comp = Tensor.init_params t in
+  let init = to_routine (module Backend) ctx ?hosted ?name bindings comp in
+  let ctx =
+    Set.fold comp.Asgns.embedded_nodes ~init:init.context ~f:(fun ctx tn ->
+        if not (Map.mem ctx.ctx_arrays tn) then Backend.init_from_host ctx tn else ctx)
+  in
+  run init;
+  ctx
+
 type example_train_result = {
   inputs : Tensor.t;
   outputs : Tensor.t;

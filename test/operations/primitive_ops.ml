@@ -9,12 +9,10 @@ module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
-let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
+let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let size = 100 in
@@ -27,8 +25,10 @@ let plot_unop ~f ?(x_min = -5.) ?(x_max = 5.) () =
   let%op fx = f x in
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
+  let ctx = Train.init_params (module Backend) IDX.empty fx in
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
+  Train.run fx_routine;
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let ys, dys =
     Array.unzip

@@ -62,7 +62,7 @@
  (modules zero2hero_1of7)
  (libraries ocannl base stdio)
  (preprocess
-  (pps ppx_here ppx_ocannl ppx_minidebug))
+  (pps ppx_here ppx_ocannl ppx_minidebug ppx_sexp_conv))
  (modes exe))
 
 (executable
