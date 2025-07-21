@@ -353,20 +353,24 @@ let to_routine (type buffer_ptr dev runner event optimize_ctx)
   if hosted then Set.iter (Asgns.guess_output_nodes comp.Asgns.asgns) ~f:set_hosted;
   Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
+(** [init_params] initializes the parameters of [t], via running their forward code or copying from
+    the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
+    only the parameters that are not in [ctx.ctx_arrays] are initialized. *)
 let init_params (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
        and type event = event
-       and type optimize_ctx = optimize_ctx) ?(ctx : Backend.context option) ?hosted ?name bindings
-    t =
+       and type optimize_ctx = optimize_ctx) ?(ctx : Backend.context option) ?(reinit_all = false)
+    ?hosted ?name bindings t =
   let ctx =
     match ctx with
     | Some ctx -> ctx
     | None -> Backend.make_context @@ Backend.new_stream @@ Backend.get_device ~ordinal:0
   in
-  let comp = Tensor.init_params t in
+  let skip = if reinit_all then None else Some ctx.ctx_arrays in
+  let comp = Tensor.init_params ?skip t in
   let init = to_routine (module Backend) ctx ?hosted ?name bindings comp in
   let ctx =
     Set.fold comp.Asgns.embedded_nodes ~init:init.context ~f:(fun ctx tn ->
@@ -378,9 +382,10 @@ let init_params (type buffer_ptr dev runner event optimize_ctx)
 type example_train_result = {
   inputs : Tensor.t;
   outputs : Tensor.t;
-  model_result : Tensor.t;
+  model_result : Tensor.t;  (** Do not use [model_result] for deriving gradients. *)
   infer_callback : float array -> float array;
-      (** Note: infer_callback is significantly less efficient than using the model via arrayjit. *)
+      (** Computes the output for the given input via the [model_result] tensor. Note:
+          [infer_callback] is inefficient as it is not batched. *)
   rev_batch_losses : float list;
   rev_epoch_losses : float list;
   learning_rates : float list;
@@ -420,7 +425,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let learning_rates = ref [] in
   let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
-  let init_params = Tensor.init_params scalar_loss in
   let update = grad_update ~disable_rootness_check ~setup_for_parallel:true scalar_loss in
   (* Define learning_rate after scalar_loss is compiled, to not trigger rootness sanitizer. *)
   let%op learning_rate =
@@ -432,16 +436,15 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
      Utils.settings.check_half_prec_constants_cutoff, no need to upcast learning_rate.value. *)
   set_hosted learning_rate.value;
   let sgd = sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let init_routine = to_routine (module Backend) contexts.(0) bindings init_params in
-  let grad_update = Backend.compile init_routine.context.optimize_ctx ?name:None bindings update in
   (* We initialize params on stream 0, and copy them to the other streams. *)
-  run init_routine;
+  let ctx0 = init_params (module Backend) ~ctx:contexts.(0) bindings scalar_loss in
+  let grad_update = Backend.compile ctx0.optimize_ctx ?name:None bindings update in
   let contexts =
     Array.mapi contexts ~f:(fun to_ init ->
-        if to_ = 0 then init_routine.context
+        if to_ = 0 then ctx0
         else
           Set.fold scalar_loss.Tensor.params ~init ~f:(fun dst p ->
-              Backend.init_from_device p.value ~dst ~src:init_routine.context))
+              Backend.init_from_device p.value ~dst ~src:ctx0))
   in
   let grad_updates = Array.map contexts ~f:(fun ctx -> Backend.link ctx grad_update) in
   let sgd_update = to_routine (module Backend) grad_updates.(0).context ?name:None bindings sgd in
@@ -487,7 +490,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (* if per_epoch_debug_streams then _debug_at "after sync" *)
   done;
   (* Using %cd instead of %op to avoid being asked to initialize [infer]. *)
-  let%cd model_result = model "infer" in
+  let%cd model_result = model "infer_input" in
   let infer_fwd =
     if disable_rootness_check then model_result.Tensor.forward
     else Tensor.consume_forward_code model_result
@@ -504,7 +507,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
                 infer_fwd)])
   in
   let infer_callback values =
-    Tn.set_values infer.value values;
+    Tn.set_values infer_input.value values;
     (* For the gccjit backend, infer is only on host, not on device. For cuda, this will be
        needed. *)
     Utils.capture_stdout_logs @@ fun () ->
@@ -525,8 +528,11 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     used_memory;
   }
 
-(* Note: this will get nicer with modular explicits. *)
-let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false)
+(** [forward_and_ctx] is a wrapper around {!init_params} that additionally runs code of [t] and
+    returns the context. If [skip_init] is true (false by default), no initialization is performmed.
+    If [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
+    parameters that are not in [ctx.ctx_arrays] are initialized. *)
+let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false) ?reinit_all
     ?(disable_rootness_check = false) (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
@@ -534,14 +540,11 @@ let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false)
        and type runner = runner
        and type optimize_ctx = optimize_ctx
        and type event = event) ctx ?(bindings = IDX.empty) t =
+  (* TODO: this will get nicer with modular explicits. *)
   if hosted then set_hosted t.Tensor.value;
   let ctx =
     if skip_init || Set.is_empty t.params then ctx
-    else
-      let init_params = Tensor.init_params t in
-      let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx bindings init_params in
-      run init;
-      init.context
+    else init_params (module Backend) ~ctx ~hosted ?reinit_all bindings t
   in
   let routine =
     Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ forward ~disable_rootness_check t)
@@ -552,13 +555,16 @@ let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false)
 
 (** [forward_and_force] is a wrapper around {!forward_and_ctx} that additionally forces the tensor's
     value and ensures it is transferred back to host as needed, see the setting
-    {!Utils.settings.automatic_host_transfers}. The resulting context is ignored.
+    {!Utils.settings.automatic_host_transfers}. If [skip_init] is true (false by default), no
+    initialization is performmed. The resulting context is ignored.
 
     Note: [Tensor.print ~force:true] also has this effect, so: using [forward_and_force] you don't
     need to pass [~force:true], and if you need the context and also to print the result, you can
     combine {!forward_and_ctx} and [Tensor.print ~force:true]. *)
-let forward_and_force ?hosted ?skip_init ?disable_rootness_check backend ctx ?bindings t =
+let forward_and_force ?hosted ?skip_init ?reinit_all ?disable_rootness_check backend ctx ?bindings t
+    =
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
-  ignore @@ forward_and_ctx ?hosted ?skip_init ?disable_rootness_check backend ctx ?bindings t;
+  ignore
+  @@ forward_and_ctx ?hosted ?skip_init ?reinit_all ?disable_rootness_check backend ctx ?bindings t;
   ignore (Lazy.force t.value.array);
   Tn.do_read t.value

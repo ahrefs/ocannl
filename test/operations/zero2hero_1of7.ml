@@ -54,10 +54,9 @@ let%expect_test "Graph drawing recompile" =
     |}];
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
-  let f_init = Train.to_routine (module Backend) ctx IDX.empty @@ Tensor.init_params f in
   let f_upd = Train.grad_update f in
-  let f_bprop = Train.to_routine (module Backend) f_init.context IDX.empty f_upd in
-  Train.run f_init;
+  let ctx = Train.init_params (module Backend) ~ctx IDX.empty f in
+  let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd in
   Train.run f_bprop;
   Tensor.print_tree ~with_grad:true ~depth:9 f;
   [%expect
@@ -270,8 +269,8 @@ let%expect_test "Simple gradients hosted" =
   Train.every_non_literal_on_host l;
   Train.every_non_literal_on_host learning_rate;
   let sgd = Train.sgd_update ~learning_rate l in
-  let f_init = Train.to_routine (module Backend) ctx IDX.empty @@ Tensor.init_params l in
-  let grad_routine = Train.to_routine (module Backend) f_init.context IDX.empty grad in
+  let ctx = Train.init_params (module Backend) ~ctx IDX.empty l in
+  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   let sgd_routine = Train.to_routine (module Backend) grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running an init or forward pass. *)
   Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
@@ -296,7 +295,6 @@ let%expect_test "Simple gradients hosted" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.run f_init;
   Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect
@@ -403,8 +401,8 @@ let%expect_test "Simple gradients virtual" =
     #1 grad_a Material/28         │#3 grad_b Material/28         │                              │
     <not-in-yet>                  │<not-in-yet>                  │                              │
     |}];
-  let f_init = Train.to_routine (module Backend) ctx IDX.empty @@ Tensor.init_params l in
-  let grad_routine = Train.to_routine (module Backend) f_init.context IDX.empty grad in
+  let ctx = Train.init_params (module Backend) ~ctx IDX.empty l in
+  let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
   [%expect
@@ -428,7 +426,6 @@ let%expect_test "Simple gradients virtual" =
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
-  Train.run f_init;
   Train.run grad_routine;
   Tensor.print_tree ~with_grad:true ~depth:9 l;
   [%expect

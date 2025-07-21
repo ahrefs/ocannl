@@ -42,7 +42,6 @@ let main () =
      computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
-  let init_params = Tensor.init_params scalar_loss in
   let update = Train.grad_update scalar_loss in
   (* TODO(#321): Define learning_rate above the call to grad_update to test the consume_forward_code
      fix *)
@@ -50,13 +49,12 @@ let main () =
   (* TODO: is set_hosted needed? *)
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let init_routine = Train.to_routine (module Backend) ctx bindings init_params in
+  let ctx = Train.init_params (module Backend) ~ctx bindings scalar_loss in
   let sgd_routine =
-    Train.to_routine (module Backend) init_routine.context bindings (Asgns.sequence [ update; sgd ])
+    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
   in
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
-  Train.run init_routine;
   for _epoch = 1 to epochs do
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;

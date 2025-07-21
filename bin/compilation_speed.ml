@@ -26,10 +26,8 @@ let benchmark_overhead backend () =
   let ctx = Backend.make_context stream in
   let init_mem = Backend.(get_used_memory stream.device) in
   let update_f = Train.grad_update f in
-  let init_x =
-    Train.to_routine (module Backend) ctx ~name:"init_assign_x" IDX.empty @@ Tensor.init_params f
-  in
-  let f_routine = Train.to_routine (module Backend) init_x.context IDX.empty update_f in
+  let ctx = Train.init_params (module Backend) ~ctx IDX.empty f in
+  let f_routine = Train.to_routine (module Backend) ctx IDX.empty update_f in
   Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in

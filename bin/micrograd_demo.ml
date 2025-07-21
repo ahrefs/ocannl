@@ -62,18 +62,13 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
       (scalar_loss, 0.0)
   in
   (* So that we can inspect them. *)
-  let init_params = Tensor.init_params scalar_loss in
   let update = Train.grad_update scalar_loss in
   let%op learning_rate = 0.1 *. (!..steps - !@step_n) /. !..steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
 
-  let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
-  let init = Backend.link ctx @@ Backend.compile ctx.optimize_ctx IDX.empty init_params in
-  let ctx = init.context in
-  Train.run init;
+  let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
+  let ctx = Train.init_params (module Backend) ~hosted:true IDX.empty scalar_loss in
   let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
   (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
      ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
