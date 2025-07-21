@@ -171,7 +171,7 @@ let%diagn2_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
-    | Merge_buffer tn -> 
+    | Merge_buffer tn ->
         (* FIXME: NOT IMPLEMENTED YET - need to handle merge buffer access differently now *)
         Low_level.Get (tn, idcs)
   in
@@ -267,7 +267,6 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
-
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
         Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in

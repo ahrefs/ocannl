@@ -375,17 +375,10 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
-(* 
-let random_seed =
-  let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
-  let res =
-    Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
-      ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |])
-      ()
-  in
-  Tn.update_memory_mode res.value Tn.Effectively_constant 24;
-  Tn.update_prec res.value Ir.Ops.uint4x32;
-  ref res *)
+(* let random_seed = let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
+   let res = Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
+   ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |]) () in Tn.update_memory_mode res.value
+   Tn.Effectively_constant 24; Tn.update_prec res.value Ir.Ops.uint4x32; ref res *)
 
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
@@ -448,8 +441,8 @@ end
     omitted. Note: the data should have no padding and if padding is inferred, the data will be
     copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
 let reshape ~l ?b ?(i = []) ?o ndarray =
-  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o ~init_data:(Asgns.Reshape ndarray)
-    ()
+  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
+    ~init_data:(Asgns.Reshape ndarray) ()
 
 (** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
     be inferred (or provided). Assumes no padding. See also: {!reshape} and {!TDSL.wrap_param}. *)

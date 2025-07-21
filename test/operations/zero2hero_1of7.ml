@@ -179,8 +179,7 @@ let%expect_test "Graph drawing fetch" =
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Yay, the whole shape gets inferred! *)
-  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad ()
-  in
+  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   let%op fx = f x in

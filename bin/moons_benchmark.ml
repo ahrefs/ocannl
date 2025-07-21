@@ -54,7 +54,9 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   (* let init_lr = 0.1 in *)
   let init_lr = 0.01 in
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
-  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len:flat_len () in
+  let moons_coordinates, moons_labels =
+    Datasets.Half_moons.generate ~config:moons_config ~len:flat_len ()
+  in
   let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
   let moons_flat ~b:_ = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray in
@@ -80,14 +82,14 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   @@ Backend.get_global_debug_info ();
   let per_batch_callback ~at_batch ~at_step ~learning_rate ~batch_loss ~epoch_loss =
     Stdio.printf "Batch=%d, step=%d, lr=%f, batch loss=%f, epoch loss=%f\n%!" at_batch at_step
-       learning_rate batch_loss epoch_loss;
+      learning_rate batch_loss epoch_loss;
     if Option.is_none !start_time then start_time := Some (Time_now.nanoseconds_since_unix_epoch ())
   in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step ~at_epoch ~learning_rate ~epoch_loss =
     (* if at_epoch % 10 = 9 then *)
-      Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
-        epoch_loss
+    Stdio.printf "Epoch=%d, step=%d, lr=%f, epoch loss=%f\n%!" at_epoch at_step learning_rate
+      epoch_loss
   in
 
   let {

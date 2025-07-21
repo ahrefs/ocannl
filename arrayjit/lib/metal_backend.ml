@@ -526,8 +526,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
       | Threefry4x32, _ ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-         func "threefry4x32" (* Metal implementation of Threefry4x32 *)
+          (* FIXME: NOT IMPLEMENTED YET *)
+          func "threefry4x32" (* Metal implementation of Threefry4x32 *)
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
@@ -559,7 +559,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform target_prec, _ ->
           (* FIXME: NOT IMPLEMENTED YET - placeholder for Uint4x32_to_prec_uniform conversion *)
-          fun _v -> string ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0" ^ metal_prec_suffix_float target_prec ^ ")")
+          fun _v ->
+            string
+              ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0"
+              ^ metal_prec_suffix_float target_prec
+              ^ ")")
     (* Logical not *)
 
     let convert_precision ~from ~to_ =

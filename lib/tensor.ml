@@ -669,7 +669,7 @@ let log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
+let to_doc ?(force = false) ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
@@ -728,7 +728,7 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
   (* Create document for tensor value *)
   let has_grad = with_grad && Option.is_some t.diff in
   let value_doc =
-    if (not force_read) && not (Lazy.is_val t.value.array) then
+    if (not force) && not (Lazy.is_val t.value.array) then
       string prefix_str ^^ string " <not-in-yet>" ^^ break 1
     else
       match (style, Lazy.force t.value.array) with
@@ -749,7 +749,7 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
     if with_grad then
       match t.diff with
       | Some diff -> (
-          if (not force_read) && not (Lazy.is_val diff.grad.array) then
+          if (not force) && not (Lazy.is_val diff.grad.array) then
             string (grad_txt diff) ^^ string " <not-in-yet>"
           else
             match Lazy.force diff.grad.array with
@@ -824,12 +824,12 @@ let to_doc ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
     ^^ (if is_empty value_doc && is_empty grad_doc then empty else hardline)
     ^^ code_doc ^^ low_level_doc)
 
-let print ?here ?(force_read = false) ~with_grad ~with_code ?(with_low_level = false)
+let print ?here ?(force = false) ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   PPrint.ToChannel.pretty 0.7 100 Stdio.stdout
-    (to_doc ~force_read ~with_grad ~with_code ~with_low_level style t)
+    (to_doc ~force ~with_grad ~with_code ~with_low_level style t)
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->

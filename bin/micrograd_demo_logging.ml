@@ -10,7 +10,7 @@ module Tn = Ir.Tnode
 
 module type Backend = Ir.Backend_intf.Backend
 
-let  () =
+let () =
   Tensor.unsafe_reinitialize ();
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
@@ -59,7 +59,9 @@ let _suspended () =
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   let init_params = Tensor.init_params g in
   let update = Train.grad_update g in
-  let step = Train.to_routine (module Backend) ctx IDX.empty @@ Asgns.sequence [init_params; update] in
+  let step =
+    Train.to_routine (module Backend) ctx IDX.empty @@ Asgns.sequence [ init_params; update ]
+  in
   Tn.print_accessible_headers ();
   Utils.capture_stdout_logs @@ fun () ->
   Train.run step;

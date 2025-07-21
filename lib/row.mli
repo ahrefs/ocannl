@@ -86,9 +86,9 @@ type total_elems =
 type row_constraint =
   | Unconstrained
   | Total_elems of { numerator : total_elems; divided_by : dim_var list }
-      (** The rows, inclusive of the further row spec, have this many elements.
-          The total is numerator / (product of divided_by variables).
-          divided_by has multiset semantics - the same variable can appear multiple times. *)
+      (** The rows, inclusive of the further row spec, have this many elements. The total is
+          numerator / (product of divided_by variables). divided_by has multiset semantics - the
+          same variable can appear multiple times. *)
   | Exact of dim list  (** The concatenated rows have these axes. *)
 [@@deriving equal, hash, compare, sexp_of]
 

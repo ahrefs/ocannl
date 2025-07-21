@@ -550,13 +550,13 @@ let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false)
   Task.run routine.schedule;
   routine.context
 
-(** [forward_and_force] is a wrapper around {!forward_and_ctx} that additionally forces the
-    tensor's value and ensures it is transferred back to host as needed, see the setting
+(** [forward_and_force] is a wrapper around {!forward_and_ctx} that additionally forces the tensor's
+    value and ensures it is transferred back to host as needed, see the setting
     {!Utils.settings.automatic_host_transfers}. The resulting context is ignored.
 
-    Note: [Tensor.print ~force_read:true] also has this effect, so: using [forward_and_force] you
-    don't need to pass [~force_read:true], and if you need the context and also to print the result,
-    you can combine {!forward_and_ctx} and [Tensor.print ~force_read:true]. *)
+    Note: [Tensor.print ~force:true] also has this effect, so: using [forward_and_force] you don't
+    need to pass [~force:true], and if you need the context and also to print the result, you can
+    combine {!forward_and_ctx} and [Tensor.print ~force:true]. *)
 let forward_and_force ?hosted ?skip_init ?disable_rootness_check backend ctx ?bindings t =
   (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
   ignore @@ forward_and_ctx ?hosted ?skip_init ?disable_rootness_check backend ctx ?bindings t;

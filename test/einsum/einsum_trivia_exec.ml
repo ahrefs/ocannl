@@ -119,8 +119,8 @@ let () =
   Train.forward_and_force backend ctx e;
   let%op f = a *+ "a|i->h; b|h->o => i->o" b in
   Train.forward_and_force backend ctx f;
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ a2;
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ a2;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ d;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ e;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ f
@@ -142,7 +142,7 @@ let () =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
   let ctx = Train.forward_and_ctx backend ctx ho in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   let%op ho2 = hey ++ "b|...->o => o|...->b" in
   Train.forward_and_force backend ctx ho2;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho2;
@@ -152,7 +152,7 @@ let () =
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   let ctx = Train.forward_and_ctx backend ctx ho3 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
 
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
   Train.forward_and_force backend ctx ho4;
@@ -213,15 +213,15 @@ let () =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   let ctx = Train.forward_and_ctx backend ctx ho in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
   let ctx = Train.forward_and_ctx backend ctx ho2 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho2;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
 
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
   let ctx = Train.forward_and_ctx backend ctx ho3 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
   let%op ho4 = hey2 ++ "i->j => i0j" in
   Train.forward_and_force backend ctx ho4;
   Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ ho4

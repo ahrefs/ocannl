@@ -433,7 +433,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Train.forward_and_force backend ctx e;
   let%op f = a *+ "a|i->h; b|h->o => i->o" b in
   Train.forward_and_force backend ctx f;
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ a2;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ a2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:436:21
@@ -450,7 +450,7 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘
     |}];
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ c;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:453:21
@@ -544,7 +544,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
   let ctx = Train.forward_and_ctx backend ctx ho in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:547:21
@@ -583,7 +583,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   let ctx = Train.forward_and_ctx backend ctx ho3 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:586:21
@@ -867,7 +867,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   let ctx = Train.forward_and_ctx backend ctx ho in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:870:21
@@ -883,7 +883,7 @@ let%expect_test "einsum1 fixed dim axis" =
     |}];
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
   let ctx = Train.forward_and_ctx backend ctx ho2 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho2;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:886:21
@@ -900,7 +900,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
   let ctx = Train.forward_and_ctx backend ctx ho3 in
-  Tensor.print ~here:[%here] ~force_read:true ~with_code:false ~with_grad:false `Default @@ ho3;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Default @@ ho3;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:903:21

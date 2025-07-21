@@ -204,17 +204,15 @@ let get_voidptr_not_managed nd : unit Ctypes.ptr =
 let adjust_idx_for_padding ?padding idx =
   match padding with
   | None -> idx
-  | Some padding_arr -> 
-      Array.mapi idx ~f:(fun i dim_idx -> 
-        if i < Array.length padding_arr then
-          dim_idx + padding_arr.(i).left
-        else dim_idx)
+  | Some padding_arr ->
+      Array.mapi idx ~f:(fun i dim_idx ->
+          if i < Array.length padding_arr then dim_idx + padding_arr.(i).left else dim_idx)
 
 (** Helper function to compute end index for iteration, respecting padding margins *)
 let compute_end_idx ?padding dims axis =
   match padding with
   | None -> dims.(axis) - 1
-  | Some padding_arr when axis < Array.length padding_arr -> 
+  | Some padding_arr when axis < Array.length padding_arr ->
       dims.(axis) - padding_arr.(axis).left - padding_arr.(axis).right - 1
   | Some _ -> dims.(axis) - 1
 
@@ -247,12 +245,11 @@ let fold_bigarray ?padding arr ~init ~f =
   let dims = A.dims arr in
   let accu = ref init in
   let rec cloop idx col =
-    if col = Array.length idx then 
+    if col = Array.length idx then
       let adjusted_idx = adjust_idx_for_padding ?padding idx in
       accu := f !accu idx @@ A.get arr adjusted_idx
     else
-      let end_idx = compute_end_idx ?padding dims col
-      in
+      let end_idx = compute_end_idx ?padding dims col in
       for j = 0 to end_idx do
         idx.(col) <- j;
         cloop idx (Int.succ col)
@@ -265,15 +262,22 @@ let fold_bigarray ?padding arr ~init ~f =
 let fold_as_float ?padding ~init ~f arr =
   match arr with
   | Byte_nd arr ->
-      fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c) arr
-  | Uint16_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
-  | Int32_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
-  | Uint4x32_nd arr -> fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
+      fold_bigarray ?padding ~init
+        ~f:(fun accu idx c -> f accu idx @@ Float.of_int @@ Char.to_int c)
+        arr
+  | Uint16_nd arr ->
+      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Float.of_int v) arr
+  | Int32_nd arr ->
+      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Int32.to_float v) arr
+  | Uint4x32_nd arr ->
+      fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
   | Half_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Bfloat16_nd arr ->
       fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
   | Fp8_nd arr ->
-      fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c) arr
+      fold_bigarray ?padding ~init
+        ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c)
+        arr
   | Single_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Double_nd arr -> fold_bigarray ?padding ~init ~f arr
 
@@ -317,8 +321,7 @@ let retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr =
         result := (x, y) :: !result
       else if axis = from_axis then iter (axis + 1)
       else
-        let end_idx = compute_end_idx ?padding dims axis
-        in
+        let end_idx = compute_end_idx ?padding dims axis in
         for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
@@ -344,8 +347,7 @@ let retrieve_1d_points ?from_axis ?padding ~xdim arr =
         result := x :: !result
       else if axis = from_axis then iter (axis + 1)
       else
-       let end_idx = compute_end_idx ?padding dims axis
-        in
+        let end_idx = compute_end_idx ?padding dims axis in
         for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
@@ -366,8 +368,7 @@ let retrieve_flat_values ?padding arr =
         let x = get_as_float ?padding arr idx in
         result := x :: !result
       else
-        let end_idx = compute_end_idx ?padding dims axis
-        in
+        let end_idx = compute_end_idx ?padding dims axis in
         for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
@@ -386,11 +387,9 @@ let set_flat_values ?padding arr values =
       if axis = n_axes then (
         if !values_idx < Array.length values then (
           set_from_float ?padding arr idx values.(!values_idx);
-          Int.incr values_idx
-        ))
+          Int.incr values_idx))
       else
-        let end_idx = compute_end_idx ?padding dims axis
-        in
+        let end_idx = compute_end_idx ?padding dims axis in
         for p = 0 to end_idx do
           idx.(axis) <- p;
           iter (axis + 1)
@@ -466,18 +465,18 @@ let int_dims_to_string ?(with_axis_numbers = false) ?padding dims =
     String.concat_array ~sep:" x "
     @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else
-    let dim_strings = Array.mapi dims ~f:(fun i dim ->
-      match padding with
-      | None -> Int.to_string dim
-      | Some padding_arr when i < Array.length padding_arr ->
-          let unpadded_dim = dim - padding_arr.(i).left - padding_arr.(i).right in
-          let total_padding = padding_arr.(i).left + padding_arr.(i).right in
-          if total_padding > 0 then
-            Int.to_string unpadded_dim ^ "+" ^ Int.to_string total_padding
-          else
-            Int.to_string dim
-      | Some _ -> Int.to_string dim
-    ) in
+    let dim_strings =
+      Array.mapi dims ~f:(fun i dim ->
+          match padding with
+          | None -> Int.to_string dim
+          | Some padding_arr when i < Array.length padding_arr ->
+              let unpadded_dim = dim - padding_arr.(i).left - padding_arr.(i).right in
+              let total_padding = padding_arr.(i).left + padding_arr.(i).right in
+              if total_padding > 0 then
+                Int.to_string unpadded_dim ^ "+" ^ Int.to_string total_padding
+              else Int.to_string dim
+          | Some _ -> Int.to_string dim)
+    in
     String.concat_array ~sep:"x" dim_strings
 
 (** Logs information about the array on the default ppx_minidebug runtime, if

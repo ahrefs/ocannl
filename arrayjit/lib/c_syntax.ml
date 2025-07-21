@@ -646,9 +646,9 @@ module C_syntax (B : C_syntax_config) = struct
         (defs, expr)
     | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
         let defs, expr_v = pp_float prec v in
-        let expr = 
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(") ^^
-          expr_v ^^ string ")"
+        let expr =
+          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
+          ^^ expr_v ^^ string ")"
         in
         (defs, expr)
     | Unop (op, v) ->
@@ -720,9 +720,9 @@ module C_syntax (B : C_syntax_config) = struct
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
     | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
         let v_doc, idcs = debug_float prec v in
-        let expr_doc = 
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(") ^^
-          v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
+        let expr_doc =
+          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
+          ^^ v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
         in
         (expr_doc, idcs)
     | Unop (op, v) ->

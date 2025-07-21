@@ -56,8 +56,7 @@ let _suspended () =
   let x_flat =
     Tensor.term ~grad_spec:Tensor.Require_grad
       ~label:[ "x_flat" ] (* ~input_dims:[] ~output_dims:[ 1 ] *)
-      ~fetch_op:(Constant_fill values)
-      ()
+      ~fetch_op:(Constant_fill values) ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   (* The [let x =] line is the same as this except [let%op x =] uses [~grad_spec:If_needed]. *)
@@ -106,9 +105,7 @@ let _suspended () =
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Yay, the whole shape gets inferred! *)
   let x_flat =
-    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ]
-      ~fetch_op:(Constant_fill xs)
-      ()
+    Tensor.term ~grad_spec:Require_grad ~label:[ "x_flat" ] ~fetch_op:(Constant_fill xs) ()
   in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in

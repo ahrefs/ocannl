@@ -158,7 +158,6 @@ let is_constexpr_comp traced_store llv =
     | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
-
     | Get (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
