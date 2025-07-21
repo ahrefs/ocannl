@@ -10,8 +10,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let%diagn_sexp _suspended () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = c + c + 1 in
@@ -21,14 +19,12 @@ let%diagn_sexp _suspended () =
   Train.every_non_literal_on_host d;
   (* List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff
      ]; *)
-  let update = Train.grad_update d in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
-  Train.run routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 d;
+  ignore (Train.update_once ~hosted:true (module Backend) d);
+  Train.printf_tree ~with_grad:true ~depth:9 d;
   Stdio.print_endline "\n";
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ d;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ a;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ b
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false d;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true a;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b
 
 let%diagn_sexp () : unit =
   Rand.init 0;
@@ -43,13 +39,10 @@ let%diagn_sexp () : unit =
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
   List.iter ~f:(function Some diff -> Train.set_hosted diff.grad | None -> ()) [ a.diff; b.diff ];
-  let update = Train.grad_update g in
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   Utils.capture_stdout_logs @@ fun () ->
-  let ctx = Train.init_params (module Backend) ~hosted:true IDX.empty g in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
-  Train.run routine;
-  (* Tensor.print_tree ~with_grad:true ~depth:9 g; *)
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default @@ g;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ a;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default @@ b
+  ignore (Train.update_once ~hosted:true (module Backend) g);
+  (* Train.printf_tree ~with_grad:true ~depth:9 g; *)
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false g;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true a;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b

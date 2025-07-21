@@ -17,8 +17,6 @@ let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
@@ -30,12 +28,9 @@ let () =
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
-  let update = Train.grad_update g in
   Utils.capture_stdout_logs @@ fun () ->
-  let ctx = Train.init_params (module Backend) ~ctx IDX.empty g in
-  let step = Train.to_routine (module Backend) ctx IDX.empty update in
-  Train.run step;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Default g;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default a;
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:true `Default b;
+  ignore (Train.update_once (module Backend) g);
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false g;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true a;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b;
   Utils.restore_settings ()

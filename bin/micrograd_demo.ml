@@ -70,9 +70,8 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
   let ctx = Train.init_params (module Backend) ~hosted:true IDX.empty scalar_loss in
   let routine = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
-  (* Stdio.print_endline "\n******** scalar_loss **********"; Tensor.print_tree ~with_id:true
-     ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
-     **********"; Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 learning_rate;
+  (* Stdio.print_endline "\n******** scalar_loss **********"; Train.printf_tree ~with_grad:false ~depth:9 scalar_loss; Stdio.print_endline "\n******** learning_rate
+     **********"; Train.printf_tree ~with_grad:false ~depth:9 learning_rate;
      Stdio.printf "\n********\n%!"; *)
   let open Operation.At in
   let epoch_loss = ref 0. in
@@ -113,7 +112,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
            mlp_result.forward)]
   in
   Stdio.print_endline "\n******** mlp_result **********";
-  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 mlp_result;
+  Train.printf_tree ~with_grad:false ~depth:9 mlp_result;
   Stdio.printf "\n********\n%!";
   let callback (x, y) =
     Tn.set_values point.value [| x; y |];

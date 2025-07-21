@@ -62,7 +62,7 @@ let experiment ~seed ~backend_name ~config () =
   let classes = Tn.points_1d ~xdim:0 outputs.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   Stdio.print_endline "\n******** mlp_result **********";
-  Tensor.print_tree ~with_id:true ~with_grad:false ~depth:9 model_result;
+  Train.printf_tree ~with_grad:false ~depth:9 model_result;
   Stdio.printf "\n********\nUsed memory: %d\n%!" used_memory;
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =

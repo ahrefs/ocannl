@@ -17,15 +17,15 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 let _suspended () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.make_context stream in
   let routine = Train.to_routine (module Backend) ctx IDX.empty code in
   Train.run routine;
   Stdio.printf "\n%!";
-  Tensor.print_tree ~with_id:true ~with_grad:true ~depth:9 v;
+  Train.printf_tree ~with_grad:true ~depth:9 v;
   Stdio.printf "\nHigh-level code:\n%!";
   Ir.Assignments.to_doc () code.asgns |> PPrint.ToChannel.pretty 0.7 100 Stdio.stdout;
   Stdio.printf "\n%!"
@@ -38,12 +38,9 @@ let _suspended () =
   let%op f5 = f 5 in
   let module Backend = (val Backends.fresh_backend ()) in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_force
-    (module Backend)
-    Backend.(make_context @@ new_stream @@ get_device ~ordinal:0)
-    f5;
+  ignore (Train.forward_once (module Backend) f5);
   Stdio.printf "\n%!";
-  Tensor.print_tree ~with_grad:false ~depth:9 f5;
+  Train.printf_tree ~with_grad:false ~depth:9 f5;
   Stdio.printf "\n%!"
 
 let _suspended () =
@@ -65,9 +62,9 @@ let _suspended () =
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let%op fx = f x in
   let module Backend = (val Backends.fresh_backend ()) in
+  let update = Train.grad_update fx in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  let update = Train.grad_update fx in
   let routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn routine.bindings step_sym in
   let ys = Array.create ~len:size 0. and dys = Array.create ~len:size 0. in
@@ -92,15 +89,13 @@ let _suspended () =
 let _suspended () =
   Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_force (module Backend) ctx f5;
-  Tensor.print_tree ~with_grad:false ~depth:9 f5;
+  ignore (Train.forward_once (module Backend) f5);
+  Train.printf_tree ~with_grad:false ~depth:9 f5;
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Yay, the whole shape gets inferred! *)
@@ -113,6 +108,8 @@ let _suspended () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.make_context stream in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   let%track_sexp () =
@@ -143,37 +140,28 @@ let () =
   let%op l = d *. "f" [ -2 ] in
   Train.every_non_literal_on_host l;
   let module Backend = (val Backends.fresh_backend ()) in
-  let update = Train.grad_update l in
-  let ctx = Train.init_params (module Backend) ~hosted:true IDX.empty l in
-  let routine = Train.to_routine (module Backend) ctx IDX.empty update in
-  Train.run routine;
+  let ctx = Train.update_once (module Backend) ~hosted:true l in
   Stdio.print_endline
     {|
       We did not update the params: all values and gradients will be at initial points,
       which are specified in the tensor in the brackets.|};
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
   let%op learning_rate = 0.1 in
   let routine =
-    Train.to_routine (module Backend) routine.context IDX.empty @@ Train.sgd_update ~learning_rate l
+    Train.to_routine (module Backend) ctx IDX.empty @@ Train.sgd_update ~learning_rate l
   in
-  (* learning_rate is virtual so this will not print anything. *)
-  Stdio.print_endline
-    {|
-      Due to how the gccjit backend works, since the parameters were constant in the grad_update
-      computation, they did not exist on the device before. Now they do. This would not be needed
-      on the cuda backend.|};
   Train.run routine;
   Stdio.print_endline
     {|
       Now we updated the params, but after the forward and backward passes:
       only params values will change, compared to the above.|};
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
-  (* We could reuse the jitted code if we did not use `jit_and_run`. *)
-  let routine = Train.to_routine (module Backend) routine.context IDX.empty update in
-  Train.run routine;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
+  (* We could reuse the jitted code if we did not use `update_once`. [disable_rootness_check:true]
+     because it's not once, it's twice. *)
+  ignore (Train.update_once ~disable_rootness_check:true (module Backend) l);
   Stdio.print_endline
     {|
       Now again we did not update the params, they will remain as above, but both param
       gradients and the values and gradients of other nodes will change thanks to the forward and
       backward passes.|};
-  Tensor.print_tree ~with_grad:true ~depth:9 l
+  Train.printf_tree ~with_grad:true ~depth:9 l

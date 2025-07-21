@@ -137,9 +137,7 @@ let rec init_params ?skip t =
                  rem_embedded := Set.union !rem_embedded asgns.embedded_nodes;
                  Seq (asgns.asgns, param.forward.asgns) :: acc) )
   in
-  let embedded_nodes =
-    Set.fold ~init:!rem_embedded params ~f:(fun acc p -> Set.add acc p.value)
-  in
+  let embedded_nodes = Set.fold ~init:!rem_embedded params ~f:(fun acc p -> Set.add acc p.value) in
   { asgns; embedded_nodes }
 
 let initial_default_prec =
@@ -535,17 +533,18 @@ let header t =
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
-let lazy_optional_payload ~spy ~present ~missing v =
-  if Lazy.is_val v || not spy then
-    match Lazy.force v with
+let lazy_optional_payload ~force ~present ~missing v =
+  if Lazy.is_val v.Tn.array || force then (
+    Tn.do_read v;
+    match Lazy.force v.array with
     | Some p -> present p
-    | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ])
+    | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ]))
   else `Vlist (false, [ `Text (missing ()); `Text "<not-in-yet> " ])
 
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 
-let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~spy ~with_shape
+let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force ~with_shape
     ~with_id ~with_value ~with_grad t =
   (* First scan to identify which tensors appear embedded anywhere *)
   let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
@@ -602,7 +601,7 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
         `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
-          lazy_optional_payload t.value.array ~spy
+          lazy_optional_payload t.value ~force
             ~present:(fun v_array ->
               Tn.do_read t.value;
               `Box
@@ -628,7 +627,7 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
     | _, true, true, Some diff ->
         let node =
           let value =
-            lazy_optional_payload t.value.array ~spy
+            lazy_optional_payload t.value ~force
               ~present:(fun v_array ->
                 Tn.do_read t.value;
                 `Box
@@ -637,7 +636,7 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
               ~missing:(fun () -> txt ^ " " ^ where_located t.value)
           in
           let grad =
-            lazy_optional_payload diff.grad.array ~spy
+            lazy_optional_payload diff.grad ~force
               ~present:(fun g_array ->
                 Tn.do_read diff.grad;
                 `Box
@@ -651,9 +650,9 @@ let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~sp
   in
   to_dag { subtensor = t; embedded = true }
 
-let to_printbox ?single_node ?embedded_only ?entries_per_axis ?(with_id = false) ?(spy = false)
+let to_printbox ?single_node ?embedded_only ?entries_per_axis ?(with_id = false) ?(force = false)
     ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
-  to_dag ?single_node ?embedded_only ?entries_per_axis ~with_id ~spy ~with_shape ~with_value
+  to_dag ?single_node ?embedded_only ?entries_per_axis ~with_id ~force ~with_shape ~with_value
     ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
@@ -674,7 +673,7 @@ let log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let to_doc ?(force = false) ~with_grad ~with_code ?(with_low_level = false)
+let to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
@@ -841,11 +840,12 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?here ?entries_per_axis ?(with_backend_info = false) ?(with_id = true) ?(spy = false)
-    ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t =
+let print_tree ?here ?(force = false) ?entries_per_axis ?(with_backend_info = false)
+    ?(with_id = true) ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t
+    =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
-  @@ to_dag ?entries_per_axis ?embedded_only ~with_id ~spy ~with_shape ~with_value ~with_grad t
+  @@ to_dag ?entries_per_axis ?embedded_only ~with_id ~force ~with_shape ~with_value ~with_grad t

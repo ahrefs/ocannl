@@ -22,13 +22,12 @@ let benchmark_overhead backend () =
   Train.set_hosted f.value;
 
   (* Train.every_non_literal_on_host f; *)
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
-  let init_mem = Backend.(get_used_memory stream.device) in
+  let device = Backend.(get_device ~ordinal:0) in
+  let init_mem = Backend.get_used_memory device in
   let update_f = Train.grad_update f in
-  let ctx = Train.init_params (module Backend) ~ctx IDX.empty f in
+  let ctx = Train.init_params (module Backend) IDX.empty f in
   let f_routine = Train.to_routine (module Backend) ctx IDX.empty update_f in
-  Tensor.print_tree ~with_grad:true ~with_backend_info:true ~depth:9 f;
+  Train.printf_tree ~with_grad:true ~depth:9 f;
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Operation.At in
@@ -49,7 +48,7 @@ let benchmark_overhead backend () =
   in
   let final_time = Time_now.nanoseconds_since_unix_epoch () in
   let time_in_sec = Int63.(to_float @@ (final_time - init_time)) /. 1000_000_000. in
-  let mem_in_bytes = Backend.(get_used_memory stream.device) - init_mem in
+  let mem_in_bytes = Backend.get_used_memory device - init_mem in
   let result =
     PrintBox_utils.Benchmark
       {

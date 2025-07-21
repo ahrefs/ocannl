@@ -27,8 +27,8 @@ let%expect_test "Graph drawing recompile" =
   let open Operation.At in
   let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
-  Train.forward_and_force backend ctx f_nd;
-  Tensor.print_tree ~with_grad:true ~depth:9 f_nd;
+  ignore (Train.forward_once backend f_nd);
+  Train.printf_tree ~with_grad:true ~depth:9 f_nd;
   [%expect
     {|
                                  #15 +_f_nd
@@ -58,7 +58,7 @@ let%expect_test "Graph drawing recompile" =
   let ctx = Train.init_params (module Backend) ~ctx IDX.empty f in
   let f_bprop = Train.to_routine (module Backend) ctx IDX.empty f_upd in
   Train.run f_bprop;
-  Tensor.print_tree ~with_grad:true ~depth:9 f;
+  Train.printf_tree ~with_grad:true ~depth:9 f;
   [%expect
     {|
                                     #32 +_f
@@ -160,8 +160,8 @@ let%expect_test "Graph drawing fetch" =
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
   Train.every_non_literal_on_host f5;
-  Train.forward_and_force (module Backend) ctx f5;
-  Tensor.print_tree ~with_grad:false ~depth:9 f5;
+  ignore (Train.forward_once (module Backend) f5);
+  Train.printf_tree ~with_grad:false ~depth:9 f5;
   [%expect
     {|
                                    #9 +_f_5
@@ -273,30 +273,30 @@ let%expect_test "Simple gradients hosted" =
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   let sgd_routine = Train.to_routine (module Backend) grad_routine.context IDX.empty sgd in
   (* Check out the initial state without running an init or forward pass. *)
-  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
-                                                    #12 *._l Host&stream/412410
-                                                    <not-in-yet>
-                                                    #13 grad_*._l Host&stream/412410
-                                                    <not-in-yet>
-                                    #8 +_d Host&stream/412410                                      │#10 f non-emb Host&stream/412410
-                                    <not-in-yet>                                                   │<not-in-yet>
-                                    #9 grad_+_d Host&stream/412410                                 │#11 grad_f Host&stream/412410
-                                    <not-in-yet>                                                   │<not-in-yet>
-                    #4 *._e Host&stream/412410                     │#6 c non-emb Host&stream/412410│
-                    <not-in-yet>                                   │<not-in-yet>                   │
-                    #5 grad_*._e Host&stream/412410                │#7 grad_c Host&stream/412410   │
-                    <not-in-yet>                                   │<not-in-yet>                   │
-    #0 a non-emb Host&stream/412410│#2 b non-emb Host&stream/412410│                               │
-    <not-in-yet>                   │<not-in-yet>                   │                               │
-    #1 grad_a Host&stream/412410   │#3 grad_b Host&stream/412410   │                               │
-    <not-in-yet>                   │<not-in-yet>                   │                               │
+                       #12 *._l
+                        0.00
+                       #13 grad_*._l
+                        0.00
+                 #8 +_d                   │#10 f non-emb
+                  0.00                    │ -2.00
+                 #9 grad_+_d              │#11 grad_f
+                  0.00                    │ 0.00
+          #4 *._e            │#6 c non-emb│
+           0.00              │ 1.00e+1    │
+          #5 grad_*._e       │#7 grad_c   │
+           0.00              │ 0.00       │
+    #0 a non-emb│#2 b non-emb│            │
+     2.00       │ -3.00      │            │
+    #1 grad_a   │#3 grad_b   │            │
+     0.00       │ 0.00       │            │
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.run grad_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                        #12 *._l
@@ -320,7 +320,7 @@ let%expect_test "Simple gradients hosted" =
      values will change, compared to the above. The update is in the opposite direction of the
      gradient. *)
   Train.run sgd_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                        #12 *._l
@@ -344,7 +344,7 @@ let%expect_test "Simple gradients hosted" =
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
   Train.run grad_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 l;
   [%expect
     {|
                        #12 *._l
@@ -381,7 +381,7 @@ let%expect_test "Simple gradients virtual" =
   let%op learning_rate = 0.1 in
   let sgd = Train.sgd_update ~learning_rate l in
   (* Check out the initial state without forcing memory modes by compilation. *)
-  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
+  Tensor.print_tree ~force:false ~with_grad:true ~depth:9 l;
   [%expect
     {|
                                                        #12 *._l Host&dev/412
@@ -404,32 +404,30 @@ let%expect_test "Simple gradients virtual" =
   let ctx = Train.init_params (module Backend) ~ctx IDX.empty l in
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
-  Tensor.print_tree ~spy:true ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
-                                                      #12 *._l Host&stream/412410
-                                                      <not-in-yet>
-                                                      #13 grad_*._l Virt/40
-                                                      <not-in-yet>
-                                          #8 +_d Local/1046                                        │#10 f non-emb Host&stream/412410
-                                          <not-in-yet>                                             │<not-in-yet>
-                                          #9 grad_+_d Virt/40                                      │#11 grad_f Host&stream/412410
-                                          <not-in-yet>                                             │<not-in-yet>
-                         #4 *._e Virt/152                          │#6 c non-emb Host&stream/412410│
-                         <not-in-yet>                              │<not-in-yet>                   │
-                         #5 grad_*._e Virt/40                      │#7 grad_c Host&stream/412410   │
-                         <not-in-yet>                              │<not-in-yet>                   │
-    #0 a non-emb Host&stream/412410│#2 b non-emb Host&stream/412410│                               │
-    <not-in-yet>                   │<not-in-yet>                   │                               │
-    #1 grad_a Host&stream/412410   │#3 grad_b Host&stream/412410   │                               │
-    <not-in-yet>                   │<not-in-yet>                   │                               │
+  Train.printf_tree ~with_grad:true ~depth:9 l;
+  [%expect {|
+                   #12 *._l
+                    0.00
+                   #13 grad_*._l Virt/40
+                   <void>
+             #8 +_d Local/1046            │#10 f non-emb
+             <void>                       │ -2.00
+             #9 grad_+_d Virt/40          │#11 grad_f
+             <void>                       │ 0.00
+      #4 *._e Virt/152       │#6 c non-emb│
+      <void>                 │ 1.00e+1    │
+      #5 grad_*._e Virt/40   │#7 grad_c   │
+      <void>                 │ 0.00       │
+    #0 a non-emb│#2 b non-emb│            │
+     2.00       │ -3.00      │            │
+    #1 grad_a   │#3 grad_b   │            │
+     0.00       │ 0.00       │            │
     |}];
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.run grad_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
+  Train.printf_tree ~with_grad:true ~depth:9 l;
+  [%expect {|
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
@@ -453,9 +451,8 @@ let%expect_test "Simple gradients virtual" =
      will change, compared to the above. Since virtual tensors are computed by-need, they will
      always be recomputed using the latest parameter state. *)
   Train.run sgd_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
+  Train.printf_tree ~with_grad:true ~depth:9 l;
+  [%expect {|
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
@@ -476,9 +473,8 @@ let%expect_test "Simple gradients virtual" =
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
   Train.run grad_routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
+  Train.printf_tree ~with_grad:true ~depth:9 l;
+  [%expect {|
                    #12 *._l
                     -1.57e+1
                    #13 grad_*._l Virt/40
@@ -512,7 +508,7 @@ let%expect_test "2D neuron hosted" =
   let ctx = Train.init_params (module Backend) IDX.empty v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 v;
+  Train.printf_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
                   #8 +_v
@@ -538,7 +534,7 @@ let%expect_test "2D neuron virtual" =
   let ctx = Train.init_params (module Backend) IDX.empty v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update in
   Train.run routine;
-  Tensor.print_tree ~with_grad:true ~depth:9 v;
+  Train.printf_tree ~with_grad:true ~depth:9 v;
   [%expect
     {|
               #8 +_v

@@ -35,7 +35,7 @@ let%debug_sexp graph_t () : unit =
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
   Train.run fx_routine;
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
-  Tensor.print_tree ~with_shape:true ~with_grad:true ~depth:9 xkcd;
+  Train.printf_tree ~with_grad:true ~depth:9 xkcd;
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->

@@ -528,43 +528,76 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     used_memory;
   }
 
-(** [forward_and_ctx] is a wrapper around {!init_params} that additionally runs code of [t] and
-    returns the context. If [skip_init] is true (false by default), no initialization is performmed.
-    If [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
+(** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
+    the context. If [skip_init] is true (false by default), no initialization is performmed. If
+    [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
     parameters that are not in [ctx.ctx_arrays] are initialized. *)
-let%track3_sexp forward_and_ctx ?(hosted = true) ?(skip_init = false) ?reinit_all
+let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
     ?(disable_rootness_check = false) (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
        and type optimize_ctx = optimize_ctx
-       and type event = event) ctx ?(bindings = IDX.empty) t =
+       and type event = event) ?(ctx : Backend.context option) ?(bindings = IDX.empty) ~f t =
   (* TODO: this will get nicer with modular explicits. *)
   if hosted then set_hosted t.Tensor.value;
+  let ctx =
+    match ctx with
+    | Some ctx -> ctx
+    | None -> Backend.make_context @@ Backend.new_stream @@ Backend.get_device ~ordinal:0
+  in
   let ctx =
     if skip_init || Set.is_empty t.params then ctx
     else init_params (module Backend) ~ctx ~hosted ?reinit_all bindings t
   in
   let routine =
-    Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ forward ~disable_rootness_check t)
+    Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ f ~disable_rootness_check t)
   in
-  if not disable_rootness_check then Tensor.remove_bprop_root t;
   Task.run routine.schedule;
   routine.context
 
-(** [forward_and_force] is a wrapper around {!forward_and_ctx} that additionally forces the tensor's
-    value and ensures it is transferred back to host as needed, see the setting
-    {!Utils.settings.automatic_host_transfers}. If [skip_init] is true (false by default), no
-    initialization is performmed. The resulting context is ignored.
+(** [forward_once] is a wrapper around {!run_once} that runs the forward code of [t]. *)
+let forward_once ?hosted ?skip_init ?reinit_all ?(disable_rootness_check = false)
+    (type buffer_ptr dev runner event optimize_ctx)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type optimize_ctx = optimize_ctx
+       and type event = event) ?ctx ?bindings t =
+  let ctx =
+    run_once ?hosted ?skip_init ?reinit_all
+      (module Backend)
+      ~f:(fun ~disable_rootness_check t -> forward ~disable_rootness_check t)
+      ~disable_rootness_check ?ctx ?bindings t
+  in
+  (* FIXME: this is going away soon. *)
+  if not disable_rootness_check then Tensor.remove_bprop_root t;
+  ctx
 
-    Note: [Tensor.print ~force:true] also has this effect, so: using [forward_and_force] you don't
-    need to pass [~force:true], and if you need the context and also to print the result, you can
-    combine {!forward_and_ctx} and [Tensor.print ~force:true]. *)
-let forward_and_force ?hosted ?skip_init ?reinit_all ?disable_rootness_check backend ctx ?bindings t
-    =
-  (* FIXME: to properly forget we need to free the incrementally-allocated memory! *)
-  ignore
-  @@ forward_and_ctx ?hosted ?skip_init ?reinit_all ?disable_rootness_check backend ctx ?bindings t;
-  ignore (Lazy.force t.value.array);
-  Tn.do_read t.value
+(** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
+    forward and backprop. *)
+let update_once ?hosted ?skip_init ?reinit_all ?(disable_rootness_check = false)
+    (type buffer_ptr dev runner event optimize_ctx)
+    (module Backend : Backend
+      with type buffer_ptr = buffer_ptr
+       and type dev = dev
+       and type runner = runner
+       and type optimize_ctx = optimize_ctx
+       and type event = event) ?ctx ?bindings t =
+  run_once ?hosted ?skip_init ?reinit_all
+    (module Backend)
+    ~f:(fun ~disable_rootness_check t -> grad_update ~disable_rootness_check t)
+    ~disable_rootness_check ?ctx ?bindings t
+
+(** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
+    [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
+let printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
+    ?(style = `Default) t =
+  Tensor.print ?here ~force:true ~with_grad ~with_code ~with_low_level style t
+
+(** [printf_tree] is a wrapper around {!Tensor.print_tree} that assumes [~force:true], and by
+    default sets [~with_value:true], [~with_grad:true], and [~depth:9]. *)
+let printf_tree ?here ?with_value ?(with_grad = true) ?(depth = 9) t =
+  Tensor.print_tree ?here ~force:true ?with_value ~with_grad ~depth t

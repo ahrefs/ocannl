@@ -14,8 +14,6 @@ let main () =
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
   let module Backend = (val Backends.fresh_backend ()) in
-  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
-  let ctx = Backend.make_context stream in
   let open Operation.At in
   let len = 200 in
   let batch_size = 10 in
@@ -49,7 +47,7 @@ let main () =
   (* TODO: is set_hosted needed? *)
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let ctx = Train.init_params (module Backend) ~ctx bindings scalar_loss in
+  let ctx = Train.init_params (module Backend) bindings scalar_loss in
   let sgd_routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
   in

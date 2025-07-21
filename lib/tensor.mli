@@ -47,7 +47,7 @@ and comparator_witness
 
 val comparator : (t, comparator_witness) Base.Comparator.t
 
-val init_params : ?skip: 'a Map.M(Ir.Tnode).t -> t -> comp
+val init_params : ?skip:'a Map.M(Ir.Tnode).t -> t -> comp
 (** [init_params ?skip t] collects into a single sequence the {!field:forward} code of [t.params],
     and transitively the initializations of the parameters of the parameters. If [skip] is provided,
     it is used to filter out the parameters that are already initialized. *)
@@ -337,7 +337,7 @@ val to_printbox :
   ?embedded_only:bool ->
   ?entries_per_axis:int ->
   ?with_id:bool ->
-  ?spy:bool ->
+  ?force:bool ->
   ?with_shape:bool ->
   ?with_value:bool ->
   with_grad:bool ->
@@ -346,7 +346,7 @@ val to_printbox :
   PrintBox.t
 
 val to_doc :
-  ?force:bool ->
+  force:bool ->
   with_grad:bool ->
   with_code:bool ->
   ?with_low_level:bool ->
@@ -368,10 +368,10 @@ val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style 
 
 val print_tree :
   ?here:Ppx_here_lib.position ->
+  ?force:bool ->
   ?entries_per_axis:int ->
   ?with_backend_info:bool ->
   ?with_id:bool ->
-  ?spy:bool ->
   ?with_shape:bool ->
   ?with_value:bool ->
   ?embedded_only:bool ->
