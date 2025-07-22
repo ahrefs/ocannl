@@ -61,6 +61,7 @@ The unary primitive operations:
 | `neg` | pointwise | `Neg` |
 | `tanh` | pointwise | `Tanh_approx` |
 | `not` | pointwise | `Not` |
+| `uint4x32_to_prec_uniform` | dedicated | `Uint4x32_to_prec_uniform` |
 
 The binary primitive operations:
 
@@ -116,6 +117,7 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
+  | Uint4x32_to_prec_uniform -> failwith "NOT IMPLEMENTED"
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -138,6 +140,7 @@ let interpret_binop op v1 v2 =
   | Cmpne -> if v1 <> v2 then 1. else 0.
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
+  | Threefry4x32 -> ...
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in

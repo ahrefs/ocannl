@@ -296,13 +296,13 @@ type unop =
   | Neg
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
-  | Uint4x32_to_prec_uniform of prec
-      (** Converts the given Uint4x32 to the given precision in a bit-efficient manner. For random
-          bits, the result is uniform over the range of the precision for integer precisions, and
-          over the range \[0.0, 1.0) for floating point precisions. When used in an access pattern,
-          the indices are converted to a byte offset depending on the given precision. NOTE: this
-          operation, unlike any others, impacts projections and shape inference (one input cell
-          corresponds to a few output cells). *)
+  | Uint4x32_to_prec_uniform
+      (** Converts the given Uint4x32 to the precision of the output in a bit-efficient manner. For
+          random bits, the result is uniform over the range of the precision for integer precisions,
+          and over the range \[0.0, 1.0) for floating point precisions. When used in an access
+          pattern, the indices are converted to a byte offset depending on the given precision.
+          NOTE: this operation, unlike any others, impacts projections and shape inference (one
+          input cell corresponds to a few output cells). *)
 [@@deriving sexp, compare, equal]
 
 type ternop =
@@ -382,7 +382,7 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
-  | Uint4x32_to_prec_uniform _ ->
+  | Uint4x32_to_prec_uniform ->
       (* FIXME: NOT IMPLEMENTED YET *)
       failwith "NOT IMPLEMENTED YET: Uint4x32_to_prec_uniform"
 
@@ -534,7 +534,7 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
   | Not -> "not"
-  | Uint4x32_to_prec_uniform target_prec -> "uint4x32_to_" ^ prec_string target_prec ^ "_uniform"
+  | Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -580,9 +580,9 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
-  | Uint4x32_to_prec_uniform target_prec, _ ->
+  | Uint4x32_to_prec_uniform, _ ->
       (* FIXME: NOT IMPLEMENTED YET *)
-      ("uint4x32_to_" ^ prec_string target_prec ^ "_uniform(", ")")
+      ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

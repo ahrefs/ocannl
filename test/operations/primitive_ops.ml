@@ -734,6 +734,12 @@ let%expect_test "tanh(x)" =
     └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}]
 
+let%expect_test "uint4x32_to_prec_uniform(x)" =
+  let%op f x = uint4x32_to_prec_uniform x in
+  let plot_box = plot_unop ~f () in
+  PrintBox_text.output Stdio.stdout plot_box;
+  [%expect {| |}]
+
 let%expect_test "where(x < 0, sin(x), cos(x))" =
   let%op f x = where (x < !.0.) (sin x) (cos x) in
   let plot_box = plot_unop ~f () in

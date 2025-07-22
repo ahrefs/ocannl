@@ -189,6 +189,8 @@ let unary_ops =
       ("neg", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Neg]));
       ("tanh", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Tanh_approx]));
       ("not", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Not]));
+      ( "uint4x32_to_prec_uniform",
+        fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_uniform]) );
     ]
 
 (** Ternary primitive ops. *)

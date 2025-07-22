@@ -421,7 +421,7 @@ let translate (expr : expression) : result =
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected an assignment operator, one of: %s"
                     "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, \
-                     neg, tanh" ))
+                     neg, tanh, uint4x32_to_prec_uniform" ))
     in
     let binary_op bin_op =
       loc

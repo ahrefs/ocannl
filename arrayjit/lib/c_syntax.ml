@@ -189,6 +189,7 @@ struct
               Cmpne;
               Or;
               And;
+              Threefry4x32;
             ]
           ~f:(fun op ->
             let p, _, _ =
@@ -213,6 +214,7 @@ struct
               Neg;
               Tanh_approx;
               Not;
+              Uint4x32_to_prec_uniform;
             ]
           ~f:(fun op ->
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
@@ -644,10 +646,10 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
-    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
-        let defs, expr_v = pp_float prec v in
+    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
+        let defs, expr_v = pp_float Ops.uint4x32 v in
         let expr =
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
+          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
           ^^ expr_v ^^ string ")"
         in
         (defs, expr)
@@ -718,10 +720,10 @@ module C_syntax (B : C_syntax_config) = struct
         let v1_doc, idcs1 = debug_float prec v1 in
         let v2_doc, idcs2 = debug_float prec v2 in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
-    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
-        let v_doc, idcs = debug_float prec v in
+    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
+        let v_doc, idcs = debug_float Ops.uint4x32 v in
         let expr_doc =
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
+          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
           ^^ v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
         in
         (expr_doc, idcs)

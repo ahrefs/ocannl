@@ -597,7 +597,7 @@ let compile_main ~name ~log_functions ~env { ctx; nodes; get_ident; merge_node; 
         cast_bool num_typ
         @@ RValue.unary_op ctx Logical_negate (Type.get ctx Type.Bool)
              (RValue.comparison ctx Eq v (RValue.zero ctx num_typ))
-    | Unop (Uint4x32_to_prec_uniform _, _c) ->
+    | Unop (Uint4x32_to_prec_uniform, _c) ->
         (* FIXME: GCC backend doesn't support Uint4x32_to_prec_uniform conversion yet *)
         raise @@ Utils.User_error "gccjit_backend: Uint4x32_to_prec_uniform conversion not supported yet"
   and loop_for_loop ~toplevel ~env key ~from_ ~to_ body =

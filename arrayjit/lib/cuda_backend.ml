@@ -479,8 +479,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
-      | Uint4x32_to_prec_uniform target_prec, _ ->
-          let conv_func = match target_prec with
+      | Uint4x32_to_prec_uniform, _ ->
+          let conv_func = match prec with
             | Ops.Single_prec _ -> "uint4x32_to_fp32_uniform"
             | Double_prec _ -> "uint4x32_to_fp64_uniform"
             | Half_prec _ -> "uint4x32_to_fp16_uniform"

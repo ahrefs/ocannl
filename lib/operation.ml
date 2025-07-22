@@ -265,6 +265,16 @@ let not ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   Tensor.unop ~label:("not" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
+let uint4x32_to_prec_uniform ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
+  fun ?grad_spec t1 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.unop
+      ~label:("uint4x32_to_prec_uniform" :: label)
+      ~transpose_op:Pointwise_un ~op_asn ~grad_asn ?grad_spec t1
+
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
@@ -282,6 +292,19 @@ let ne ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 <> v2) in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~label:("<>" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
+let threefry4x32 ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  fun ?grad_spec t1 t2 ->
+    let result =
+      Tensor.binop ~label:("threefry4x32" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+        ?grad_spec t1 t2
+    in
+    (* Set output precision to uint4x32 *)
+    Tn.update_prec result.value Ir.Ops.uint4x32;
+    result
 
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
@@ -375,28 +398,16 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
-(* let random_seed = let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
-   let res = Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
-   ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |]) () in Tn.update_memory_mode res.value
-   Tn.Effectively_constant 24; Tn.update_prec res.value Ir.Ops.uint4x32; ref res *)
-
-let threefry4x32 ?(label = []) ?(grad_spec = Tensor.If_needed) key counter =
-  let op_asn ~t ~key ~counter = Asgns.Accum_binop { initialize_neutral = false; accum = Ops.Arg2; t; binop = Ops.Threefry4x32; x1 = key; x2 = counter; projections = [] } in
-  let grad_asn ~t:_ ~g:_ ~key:_ ~counter:_ ~projections:_ = Asgns.empty_comp in
-  let result = 
-    Tensor.op ~label:("threefry4x32" :: label) ~op_asn ~grad_asn ~grad_spec 
-      (Shape.derive_broadcast_shape_exn key.shape counter.shape)
-      [ key; counter ]
+let random_seed =
+  let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
+  let res =
+    Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
+      ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |])
+      ()
   in
-  (* Set output precision to uint4x32 *)
-  Tn.update_prec result.value Ir.Ops.uint4x32;
-  result
-
-let uint4x32_to_prec_uniform ?(label = []) ?(grad_spec = Tensor.If_needed) ~target_prec x =
-  let op_asn ~t ~x = Asgns.Accum_unop { initialize_neutral = false; accum = Ops.Arg2; t; x; op = Ops.Uint4x32_to_prec_uniform target_prec; projections = [] } in
-  let grad_asn ~t:_ ~g:_ ~x:_ ~projections:_ = Asgns.empty_comp in
-  Tensor.op ~label:("uint4x32_to_prec_uniform" :: label) ~op_asn ~grad_asn ~grad_spec x.shape [ x ]
-
+  Tn.update_memory_mode res.value Tn.Effectively_constant 24;
+  Tn.update_prec res.value Ir.Ops.uint4x32;
+  ref res
 
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
