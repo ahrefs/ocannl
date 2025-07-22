@@ -548,13 +548,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    (* Read and prepend the CUDA builtins file *)
-    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.cu" in
-    (try
-       let builtins_content = Stdio.In_channel.read_all builtins_path in
-       Buffer.add_string b builtins_content;
-       Buffer.add_string b "\n\n"
-     with _ -> ()); (* Silently skip if file not found *)
     if Utils.debug_log_from_routines () then
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     let declarations_doc = Syntax.print_declarations () in

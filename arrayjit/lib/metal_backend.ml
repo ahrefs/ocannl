@@ -627,13 +627,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    (* Read and prepend the Metal builtins file *)
-    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.msl" in
-    (try
-       let builtins_content = Stdio.In_channel.read_all builtins_path in
-       Buffer.add_string b builtins_content;
-       Buffer.add_string b "\n\n"
-     with _ -> ()); (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     (* Add Metal address space qualifiers *)
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
@@ -657,12 +650,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     (* Read and prepend the Metal builtins file *)
-    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.msl" in
-    (try
-       let builtins_content = Stdio.In_channel.read_all builtins_path in
-       Buffer.add_string b builtins_content;
-       Buffer.add_string b "\n\n"
-     with _ -> ()); (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     let funcs_and_docs =
       Array.map2_exn names lowereds

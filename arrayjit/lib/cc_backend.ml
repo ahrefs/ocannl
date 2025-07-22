@@ -133,13 +133,6 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
-  (* Read and prepend the C builtins file *)
-  let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.c" in
-  (try
-     let builtins_content = Stdio.In_channel.read_all builtins_path in
-     Stdio.Out_channel.output_string build_file.oc builtins_content;
-     Stdio.Out_channel.output_string build_file.oc "\n\n"
-   with _ -> ()); (* Silently skip if file not found *)
   let declarations_doc = Syntax.print_declarations () in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
   let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
@@ -164,13 +157,6 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
       @@ common_prefix (Array.to_list @@ Array.concat_map ~f:Option.to_array names))
   in
   let build_file = Utils.open_build_file ~base_name ~extension:".c" in
-  (* Read and prepend the C builtins file *)
-  let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.c" in
-  (try
-     let builtins_content = Stdio.In_channel.read_all builtins_path in
-     Stdio.Out_channel.output_string build_file.oc builtins_content;
-     Stdio.Out_channel.output_string build_file.oc "\n\n"
-   with _ -> ()); (* Silently skip if file not found *)
   let declarations_doc = Syntax.print_declarations () in
   let params_and_docs =
     Array.map2_exn names lowereds ~f:(fun name_opt lowered_opt ->
