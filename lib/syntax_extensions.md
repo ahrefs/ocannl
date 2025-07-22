@@ -82,7 +82,8 @@ The binary primitive operations:
 | `and_` | `&&` | pointwise | `And` | `=&&`, `=:&&` |
 | `mod_` | `%` | pointwise | `Mod` | none |
 | `max` | `@^` | pointwise | `Max` | `=@^`, `=:@^` |
-| `min` | `^^` | pointwise | `Min` | `=^^`, `=:^^` |
+| `min` | `@-` | pointwise | `Min` | `=@-`, `=:@-` |
+| `threefry4x32` | `^^^^` | pointwise | `Threefry4x32` | `=^^^^`, `=:^^^^` |
 
 The ternary primitive operations:
 

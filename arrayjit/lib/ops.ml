@@ -414,8 +414,8 @@ let binop_cd_syntax = function
   | And -> "&&"
   | Mod -> "%"
   | Max -> "@^"
-  | Min -> "^^"
-  | Threefry4x32 -> "threefry4x32"
+  | Min -> "@-"
+  | Threefry4x32 -> "^^^^"
 (* | Shl -> "lsl" *)
 (* | Shr -> "lsr" *)
 
@@ -500,7 +500,8 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Or when initialize_neutral -> "=:||"
   | And when initialize_neutral -> "=:&&"
   | Max when initialize_neutral -> "=:@^"
-  | Min when initialize_neutral -> "=:^^"
+  | Min when initialize_neutral -> "=:@-"
+  | Threefry4x32 when initialize_neutral -> "=:^^^^"
   | Add -> "=+"
   | Sub -> "=-"
   | Mul -> "=*"
@@ -509,10 +510,11 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Relu_gate -> "=?/"
   | Satur01_gate -> "=?^"
   | Max -> "=@^"
-  | Min -> "=^^"
+  | Min -> "=@-"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod | Threefry4x32 (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
+  | Threefry4x32 -> "=^^^^"
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)

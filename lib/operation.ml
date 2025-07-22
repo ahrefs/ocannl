@@ -380,7 +380,7 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
    ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |]) () in Tn.update_memory_mode res.value
    Tn.Effectively_constant 24; Tn.update_prec res.value Ir.Ops.uint4x32; ref res *)
 
-let threefry4x32 ?(label = []) ?(grad_spec = If_needed) key counter =
+let threefry4x32 ?(label = []) ?(grad_spec = Tensor.If_needed) key counter =
   let op_asn ~t ~key ~counter = Asgns.Accum_binop { initialize_neutral = false; accum = Ops.Arg2; t; binop = Ops.Threefry4x32; x1 = key; x2 = counter; projections = [] } in
   let grad_asn ~t:_ ~g:_ ~key:_ ~counter:_ ~projections:_ = Asgns.empty_comp in
   let result = 
@@ -392,7 +392,7 @@ let threefry4x32 ?(label = []) ?(grad_spec = If_needed) key counter =
   Tn.update_prec result.value Ir.Ops.uint4x32;
   result
 
-let uint4x32_to_prec_uniform ?(label = []) ?(grad_spec = If_needed) ~target_prec x =
+let uint4x32_to_prec_uniform ?(label = []) ?(grad_spec = Tensor.If_needed) ~target_prec x =
   let op_asn ~t ~x = Asgns.Accum_unop { initialize_neutral = false; accum = Ops.Arg2; t; x; op = Ops.Uint4x32_to_prec_uniform target_prec; projections = [] } in
   let grad_asn ~t:_ ~g:_ ~x:_ ~projections:_ = Asgns.empty_comp in
   Tensor.op ~label:("uint4x32_to_prec_uniform" :: label) ~op_asn ~grad_asn ~grad_spec x.shape [ x ]
