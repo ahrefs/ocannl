@@ -131,22 +131,6 @@ static inline uint8_t float_to_fp8(float f)
   return (uint8_t)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));
 }
 
-typedef struct
-{
-  uint32_t v[4];
-} uint4x32_t;
-
-/* Threefry4x32 implementation (pure C function) */
-uint4x32_t arrayjit_threefry4x32(uint4x32_t v1, uint4x32_t v2)
-{
-  /* FIXME: NOT IMPLEMENTED YET */
-  uint4x32_t result;
-  result.v[0] = 0;
-  result.v[1] = 0;
-  result.v[2] = 0;
-  result.v[3] = 0;
-  return result;
-}
 
 /* OCaml wrapper functions */
 

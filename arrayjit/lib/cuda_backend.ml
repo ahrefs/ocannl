@@ -282,6 +282,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> "unsigned char"
       | Ops.Uint16_prec _ -> "unsigned short"
       | Ops.Int32_prec _ -> "int"
+      | Ops.Uint4x32_prec _ -> "uint4x32_t"
       | Ops.Half_prec _ -> "__half"
       | Ops.Bfloat16_prec _ -> "__nv_bfloat16" (* CUDA bfloat16 type *)
       | Ops.Fp8_prec _ -> "__nv_fp8_e5m2" (* CUDA FP8 type (E5M2 format) *)
@@ -416,6 +417,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmpeq, _ -> f "=="
       | Or, _ -> f "||"
       | And, _ -> f "&&"
+      | Threefry4x32, _ -> func "arrayjit_threefry4x32"
 
     let unop_syntax prec v =
       let open PPrint in
@@ -478,8 +480,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
       | Uint4x32_to_prec_uniform target_prec, _ ->
-          (* FIXME: NOT IMPLEMENTED YET - placeholder for Uint4x32_to_prec_uniform conversion *)
-          f ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0)") ""
+          let conv_func = match target_prec with
+            | Ops.Single_prec _ -> "uint4x32_to_fp32_uniform"
+            | Double_prec _ -> "uint4x32_to_fp64_uniform"
+            | Half_prec _ -> "uint4x32_to_fp16_uniform"
+            | Bfloat16_prec _ -> "uint4x32_to_bf16_uniform"
+            | Byte_prec _ -> "uint4x32_to_u8_uniform"
+            | Uint16_prec _ -> "uint4x32_to_u32_uniform" (* Should probably be u16, but using u32 for 16-bit unsigned *)
+            | Int32_prec _ -> "uint4x32_to_i32_uniform"
+            | _ -> "/* unsupported conversion from uint4x32 */ 0"
+          in
+          func conv_func
 
     let ternop_syntax prec v =
       let open PPrint in
@@ -537,6 +548,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
+    (* Read and prepend the CUDA builtins file *)
+    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.cu" in
+    (try
+       let builtins_content = Stdio.In_channel.read_all builtins_path in
+       Buffer.add_string b builtins_content;
+       Buffer.add_string b "\n\n"
+     with _ -> ()); (* Silently skip if file not found *)
     if Utils.debug_log_from_routines () then
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     let declarations_doc = Syntax.print_declarations () in
@@ -552,6 +570,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
+    (* Read and prepend the CUDA builtins file *)
+    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.cu" in
+    (try
+       let builtins_content = Stdio.In_channel.read_all builtins_path in
+       Buffer.add_string b builtins_content;
+       Buffer.add_string b "\n\n"
+     with _ -> ()); (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     let params_and_docs =
       Array.map2_exn names lowereds

@@ -1,0 +1,192 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct uint4x32_t {
+    uint4 v;
+};
+
+/* Threefry4x32 constants */
+constant uint32_t THREEFRY_C240 = 0x1BD11BDA;
+
+/* Rotation constants for Threefry4x32 */
+constant uint THREEFRY_ROTATION_0_0 = 13;
+constant uint THREEFRY_ROTATION_0_1 = 15;
+constant uint THREEFRY_ROTATION_0_2 = 26;
+constant uint THREEFRY_ROTATION_0_3 = 6;
+constant uint THREEFRY_ROTATION_1_0 = 17;
+constant uint THREEFRY_ROTATION_1_1 = 29;
+constant uint THREEFRY_ROTATION_1_2 = 16;
+constant uint THREEFRY_ROTATION_1_3 = 24;
+
+/* Metal rotate left using built-in rotate function */
+inline uint32_t rotl32(uint32_t x, uint n) {
+    return rotate(x, n);
+}
+
+/* Threefry4x32 round function using SIMD operations */
+inline void threefry_round(thread uint4 &x, uint r0, uint r1, uint r2, uint r3) {
+    x.x += x.y; x.y = rotl32(x.y, r0); x.y ^= x.x;
+    x.z += x.w; x.w = rotl32(x.w, r1); x.w ^= x.z;
+    
+    uint32_t tmp = x.y;
+    x.y = x.w;
+    x.w = tmp;
+    
+    x.x += x.y; x.y = rotl32(x.y, r2); x.y ^= x.x;
+    x.z += x.w; x.w = rotl32(x.w, r3); x.w ^= x.z;
+    
+    tmp = x.y;
+    x.y = x.w;
+    x.w = tmp;
+}
+
+/* Threefry4x32 implementation - 20 rounds */
+uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+    uint4 x = counter.v;
+    uint4 k = key.v;
+    
+    /* Compute ks[4] */
+    uint32_t ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
+    
+    /* Initial key injection */
+    x += k;
+    
+    /* 20 rounds with key injections */
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Key injection after round 4 */
+    x.x += k.y;
+    x.y += k.z;
+    x.z += k.w;
+    x.w += ks4 + 1;
+    
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Key injection after round 8 */
+    x.x += k.z;
+    x.y += k.w;
+    x.z += ks4;
+    x.w += k.x + 2;
+    
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Key injection after round 12 */
+    x.x += k.w;
+    x.y += ks4;
+    x.z += k.x;
+    x.w += k.y + 3;
+    
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Key injection after round 16 */
+    x.x += ks4;
+    x.y += k.x;
+    x.z += k.y;
+    x.w += k.z + 4;
+    
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Final key injection after round 20 */
+    x += k;
+    x.w += 5;
+    
+    uint4x32_t result;
+    result.v = x;
+    return result;
+}
+
+/* Conversion functions from uint4x32 to various precisions uniformly */
+
+/* Convert to float in [0, 1) */
+inline float uint32_to_float_uniform(uint32_t x) {
+    return (x >> 8) * (1.0f / 16777216.0f);
+}
+
+/* Uint4x32 to float32 uniform */
+float uint4x32_to_fp32_uniform(uint4x32_t x) {
+    return uint32_to_float_uniform(x.v.x);
+}
+
+/* Uint4x32 to float64 uniform - Metal doesn't have native double support */
+float uint4x32_to_fp64_uniform(uint4x32_t x) {
+    /* Fallback to float precision */
+    uint64_t combined = (uint64_t(x.v.y) << 32) | x.v.x;
+    return float(combined) * (1.0f / 18446744073709551616.0f);
+}
+
+/* Uint4x32 to int32 uniform */
+int32_t uint4x32_to_i32_uniform(uint4x32_t x) {
+    return int32_t(x.v.x);
+}
+
+/* Uint4x32 to int64 uniform */
+int64_t uint4x32_to_i64_uniform(uint4x32_t x) {
+    return int64_t((uint64_t(x.v.y) << 32) | x.v.x);
+}
+
+/* Uint4x32 to uint32 uniform */
+uint32_t uint4x32_to_u32_uniform(uint4x32_t x) {
+    return x.v.x;
+}
+
+/* Uint4x32 to uint64 uniform */
+uint64_t uint4x32_to_u64_uniform(uint4x32_t x) {
+    return (uint64_t(x.v.y) << 32) | x.v.x;
+}
+
+/* Uint4x32 to int8 uniform */
+int8_t uint4x32_to_i8_uniform(uint4x32_t x) {
+    return int8_t(x.v.x & 0xFF);
+}
+
+/* Uint4x32 to uint8 uniform */
+uint8_t uint4x32_to_u8_uniform(uint4x32_t x) {
+    return uint8_t(x.v.x & 0xFF);
+}
+
+/* Uint4x32 to bfloat16 uniform */
+uint16_t uint4x32_to_bf16_uniform(uint4x32_t x) {
+    float f = uint32_to_float_uniform(x.v.x);
+    return uint16_t(as_type<uint32_t>(f) >> 16);
+}
+
+/* Uint4x32 to float16 uniform */
+half uint4x32_to_fp16_uniform(uint4x32_t x) {
+    float f = uint32_to_float_uniform(x.v.x);
+    return half(f);
+}

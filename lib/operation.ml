@@ -380,10 +380,30 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
    ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |]) () in Tn.update_memory_mode res.value
    Tn.Effectively_constant 24; Tn.update_prec res.value Ir.Ops.uint4x32; ref res *)
 
+let threefry4x32 ?(label = []) ?(grad_spec = If_needed) key counter =
+  let op_asn ~t ~key ~counter = Asgns.Accum_binop { initialize_neutral = false; accum = Ops.Arg2; t; binop = Ops.Threefry4x32; x1 = key; x2 = counter; projections = [] } in
+  let grad_asn ~t:_ ~g:_ ~key:_ ~counter:_ ~projections:_ = Asgns.empty_comp in
+  let result = 
+    Tensor.op ~label:("threefry4x32" :: label) ~op_asn ~grad_asn ~grad_spec 
+      (Shape.derive_broadcast_shape_exn key.shape counter.shape)
+      [ key; counter ]
+  in
+  (* Set output precision to uint4x32 *)
+  Tn.update_prec result.value Ir.Ops.uint4x32;
+  result
+
+let uint4x32_to_prec_uniform ?(label = []) ?(grad_spec = If_needed) ~target_prec x =
+  let op_asn ~t ~x = Asgns.Accum_unop { initialize_neutral = false; accum = Ops.Arg2; t; x; op = Ops.Uint4x32_to_prec_uniform target_prec; projections = [] } in
+  let grad_asn ~t:_ ~g:_ ~x:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.op ~label:("uint4x32_to_prec_uniform" :: label) ~op_asn ~grad_asn ~grad_spec x.shape [ x ]
+
+
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
   let ( + ) = add ~grad_spec:If_needed
+  let threefry4x32 = threefry4x32 ~grad_spec:If_needed
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:If_needed
   let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
   let relu = relu ~grad_spec:If_needed
   let sat01 = sat01 ~grad_spec:If_needed
@@ -410,6 +430,8 @@ module DO = struct
   let ( < ) = lt ~grad_spec:Prohibit_grad
   let ( = ) = eq ~grad_spec:Prohibit_grad
   let ( <> ) = ne ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 end
 
 module NDO = struct
@@ -428,6 +450,8 @@ module NDO = struct
   let neg = neg ~grad_spec:Prohibit_grad
   let not = not ~grad_spec:Prohibit_grad
   let sqrt = sqrt ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32 ~grad_spec:Prohibit_grad
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
   let recip = recip ~grad_spec:Prohibit_grad
   let recip_sqrt = recip_sqrt ~grad_spec:Prohibit_grad
   let tanh = tanh ~grad_spec:Prohibit_grad
@@ -435,6 +459,8 @@ module NDO = struct
   let ( < ) = lt ~grad_spec:Prohibit_grad
   let ( = ) = eq ~grad_spec:Prohibit_grad
   let ( <> ) = ne ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
@@ -495,6 +521,8 @@ module TDSL = struct
   let wrap = wrap ~grad_spec:If_needed
   let wrap_padded = wrap_padded ~grad_spec:If_needed
   let rebatch = rebatch ~grad_spec:If_needed
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
@@ -527,6 +555,8 @@ module NTDSL = struct
   let wrap = wrap ~grad_spec:Prohibit_grad
   let wrap_padded = wrap_padded ~grad_spec:Prohibit_grad
   let rebatch = rebatch ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in

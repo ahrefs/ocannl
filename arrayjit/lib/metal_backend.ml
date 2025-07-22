@@ -525,9 +525,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
-      | Threefry4x32, _ ->
-          (* FIXME: NOT IMPLEMENTED YET *)
-          func "threefry4x32" (* Metal implementation of Threefry4x32 *)
+      | Threefry4x32, _ -> func "arrayjit_threefry4x32"
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
@@ -558,12 +556,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform target_prec, _ ->
-          (* FIXME: NOT IMPLEMENTED YET - placeholder for Uint4x32_to_prec_uniform conversion *)
-          fun _v ->
-            string
-              ("/* FIXME: uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform */ (0.0"
-              ^ metal_prec_suffix_float target_prec
-              ^ ")")
+          let conv_func = match target_prec with
+            | Ops.Single_prec _ -> "uint4x32_to_fp32_uniform"
+            | Double_prec _ -> "uint4x32_to_fp64_uniform" (* Metal doesn't support double, but function exists *)
+            | Half_prec _ -> "uint4x32_to_fp16_uniform"
+            | Bfloat16_prec _ -> "uint4x32_to_bf16_uniform"
+            | Byte_prec _ -> "uint4x32_to_u8_uniform"
+            | Uint16_prec _ -> "uint4x32_to_u32_uniform" (* Should probably be u16 *)
+            | Int32_prec _ -> "uint4x32_to_i32_uniform"
+            | _ -> "/* unsupported conversion from uint4x32 */ 0"
+          in
+          func_doc conv_func
     (* Logical not *)
 
     let convert_precision ~from ~to_ =
@@ -624,6 +627,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
+    (* Read and prepend the Metal builtins file *)
+    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.msl" in
+    (try
+       let builtins_content = Stdio.In_channel.read_all builtins_path in
+       Buffer.add_string b builtins_content;
+       Buffer.add_string b "\n\n"
+     with _ -> ()); (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     (* Add Metal address space qualifiers *)
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
@@ -646,6 +656,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
+    (* Read and prepend the Metal builtins file *)
+    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.msl" in
+    (try
+       let builtins_content = Stdio.In_channel.read_all builtins_path in
+       Buffer.add_string b builtins_content;
+       Buffer.add_string b "\n\n"
+     with _ -> ()); (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     let funcs_and_docs =
       Array.map2_exn names lowereds

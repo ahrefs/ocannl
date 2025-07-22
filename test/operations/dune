@@ -65,7 +65,7 @@
  (inline_tests
   (deps ocannl_config))
  (libraries base dynlink ocannl)
- (modules hello_world_op zero2hero_1of7 primitive_ops)
+ (modules hello_world_op zero2hero_1of7 primitive_ops test_threefry4x32 threefry4x32_demo)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))
