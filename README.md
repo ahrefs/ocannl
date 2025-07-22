@@ -68,20 +68,22 @@ This is very tentative.
   * DONE: BF16, FP8.
   * DONE: Extended expressivity of projections and the generalized einsum notation to cover strided iteration and convolution.
   * DONE: Parameter initialization on devices.
+  * TODO: New syntax for inline parameter definitions; record-based syntax instead of string-based.
   * TODO: counter-based randomness via threefry.
-  * TODO: Add convnet building blocks and corresponding examples starting with MNIST.
-  * TODO: Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
-* 0.7: Replicate the scaffolding from [llm.c](https://github.com/karpathy/llm.c) for training GPT-2.
-  * Useful building blocks for models in [lib/nn_blocks.ml](lib/nn_blocks.ml).
-  * A language model example.
-  * Port (translate or bind) the Python files from [llm.c](https://github.com/karpathy/llm.c) to implement tokenization, data loading and saving etc.
-  * At the end of 0.6.x, we should have an apples-to-apples benchmark comparing OCANNL to [llm.c](https://github.com/karpathy/llm.c) for both CPU and GPU.
-* 0.8: Optimize performance -- low hanging fruit.
+* 0.6.1:
+  * Add convnet building blocks and corresponding examples starting with MNIST.
+  * Add transformer building blocks.
+  * Integrate with huggingface-tokenizers
+  * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c).
+* 0.6.2:
+  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
+  * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
+* 0.7: Optimize performance -- low hanging fruit.
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
-  * These will require splitting a routine into multiple CUDA kernels.
-* 0.9: Optimize performance: program search.
+  * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
+* 0.8: Optimize performance: program search.
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
@@ -150,4 +152,4 @@ The dependency on `cudajit` and `metal` is optional, so you have to install them
 
 ## Development
 
-NOTE TO POTENTIAL CONTRIBUTORS: while I am starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness. We allow for failing tests on the main branch, although going forward this should be happening less for unit tests. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases.
+NOTE TO POTENTIAL CONTRIBUTORS: while I am slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this should be happening less for unit tests. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases.
