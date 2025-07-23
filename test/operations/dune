@@ -59,7 +59,7 @@
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
    "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
-(executable
+(test
  (name threefry4x32_demo)
  (modules threefry4x32_demo)
  (libraries base ocannl)

@@ -90,14 +90,6 @@ type session_state = {
 let session_state =
   { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
-let%track5_sexp unsafe_reinitialize () =
-  session_state.next_id <- 0;
-  session_state.forward_roots <- Map.empty (module Int);
-  session_state.backprop_roots <- Map.empty (module Int);
-  Tn.Registry.clear Tn.registry;
-  Ir.Rand.Random_for_tests.rand := (1l : Int32.t);
-  Shape.unsafe_reinitialize ()
-
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let is_bprop_root t = Map.mem session_state.backprop_roots t.id
@@ -518,6 +510,32 @@ found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_n
   remove_bprop_root t;
   (diff.zero_grads, diff.backprop)
 
+let random_seed = ref None
+
+let set_random_seed ?seed () =
+  let seed =
+    Option.value ~default:42 @@ Option.first_some seed Utils.settings.fixed_state_for_init
+  in
+  let res = number ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int.to_float seed) in
+  Tn.update_prec res.value Ir.Ops.uint4x32;
+  random_seed := Some res
+
+let rec get_random_seed () =
+  match !random_seed with
+  | Some res -> res
+  | None ->
+      set_random_seed ();
+      get_random_seed ()
+
+let%track5_sexp unsafe_reinitialize () =
+  session_state.next_id <- 0;
+  session_state.forward_roots <- Map.empty (module Int);
+  session_state.backprop_roots <- Map.empty (module Int);
+  random_seed := None;
+  Tn.Registry.clear Tn.registry;
+  Ir.Rand.Random_for_tests.rand := (1l : Int32.t);
+  Shape.unsafe_reinitialize ()
+
 let header t =
   let v_dims_s = Tn.dims_to_string t.value in
   let g_dims_s =
@@ -673,8 +691,7 @@ let log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
-    (style : array_print_style) t =
+let to_doc ~force ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix_str =

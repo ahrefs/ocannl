@@ -400,14 +400,6 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
-let random_seed =
-  let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
-  let res =
-    Tensor.number ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int.to_float seed)
-  in
-  Tn.update_prec res.value Ir.Ops.uint4x32;
-  ref res
-
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed

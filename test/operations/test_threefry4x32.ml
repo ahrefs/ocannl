@@ -8,7 +8,7 @@ module O = TDSL.O
 let%expect_test "threefry4x32 basic test" =
   let module Backend = (val Backends.fresh_backend ()) in
   (* Use the random seed as the key *)
-  let key = !Ocannl.Operation.random_seed in
+  let key = Ocannl.Tensor.get_random_seed () in
 
   (* Create a counter tensor *)
   let counter = TDSL.range 10 in
@@ -38,17 +38,20 @@ let%expect_test "threefry4x32 basic test" =
   [%expect
     {|
     First 5 uniform random values:
-      [0]: 0.123456
-      [1]: 0.789012
-      [2]: 0.345678
-      [3]: 0.901234
-      [4]: 0.567890
+      [0]: 0.237546
+      [1]: 0.820663
+      [2]: 0.062128
+      [3]: 0.174579
+      [4]: 0.706292
     All values in [0, 1) range: true
-  |}]
+    |}]
 
 let%expect_test "uint4x32_to_prec_uniform different precisions" =
   let module Backend = (val Backends.fresh_backend ()) in
-  let key = !Ocannl.Operation.random_seed in
+  (* TODO(#330): This is an opportunity to test that optimization context checking complains about
+     the random seed being missing if it is not set here. *)
+  Ocannl.Tensor.set_random_seed ();
+  let key = Ocannl.Tensor.get_random_seed () in
   let counter = TDSL.range 5 in
   let random_bits = O.threefry4x32 key counter in
 
@@ -59,7 +62,10 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
     Ocannl.Train.set_hosted uniform.value;
     ignore (Ocannl.Train.forward_once (module Backend) uniform);
     let result = Ir.Tnode.get_values uniform.value in
-    Stdio.printf "%s precision - first value: %f\n" prec_name result.(0)
+    Stdio.printf "%s precision - first value: %f, second value: %f\n" prec_name result.(0)
+      result.(1);
+    Stdio.printf "All values in [0, 1) range: %b\n"
+      (Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)))
   in
 
   test_precision Ir.Ops.single "Single";
@@ -68,7 +74,10 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
 
   [%expect
     {|
-    Single precision - first value: 0.123456
-    Double precision - first value: 0.123456789012
-    Half precision - first value: 0.123047
-  |}]
+    Single precision - first value: 0.237546, second value: 0.820663
+    All values in [0, 1) range: true
+    Double precision - first value: 0.237546, second value: 0.820663
+    All values in [0, 1) range: true
+    Half precision - first value: 0.237546, second value: 0.820663
+    All values in [0, 1) range: true
+    |}]
