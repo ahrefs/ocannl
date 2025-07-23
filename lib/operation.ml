@@ -298,6 +298,8 @@ let threefry4x32 ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun ?grad_spec t1 t2 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
     let result =
       Tensor.binop ~label:("threefry4x32" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
         ?grad_spec t1 t2
