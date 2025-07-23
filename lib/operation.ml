@@ -494,11 +494,11 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
     ()
 
 (** The output dimensions are taken from the provided ndarray, assuming precisely the first axis is
-    a batch axis, assumes no input axes and the batch dimensions are inferred. Assumes the data has
-    no padding, and data is copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
+    a batch axis, assumes no input axes and the batch dimensions are inferred. Empty output
+    dimensions are allowed and represent scalars. Assumes the data has no padding, and data is
+    copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
-  if List.is_empty output_dims then invalid_arg "rebatch: ndarray has just one axis";
   Tensor.term ~label:[ l ] ~input_dims:[] ~output_dims ~init_data:(Reshape ndarray) ()
 
 module TDSL = struct

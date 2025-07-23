@@ -881,7 +881,7 @@ let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
                 (* Cannot deduce no_further_axes, return unchanged *)
                 ([ Rows_constr { r = rows; constr } ], env))
       | Exact [ single_dim ] -> (
-          (* Shapes must have non-empty output rows. *)
+          (* Handle exact single dimension constraint, preferring non-empty output rows. *)
           match List.rev rows with
           | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
               apply_rows_constraint ~stage (List.rev more_rows) constr env

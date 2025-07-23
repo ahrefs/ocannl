@@ -51,7 +51,7 @@ module No_device_buffer_and_copying () :
   let%track7_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
       buffer_ptr =
     let size_in_bytes =
-      (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
+      (Array.fold dims ~init:1 ~f:( * )) * Ops.prec_in_bytes prec
     in
     alloc_impl ~size_in_bytes
 

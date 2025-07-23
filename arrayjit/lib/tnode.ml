@@ -98,7 +98,7 @@ let compare a1 a2 = compare_int a1.id a2.id
 
 let num_elems tn =
   let dims = Lazy.force tn.dims in
-  if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
+  Array.fold dims ~init:1 ~f:( * )
 
 let dims_without_padding tn =
   match Lazy.force tn.padding with
@@ -628,7 +628,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
              let total_elems = Array.reduce_exn target_dims ~f:( * ) in
              let source_total =
                let source_dims = Bigarray.Genarray.dims arr in
-               if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
+               Array.fold source_dims ~init:1 ~f:( * )
              in
              if total_elems <> source_total then
                raise
@@ -651,10 +651,10 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
            in
            (* Check total elements match, allowing shape differences *)
            let source_total =
-             if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
+             Array.fold source_dims ~init:1 ~f:( * )
            in
            let data_total =
-             if Array.is_empty data_dims then 0 else Array.reduce_exn data_dims ~f:( * )
+             Array.fold data_dims ~init:1 ~f:( * )
            in
            if source_total <> data_total then
              invalid_arg

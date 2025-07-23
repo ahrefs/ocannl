@@ -282,9 +282,8 @@ let fold_as_float ?padding ~init ~f arr =
   | Double_nd arr -> fold_bigarray ?padding ~init ~f arr
 
 let size_in_bytes v =
-  (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative
-     to report the cases differently. *)
-  let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
+  (* Use Bigarray's natural behavior: empty dimensions have the same size as 1-element arrays *)
+  let f arr = A.size_in_bytes arr in
   apply { f } v
 
 let get_as_float ?padding arr idx =
@@ -432,7 +431,7 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
     =
   (* dims already includes padding if padding is specified *)
   let size_in_bytes : int =
-    (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
+    (Array.fold dims ~init:1 ~f:( * )) * Ops.prec_in_bytes prec
   in
   let%track7_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
