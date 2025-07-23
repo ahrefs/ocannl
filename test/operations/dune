@@ -59,13 +59,20 @@
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
    "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
 
+(executable
+ (name threefry4x32_demo)
+ (modules threefry4x32_demo)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
  (libraries base dynlink ocannl)
- (modules hello_world_op zero2hero_1of7 primitive_ops test_threefry4x32 threefry4x32_demo)
+ (modules hello_world_op zero2hero_1of7 primitive_ops test_threefry4x32)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))

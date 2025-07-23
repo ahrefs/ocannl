@@ -2007,6 +2007,9 @@ let%track5_sexp close_row_terminal ~(stage : stage) (env : environment)
           let keep_terminal = if is_stage6_up stage then [] else [ Terminal_row r1 ] in
           ineqs @ term_dims () @ keep_terminal
       | Some (Solved_row _) -> assert false
+      | Some (Bounds_row { lub = Some _; constr = Total_elems { numerator = Num_elems 1; _ }; _ })
+        when is_stage3_up stage ->
+          term_dims ()
       | Some (Bounds_row { lub = Some lub; _ }) when is_stage3_up stage ->
           Row_eq { r1; r2 = lub } :: term_dims ()
       | _ when is_stage6_up stage -> []

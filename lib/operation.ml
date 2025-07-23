@@ -403,11 +403,8 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
 let random_seed =
   let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
   let res =
-    Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
-      ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |])
-      ()
+    Tensor.number ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int.to_float seed)
   in
-  Tn.update_memory_mode res.value Tn.Effectively_constant 24;
   Tn.update_prec res.value Ir.Ops.uint4x32;
   ref res
 
