@@ -110,7 +110,7 @@ __device__ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) 
 /* Conversion functions from uint4x32 to various precisions uniformly */
 
 /* Convert to float in [0, 1) using CUDA intrinsics */
-__device__ __forceinline__ float uint32_to_float_uniform(uint32_t x) {
+__device__ __forceinline__ float uint32_to_single_uniform(uint32_t x) {
     /* Use __uint2float_rn for correct rounding */
     return __uint2float_rn(x >> 8) * (1.0f / 16777216.0f);
 }
@@ -121,12 +121,12 @@ __device__ __forceinline__ double uint32_to_double_uniform(uint32_t x) {
 }
 
 /* Uint4x32 to float32 uniform */
-__device__ float uint4x32_to_fp32_uniform(uint4x32_t x) {
-    return uint32_to_float_uniform(x.v[0]);
+__device__ float uint4x32_to_single_uniform(uint4x32_t x) {
+    return uint32_to_single_uniform(x.v[0]);
 }
 
 /* Uint4x32 to float64 uniform */
-__device__ double uint4x32_to_fp64_uniform(uint4x32_t x) {
+__device__ double uint4x32_to_double_uniform(uint4x32_t x) {
     uint64_t combined = __double_as_longlong(__hiloint2double(x.v[1], x.v[0]));
     return __longlong_as_double(combined) * (1.0 / 18446744073709551616.0);
 }
@@ -163,12 +163,12 @@ __device__ uint8_t uint4x32_to_u8_uniform(uint4x32_t x) {
 
 /* Uint4x32 to bfloat16 uniform */
 __device__ uint16_t uint4x32_to_bf16_uniform(uint4x32_t x) {
-    float f = uint32_to_float_uniform(x.v[0]);
+    float f = uint32_to_single_uniform(x.v[0]);
     return (uint16_t)(__float_as_uint(f) >> 16);
 }
 
 /* Uint4x32 to float16 uniform using CUDA half intrinsics */
 __device__ __half uint4x32_to_fp16_uniform(uint4x32_t x) {
-    float f = uint32_to_float_uniform(x.v[0]);
+    float f = uint32_to_single_uniform(x.v[0]);
     return __float2half(f);
 }

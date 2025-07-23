@@ -557,8 +557,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform, _ ->
           let conv_func = match prec with
-            | Ops.Single_prec _ -> "uint4x32_to_fp32_uniform"
-            | Double_prec _ -> "uint4x32_to_fp64_uniform" (* Metal doesn't support double, but function exists *)
+            | Ops.Single_prec _ -> "uint4x32_to_single_uniform"
+            | Double_prec _ -> "uint4x32_to_double_uniform" (* Metal doesn't support double, but function exists *)
             | Half_prec _ -> "uint4x32_to_fp16_uniform"
             | Bfloat16_prec _ -> "uint4x32_to_bf16_uniform"
             | Byte_prec _ -> "uint4x32_to_u8_uniform"

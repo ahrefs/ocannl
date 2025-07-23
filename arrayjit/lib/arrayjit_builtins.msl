@@ -133,17 +133,17 @@ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
 /* Conversion functions from uint4x32 to various precisions uniformly */
 
 /* Convert to float in [0, 1) */
-inline float uint32_to_float_uniform(uint32_t x) {
+inline float uint32_to_single_uniform(uint32_t x) {
     return (x >> 8) * (1.0f / 16777216.0f);
 }
 
 /* Uint4x32 to float32 uniform */
-float uint4x32_to_fp32_uniform(uint4x32_t x) {
-    return uint32_to_float_uniform(x.v.x);
+float uint4x32_to_single_uniform(uint4x32_t x) {
+    return uint32_to_single_uniform(x.v.x);
 }
 
 /* Uint4x32 to float64 uniform - Metal doesn't have native double support */
-float uint4x32_to_fp64_uniform(uint4x32_t x) {
+float uint4x32_to_double_uniform(uint4x32_t x) {
     /* Fallback to float precision */
     uint64_t combined = (uint64_t(x.v.y) << 32) | x.v.x;
     return float(combined) * (1.0f / 18446744073709551616.0f);
@@ -181,12 +181,12 @@ uint8_t uint4x32_to_u8_uniform(uint4x32_t x) {
 
 /* Uint4x32 to bfloat16 uniform */
 uint16_t uint4x32_to_bf16_uniform(uint4x32_t x) {
-    float f = uint32_to_float_uniform(x.v.x);
+    float f = uint32_to_single_uniform(x.v.x);
     return uint16_t(as_type<uint32_t>(f) >> 16);
 }
 
 /* Uint4x32 to float16 uniform */
 half uint4x32_to_fp16_uniform(uint4x32_t x) {
-    float f = uint32_to_float_uniform(x.v.x);
+    float f = uint32_to_single_uniform(x.v.x);
     return half(f);
 }

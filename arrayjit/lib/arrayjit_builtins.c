@@ -140,7 +140,7 @@ extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
 /* Conversion functions from uint4x32 to various precisions uniformly */
 
 /* Convert to float in [0, 1) */
-extern float uint32_to_float_uniform(uint32_t x) {
+extern float uint32_to_single_uniform(uint32_t x) {
     /* Use upper 24 bits for float mantissa (23 bits + implicit 1) */
     return (x >> 8) * (1.0f / 16777216.0f);
 }
@@ -152,7 +152,7 @@ extern double uint32_to_double_uniform(uint32_t x) {
 
 /* Uint4x32 to float32 uniform - uses first 32 bits */
 extern float uint4x32_to_single_uniform(uint4x32_t x) {
-    return uint32_to_float_uniform(x.v[0]);
+    return uint32_to_single_uniform(x.v[0]);
 }
 
 /* Uint4x32 to float64 uniform - uses first 64 bits */
@@ -194,7 +194,7 @@ extern uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
 /* Uint4x32 to bfloat16 uniform - uses first 16 bits */
 extern uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     /* Convert to float first, then to bfloat16 */
-    float f = uint32_to_float_uniform(x.v[0]);
+    float f = uint32_to_single_uniform(x.v[0]);
     uint32_t bits;
     memcpy(&bits, &f, sizeof(float));
     return (uint16_t)(bits >> 16);
@@ -291,7 +291,7 @@ extern uint4x32_t fp8_to_uint4x32(uint8_t x) {
 /* Pure C conversion functions for use in C backends */
 
 /* BFloat16 to Float conversion (C function) */
-extern float bfloat16_to_float(uint16_t bf16)
+extern float bfloat16_to_single(uint16_t bf16)
 {
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
@@ -300,7 +300,7 @@ extern float bfloat16_to_float(uint16_t bf16)
 }
 
 /* Float to BFloat16 conversion (C function) */
-extern uint16_t float_to_bfloat16(float f)
+extern uint16_t single_to_bfloat16(float f)
 {
   uint32_t f32 = *((uint32_t *)&f);
 
@@ -311,7 +311,7 @@ extern uint16_t float_to_bfloat16(float f)
 
 /* FP8 E5M2 format to Float conversion (C function)
    Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
-extern float fp8_to_float(uint8_t fp8)
+extern float fp8_to_single(uint8_t fp8)
 {
   /* Handle zero */
   if (fp8 == 0)
@@ -354,7 +354,7 @@ extern float fp8_to_float(uint8_t fp8)
 }
 
 /* Float to FP8 E5M2 conversion (C function) */
-extern uint8_t float_to_fp8(float f)
+extern uint8_t single_to_fp8(float f)
 {
   /* Handle zero */
   if (f == 0.0f)
@@ -623,38 +623,38 @@ CAMLprim value arrayjit_fp8_to_uint4x32_ocaml(value v_x)
 }
 
 /* BFloat16 to Float conversion (OCaml wrapper) */
-CAMLprim value arrayjit_bfloat16_to_float(value v_bf16)
+CAMLprim value arrayjit_bfloat16_to_single(value v_bf16)
 {
   CAMLparam1(v_bf16);
   uint16_t bf16 = (uint16_t)Int_val(v_bf16);
-  float result = bfloat16_to_float(bf16);
+  float result = bfloat16_to_single(bf16);
   CAMLreturn(caml_copy_double((double)result));
 }
 
 /* Float to BFloat16 conversion (OCaml wrapper) */
-CAMLprim value arrayjit_float_to_bfloat16(value v_float)
+CAMLprim value arrayjit_single_to_bfloat16(value v_float)
 {
   CAMLparam1(v_float);
   float f = (float)Double_val(v_float);
-  uint16_t bf16 = float_to_bfloat16(f);
+  uint16_t bf16 = single_to_bfloat16(f);
   CAMLreturn(Val_int(bf16));
 }
 
 /* FP8 E5M2 format to Float conversion (OCaml wrapper) */
-CAMLprim value arrayjit_fp8_to_float(value v_fp8)
+CAMLprim value arrayjit_fp8_to_single(value v_fp8)
 {
   CAMLparam1(v_fp8);
   uint8_t fp8 = (uint8_t)Int_val(v_fp8);
-  float result = fp8_to_float(fp8);
+  float result = fp8_to_single(fp8);
   CAMLreturn(caml_copy_double((double)result));
 }
 
 /* Float to FP8 E5M2 conversion (OCaml wrapper) */
-CAMLprim value arrayjit_float_to_fp8(value v_float)
+CAMLprim value arrayjit_single_to_fp8(value v_float)
 {
   CAMLparam1(v_float);
   float f = (float)Double_val(v_float);
-  uint8_t fp8 = float_to_fp8(f);
+  uint8_t fp8 = single_to_fp8(f);
   CAMLreturn(Val_int(fp8));
 }
 

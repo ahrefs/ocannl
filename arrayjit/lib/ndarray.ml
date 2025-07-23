@@ -140,8 +140,8 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
       | Ops.Uint4x32 -> A.fill arr Stdlib.Complex.{ re = pad_value; im = 0.0 }
       | Ops.Half -> A.fill arr pad_value
-      | Ops.Bfloat16 -> A.fill arr (Ops.float_to_bfloat16 pad_value)
-      | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ Ops.float_to_fp8 pad_value)
+      | Ops.Bfloat16 -> A.fill arr (Ops.single_to_bfloat16 pad_value)
+      | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ Ops.single_to_fp8 pad_value)
       | Ops.Single -> A.fill arr pad_value
       | Ops.Double -> A.fill arr pad_value));
   arr
@@ -216,8 +216,8 @@ let set_from_float ?padding arr idx v =
   | Int32_nd arr -> A.set arr adjusted_idx @@ Int32.of_float v
   | Uint4x32_nd arr -> A.set arr adjusted_idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.set arr adjusted_idx v
-  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.float_to_bfloat16 v
-  | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Ops.float_to_fp8 v
+  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.single_to_bfloat16 v
+  | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Ops.single_to_fp8 v
   | Single_nd arr -> A.set arr adjusted_idx v
   | Double_nd arr -> A.set arr adjusted_idx v
 
@@ -228,8 +228,8 @@ let fill_from_float arr v =
   | Int32_nd arr -> A.fill arr @@ Int32.of_float v
   | Uint4x32_nd arr -> A.fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.fill arr v
-  | Bfloat16_nd arr -> A.fill arr @@ Ops.float_to_bfloat16 v
-  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ Ops.float_to_fp8 v
+  | Bfloat16_nd arr -> A.fill arr @@ Ops.single_to_bfloat16 v
+  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ Ops.single_to_fp8 v
   | Single_nd arr -> A.fill arr v
   | Double_nd arr -> A.fill arr v
 
@@ -265,10 +265,10 @@ let fold_as_float ?padding ~init ~f arr =
       fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
   | Half_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Bfloat16_nd arr ->
-      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Ops.bfloat16_to_float v) arr
+      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Ops.bfloat16_to_single v) arr
   | Fp8_nd arr ->
       fold_bigarray ?padding ~init
-        ~f:(fun accu idx c -> f accu idx @@ Ops.fp8_to_float @@ Char.to_int c)
+        ~f:(fun accu idx c -> f accu idx @@ Ops.fp8_to_single @@ Char.to_int c)
         arr
   | Single_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Double_nd arr -> fold_bigarray ?padding ~init ~f arr
@@ -286,8 +286,8 @@ let get_as_float ?padding arr idx =
   | Int32_nd arr -> Int32.to_float @@ A.get arr adjusted_idx
   | Uint4x32_nd arr -> (A.get arr adjusted_idx).Stdlib.Complex.re
   | Half_nd arr -> A.get arr adjusted_idx
-  | Bfloat16_nd arr -> Ops.bfloat16_to_float @@ A.get arr adjusted_idx
-  | Fp8_nd arr -> Ops.fp8_to_float @@ Char.to_int @@ A.get arr adjusted_idx
+  | Bfloat16_nd arr -> Ops.bfloat16_to_single @@ A.get arr adjusted_idx
+  | Fp8_nd arr -> Ops.fp8_to_single @@ Char.to_int @@ A.get arr adjusted_idx
   | Single_nd arr -> A.get arr adjusted_idx
   | Double_nd arr -> A.get arr adjusted_idx
 
