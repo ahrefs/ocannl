@@ -159,16 +159,19 @@ let%diagn2_sexp to_low_level code =
   let open Indexing in
   let get buffer idcs =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
-    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
-      [%log
-        "get",
-        "a=",
-        (tn : Tn.t),
-        ":",
-        Tn.label tn,
-        (idcs : Indexing.axis_index array),
-        (Lazy.force tn.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+    let idcs = (match (idcs, Lazy.force tn.Tn.dims) with
+    | [||], [|1|] -> [| Fixed_idx 0 |]
+    | [| Fixed_idx 0 |], [||] -> idcs
+    | idcs, dims when Array.length idcs = Array.length dims -> idcs
+    | _ ->
+        [%log
+          "get a=",
+          (tn : Tn.t),
+          ":",
+          Tn.label tn,
+          (idcs : Indexing.axis_index array),
+          (Lazy.force tn.dims : int array)];
+        assert false) in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn ->

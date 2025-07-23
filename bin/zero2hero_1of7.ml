@@ -82,7 +82,7 @@ let _suspended () =
   PrintBox_text.output Stdio.stdout plot_box;
   Stdio.print_endline ""
 
-let  () =
+let _suspended () =
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -159,3 +159,45 @@ let _suspended () =
       gradients and the values and gradients of other nodes will change thanks to the forward and
       backward passes.|};
   Train.printf_tree ~with_grad:true ~depth:9 l
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  let module Backend = (val Backends.fresh_backend ()) in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.make_context stream in
+  let open Operation.At in
+  CDSL.virtualize_settings.enable_device_only <- false;
+  let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
+  let%op f5 = f 5 in
+  Train.every_non_literal_on_host f5;
+  ignore (Train.forward_once (module Backend) f5);
+  Train.printf_tree ~with_grad:false ~depth:9 f5;
+  let size = 100 in
+  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  (* Yay, the whole shape gets inferred! *)
+  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  let%op x = x_flat @| step_sym in
+  let%op fx = f x in
+  Train.set_hosted x.value;
+  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
+  let update = Train.grad_update fx in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
+  let step_ref = IDX.find_exn fx_routine.bindings step_sym in
+  let ys, dys =
+    Array.unzip
+    @@ Array.mapi xs ~f:(fun i _ ->
+           step_ref := i;
+           Train.run fx_routine;
+           (fx.@[0], x.@%[0]))
+  in
+  (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
+  let plot_box =
+    PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
+      [
+        Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" };
+        Scatterplot { points = Array.zip_exn xs dys; content = PrintBox.line "*" };
+        Line_plot { points = Array.create ~len:20 0.; content = PrintBox.line "-" };
+      ]
+  in
+  PrintBox_text.output Stdio.stdout plot_box

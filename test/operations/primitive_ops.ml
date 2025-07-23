@@ -259,8 +259,7 @@ let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.44e+1│*                                                                                                   │
     │        │                                                                                                    │

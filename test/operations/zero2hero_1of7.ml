@@ -201,8 +201,7 @@ let%expect_test "Graph drawing fetch" =
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+2 │#                                                                                                   │
     │         │#                                                                                                   │
