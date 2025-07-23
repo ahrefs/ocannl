@@ -452,13 +452,14 @@ module C_syntax (B : C_syntax_config) = struct
 
   let pp_array_offset (idcs, dims) =
     let open PPrint in
-    assert (not @@ Array.is_empty idcs);
-    let doc = ref (pp_axis_index idcs.(0)) in
-    for i = 1 to Array.length idcs - 1 do
-      doc :=
-        parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
-    done;
-    !doc
+    if Array.is_empty idcs then string "0"
+    else
+      let doc = ref (pp_axis_index idcs.(0)) in
+      for i = 1 to Array.length idcs - 1 do
+        doc :=
+          parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
+      done;
+      !doc
 
   let doc_to_string doc =
     let buf = Buffer.create 128 in
@@ -649,8 +650,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
         let defs, expr_v = pp_float Ops.uint4x32 v in
         let expr =
-          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
-          ^^ expr_v ^^ string ")"
+          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(") ^^ expr_v ^^ string ")"
         in
         (defs, expr)
     | Unop (op, v) ->

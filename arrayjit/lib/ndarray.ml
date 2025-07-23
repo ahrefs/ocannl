@@ -323,7 +323,7 @@ let retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr =
 
 let retrieve_1d_points ?from_axis ?padding ~xdim arr =
   let dims = dims arr in
-  if Array.is_empty dims then [||]
+  if Array.is_empty dims then [| get_as_float ?padding arr [||] |]
   else
     let n_axes = Array.length dims in
     let from_axis = Option.value from_axis ~default:(n_axes - 1) in
@@ -349,7 +349,7 @@ let retrieve_1d_points ?from_axis ?padding ~xdim arr =
 
 let retrieve_flat_values ?padding arr =
   let dims = dims arr in
-  if Array.is_empty dims then [||]
+  if Array.is_empty dims then [| get_as_float ?padding arr [||] |]
   else
     let n_axes = Array.length dims in
     let result = ref [] in
@@ -370,7 +370,8 @@ let retrieve_flat_values ?padding arr =
 
 let set_flat_values ?padding arr values =
   let dims = dims arr in
-  if not (Array.is_empty dims) then
+  if Array.is_empty dims then set_from_float ?padding arr [| 0 |] values.(0)
+  else
     let n_axes = Array.length dims in
     let idx = Array.create ~len:n_axes 0 in
     let values_idx = ref 0 in
@@ -418,9 +419,7 @@ let used_memory = Atomic.make 0
 let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array) ~padding
     =
   (* dims already includes padding if padding is specified *)
-  let size_in_bytes : int =
-    (Array.fold dims ~init:1 ~f:( * )) * Ops.prec_in_bytes prec
-  in
+  let size_in_bytes : int = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
   let%track7_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     [%log3 "Deleting", _debug, ptr_to_string_hum _result]
@@ -528,7 +527,14 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     ^ (if has_inf then " pos. inf." else "")
     ^ if has_neg_inf then " neg. inf." else ""
   in
-  if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
+  if Array.is_empty dims then
+    B.vlist ~bars:false
+      [
+        B.text header;
+        B.line
+          ("scalar "
+          ^ concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr [||]));
+      ]
   else
     let indices = Array.copy indices in
     let entries_per_axis =
