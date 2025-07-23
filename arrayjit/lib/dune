@@ -46,7 +46,6 @@
    ppx_variants_conv
    ppx_minidebug))
  (modules
-  rand
   ops
   ndarray
   indexing

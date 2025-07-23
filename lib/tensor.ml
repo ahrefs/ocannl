@@ -533,7 +533,6 @@ let%track5_sexp unsafe_reinitialize () =
   session_state.backprop_roots <- Map.empty (module Int);
   random_seed := None;
   Tn.Registry.clear Tn.registry;
-  Ir.Rand.Random_for_tests.rand := (1l : Int32.t);
   Shape.unsafe_reinitialize ()
 
 let header t =

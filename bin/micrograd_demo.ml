@@ -6,12 +6,10 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Rand = Ir.Rand.Lib
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
-  Rand.init 0;
   let hid_dim = 16 in
   let len = 300 in
   let batch_size = 20 in

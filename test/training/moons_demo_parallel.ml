@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Rand = Ir.Rand.Lib
 
 let main () =
   (* Micrograd half-moons example, with multi-stream execution simulating multi-device. *)

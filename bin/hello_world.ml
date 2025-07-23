@@ -5,12 +5,10 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
 let hello1 () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   
   
@@ -25,7 +23,6 @@ let hello1 () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo
 
 let hello2 () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   
   
@@ -38,7 +35,6 @@ let hello2 () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y
 
 let hello3 () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   
   
@@ -69,7 +65,6 @@ let hello4 () =
   in
   
   
-  Rand.init 0;
   let ri = TDSL.range 3 in
   let%op ti = ri ++ "i=>i0" in
   (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
@@ -102,7 +97,6 @@ let hello5 () =
   in
   
   
-  Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   ignore (Train.forward_once backend ho);
@@ -120,7 +114,6 @@ let hello6 () =
   in
   
   
-  Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. "hey" in
   ignore (Train.forward_once backend y);

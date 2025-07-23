@@ -5,13 +5,11 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
 let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;

@@ -6,7 +6,6 @@ module NTDSL = Operation.NTDSL
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Task = Ir.Task
-module Rand = Ir.Rand.Lib
 module BT = Ir.Backend_intf
 
 module type Backend = Ir.Backend_intf.Backend
@@ -398,7 +397,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     (module Backend : Backend) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
-  Rand.init seed;
   let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
   let num_streams = Array.length streams in
   let contexts = Array.map streams ~f:(Backend.make_context ?ctx_arrays:None) in

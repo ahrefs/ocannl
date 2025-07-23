@@ -4,7 +4,6 @@ module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -26,7 +25,6 @@ let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   (* "Hey" is inferred to be a scalar. *)
   let%op ya = 2 *. "hey" 7.0 in
   ignore (Train.forward_once backend ya);
@@ -45,7 +43,6 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op yb = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
   ignore (Train.forward_once backend yb);
@@ -80,7 +77,6 @@ let%track2_sexp _Print_constant_tensor (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   ignore (Train.forward_once backend hey);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false @@ hey;
@@ -177,7 +173,6 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let%op yc = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
   ignore (Train.forward_once backend yc);
@@ -197,7 +192,6 @@ let%track2_sexp _Big_matrix (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.param ~value:0.5 "hey" in
   let zero_to_twenty = TDSL.range 20 in
@@ -219,7 +213,6 @@ let%track2_sexp _Very_big_tensor (() : unit) : unit =
   in
   
   
-  Rand.init 0;
   let hey = TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8 ] ~output_dims:[ 9 ] () in
   let%op ye = (hey * (1 + 1)) - 10 in
   ignore (Train.forward_once backend ye);

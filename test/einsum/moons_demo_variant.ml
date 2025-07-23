@@ -5,7 +5,6 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
-module Rand = Ir.Rand.Lib
 module Tn = Ir.Tnode
 
 module type Backend = Ir.Backend_intf.Backend
@@ -13,7 +12,6 @@ module type Backend = Ir.Backend_intf.Backend
 let () =
   (* Very similar to micrograd_demo.ml, but with an einsum shape inference corner case. *)
   Tensor.unsafe_reinitialize ();
-  Rand.init 5;
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   let len = 200 in

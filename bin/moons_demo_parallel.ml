@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
-module Rand = Ir.Rand.Lib
 
 let experiment ~seed ~backend_name ~config () =
   let hid_dim = 16 in

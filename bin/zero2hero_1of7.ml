@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -15,7 +14,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let _suspended () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
@@ -31,7 +29,6 @@ let _suspended () =
   Stdio.printf "\n%!"
 
 let _suspended () =
-  Rand.init 0;
   CDSL.enable_all_debugs ();
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -45,7 +42,6 @@ let _suspended () =
 
 let _suspended () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
-  Rand.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -86,8 +82,7 @@ let _suspended () =
   PrintBox_text.output Stdio.stdout plot_box;
   Stdio.print_endline ""
 
-let _suspended () =
-  Rand.init 0;
+let  () =
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -133,8 +128,7 @@ let _suspended () =
   in
   ()
 
-let () =
-  Rand.init 0;
+let _suspended () =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in

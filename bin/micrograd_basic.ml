@@ -4,13 +4,11 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let%diagn_sexp _suspended () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
-  Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = c + c + 1 in
   (* let%op c = c + 1 + c + ~-a in *)
@@ -27,7 +25,6 @@ let%diagn_sexp _suspended () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true b
 
 let%diagn_sexp () : unit =
-  Rand.init 0;
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
