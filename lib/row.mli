@@ -2,7 +2,7 @@
 
 open Base
 
-type axis_padding = Ir.Ndarray.axis_padding [@@deriving equal, sexp]
+type axis_padding = Ir.Ops.axis_padding [@@deriving equal, sexp]
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 type dim_var [@@deriving equal, hash, compare, sexp]
 type proj_id [@@deriving equal, hash, compare, sexp]

@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-type axis_padding = Ir.Ndarray.axis_padding [@@deriving equal, sexp]
+type axis_padding = Ir.Ops.axis_padding [@@deriving equal, sexp]
 
 module Dim_var = struct
   type t = { id : int; label : string option [@compare.ignore] [@equal.ignore] [@hash.ignore] }
@@ -2387,7 +2387,7 @@ let get_proj_index proj_env =
             (* Left padding smaller than right when split needed *)
             let right_padding = (kernel_size + 1) / 2 in
             let left_padding = kernel_size - right_padding in
-            let operation_padding = Ir.Ndarray.{ left = left_padding; right = right_padding } in
+            let operation_padding = Ir.Ops.{ left = left_padding; right = right_padding } in
 
             (* Check and update padding based on projection ID from output *)
             (let check_and_update_padding proj_id =
@@ -2413,7 +2413,7 @@ let get_proj_index proj_env =
                      when operation_padding.left > existing_pad.left
                           || operation_padding.right > existing_pad.right ->
                        let updated_pad =
-                         Ir.Ndarray.
+                         Ir.Ops.
                            {
                              left = Int.max operation_padding.left existing_pad.left;
                              right = Int.max operation_padding.right existing_pad.right;

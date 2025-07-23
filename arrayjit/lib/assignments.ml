@@ -13,7 +13,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type init_data =
   | Reshape of Ndarray.t
   | Keep_shape_no_padding of Ndarray.t
-  | Padded of { data : Nd.t; padding : Nd.axis_padding array; padded_value : float }
+  | Padded of { data : Nd.t; padding : Ops.axis_padding array; padded_value : float }
 [@@deriving sexp_of, equal]
 
 type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]

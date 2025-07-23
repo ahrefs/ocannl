@@ -72,7 +72,7 @@ type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
-  padding : (Nd.axis_padding array * float) option Lazy.t;
+  padding : (Ops.axis_padding array * float) option Lazy.t;
       (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
           padding value. *)
   size_in_bytes : int Lazy.t;
@@ -646,7 +646,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
            let source_dims = Nd.dims base_ndarray in
            (* Calculate actual data dimensions (target dims minus padding) *)
            let data_dims =
-             Array.map2_exn target_dims padding ~f:(fun dim { Nd.left; right } ->
+             Array.map2_exn target_dims padding ~f:(fun dim { Ops.left; right } ->
                  dim - left - right)
            in
            (* Check total elements match, allowing shape differences *)

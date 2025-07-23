@@ -660,3 +660,97 @@ let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
 
 let ptr_to_string_hum (type elem) (ptr : elem Ctypes.ptr) prec =
   rawptr_to_string_hum (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) prec
+
+(** {2 *** External FFI declarations ***} *)
+
+type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
+
+external bfloat16_to_float : int -> float = "arrayjit_bfloat16_to_float"
+(** Original conversion functions *)
+
+external float_to_bfloat16 : float -> int = "arrayjit_float_to_bfloat16"
+external fp8_to_float : int -> float = "arrayjit_fp8_to_float"
+external float_to_fp8 : float -> int = "arrayjit_float_to_fp8"
+
+external copy_with_padding_c :
+  ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
+  ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
+    axis_padding array ->
+  unit = "arrayjit_copy_with_padding"
+
+external threefry4x32 : int array -> int array -> int array = "arrayjit_threefry4x32_ocaml"
+(** Threefry4x32 PRNG *)
+
+external uint4x32_to_single_uniform : int array -> float
+  = "arrayjit_uint4x32_to_single_uniform_ocaml"
+(** Conversion from uint4x32 to various uniform distributions *)
+
+external uint4x32_to_double_uniform : int array -> float
+  = "arrayjit_uint4x32_to_double_uniform_ocaml"
+
+external uint4x32_to_int32_uniform : int array -> int = "arrayjit_uint4x32_to_int32_uniform_ocaml"
+external uint4x32_to_int64_uniform : int array -> int64 = "arrayjit_uint4x32_to_int64_uniform_ocaml"
+external uint4x32_to_uint32_uniform : int array -> int = "arrayjit_uint4x32_to_uint32_uniform_ocaml"
+
+external uint4x32_to_uint64_uniform : int array -> int64
+  = "arrayjit_uint4x32_to_uint64_uniform_ocaml"
+
+external uint4x32_to_byte_uniform : int array -> int = "arrayjit_uint4x32_to_byte_uniform_ocaml"
+external uint4x32_to_uint16_uniform : int array -> int = "arrayjit_uint4x32_to_uint16_uniform_ocaml"
+
+external uint4x32_to_bfloat16_uniform : int array -> int
+  = "arrayjit_uint4x32_to_bfloat16_uniform_ocaml"
+
+external uint4x32_to_half_uniform : int array -> int = "arrayjit_uint4x32_to_half_uniform_ocaml"
+external uint4x32_to_fp8_uniform : int array -> int = "arrayjit_uint4x32_to_fp8_uniform_ocaml"
+
+external single_to_uint4x32 : float -> int array = "arrayjit_single_to_uint4x32_ocaml"
+(** Conversion to uint4x32 from various types *)
+
+external double_to_uint4x32 : float -> int array = "arrayjit_double_to_uint4x32_ocaml"
+external int32_to_uint4x32 : int -> int array = "arrayjit_int32_to_uint4x32_ocaml"
+external int64_to_uint4x32 : int64 -> int array = "arrayjit_int64_to_uint4x32_ocaml"
+external uint32_to_uint4x32 : int -> int array = "arrayjit_uint32_to_uint4x32_ocaml"
+external uint64_to_uint4x32 : int64 -> int array = "arrayjit_uint64_to_uint4x32_ocaml"
+external byte_to_uint4x32 : int -> int array = "arrayjit_byte_to_uint4x32_ocaml"
+external uint16_to_uint4x32 : int -> int array = "arrayjit_uint16_to_uint4x32_ocaml"
+external bfloat16_to_uint4x32 : int -> int array = "arrayjit_bfloat16_to_uint4x32_ocaml"
+external half_to_uint4x32 : int -> int array = "arrayjit_half_to_uint4x32_ocaml"
+external fp8_to_uint4x32 : int -> int array = "arrayjit_fp8_to_uint4x32_ocaml"
+
+let () =
+  (* Ensure that the functions are linked in *)
+  let _ = bfloat16_to_float 0 in
+  let _ = float_to_bfloat16 0.0 in
+  let _ = fp8_to_float 0 in
+  let _ = float_to_fp8 0.0 in
+  let _ =
+    copy_with_padding_c
+      (Bigarray.Genarray.create Bigarray.Float32 Bigarray.c_layout [| 1; 1 |])
+      (Bigarray.Genarray.create Bigarray.Float32 Bigarray.c_layout [| 1; 1 |])
+      [| { left = 0; right = 0 }; { left = 0; right = 0 } |]
+  in
+  let _ = threefry4x32 [| 0 |] [| 0 |] in
+  let _ = uint4x32_to_single_uniform [| 0 |] in
+  let _ = uint4x32_to_double_uniform [| 0 |] in
+  let _ = uint4x32_to_int32_uniform [| 0 |] in
+  let _ = uint4x32_to_int64_uniform [| 0 |] in
+  let _ = uint4x32_to_uint32_uniform [| 0 |] in
+  let _ = uint4x32_to_uint64_uniform [| 0 |] in
+  let _ = uint4x32_to_byte_uniform [| 0 |] in
+  let _ = uint4x32_to_uint16_uniform [| 0 |] in
+  let _ = uint4x32_to_bfloat16_uniform [| 0 |] in
+  let _ = uint4x32_to_half_uniform [| 0 |] in
+  let _ = uint4x32_to_fp8_uniform [| 0 |] in
+  let _ = single_to_uint4x32 0.0 in
+  let _ = double_to_uint4x32 0.0 in
+  let _ = int32_to_uint4x32 0 in
+  let _ = int64_to_uint4x32 0L in
+  let _ = uint32_to_uint4x32 0 in
+  let _ = uint64_to_uint4x32 0L in
+  let _ = byte_to_uint4x32 0 in
+  let _ = uint16_to_uint4x32 0 in
+  let _ = bfloat16_to_uint4x32 0 in
+  let _ = half_to_uint4x32 0 in
+  let _ = fp8_to_uint4x32 0 in
+  ()

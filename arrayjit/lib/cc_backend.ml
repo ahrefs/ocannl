@@ -12,6 +12,46 @@ open Backend_intf
 
 let name = "cc"
 
+(* Header declarations for arrayjit builtins *)
+let arrayjit_builtins_header = {|
+/* ArrayJIT builtins declarations */
+#include <stdint.h>
+
+typedef struct {
+    uint32_t v[4];
+} uint4x32_t;
+
+/* Threefry4x32 random number generator */
+extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter);
+
+/* Conversion functions from uint4x32 to various precisions uniformly */
+extern float uint4x32_to_single_uniform(uint4x32_t x);
+extern double uint4x32_to_double_uniform(uint4x32_t x);
+extern int32_t uint4x32_to_int32_uniform(uint4x32_t x);
+extern int64_t uint4x32_to_int64_uniform(uint4x32_t x);
+extern uint32_t uint4x32_to_uint32_uniform(uint4x32_t x);
+extern uint64_t uint4x32_to_uint64_uniform(uint4x32_t x);
+extern int8_t uint4x32_to_byte_uniform(uint4x32_t x);
+extern uint16_t uint4x32_to_uint16_uniform(uint4x32_t x);
+extern uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x);
+extern uint16_t uint4x32_to_half_uniform(uint4x32_t x);
+extern uint8_t uint4x32_to_fp8_uniform(uint4x32_t x);
+
+/* Conversion functions from various precisions to uint4x32_t */
+extern uint4x32_t single_to_uint4x32(float x);
+extern uint4x32_t double_to_uint4x32(double x);
+extern uint4x32_t int32_to_uint4x32(int32_t x);
+extern uint4x32_t int64_to_uint4x32(int64_t x);
+extern uint4x32_t uint32_to_uint4x32(uint32_t x);
+extern uint4x32_t uint64_to_uint4x32(uint64_t x);
+extern uint4x32_t byte_to_uint4x32(unsigned char x);
+extern uint4x32_t uint16_to_uint4x32(uint16_t x);
+extern uint4x32_t bfloat16_to_uint4x32(uint16_t x);
+extern uint4x32_t half_to_uint4x32(uint16_t x);
+extern uint4x32_t fp8_to_uint4x32(uint8_t x);
+
+|}
+
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
 
@@ -63,9 +103,18 @@ let%track7_sexp c_compile_and_load ~f_name =
   let libname = base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
+  let kernel_link_flags = 
+    match Sys.os_type with
+    | "Unix" -> 
+        if Stdlib.Sys.command "uname -s | grep -q Darwin" = 0 then
+          "-bundle -undefined dynamic_lookup"
+        else
+          "-shared -fPIC"
+    | "Win32" | "Cygwin" -> "-shared"
+    | _ -> "-shared -fPIC" in
   let cmdline : string =
-    Printf.sprintf "%s %s -O%d -o %s -shared -fPIC >> %s 2>&1" (compiler_command ()) f_name
-      (optimization_level ()) libname log_fname
+    Printf.sprintf "%s %s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_name
+      (optimization_level ()) libname kernel_link_flags log_fname
   in
   let rc : int = Stdlib.Sys.command cmdline in
   (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
@@ -135,7 +184,8 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let declarations_doc = Syntax.print_declarations () in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-  let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
+  let header_doc = PPrint.string arrayjit_builtins_header in
+  let final_doc = PPrint.(header_doc ^^ declarations_doc ^^ proc_doc) in
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
@@ -164,7 +214,8 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
             Syntax.compile_proc ~name idx_params lowered))
   in
   let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
-  let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
+  let header_doc = PPrint.string arrayjit_builtins_header in
+  let final_doc = PPrint.(header_doc ^^ declarations_doc ^^ separate hardline all_proc_docs) in
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
   let result_library = c_compile_and_load ~f_name:build_file.f_name in

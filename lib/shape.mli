@@ -176,7 +176,7 @@ type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp
 val to_dims : t -> int array
 (** Uses the matrix convention of putting the input axes last. *)
 
-val to_padding : t -> (Ir.Ndarray.axis_padding array * float) option
+val to_padding : t -> (Ir.Ops.axis_padding array * float) option
 (** Returns the padding of the shape, if any. Includes the padded value. Uses the matrix convention
     of putting the input axes last. *)
 
