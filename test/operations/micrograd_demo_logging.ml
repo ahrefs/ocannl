@@ -5,14 +5,12 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
-module Rand = Ir.Rand.Lib
 module Tn = Ir.Tnode
 
 module type Backend = Ir.Backend_intf.Backend
 
 let () =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;

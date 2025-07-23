@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -14,9 +13,8 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level 9]
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
-let%debug_sexp graph_t () : unit =
+let graph_t () : unit =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;

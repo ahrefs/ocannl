@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -15,7 +14,6 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
 
 let _suspended () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
@@ -31,7 +29,6 @@ let _suspended () =
   Stdio.printf "\n%!"
 
 let _suspended () =
-  Rand.init 0;
   CDSL.enable_all_debugs ();
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
@@ -45,7 +42,6 @@ let _suspended () =
 
 let _suspended () =
   (* FIXME: why is this toplevel example broken and the next one working? *)
-  Rand.init 0;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let size = 100 in
   let values = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -87,7 +83,6 @@ let _suspended () =
   Stdio.print_endline ""
 
 let _suspended () =
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -133,8 +128,7 @@ let _suspended () =
   in
   ()
 
-let () =
-  Rand.init 0;
+let _suspended () =
   let%op e = "a" [ 2 ] *. "b" [ -3 ] in
   let%op d = e + "c" [ 10 ] in
   let%op l = d *. "f" [ -2 ] in
@@ -165,3 +159,45 @@ let () =
       gradients and the values and gradients of other nodes will change thanks to the forward and
       backward passes.|};
   Train.printf_tree ~with_grad:true ~depth:9 l
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  let module Backend = (val Backends.fresh_backend ()) in
+  let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
+  let ctx = Backend.make_context stream in
+  let open Operation.At in
+  CDSL.virtualize_settings.enable_device_only <- false;
+  let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
+  let%op f5 = f 5 in
+  Train.every_non_literal_on_host f5;
+  ignore (Train.forward_once (module Backend) f5);
+  Train.printf_tree ~with_grad:false ~depth:9 f5;
+  let size = 100 in
+  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
+  (* Yay, the whole shape gets inferred! *)
+  let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
+  let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
+  let%op x = x_flat @| step_sym in
+  let%op fx = f x in
+  Train.set_hosted x.value;
+  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
+  let update = Train.grad_update fx in
+  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
+  let step_ref = IDX.find_exn fx_routine.bindings step_sym in
+  let ys, dys =
+    Array.unzip
+    @@ Array.mapi xs ~f:(fun i _ ->
+           step_ref := i;
+           Train.run fx_routine;
+           (fx.@[0], x.@%[0]))
+  in
+  (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
+  let plot_box =
+    PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
+      [
+        Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" };
+        Scatterplot { points = Array.zip_exn xs dys; content = PrintBox.line "*" };
+        Line_plot { points = Array.create ~len:20 0.; content = PrintBox.line "-" };
+      ]
+  in
+  PrintBox_text.output Stdio.stdout plot_box

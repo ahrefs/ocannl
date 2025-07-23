@@ -72,7 +72,7 @@ type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
-  padding : (Nd.axis_padding array * float) option Lazy.t;
+  padding : (Ops.axis_padding array * float) option Lazy.t;
       (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
           padding value. *)
   size_in_bytes : int Lazy.t;
@@ -98,7 +98,7 @@ let compare a1 a2 = compare_int a1.id a2.id
 
 let num_elems tn =
   let dims = Lazy.force tn.dims in
-  if Array.is_empty dims then 0 else Array.reduce_exn dims ~f:( * )
+  Array.fold dims ~init:1 ~f:( * )
 
 let dims_without_padding tn =
   match Lazy.force tn.padding with
@@ -628,7 +628,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
              let total_elems = Array.reduce_exn target_dims ~f:( * ) in
              let source_total =
                let source_dims = Bigarray.Genarray.dims arr in
-               if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
+               Array.fold source_dims ~init:1 ~f:( * )
              in
              if total_elems <> source_total then
                raise
@@ -646,16 +646,12 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
            let source_dims = Nd.dims base_ndarray in
            (* Calculate actual data dimensions (target dims minus padding) *)
            let data_dims =
-             Array.map2_exn target_dims padding ~f:(fun dim { Nd.left; right } ->
+             Array.map2_exn target_dims padding ~f:(fun dim { Ops.left; right } ->
                  dim - left - right)
            in
            (* Check total elements match, allowing shape differences *)
-           let source_total =
-             if Array.is_empty source_dims then 0 else Array.reduce_exn source_dims ~f:( * )
-           in
-           let data_total =
-             if Array.is_empty data_dims then 0 else Array.reduce_exn data_dims ~f:( * )
-           in
+           let source_total = Array.fold source_dims ~init:1 ~f:( * ) in
+           let data_total = Array.fold data_dims ~init:1 ~f:( * ) in
            if source_total <> data_total then
              invalid_arg
                [%string
@@ -748,7 +744,22 @@ let set_value tn =
 let get_value tn =
   do_read tn;
   let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Nd.get_as_float ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
+  fun idx ->
+    try
+      let idx =
+        if Array.length (Lazy.force tn.dims) = 0 && Array.length idx = 1 then
+          if idx.(0) = 0 then [||] else invalid_arg "Tnode.get_value: index out of bounds"
+        else idx
+      in
+      Nd.get_as_float ?padding (Option.value_exn ~here:[%here] @@ Lazy.force tn.array) idx
+    with Invalid_argument _ ->
+      Stdio.printf "Tnode.get_value: array %s index out of bounds: %s for dims %s\n" (debug_name tn)
+        (Sexp.to_string_hum ([%sexp_of: int array] idx))
+        (Sexp.to_string_hum
+           ([%sexp_of: int array] @@ Nd.dims
+           @@ Option.value_exn ~here:[%here]
+           @@ Lazy.force tn.array));
+      raise @@ Utils.User_error "Tnode.get_value: index out of bounds"
 
 let set_values tn values =
   do_write tn;

@@ -6,13 +6,11 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
 let%expect_test "Graph drawing recompile" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
@@ -151,7 +149,6 @@ let%expect_test "Graph drawing recompile" =
 
 let%expect_test "Graph drawing fetch" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -204,8 +201,7 @@ let%expect_test "Graph drawing fetch" =
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+2 │#                                                                                                   │
     │         │#                                                                                                   │
@@ -255,7 +251,6 @@ let%expect_test "Graph drawing fetch" =
 
 let%expect_test "Simple gradients hosted" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -367,7 +362,6 @@ let%expect_test "Simple gradients hosted" =
 
 let%expect_test "Simple gradients virtual" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
@@ -500,7 +494,6 @@ let%expect_test "tanh plot" =
 
 let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   Train.every_non_literal_on_host v;
@@ -527,7 +520,6 @@ let%expect_test "2D neuron hosted" =
 
 let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
   let update = Train.grad_update v in

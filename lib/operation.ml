@@ -265,6 +265,16 @@ let not ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   Tensor.unop ~label:("not" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
+let uint4x32_to_prec_uniform ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
+  fun ?grad_spec t1 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.unop
+      ~label:("uint4x32_to_prec_uniform" :: label)
+      ~transpose_op:Pointwise_un ~op_asn ~grad_asn ?grad_spec t1
+
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
@@ -282,6 +292,21 @@ let ne ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 <> v2) in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~label:("<>" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
+let threefry4x32 ?(label = []) =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  fun ?grad_spec t1 t2 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
+    let result =
+      Tensor.binop ~label:("threefry4x32" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+        ?grad_spec t1 t2
+    in
+    (* Set output precision to uint4x32 *)
+    Tn.update_prec result.value Ir.Ops.uint4x32;
+    result
 
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
@@ -375,15 +400,12 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
-(* let random_seed = let seed = Option.value ~default:42 @@ Utils.settings.fixed_state_for_init in
-   let res = Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
-   ~fetch_op:(Asgns.Constant_fill [| Int.to_float seed |]) () in Tn.update_memory_mode res.value
-   Tn.Effectively_constant 24; Tn.update_prec res.value Ir.Ops.uint4x32; ref res *)
-
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
   let ( + ) = add ~grad_spec:If_needed
+  let threefry4x32 = threefry4x32 ~grad_spec:If_needed
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:If_needed
   let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
   let relu = relu ~grad_spec:If_needed
   let sat01 = sat01 ~grad_spec:If_needed
@@ -410,6 +432,8 @@ module DO = struct
   let ( < ) = lt ~grad_spec:Prohibit_grad
   let ( = ) = eq ~grad_spec:Prohibit_grad
   let ( <> ) = ne ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 end
 
 module NDO = struct
@@ -428,6 +452,8 @@ module NDO = struct
   let neg = neg ~grad_spec:Prohibit_grad
   let not = not ~grad_spec:Prohibit_grad
   let sqrt = sqrt ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32 ~grad_spec:Prohibit_grad
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
   let recip = recip ~grad_spec:Prohibit_grad
   let recip_sqrt = recip_sqrt ~grad_spec:Prohibit_grad
   let tanh = tanh ~grad_spec:Prohibit_grad
@@ -435,6 +461,8 @@ module NDO = struct
   let ( < ) = lt ~grad_spec:Prohibit_grad
   let ( = ) = eq ~grad_spec:Prohibit_grad
   let ( <> ) = ne ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
@@ -458,11 +486,11 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
     ()
 
 (** The output dimensions are taken from the provided ndarray, assuming precisely the first axis is
-    a batch axis, assumes no input axes and the batch dimensions are inferred. Assumes the data has
-    no padding, and data is copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
+    a batch axis, assumes no input axes and the batch dimensions are inferred. Empty output
+    dimensions are allowed and represent scalars. Assumes the data has no padding, and data is
+    copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
-  if List.is_empty output_dims then invalid_arg "rebatch: ndarray has just one axis";
   Tensor.term ~label:[ l ] ~input_dims:[] ~output_dims ~init_data:(Reshape ndarray) ()
 
 module TDSL = struct
@@ -495,6 +523,8 @@ module TDSL = struct
   let wrap = wrap ~grad_spec:If_needed
   let wrap_padded = wrap_padded ~grad_spec:If_needed
   let rebatch = rebatch ~grad_spec:If_needed
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
@@ -527,6 +557,8 @@ module NTDSL = struct
   let wrap = wrap ~grad_spec:Prohibit_grad
   let wrap_padded = wrap_padded ~grad_spec:Prohibit_grad
   let rebatch = rebatch ~grad_spec:Prohibit_grad
+  let threefry4x32 = threefry4x32
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in

@@ -95,19 +95,19 @@ struct
   let extra_declarations =
     [
       (* BFloat16 conversion functions *)
-      "static inline float bfloat16_to_float(unsigned short bf16) {";
+      "static inline float bfloat16_to_single(unsigned short bf16) {";
       "  unsigned int f32 = ((unsigned int)bf16) << 16;";
       "  return *((float*)&f32);";
       "}";
       "";
-      "static inline unsigned short float_to_bfloat16(float f) {";
+      "static inline unsigned short single_to_bfloat16(float f) {";
       "  unsigned int f32 = *((unsigned int*)&f);";
       "  unsigned int rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);";
       "  return (unsigned short)(rounded >> 16);";
       "}";
       "";
       (* FP8 E5M2 conversion functions *)
-      "static inline float fp8_to_float(unsigned char fp8) {";
+      "static inline float fp8_to_single(unsigned char fp8) {";
       "  if (fp8 == 0) return 0.0f;";
       "  unsigned int sign = (fp8 >> 7) & 1;";
       "  unsigned int exp = (fp8 >> 2) & 0x1F;";
@@ -126,7 +126,7 @@ struct
       "  return result;";
       "}";
       "";
-      "static inline unsigned char float_to_fp8(float f) {";
+      "static inline unsigned char single_to_fp8(float f) {";
       "  if (f == 0.0f) return 0;";
       "  unsigned int sign = (f < 0) ? 1 : 0;";
       "  f = fabsf(f);";
@@ -189,6 +189,7 @@ struct
               Cmpne;
               Or;
               And;
+              Threefry4x32;
             ]
           ~f:(fun op ->
             let p, _, _ =
@@ -213,6 +214,7 @@ struct
               Neg;
               Tanh_approx;
               Not;
+              Uint4x32_to_prec_uniform;
             ]
           ~f:(fun op ->
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
@@ -223,9 +225,9 @@ struct
     match prec with
     | Ops.Bfloat16_prec _ ->
         (* For BFloat16, perform operations in float precision *)
-        let float_v1 = PPrint.(string "bfloat16_to_float(" ^^ v1 ^^ string ")") in
-        let float_v2 = PPrint.(string "bfloat16_to_float(" ^^ v2 ^^ string ")") in
-        let float_v3 = PPrint.(string "bfloat16_to_float(" ^^ v3 ^^ string ")") in
+        let float_v1 = PPrint.(string "bfloat16_to_single(" ^^ v1 ^^ string ")") in
+        let float_v2 = PPrint.(string "bfloat16_to_single(" ^^ v2 ^^ string ")") in
+        let float_v3 = PPrint.(string "bfloat16_to_single(" ^^ v3 ^^ string ")") in
         let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
         let float_result =
           PPrint.(
@@ -236,12 +238,12 @@ struct
               ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
               ^^ string op_suffix))
         in
-        PPrint.(string "float_to_bfloat16(" ^^ float_result ^^ string ")")
+        PPrint.(string "single_to_bfloat16(" ^^ float_result ^^ string ")")
     | Ops.Fp8_prec _ ->
         (* For FP8, perform operations in float precision *)
-        let float_v1 = PPrint.(string "fp8_to_float(" ^^ v1 ^^ string ")") in
-        let float_v2 = PPrint.(string "fp8_to_float(" ^^ v2 ^^ string ")") in
-        let float_v3 = PPrint.(string "fp8_to_float(" ^^ v3 ^^ string ")") in
+        let float_v1 = PPrint.(string "fp8_to_single(" ^^ v1 ^^ string ")") in
+        let float_v2 = PPrint.(string "fp8_to_single(" ^^ v2 ^^ string ")") in
+        let float_v3 = PPrint.(string "fp8_to_single(" ^^ v3 ^^ string ")") in
         let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
         let float_result =
           PPrint.(
@@ -252,7 +254,7 @@ struct
               ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
               ^^ string op_suffix))
         in
-        PPrint.(string "float_to_fp8(" ^^ float_result ^^ string ")")
+        PPrint.(string "single_to_fp8(" ^^ float_result ^^ string ")")
     | _ ->
         let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
         let open PPrint in
@@ -291,30 +293,30 @@ struct
               (parens
                  (group
                     (parens
-                       (string "fp8_to_float(" ^^ v1
-                       ^^ string ") > 0.0f && fp8_to_float("
+                       (string "fp8_to_single(" ^^ v1
+                       ^^ string ") > 0.0f && fp8_to_single("
                        ^^ v1 ^^ string ") < 1.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "float_to_fp8(0.0f)")
+                     ^^ string "single_to_fp8(0.0f)")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "float_to_fp8(0.0f)"))))
+                        ^^ string "single_to_fp8(0.0f)"))))
         | Ops.Bfloat16_prec _ ->
             let open PPrint in
             group
               (parens
                  (group
                     (parens
-                       (string "bfloat16_to_float(" ^^ v1
-                       ^^ string ") > 0.0f && bfloat16_to_float("
+                       (string "bfloat16_to_single(" ^^ v1
+                       ^^ string ") > 0.0f && bfloat16_to_single("
                        ^^ v1 ^^ string ") < 1.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "float_to_bfloat16(0.0f)")
+                     ^^ string "single_to_bfloat16(0.0f)")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "float_to_bfloat16(0.0f)"))))
+                        ^^ string "single_to_bfloat16(0.0f)"))))
         | Ops.Half_prec _ ->
             let open PPrint in
             group
@@ -353,8 +355,8 @@ struct
         match prec with
         | Ops.Bfloat16_prec _ -> (
             (* For BFloat16, perform all operations in float precision *)
-            let float_v1 = PPrint.(string "bfloat16_to_float(" ^^ v1 ^^ string ")") in
-            let float_v2 = PPrint.(string "bfloat16_to_float(" ^^ v2 ^^ string ")") in
+            let float_v1 = PPrint.(string "bfloat16_to_single(" ^^ v1 ^^ string ")") in
+            let float_v2 = PPrint.(string "bfloat16_to_single(" ^^ v2 ^^ string ")") in
             let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
             let float_result =
               PPrint.(
@@ -366,12 +368,12 @@ struct
             (* For comparison operations, return float result (0.0 or 1.0) converted to BFloat16 *)
             match op with
             | Ops.Cmplt | Ops.Cmpeq | Ops.Cmpne | Ops.Or | Ops.And ->
-                PPrint.(string "float_to_bfloat16(" ^^ float_result ^^ string ")")
-            | _ -> PPrint.(string "float_to_bfloat16(" ^^ float_result ^^ string ")"))
+                PPrint.(string "single_to_bfloat16(" ^^ float_result ^^ string ")")
+            | _ -> PPrint.(string "single_to_bfloat16(" ^^ float_result ^^ string ")"))
         | Ops.Fp8_prec _ ->
             (* For FP8, perform all operations in float precision *)
-            let float_v1 = PPrint.(string "fp8_to_float(" ^^ v1 ^^ string ")") in
-            let float_v2 = PPrint.(string "fp8_to_float(" ^^ v2 ^^ string ")") in
+            let float_v1 = PPrint.(string "fp8_to_single(" ^^ v1 ^^ string ")") in
+            let float_v2 = PPrint.(string "fp8_to_single(" ^^ v2 ^^ string ")") in
             let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
             let float_result =
               PPrint.(
@@ -380,7 +382,7 @@ struct
                   ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
                   ^^ string op_suffix))
             in
-            PPrint.(string "float_to_fp8(" ^^ float_result ^^ string ")")
+            PPrint.(string "single_to_fp8(" ^^ float_result ^^ string ")")
         | _ ->
             let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax prec op in
             let open PPrint in
@@ -393,16 +395,16 @@ struct
     match prec with
     | Ops.Bfloat16_prec _ ->
         (* For BFloat16, perform operations in float precision *)
-        let float_v = PPrint.(string "bfloat16_to_float(" ^^ v ^^ string ")") in
+        let float_v = PPrint.(string "bfloat16_to_single(" ^^ v ^^ string ")") in
         let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
         let float_result = PPrint.(group (string op_prefix ^^ float_v ^^ string op_suffix)) in
-        PPrint.(string "float_to_bfloat16(" ^^ float_result ^^ string ")")
+        PPrint.(string "single_to_bfloat16(" ^^ float_result ^^ string ")")
     | Ops.Fp8_prec _ ->
         (* For FP8, perform operations in float precision *)
-        let float_v = PPrint.(string "fp8_to_float(" ^^ v ^^ string ")") in
+        let float_v = PPrint.(string "fp8_to_single(" ^^ v ^^ string ")") in
         let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
         let float_result = PPrint.(group (string op_prefix ^^ float_v ^^ string op_suffix)) in
-        PPrint.(string "float_to_fp8(" ^^ float_result ^^ string ")")
+        PPrint.(string "single_to_fp8(" ^^ float_result ^^ string ")")
     | _ ->
         let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
         let open PPrint in
@@ -450,13 +452,14 @@ module C_syntax (B : C_syntax_config) = struct
 
   let pp_array_offset (idcs, dims) =
     let open PPrint in
-    assert (not @@ Array.is_empty idcs);
-    let doc = ref (pp_axis_index idcs.(0)) in
-    for i = 1 to Array.length idcs - 1 do
-      doc :=
-        parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
-    done;
-    !doc
+    if Array.is_empty idcs then string "0"
+    else
+      let doc = ref (pp_axis_index idcs.(0)) in
+      for i = 1 to Array.length idcs - 1 do
+        doc :=
+          parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
+      done;
+      !doc
 
   let doc_to_string doc =
     let buf = Buffer.create 128 in
@@ -644,11 +647,10 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
-    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
-        let defs, expr_v = pp_float prec v in
+    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
+        let defs, expr_v = pp_float Ops.uint4x32 v in
         let expr =
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
-          ^^ expr_v ^^ string ")"
+          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(") ^^ expr_v ^^ string ")"
         in
         (defs, expr)
     | Unop (op, v) ->
@@ -718,10 +720,10 @@ module C_syntax (B : C_syntax_config) = struct
         let v1_doc, idcs1 = debug_float prec v1 in
         let v2_doc, idcs2 = debug_float prec v2 in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
-    | Unop (Ops.Uint4x32_to_prec_uniform target_prec, v) ->
-        let v_doc, idcs = debug_float prec v in
+    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
+        let v_doc, idcs = debug_float Ops.uint4x32 v in
         let expr_doc =
-          string ("uint4x32_to_" ^ Ops.prec_string target_prec ^ "_uniform(")
+          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
           ^^ v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
         in
         (expr_doc, idcs)

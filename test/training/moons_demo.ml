@@ -5,12 +5,10 @@ module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module Asgns = Ir.Assignments
-module Rand = Ir.Rand.Lib
 
 let main () =
   (* Micrograd half-moons example, single device/stream. *)
   Tensor.unsafe_reinitialize ();
-  Rand.init 5;
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
   let module Backend = (val Backends.fresh_backend ()) in

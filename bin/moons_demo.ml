@@ -6,14 +6,12 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
-module Rand = Ir.Rand.Lib
 (* module Half_moons = Datasets.Half_moons *)
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let demo () =
   let seed = 3 in
-  Rand.init seed;
   Utils.settings.fixed_state_for_init <- Some seed;
   let hid_dim = 16 in
   let len = 512 in

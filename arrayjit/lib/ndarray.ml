@@ -3,12 +3,6 @@ module Lazy = Utils.Lazy
 
 (** N-dimensional arrays: a precision-handling wrapper for [Bigarray.Genarray] and its utilities. *)
 
-(* External conversion functions for special float types *)
-external bfloat16_to_float : int -> float = "arrayjit_bfloat16_to_float"
-external float_to_bfloat16 : float -> int = "arrayjit_float_to_bfloat16"
-external fp8_to_float : int -> float = "arrayjit_fp8_to_float"
-external float_to_fp8 : float -> int = "arrayjit_float_to_fp8"
-
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 9]
@@ -132,8 +126,6 @@ let create_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precis
 
 (** {2 *** Initialization ***} *)
 
-type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
-
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding :
     (ocaml, elt_t) bigarray =
   let arr = create_bigarray_of_prec prec dims in
@@ -148,8 +140,8 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       | Ops.Int32 -> A.fill arr (Int32.of_float pad_value)
       | Ops.Uint4x32 -> A.fill arr Stdlib.Complex.{ re = pad_value; im = 0.0 }
       | Ops.Half -> A.fill arr pad_value
-      | Ops.Bfloat16 -> A.fill arr (float_to_bfloat16 pad_value)
-      | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ float_to_fp8 pad_value)
+      | Ops.Bfloat16 -> A.fill arr (Ops.single_to_bfloat16 pad_value)
+      | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ Ops.single_to_fp8 pad_value)
       | Ops.Single -> A.fill arr pad_value
       | Ops.Double -> A.fill arr pad_value));
   arr
@@ -206,14 +198,14 @@ let adjust_idx_for_padding ?padding idx =
   | None -> idx
   | Some padding_arr ->
       Array.mapi idx ~f:(fun i dim_idx ->
-          if i < Array.length padding_arr then dim_idx + padding_arr.(i).left else dim_idx)
+          if i < Array.length padding_arr then dim_idx + padding_arr.(i).Ops.left else dim_idx)
 
 (** Helper function to compute end index for iteration, respecting padding margins *)
 let compute_end_idx ?padding dims axis =
   match padding with
   | None -> dims.(axis) - 1
   | Some padding_arr when axis < Array.length padding_arr ->
-      dims.(axis) - padding_arr.(axis).left - padding_arr.(axis).right - 1
+      dims.(axis) - padding_arr.(axis).Ops.left - padding_arr.(axis).Ops.right - 1
   | Some _ -> dims.(axis) - 1
 
 let set_from_float ?padding arr idx v =
@@ -224,8 +216,8 @@ let set_from_float ?padding arr idx v =
   | Int32_nd arr -> A.set arr adjusted_idx @@ Int32.of_float v
   | Uint4x32_nd arr -> A.set arr adjusted_idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.set arr adjusted_idx v
-  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ float_to_bfloat16 v
-  | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ float_to_fp8 v
+  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.single_to_bfloat16 v
+  | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Ops.single_to_fp8 v
   | Single_nd arr -> A.set arr adjusted_idx v
   | Double_nd arr -> A.set arr adjusted_idx v
 
@@ -236,8 +228,8 @@ let fill_from_float arr v =
   | Int32_nd arr -> A.fill arr @@ Int32.of_float v
   | Uint4x32_nd arr -> A.fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
   | Half_nd arr -> A.fill arr v
-  | Bfloat16_nd arr -> A.fill arr @@ float_to_bfloat16 v
-  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ float_to_fp8 v
+  | Bfloat16_nd arr -> A.fill arr @@ Ops.single_to_bfloat16 v
+  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ Ops.single_to_fp8 v
   | Single_nd arr -> A.fill arr v
   | Double_nd arr -> A.fill arr v
 
@@ -273,18 +265,17 @@ let fold_as_float ?padding ~init ~f arr =
       fold_bigarray ?padding ~init ~f:(fun accu idx c -> f accu idx c.Stdlib.Complex.re) arr
   | Half_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Bfloat16_nd arr ->
-      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ bfloat16_to_float v) arr
+      fold_bigarray ?padding ~init ~f:(fun accu idx v -> f accu idx @@ Ops.bfloat16_to_single v) arr
   | Fp8_nd arr ->
       fold_bigarray ?padding ~init
-        ~f:(fun accu idx c -> f accu idx @@ fp8_to_float @@ Char.to_int c)
+        ~f:(fun accu idx c -> f accu idx @@ Ops.fp8_to_single @@ Char.to_int c)
         arr
   | Single_nd arr -> fold_bigarray ?padding ~init ~f arr
   | Double_nd arr -> fold_bigarray ?padding ~init ~f arr
 
 let size_in_bytes v =
-  (* Cheating here because 1 number Bigarray is same size as empty Bigarray: it's more informative
-     to report the cases differently. *)
-  let f arr = if Array.is_empty @@ A.dims arr then 0 else A.size_in_bytes arr in
+  (* Use Bigarray's natural behavior: empty dimensions have the same size as 1-element arrays *)
+  let f arr = A.size_in_bytes arr in
   apply { f } v
 
 let get_as_float ?padding arr idx =
@@ -295,8 +286,8 @@ let get_as_float ?padding arr idx =
   | Int32_nd arr -> Int32.to_float @@ A.get arr adjusted_idx
   | Uint4x32_nd arr -> (A.get arr adjusted_idx).Stdlib.Complex.re
   | Half_nd arr -> A.get arr adjusted_idx
-  | Bfloat16_nd arr -> bfloat16_to_float @@ A.get arr adjusted_idx
-  | Fp8_nd arr -> fp8_to_float @@ Char.to_int @@ A.get arr adjusted_idx
+  | Bfloat16_nd arr -> Ops.bfloat16_to_single @@ A.get arr adjusted_idx
+  | Fp8_nd arr -> Ops.fp8_to_single @@ Char.to_int @@ A.get arr adjusted_idx
   | Single_nd arr -> A.get arr adjusted_idx
   | Double_nd arr -> A.get arr adjusted_idx
 
@@ -332,7 +323,7 @@ let retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr =
 
 let retrieve_1d_points ?from_axis ?padding ~xdim arr =
   let dims = dims arr in
-  if Array.is_empty dims then [||]
+  if Array.is_empty dims then [| get_as_float ?padding arr [||] |]
   else
     let n_axes = Array.length dims in
     let from_axis = Option.value from_axis ~default:(n_axes - 1) in
@@ -358,7 +349,7 @@ let retrieve_1d_points ?from_axis ?padding ~xdim arr =
 
 let retrieve_flat_values ?padding arr =
   let dims = dims arr in
-  if Array.is_empty dims then [||]
+  if Array.is_empty dims then [| get_as_float ?padding arr [||] |]
   else
     let n_axes = Array.length dims in
     let result = ref [] in
@@ -379,7 +370,8 @@ let retrieve_flat_values ?padding arr =
 
 let set_flat_values ?padding arr values =
   let dims = dims arr in
-  if not (Array.is_empty dims) then
+  if Array.is_empty dims then set_from_float ?padding arr [| 0 |] values.(0)
+  else
     let n_axes = Array.length dims in
     let idx = Array.create ~len:n_axes 0 in
     let values_idx = ref 0 in
@@ -414,14 +406,10 @@ let hash nd = Nativeint.hash (to_native nd)
 let hash_fold_t acc nd = hash_fold_nativeint acc (to_native nd)
 let hash_t nd = Nativeint.hash @@ to_native nd
 
-external copy_with_padding_c : ('a, 'b) bigarray -> ('a, 'b) bigarray -> axis_padding array -> unit
-  = "arrayjit_copy_with_padding"
-(** C function declarations for efficient copying *)
-
 (** Copies the whole of [source] onto the parts of [target] skipping over padding margins --
     requires that source dimensions + padding = target dimensions. *)
 let copy_with_padding ~source ~target ~padding =
-  let copy_impl source_arr target_arr = copy_with_padding_c source_arr target_arr padding in
+  let copy_impl source_arr target_arr = Ops.copy_with_padding_c source_arr target_arr padding in
   apply2 { f2 = copy_impl } source target
 
 (** {2 *** Creating ***} *)
@@ -431,9 +419,7 @@ let used_memory = Atomic.make 0
 let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array) ~padding
     =
   (* dims already includes padding if padding is specified *)
-  let size_in_bytes : int =
-    (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
-  in
+  let size_in_bytes : int = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
   let%track7_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
     [%log3 "Deleting", _debug, ptr_to_string_hum _result]
@@ -470,7 +456,7 @@ let int_dims_to_string ?(with_axis_numbers = false) ?padding dims =
           match padding with
           | None -> Int.to_string dim
           | Some padding_arr when i < Array.length padding_arr ->
-              let unpadded_dim = dim - padding_arr.(i).left - padding_arr.(i).right in
+              let unpadded_dim = dim - padding_arr.(i).Ops.left - padding_arr.(i).right in
               let total_padding = padding_arr.(i).left + padding_arr.(i).right in
               if total_padding > 0 then
                 Int.to_string unpadded_dim ^ "+" ^ Int.to_string total_padding
@@ -541,7 +527,14 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     ^ (if has_inf then " pos. inf." else "")
     ^ if has_neg_inf then " neg. inf." else ""
   in
-  if Array.is_empty dims then B.vlist ~bars:false [ B.text header; B.line "<void>" ]
+  if Array.is_empty dims then
+    B.vlist ~bars:false
+      [
+        B.text header;
+        B.line
+          ("scalar "
+          ^ concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr [||]));
+      ]
   else
     let indices = Array.copy indices in
     let entries_per_axis =

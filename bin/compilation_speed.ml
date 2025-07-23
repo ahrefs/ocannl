@@ -5,7 +5,6 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -16,7 +15,6 @@ let benchmark_overhead backend () =
   let module Backend = (val backend : Backend) in
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ Backend.name ^ " ******";
-  Rand.init 0;
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
   Train.set_hosted f.value;

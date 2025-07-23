@@ -10,7 +10,7 @@
   - This way we avoid introducing multiple operations on bits. We might yet split this operation into more fine grained ones.
 - TODO: Support of counter-based randomness, and behind-the-scenes key splitting by the relevant operations.
   - TODO: The cascade of splits uses the Tnode id, the train step and the tensor cell position.
-- TODO: Added a new operation `Uint4x32_to_prec_uniform`. It is added to `dedicated_access` and thus to `fetch_op` -- it cannot be `unop` because it cannot be implemented pointwise / is not shape-preserving due to efficient use of the 128 bits.
+- TODO: Added a new operation `Uint4x32_to_prec_uniform` to `unop`. It has a dedicated support in shape and projection inference to account for not being pointwise / is not shape-preserving due to efficient use of the 128 bits.
 - Added a field `params` to `Tensor.t` since we need to track parameters to properly initialize computations (see below).
 
 ### Changed

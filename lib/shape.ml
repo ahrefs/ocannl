@@ -753,7 +753,7 @@ let to_dims (sh : t) : int array =
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
-let to_padding (sh : t) : (Ir.Ndarray.axis_padding array * float) option =
+let to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
   finish_inference ();
   (* FIXME: NOT IMPLEMENTED YET -- e.g. this should not be None if any of the padding isn't None.
      Also, the padded value should be inferred. *)

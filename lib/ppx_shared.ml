@@ -163,8 +163,10 @@ let binary_ops =
       ("mod_", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Mod]));
       ("@^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Max]));
       ("max", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Max]));
-      ("^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Min]));
+      ("@-", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Min]));
       ("min", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Min]));
+      ("^^^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32]));
+      ("threefry4x32", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32]));
     ]
 
 (** Unary primitive ops. *)
@@ -187,6 +189,8 @@ let unary_ops =
       ("neg", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Neg]));
       ("tanh", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Tanh_approx]));
       ("not", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Not]));
+      ( "uint4x32_to_prec_uniform",
+        fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_uniform]) );
     ]
 
 (** Ternary primitive ops. *)
@@ -215,7 +219,8 @@ let assignment_ops =
       ("=||", fun loc -> (false, [%expr Ir.Ops.Or]));
       ("=&&", fun loc -> (false, [%expr Ir.Ops.And]));
       ("=@^", fun loc -> (false, [%expr Ir.Ops.Max]));
-      ("=^^", fun loc -> (false, [%expr Ir.Ops.Min]));
+      ("=@-", fun loc -> (false, [%expr Ir.Ops.Min]));
+      ("=^^^^", fun loc -> (false, [%expr Ir.Ops.Threefry4x32]));
       ("=:+", fun loc -> (true, [%expr Ir.Ops.Add]));
       ("=:-", fun loc -> (true, [%expr Ir.Ops.Sub]));
       ("=:*", fun loc -> (true, [%expr Ir.Ops.Mul]));
@@ -226,7 +231,8 @@ let assignment_ops =
       ("=:||", fun loc -> (true, [%expr Ir.Ops.Or]));
       ("=:&&", fun loc -> (true, [%expr Ir.Ops.And]));
       ("=:@^", fun loc -> (true, [%expr Ir.Ops.Max]));
-      ("=:^^", fun loc -> (true, [%expr Ir.Ops.Min]));
+      ("=:@-", fun loc -> (true, [%expr Ir.Ops.Min]));
+      ("=:^^^^", fun loc -> (true, [%expr Ir.Ops.Threefry4x32]));
     ]
 
 let is_primitive_op op_ident =

@@ -9,8 +9,8 @@ let test_bfloat16_conversions () =
   let test_values = [ 0.0; 1.0; -1.0; 3.14159; 1e-3; 1e3; Float.infinity; Float.neg_infinity ] in
 
   List.iter test_values ~f:(fun orig ->
-      let bf16 = Ndarray.float_to_bfloat16 orig in
-      let back = Ndarray.bfloat16_to_float bf16 in
+      let bf16 = Ops.single_to_bfloat16 orig in
+      let back = Ops.bfloat16_to_single bf16 in
       Stdio.printf "  %.6f -> 0x%04x -> %.6f\n" orig bf16 back);
 
   (* Test round-trip through ndarray *)
@@ -28,8 +28,8 @@ let test_fp8_conversions () =
   let test_values = [ 0.0; 1.0; -1.0; 0.5; 2.0; 0.125; 16.0; -0.25 ] in
 
   List.iter test_values ~f:(fun orig ->
-      let fp8 = Ndarray.float_to_fp8 orig in
-      let back = Ndarray.fp8_to_float fp8 in
+      let fp8 = Ops.single_to_fp8 orig in
+      let back = Ops.fp8_to_single fp8 in
       Stdio.printf "  %.6f -> 0x%02x -> %.6f\n" orig fp8 back);
 
   (* Test round-trip through ndarray *)
@@ -44,7 +44,7 @@ let test_padding () =
   Stdio.printf "\n\nTesting padding functionality:\n";
 
   (* Test padding with float32 array *)
-  let padding_config = [| { Ndarray.left = 1; right = 1 }; { left = 2; right = 1 } |] in
+  let padding_config = [| { Ops.left = 1; right = 1 }; { left = 2; right = 1 } |] in
   (* left=1,right=1 for first dim; left=2,right=1 for second dim *)
   let padding_value = -999.0 in
 

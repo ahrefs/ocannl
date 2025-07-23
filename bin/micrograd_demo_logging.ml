@@ -5,14 +5,12 @@ module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
-module Rand = Ir.Rand.Lib
 module Tn = Ir.Tnode
 
 module type Backend = Ir.Backend_intf.Backend
 
 let () =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
@@ -34,7 +32,6 @@ let () =
 
 let _suspended () =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   
   

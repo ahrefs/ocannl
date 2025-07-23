@@ -6,3 +6,4 @@ log_level=0
 print_decimals_precision=2
 prefer_backend_uniformity=true
 default_prec=single
+fixed_state_for_init=42

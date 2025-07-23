@@ -296,13 +296,13 @@ type unop =
   | Neg
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
-  | Uint4x32_to_prec_uniform of prec
-      (** Converts the given Uint4x32 to the given precision in a bit-efficient manner. For random
-          bits, the result is uniform over the range of the precision for integer precisions, and
-          over the range \[0.0, 1.0) for floating point precisions. When used in an access pattern,
-          the indices are converted to a byte offset depending on the given precision. NOTE: this
-          operation, unlike any others, impacts projections and shape inference (one input cell
-          corresponds to a few output cells). *)
+  | Uint4x32_to_prec_uniform
+      (** Converts the given Uint4x32 to the precision of the output in a bit-efficient manner. For
+          random bits, the result is uniform over the range of the precision for integer precisions,
+          and over the range \[0.0, 1.0) for floating point precisions. When used in an access
+          pattern, the indices are converted to a byte offset depending on the given precision.
+          NOTE: this operation, unlike any others, impacts projections and shape inference (one
+          input cell corresponds to a few output cells). *)
 [@@deriving sexp, compare, equal]
 
 type ternop =
@@ -382,7 +382,7 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
-  | Uint4x32_to_prec_uniform _ ->
+  | Uint4x32_to_prec_uniform ->
       (* FIXME: NOT IMPLEMENTED YET *)
       failwith "NOT IMPLEMENTED YET: Uint4x32_to_prec_uniform"
 
@@ -414,8 +414,8 @@ let binop_cd_syntax = function
   | And -> "&&"
   | Mod -> "%"
   | Max -> "@^"
-  | Min -> "^^"
-  | Threefry4x32 -> "threefry4x32"
+  | Min -> "@-"
+  | Threefry4x32 -> "^^^^"
 (* | Shl -> "lsl" *)
 (* | Shr -> "lsr" *)
 
@@ -500,7 +500,8 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Or when initialize_neutral -> "=:||"
   | And when initialize_neutral -> "=:&&"
   | Max when initialize_neutral -> "=:@^"
-  | Min when initialize_neutral -> "=:^^"
+  | Min when initialize_neutral -> "=:@-"
+  | Threefry4x32 when initialize_neutral -> "=:^^^^"
   | Add -> "=+"
   | Sub -> "=-"
   | Mul -> "=*"
@@ -509,10 +510,11 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Relu_gate -> "=?/"
   | Satur01_gate -> "=?^"
   | Max -> "=@^"
-  | Min -> "=^^"
+  | Min -> "=@-"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod | Threefry4x32 (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
+  | Threefry4x32 -> "=^^^^"
+  | Arg1 | Mod (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)
@@ -532,7 +534,7 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
   | Not -> "not"
-  | Uint4x32_to_prec_uniform target_prec -> "uint4x32_to_" ^ prec_string target_prec ^ "_uniform"
+  | Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -578,9 +580,9 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
-  | Uint4x32_to_prec_uniform target_prec, _ ->
+  | Uint4x32_to_prec_uniform, _ ->
       (* FIXME: NOT IMPLEMENTED YET *)
-      ("uint4x32_to_" ^ prec_string target_prec ^ "_uniform(", ")")
+      ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
@@ -608,34 +610,34 @@ let c_convert_precision ~from ~to_ =
   | Void_prec, Void_prec ->
       ("", "")
   (* BFloat16 conversions *)
-  | Bfloat16_prec _, Single_prec _ -> ("bfloat16_to_float(", ")")
-  | Single_prec _, Bfloat16_prec _ -> ("float_to_bfloat16(", ")")
-  | Bfloat16_prec _, Double_prec _ -> ("(double)bfloat16_to_float(", ")")
-  | Double_prec _, Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  | Bfloat16_prec _, Single_prec _ -> ("bfloat16_to_single(", ")")
+  | Single_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(", ")")
+  | Bfloat16_prec _, Double_prec _ -> ("(double)bfloat16_to_single(", ")")
+  | Double_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)", ")")
   (* FP8 conversions *)
-  | Fp8_prec _, Single_prec _ -> ("fp8_to_float(", ")")
-  | Single_prec _, Fp8_prec _ -> ("float_to_fp8(", ")")
-  | Fp8_prec _, Double_prec _ -> ("(double)fp8_to_float(", ")")
-  | Double_prec _, Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  | Fp8_prec _, Single_prec _ -> ("fp8_to_single(", ")")
+  | Single_prec _, Fp8_prec _ -> ("single_to_fp8(", ")")
+  | Fp8_prec _, Double_prec _ -> ("(double)fp8_to_single(", ")")
+  | Double_prec _, Fp8_prec _ -> ("single_to_fp8((float)", ")")
   (* Conversions involving BFloat16 and other types *)
-  | Bfloat16_prec _, Half_prec _ -> ("(_Float16)bfloat16_to_float(", ")")
-  | Half_prec _, Bfloat16_prec _ -> ("float_to_bfloat16((float)", ")")
+  | Bfloat16_prec _, Half_prec _ -> ("(_Float16)bfloat16_to_single(", ")")
+  | Half_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)", ")")
   | Bfloat16_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) ->
-      ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_float(", ")")
+      ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_single(", ")")
   | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Bfloat16_prec _ ->
-      ("float_to_bfloat16((float)", ")")
+      ("single_to_bfloat16((float)", ")")
   (* Conversions involving FP8 and other types *)
-  | Fp8_prec _, Half_prec _ -> ("(_Float16)fp8_to_float(", ")")
-  | Half_prec _, Fp8_prec _ -> ("float_to_fp8((float)", ")")
+  | Fp8_prec _, Half_prec _ -> ("(_Float16)fp8_to_single(", ")")
+  | Half_prec _, Fp8_prec _ -> ("single_to_fp8((float)", ")")
   | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) ->
-      ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_float(", ")")
-  | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Fp8_prec _ -> ("float_to_fp8((float)", ")")
+      ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_single(", ")")
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Fp8_prec _ -> ("single_to_fp8((float)", ")")
   (* BFloat16 <-> FP8 conversions *)
-  | Bfloat16_prec _, Fp8_prec _ -> ("float_to_fp8(bfloat16_to_float(", "))")
-  | Fp8_prec _, Bfloat16_prec _ -> ("float_to_bfloat16(fp8_to_float(", "))")
+  | Bfloat16_prec _, Fp8_prec _ -> ("single_to_fp8(bfloat16_to_single(", "))")
+  | Fp8_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(fp8_to_single(", "))")
   (* Uint4x32 conversions - special handling *)
-  | Uint4x32_prec _, _ -> ("uint4x32_to_" ^ c_typ_of_prec to_ ^ "(", ")")
-  | _, Uint4x32_prec _ -> (c_typ_of_prec from ^ "_to_uint4x32(", ")")
+  | Uint4x32_prec _, _ -> ("uint4x32_to_" ^ prec_string to_ ^ "(", ")")
+  | _, Uint4x32_prec _ -> (prec_string from ^ "_to_uint4x32(", ")")
   (* Default case for all other conversions *)
   | _ -> ("(" ^ c_typ_of_prec to_ ^ ")(", ")")
 
@@ -658,3 +660,97 @@ let c_ptr_to_string (type elem) (ptr : elem Ctypes.ptr) prec =
 
 let ptr_to_string_hum (type elem) (ptr : elem Ctypes.ptr) prec =
   rawptr_to_string_hum (Ctypes.raw_address_of_ptr @@ Ctypes.to_voidp ptr) prec
+
+(** {2 *** External FFI declarations ***} *)
+
+type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
+
+external bfloat16_to_single : int -> float = "arrayjit_bfloat16_to_single"
+(** Original conversion functions *)
+
+external single_to_bfloat16 : float -> int = "arrayjit_single_to_bfloat16"
+external fp8_to_single : int -> float = "arrayjit_fp8_to_single"
+external single_to_fp8 : float -> int = "arrayjit_single_to_fp8"
+
+external copy_with_padding_c :
+  ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
+  ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
+    axis_padding array ->
+  unit = "arrayjit_copy_with_padding"
+
+external threefry4x32 : int array -> int array -> int array = "arrayjit_threefry4x32_ocaml"
+(** Threefry4x32 PRNG *)
+
+external uint4x32_to_single_uniform : int array -> float
+  = "arrayjit_uint4x32_to_single_uniform_ocaml"
+(** Conversion from uint4x32 to various uniform distributions *)
+
+external uint4x32_to_double_uniform : int array -> float
+  = "arrayjit_uint4x32_to_double_uniform_ocaml"
+
+external uint4x32_to_int32_uniform : int array -> int = "arrayjit_uint4x32_to_int32_uniform_ocaml"
+external uint4x32_to_int64_uniform : int array -> int64 = "arrayjit_uint4x32_to_int64_uniform_ocaml"
+external uint4x32_to_uint32_uniform : int array -> int = "arrayjit_uint4x32_to_uint32_uniform_ocaml"
+
+external uint4x32_to_uint64_uniform : int array -> int64
+  = "arrayjit_uint4x32_to_uint64_uniform_ocaml"
+
+external uint4x32_to_byte_uniform : int array -> int = "arrayjit_uint4x32_to_byte_uniform_ocaml"
+external uint4x32_to_uint16_uniform : int array -> int = "arrayjit_uint4x32_to_uint16_uniform_ocaml"
+
+external uint4x32_to_bfloat16_uniform : int array -> int
+  = "arrayjit_uint4x32_to_bfloat16_uniform_ocaml"
+
+external uint4x32_to_half_uniform : int array -> int = "arrayjit_uint4x32_to_half_uniform_ocaml"
+external uint4x32_to_fp8_uniform : int array -> int = "arrayjit_uint4x32_to_fp8_uniform_ocaml"
+
+external single_to_uint4x32 : float -> int array = "arrayjit_single_to_uint4x32_ocaml"
+(** Conversion to uint4x32 from various types *)
+
+external double_to_uint4x32 : float -> int array = "arrayjit_double_to_uint4x32_ocaml"
+external int32_to_uint4x32 : int -> int array = "arrayjit_int32_to_uint4x32_ocaml"
+external int64_to_uint4x32 : int64 -> int array = "arrayjit_int64_to_uint4x32_ocaml"
+external uint32_to_uint4x32 : int -> int array = "arrayjit_uint32_to_uint4x32_ocaml"
+external uint64_to_uint4x32 : int64 -> int array = "arrayjit_uint64_to_uint4x32_ocaml"
+external byte_to_uint4x32 : int -> int array = "arrayjit_byte_to_uint4x32_ocaml"
+external uint16_to_uint4x32 : int -> int array = "arrayjit_uint16_to_uint4x32_ocaml"
+external bfloat16_to_uint4x32 : int -> int array = "arrayjit_bfloat16_to_uint4x32_ocaml"
+external half_to_uint4x32 : int -> int array = "arrayjit_half_to_uint4x32_ocaml"
+external fp8_to_uint4x32 : int -> int array = "arrayjit_fp8_to_uint4x32_ocaml"
+
+let () =
+  (* Ensure that the functions are linked in *)
+  let _ = bfloat16_to_single 0 in
+  let _ = single_to_bfloat16 0.0 in
+  let _ = fp8_to_single 0 in
+  let _ = single_to_fp8 0.0 in
+  let _ =
+    copy_with_padding_c
+      (Bigarray.Genarray.create Bigarray.Float32 Bigarray.c_layout [| 1; 1 |])
+      (Bigarray.Genarray.create Bigarray.Float32 Bigarray.c_layout [| 1; 1 |])
+      [| { left = 0; right = 0 }; { left = 0; right = 0 } |]
+  in
+  let _ = threefry4x32 [| 0 |] [| 0 |] in
+  let _ = uint4x32_to_single_uniform [| 0 |] in
+  let _ = uint4x32_to_double_uniform [| 0 |] in
+  let _ = uint4x32_to_int32_uniform [| 0 |] in
+  let _ = uint4x32_to_int64_uniform [| 0 |] in
+  let _ = uint4x32_to_uint32_uniform [| 0 |] in
+  let _ = uint4x32_to_uint64_uniform [| 0 |] in
+  let _ = uint4x32_to_byte_uniform [| 0 |] in
+  let _ = uint4x32_to_uint16_uniform [| 0 |] in
+  let _ = uint4x32_to_bfloat16_uniform [| 0 |] in
+  let _ = uint4x32_to_half_uniform [| 0 |] in
+  let _ = uint4x32_to_fp8_uniform [| 0 |] in
+  let _ = single_to_uint4x32 0.0 in
+  let _ = double_to_uint4x32 0.0 in
+  let _ = int32_to_uint4x32 0 in
+  let _ = int64_to_uint4x32 0L in
+  let _ = uint32_to_uint4x32 0 in
+  let _ = uint64_to_uint4x32 0L in
+  let _ = byte_to_uint4x32 0 in
+  let _ = uint16_to_uint4x32 0 in
+  let _ = bfloat16_to_uint4x32 0 in
+  let _ = half_to_uint4x32 0 in
+  let _ = fp8_to_uint4x32 0 in
+  ()

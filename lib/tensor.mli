@@ -291,6 +291,14 @@ val unsafe_reinitialize : unit -> unit
     and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode},
     {!Ir.Rand.Random_for_tests}. *)
 
+val set_random_seed : ?seed:int -> unit -> unit
+(** Creates the random seed tensor. If [seed] is provided, it is used to set the random seed.
+    Otherwise, the seed is taken from the settings. *)
+
+val get_random_seed : unit -> t
+(** Returns a tensor with the current random seed. Lazily initialized using {!set_random_seed} and
+    reset when {!unsafe_reinitialize} is called. *)
+
 (** {2 Printing.} *)
 
 val header : t -> string

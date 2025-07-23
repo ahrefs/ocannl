@@ -5,13 +5,11 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
-module Rand = Ir.Rand.Lib
 
 module type Backend = Ir.Backend_intf.Backend
 
 let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   Tensor.unsafe_reinitialize ();
-  Rand.init 0;
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
@@ -261,8 +259,7 @@ let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.44e+1│*                                                                                                   │
     │        │                                                                                                    │
@@ -732,6 +729,58 @@ let%expect_test "tanh(x)" =
     │         │-5.00                                                                                           5.00│
     │         │                                                 x                                                  │
     └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
+
+let%expect_test "uint4x32_to_prec_uniform(x)" =
+  let%op f x = uint4x32_to_prec_uniform x in
+  let plot_box = plot_unop ~f () in
+  PrintBox_text.output Stdio.stdout plot_box;
+  [%expect {|
+    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 7.52e-1│#                                                                                                   │
+    │        │ ### ### ### ### ######## ############### ########                                                  │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │f       │                                                                                                    │
+    │(       │                                                                                                    │
+    │x       │                                                                                                    │
+    │)       │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                              #### #### ####### ####│
+    │        │                                                 # ###########################                      │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │ 0.00   │**** *** *** *** ********-*************** ********-******************************* **** *******-****│
+    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │        │-5.00                                                                                           5.00│
+    │        │                                                 x                                                  │
+    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}]
 
 let%expect_test "where(x < 0, sin(x), cos(x))" =

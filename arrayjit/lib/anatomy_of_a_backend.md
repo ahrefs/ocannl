@@ -20,7 +20,7 @@
 The modules and files of `arrayjit` can loosely be divided into three parts.
 
 - "Utility": generic code providing support across the project, both for `arrayjit` and `neural_nets_lib`.
-  - The modules `Utils`, `Rand` and `Ppx_helper`.
+  - The modules `Utils` and `Ppx_helper`.
 - "Frontend": the parts that are user-visible, concrete, and shared across the project.
   - `Task`: a wrapper for work execution (`unit -> unit`).
   - `Ops`: numeric precision specification types, primitive numerical operations.
