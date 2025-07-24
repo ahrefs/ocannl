@@ -35,7 +35,13 @@ end
 module Device_config = struct
   include Backend_buffer
 
-  type dev = { dev : Cu.Device.t; primary_context : Cu.Context.t } [@@deriving sexp_of]
+  type dev = {
+    dev : Cu.Device.t;
+    primary_context : Cu.Context.t;
+    set_builtins_in : Cu.Module.t -> unit;
+  }
+  [@@deriving sexp_of]
+
   type runner = Cu.Stream.t [@@deriving sexp_of]
   type event = Cu.Delimited_event.t [@@deriving sexp_of]
 
@@ -98,6 +104,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       initialized := true)
 
   let num_devices = Cu.Device.get_count
+
+  (* [devices] is mutable to support plugging in new devices. *)
   let devices = ref @@ Array.create ~len:(num_devices ()) None
 
   let get_used_memory (device : device) =
@@ -121,6 +129,57 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
         Cu.Deviceptr.mem_free buffer_ptr)
 
+  let%diagn2_sexp cuda_to_ptx ~name cu_src =
+    let name_cu = name ^ ".cu" in
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let build_file = Utils.open_build_file ~base_name:name ~extension:".cu" in
+      Stdio.Out_channel.output_string build_file.oc cu_src;
+      build_file.finalize ());
+    [%log "compiling to PTX"];
+    let with_debug =
+      Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
+    in
+    let options =
+      "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
+    in
+    (* FIXME: every now and then the compilation crashes because the options are garbled. *)
+    (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
+    let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
+      Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc;
+      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
+      Stdio.Out_channel.output_string oc
+      @@ Option.value_exn ~here:[%here] (Nvrtc.compilation_log ptx);
+      Stdio.Out_channel.flush oc;
+      Stdio.Out_channel.close oc);
+    ptx
+
+  let run_options () =
+    if Utils.with_runtime_debug () then
+      Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
+    else []
+
+  let set_ptr_in_kernel kernel_module src name =
+    let dst, _ = Cuda.Module.get_global kernel_module ~name in
+    (* Copy the helper function address to the kernel's function pointer variable *)
+    Cuda.Deviceptr.memcpy_D_to_D ~dst ~src ~size_in_bytes:8 (* pointer size *) ()
+
+  let set_builtins_for_device =
+    assert !initialized;
+    let builtins_path =
+      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_large.cu"
+    in
+    let cu_src = Stdio.In_channel.read_all builtins_path in
+    let code = cuda_to_ptx ~name:"builtins_large" cu_src in
+    fun ~primary_context ->
+      set_ctx primary_context;
+      let run_module = Cu.Module.load_data_ex code (run_options ()) in
+      let threefry4x32_ptr, _ = Cu.Module.get_global run_module ~name:"arrayjit_threefry4x32" in
+      fun kernel_module -> set_ptr_in_kernel kernel_module threefry4x32_ptr "arrayjit_threefry4x32"
+
   let%track3_sexp get_device ~(ordinal : int) : device =
     if num_devices () <= ordinal then
       invalid_arg [%string "Exec_as_cuda.get_device %{ordinal#Int}: not enough devices"];
@@ -130,7 +189,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let default () =
       let dev = Cu.Device.get ~ordinal in
       let primary_context : Cu.Context.t = Cu.Context.get_primary dev in
-      let dev = { dev; primary_context } in
+      let set_builtins_in = set_builtins_for_device ~primary_context in
+      let dev = { dev; primary_context; set_builtins_in } in
       set_ctx primary_context;
       if Utils.debug_log_from_routines () && not (Hash_set.mem initialized_devices ordinal) then
         Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
@@ -228,34 +288,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     params_and_names : ((string * param_source) list * string) option array;
   }
   [@@deriving sexp_of]
-
-  let%diagn2_sexp cuda_to_ptx ~name cu_src =
-    let name_cu = name ^ ".cu" in
-    if Utils.settings.output_debug_files_in_build_directory then (
-      let build_file = Utils.open_build_file ~base_name:name ~extension:".cu" in
-      Stdio.Out_channel.output_string build_file.oc cu_src;
-      build_file.finalize ());
-    [%log "compiling to PTX"];
-    let with_debug =
-      Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
-    in
-    let options =
-      "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
-    in
-    (* FIXME: every now and then the compilation crashes because the options are garbled. *)
-    (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
-    let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
-    if Utils.settings.output_debug_files_in_build_directory then (
-      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
-      Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
-      Stdio.Out_channel.flush oc;
-      Stdio.Out_channel.close oc;
-      let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
-      Stdio.Out_channel.output_string oc
-      @@ Option.value_exn ~here:[%here] (Nvrtc.compilation_log ptx);
-      Stdio.Out_channel.flush oc;
-      Stdio.Out_channel.close oc);
-    ptx
 
   module Cuda_syntax_config (Input : sig
     val procs : Low_level.optimized array
@@ -789,34 +821,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         work;
       }
 
-  let run_options () =
-    if Utils.with_runtime_debug () then
-      Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
-    else []
-
-  let set_ptr_in_kernel kernel_module src name =
-    let dst, _ = Cuda.Module.get_global kernel_module ~name in
-    (* Copy the helper function address to the kernel's function pointer variable *)
-    Cuda.Deviceptr.memcpy_D_to_D ~dst ~src ~size_in_bytes:8 (* pointer size *) ()
-
-  let set_builtins_in_kernel =
-    assert !initialized;
-    let builtins_path =
-      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_large.cu"
-    in
-    let cu_src = Stdio.In_channel.read_all builtins_path in
-    let code = cuda_to_ptx ~name:"builtins_large" cu_src in
-    (* set_ctx ctx; *)
-    let run_module = Cu.Module.load_data_ex code (run_options ()) in
-    let threefry4x32_ptr, _ = Cu.Module.get_global run_module ~name:"arrayjit_threefry4x32" in
-    fun kernel_module ->
-      set_ptr_in_kernel kernel_module threefry4x32_ptr "arrayjit_threefry4x32"
-
   let%track3_sexp link prior_context (code : code) ctx_arrays =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
-    set_builtins_in_kernel run_module;
+    prior_context.stream.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
@@ -835,7 +844,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
-    set_builtins_in_kernel run_module;
+    prior_context.stream.device.dev.set_builtins_in run_module;
     let procs =
       Array.mapi code_batch.params_and_names ~f:(fun i pns ->
           Option.value ~default:None
