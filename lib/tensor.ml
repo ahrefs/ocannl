@@ -223,20 +223,8 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Fetch fetch_op) -> Terminal (Fetch fetch_op)
     | Some (Data init_data) -> Terminal (Data init_data)
   in
-  let rec shape_logics = function
-    | [] -> [ terminal_logic () ]
-    | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
-    | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
-    | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
-    | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
-  in
-  let local_shape_updates =
-    List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
-  in
   let dims = lazy_to_dims shape in
-  List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
-  let padding = lazy (Shape.to_padding shape) in
+   let padding = lazy (Shape.to_padding shape) in
   let v =
     match terminal_op with
     | Some (Shape.Data (Asgns.Reshape data)) ->
@@ -248,6 +236,24 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
     | Some (Shape.Fetch _) | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
   in
+  let transpose_op =
+    match transpose_op with
+    |  (Uint4x32_to_prec _) ->
+         (Shape.Uint4x32_to_prec v.Tn.prec)
+    | _ -> transpose_op
+  in
+  let rec shape_logics = function
+    | [] -> [ terminal_logic () ]
+    | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
+    | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
+    | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
+    | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
+  in
+  let local_shape_updates =
+    List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
+  in
+  List.iter ~f:Shape.propagate_shapes local_shape_updates;
+  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
