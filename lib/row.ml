@@ -829,8 +829,8 @@ let check_empty_row r =
         [ Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } } ]
       else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
 
-let rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint) (env : environment)
-    : constraint_ list * environment =
+let%track5_sexp rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
+    (env : environment) : constraint_ list * environment =
   match rows_to_row_or_vars rows with
   | Either.First single_row -> apply_row_constraint stage single_row constr env
   | Either.Second (all_dims, row_vars) -> (
@@ -1904,34 +1904,38 @@ let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | 
 let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
 
-let rec eliminate_rows_constraint stage ~lub (rows : row list) (constr : row_constraint)
-    (env : environment) : constraint_ list =
-  match rows_to_row_or_vars rows with
-  | Either.First single_row -> eliminate_row_constraint stage ~lub single_row constr env
-  | Either.Second (_all_dims, row_vars) -> (
-      let rev_row_vars = List.rev row_vars in
-      match
-        ( constr,
-          List.findi rev_row_vars ~f:(fun _ -> function
-            | _, { kind = `Output; _ } -> true
-            | _ -> false) )
-      with
-      | Total_elems _, Some (idx, (v, id)) when is_stage5_up stage ->
-          let other_vars = List.filteri rev_row_vars ~f:(fun i _ -> i <> idx) in
-          let other_vars = List.map other_vars ~f:(fun (v, id) -> row_of_var v id) in
-          let other_eqs =
-            List.map other_vars ~f:(fun r ->
-                Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id } })
-          in
-          let rows =
-            List.map rows ~f:(function
-              | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
-              | r -> { r with dims = r_dims r; bcast = Broadcastable })
-          in
-          other_eqs @ eliminate_rows_constraint stage ~lub rows constr env
-      | _ -> [ Rows_constr { r = rows; constr } ])
+let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list)
+    (constr : row_constraint) (env : environment) : constraint_ list =
+  if depth > 16 then []
+  else
+    match rows_to_row_or_vars rows with
+    | Either.First single_row ->
+        eliminate_row_constraint ~depth:(depth + 1) stage ~lub single_row constr env
+    | Either.Second (_all_dims, row_vars) -> (
+        let rev_row_vars = List.rev row_vars in
+        match
+          ( constr,
+            List.findi rev_row_vars ~f:(fun _ -> function
+              | _, { Row_id.kind = `Output; _ } -> true
+              | _ -> false) )
+        with
+        | Total_elems _, Some (idx, (v, id)) when is_stage5_up stage ->
+            let other_vars = List.filteri rev_row_vars ~f:(fun i _ -> i <> idx) in
+            let other_vars = List.map other_vars ~f:(fun (v, id) -> row_of_var v id) in
+            let other_eqs =
+              List.map other_vars ~f:(fun r ->
+                  Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id } })
+            in
+            let rows =
+              List.map rows ~f:(function
+                | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
+                | r -> { r with dims = r_dims r; bcast = Broadcastable })
+            in
+            other_eqs @ eliminate_rows_constraint ~depth:(depth + 1) stage ~lub rows constr env
+        | _ -> [ Rows_constr { r = rows; constr } ])
 
-and eliminate_row_constraint stage ~lub (r : row) (constr : row_constraint) env : constraint_ list =
+and eliminate_row_constraint ~depth stage ~lub (r : row) (constr : row_constraint) env :
+    constraint_ list =
   let keep_constr = if is_stage5_up stage then [] else [ Rows_constr { r = [ r ]; constr } ] in
   match r with
   | { bcast = Broadcastable; _ } ->
@@ -1939,7 +1943,7 @@ and eliminate_row_constraint stage ~lub (r : row) (constr : row_constraint) env 
       let ineqs, _env = apply_row_constraint stage r constr env in
       List.concat_map ineqs ~f:(function
         | Rows_constr { r = rows; constr } ->
-            eliminate_rows_constraint stage ~lub:None rows constr env
+            eliminate_rows_constraint ~depth stage ~lub:None rows constr env
         | ineq -> [ ineq ])
   | { bcast = Row_var { v; beg_dims }; dims; id } -> (
       let r1 = row_of_var v id in
@@ -1963,7 +1967,7 @@ and eliminate_row_constraint stage ~lub (r : row) (constr : row_constraint) env 
               let ineqs, _env = apply_row_constraint stage lub constr env in
               List.concat_map ineqs ~f:(function
                 | Rows_constr { r = rows; constr } ->
-                    eliminate_rows_constraint stage ~lub:None rows constr env
+                    eliminate_rows_constraint ~depth stage ~lub:None rows constr env
                 | ineq -> [ ineq ])
           | Num_elems d, [ v ], None when is_stage4_up stage ->
               no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
@@ -2000,7 +2004,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) (env : environment)
         when is_stage2_up stage && not (equal_row_constraint constr Unconstrained) ->
           let ineqs =
             (* This is the constraint on the row variable, not on the original row. *)
-            try eliminate_row_constraint stage r1 ~lub:None constr env
+            try eliminate_row_constraint ~depth:0 stage r1 ~lub:None constr env
             with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1 ] :: trace)
           in
           (* FIXME: at which stage should we drop the terminal row? *)
@@ -2094,7 +2098,11 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           (extras @ ineqs, env)
       | Rows_constr { r = rows; constr } ->
           let substituted_rows = List.map rows ~f:(subst_row env) in
-          let more_ineqs, env = apply_rows_constraint ~stage substituted_rows constr env in
+          let more_ineqs, env =
+            if is_stage5_up stage then
+              (eliminate_rows_constraint ~depth:0 stage ~lub:None substituted_rows constr env, env)
+            else apply_rows_constraint ~stage substituted_rows constr env
+          in
           (more_ineqs @ ineqs, env)
       | Terminal_dim d ->
           let more_ineqs = close_dim_terminal ~stage env @@ subst_dim env d in
@@ -2129,7 +2137,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
         | Bounds_row { lub; constr; _ } ->
             (* TODO: should we store the id somewhere? *)
             let id = phantom_row_id in
-            eliminate_row_constraint stage (row_of_var v id) ~lub constr env
+            eliminate_row_constraint ~depth:0 stage (row_of_var v id) ~lub constr env
         | _ -> []
       in
       let finalizing_entries : constraint_ list =
