@@ -606,8 +606,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
-      | Uint4x32_to_prec_uniform, _ ->
-          func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
+      | Uint4x32_to_prec_uniform, _ -> func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
 
     let ternop_syntax prec v =
       let open PPrint in
@@ -657,6 +656,24 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ^^ rparen ^^ semi
   end
 
+  let builtins_large_header =
+    {|
+  __device__ uint4x32_t ( *arrayjit_threefry4x32)(uint4x32_t key, uint4x32_t counter) = nullptr;
+  |}
+
+  let prepend_builtins b =
+    if Utils.debug_log_from_routines () then
+      Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
+    Buffer.add_string b "\n\n";
+    let builtins_path =
+      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_small.cu"
+    in
+    let builtins_content = Stdio.In_channel.read_all builtins_path in
+    Buffer.add_string b builtins_content;
+    (* Needs to be after the small builtins, because uses uint4x32_t. *)
+    Buffer.add_string b builtins_large_header;
+    Buffer.add_string b "\n\n"
+
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
     (* TODO: The following link seems to claim it's better to expand into loops than use memset.
        https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
@@ -665,8 +682,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    if Utils.debug_log_from_routines () then
-      Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
+    prepend_builtins b;
     let declarations_doc = Syntax.print_declarations () in
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
@@ -680,16 +696,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    (* Read and prepend the CUDA builtins file *)
-    let builtins_path =
-      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "arrayjit_builtins.cu"
-    in
-    (try
-       let builtins_content = Stdio.In_channel.read_all builtins_path in
-       Buffer.add_string b builtins_content;
-       Buffer.add_string b "\n\n"
-     with _ -> ());
-    (* Silently skip if file not found *)
+    prepend_builtins b;
     let declarations_doc = Syntax.print_declarations () in
     let params_and_docs =
       Array.map2_exn names lowereds
@@ -787,10 +794,29 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
     else []
 
+  let set_ptr_in_kernel kernel_module src name =
+    let dst, _ = Cuda.Module.get_global kernel_module ~name in
+    (* Copy the helper function address to the kernel's function pointer variable *)
+    Cuda.Deviceptr.memcpy_D_to_D ~dst ~src ~size_in_bytes:8 (* pointer size *) ()
+
+  let set_builtins_in_kernel =
+    assert !initialized;
+    let builtins_path =
+      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_large.cu"
+    in
+    let cu_src = Stdio.In_channel.read_all builtins_path in
+    let code = cuda_to_ptx ~name:"builtins_large" cu_src in
+    (* set_ctx ctx; *)
+    let run_module = Cu.Module.load_data_ex code (run_options ()) in
+    let threefry4x32_ptr, _ = Cu.Module.get_global run_module ~name:"arrayjit_threefry4x32" in
+    fun kernel_module ->
+      set_ptr_in_kernel kernel_module threefry4x32_ptr "arrayjit_threefry4x32"
+
   let%track3_sexp link prior_context (code : code) ctx_arrays =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
+    set_builtins_in_kernel run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
@@ -809,6 +835,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
+    set_builtins_in_kernel run_module;
     let procs =
       Array.mapi code_batch.params_and_names ~f:(fun i pns ->
           Option.value ~default:None

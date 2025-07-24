@@ -35,7 +35,7 @@
   ppx_minidebug.runtime)
  (foreign_stubs
   (language c)
-  (names arrayjit_builtins))
+  (names builtins))
  (preprocess
   (pps
    ppx_compare

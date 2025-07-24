@@ -13,7 +13,7 @@ open Backend_intf
 let name = "cc"
 
 (* Header declarations for arrayjit builtins *)
-let arrayjit_builtins_header = {|
+let builtins_header = {|
 /* ArrayJIT builtins declarations */
 #include <stdint.h>
 
@@ -184,7 +184,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let declarations_doc = Syntax.print_declarations () in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-  let header_doc = PPrint.string arrayjit_builtins_header in
+  let header_doc = PPrint.string builtins_header in
   let final_doc = PPrint.(header_doc ^^ declarations_doc ^^ proc_doc) in
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
@@ -214,7 +214,7 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
             Syntax.compile_proc ~name idx_params lowered))
   in
   let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
-  let header_doc = PPrint.string arrayjit_builtins_header in
+  let header_doc = PPrint.string builtins_header in
   let final_doc = PPrint.(header_doc ^^ declarations_doc ^^ separate hardline all_proc_docs) in
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
