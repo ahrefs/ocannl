@@ -618,14 +618,8 @@ let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () 
   | "multicore_cc" ->
       (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) (Config)
       : Backend)
-  | "gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Gcc_backend_impl) (Config)
-      : Backend)
   | "sync_cc" ->
       (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) (Config) : Backend)
-  | "sync_gccjit" ->
-      (module Make_device_backend_from_lowered (Schedulers.Sync) (Gcc_backend_impl) (Config)
-      : Backend)
   | "cuda" ->
       (module Raise_backend ((Cuda_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
   | "metal" ->

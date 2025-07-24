@@ -77,8 +77,6 @@ cc_backend_optimization_level=3
 # By default, `ocamlc -config` field `c_compiler` is used.
 cc_backend_compiler_command=
 
-# The `-O` argument to `gcc` for the `gcc` backend (using gccjit).
-gccjit_backend_optimization_level=3
 
 # Only tensor nodes with up to this many visits per array cell (in a dedicated interpreter)
 # can be inlined. Values worth considering: 0 (disables inlining) to 3.

@@ -90,21 +90,6 @@
    ppx_variants_conv
    ppx_minidebug)))
 
-(library
- (name gcc_backend)
- (public_name arrayjit.gcc_backend)
- (optional)
- (modules gcc_backend)
- (libraries base gccjit utils ir)
- (preprocess
-  (pps
-   ppx_compare
-   ppx_hash
-   ppx_here
-   ppx_sexp_conv
-   ppx_string
-   ppx_variants_conv
-   ppx_minidebug)))
 
 (library
  (name backends)
@@ -123,11 +108,6 @@
   saturn_lockfree
   utils
   ir
-  (select
-   gcc_backend_impl.ml
-   from
-   (gcc_backend -> gcc_backend_impl.gccjit.ml)
-   (-> gcc_backend_impl.missing.ml))
   (select
    cuda_backend_impl.ml
    from
@@ -150,7 +130,6 @@
    ppx_minidebug))
  (modules
   cc_backend
-  gcc_backend_impl
   cuda_backend_impl
   metal_backend_impl
   lowered_backend_missing

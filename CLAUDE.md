@@ -30,8 +30,8 @@ dune runtest -p neural_nets_lib
 # Install dependencies
 opam install . --deps-only
 
-# Install with optional backends
-opam install cudajit gccjit  # for CUDA and GCC backends
+# Install with optional backends  
+opam install cudajit  # for CUDA backend
 ```
 
 ## Architecture Overview
@@ -66,7 +66,7 @@ opam install cudajit gccjit  # for CUDA and GCC backends
 
 2. **Shape Inference**: Comprehensive axis tracking with batch/input/output classification and optional dimension labels
 
-3. **Backend Architecture**: Unified interface supporting CPU (multicore, GCC JIT), CUDA, and Metal backends
+3. **Backend Architecture**: Unified interface supporting CPU (multicore), CUDA, and Metal backends
 
 4. **Memory Management**: Sophisticated tensor node memory modes (Virtual, Local, On_device, Hosted) with automatic host transfers
 
