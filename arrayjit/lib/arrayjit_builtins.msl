@@ -150,7 +150,7 @@ float uint4x32_to_double_uniform(uint4x32_t x) {
 }
 
 /* Uint4x32 to int32 uniform */
-int32_t uint4x32_to_i32_uniform(uint4x32_t x) {
+int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
     return int32_t(x.v.x);
 }
 
@@ -180,13 +180,13 @@ uint8_t uint4x32_to_u8_uniform(uint4x32_t x) {
 }
 
 /* Uint4x32 to bfloat16 uniform */
-uint16_t uint4x32_to_bf16_uniform(uint4x32_t x) {
+uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     float f = uint32_to_single_uniform(x.v.x);
     return uint16_t(as_type<uint32_t>(f) >> 16);
 }
 
 /* Uint4x32 to float16 uniform */
-half uint4x32_to_fp16_uniform(uint4x32_t x) {
+half uint4x32_to_half_uniform(uint4x32_t x) {
     float f = uint32_to_single_uniform(x.v.x);
     return half(f);
 }

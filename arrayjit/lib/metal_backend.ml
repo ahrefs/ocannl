@@ -555,18 +555,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, _ -> func_doc "rsqrt"
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
-      | Uint4x32_to_prec_uniform, _ ->
-          let conv_func = match prec with
-            | Ops.Single_prec _ -> "uint4x32_to_single_uniform"
-            | Double_prec _ -> "uint4x32_to_double_uniform" (* Metal doesn't support double, but function exists *)
-            | Half_prec _ -> "uint4x32_to_fp16_uniform"
-            | Bfloat16_prec _ -> "uint4x32_to_bf16_uniform"
-            | Byte_prec _ -> "uint4x32_to_u8_uniform"
-            | Uint16_prec _ -> "uint4x32_to_u32_uniform" (* Should probably be u16 *)
-            | Int32_prec _ -> "uint4x32_to_i32_uniform"
-            | _ -> "/* unsupported conversion from uint4x32 */ 0"
-          in
-          func_doc conv_func
+      | Uint4x32_to_prec_uniform, _ -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
     (* Logical not *)
 
     let convert_precision ~from ~to_ =

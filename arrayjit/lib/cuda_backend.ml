@@ -42,7 +42,7 @@ module Device_config = struct
   let name = "cuda"
 end
 
-module Device_stream = Backend_impl.Device_types (Device_config)
+module Device_stream = Backend_impl.Device_types_ll (Device_config)
 open Device_config
 
 let set_ctx ctx = Cu.Context.set_current ctx
@@ -321,7 +321,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string ")")
-      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _ | Uint4x32_prec _) ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
       | ToPowOf, Bfloat16_prec _ ->
           fun v1 v2 ->
@@ -350,6 +350,50 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                         ^^ string "__float2bfloat16(0.0f)"))))
+      | Relu_gate, Half_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0h"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0h")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0h"))))
+      | Relu_gate, Single_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0f")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0f"))))
+      | Relu_gate, Double_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0.0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0.0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0.0"))))
+      | Relu_gate, Uint4x32_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0"))))
       | Satur01_gate, Byte_prec _ ->
           fun v1 v2 ->
             group
@@ -402,14 +446,97 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                         ^^ string "0.0"))))
+      | Satur01_gate, Uint16_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "(unsigned short)0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "(unsigned short)0"))))
+      | Satur01_gate, Int32_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0"))))
+      | Satur01_gate, Uint4x32_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0u")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0u"))))
+      | Satur01_gate, Bfloat16_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "__bfloat162float(" ^^ v1
+                       ^^ string ") > 0.0f && __bfloat162float("
+                       ^^ v1 ^^ string ") < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "__float2bfloat16(0.0f)")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "__float2bfloat16(0.0f)"))))
+      | Satur01_gate, Fp8_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
+                      ^^ string " < 1.0f"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "(unsigned char)0")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "(unsigned char)0"))))
       | Max, Byte_prec _ -> func "max"
       | Max, Half_prec _ -> func "__hmax"
       | Max, Double_prec _ -> func "fmax"
       | Max, Single_prec _ -> func "fmaxf"
+      | Max, Uint16_prec _ -> func "max"
+      | Max, Int32_prec _ -> func "max"
+      | Max, Uint4x32_prec _ -> func "max"
+      | Max, Bfloat16_prec _ ->
+          (* FIXME: This might be wrong, definitely verify and maybe fix, here and elsewhere *)
+          func "__hmax"
+      | Max, Fp8_prec _ -> func "max"
       | Min, Byte_prec _ -> func "min"
       | Min, Half_prec _ -> func "__hmin"
       | Min, Double_prec _ -> func "fmin"
       | Min, Single_prec _ -> func "fminf"
+      | Min, Uint16_prec _ -> func "min"
+      | Min, Int32_prec _ -> func "min"
+      | Min, Uint4x32_prec _ -> func "min"
+      | Min, Bfloat16_prec _ -> func "__hmin"
+      | Min, Fp8_prec _ -> func "min"
       | Mod, Byte_prec _ -> f "%"
       | Mod, _ -> func "fmod"
       | Cmplt, _ -> f "<"
@@ -480,17 +607,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
       | Uint4x32_to_prec_uniform, _ ->
-          let conv_func = match prec with
-            | Ops.Single_prec _ -> "uint4x32_to_single_uniform"
-            | Double_prec _ -> "uint4x32_to_double_uniform"
-            | Half_prec _ -> "uint4x32_to_fp16_uniform"
-            | Bfloat16_prec _ -> "uint4x32_to_bf16_uniform"
-            | Byte_prec _ -> "uint4x32_to_u8_uniform"
-            | Uint16_prec _ -> "uint4x32_to_u32_uniform" (* Should probably be u16, but using u32 for 16-bit unsigned *)
-            | Int32_prec _ -> "uint4x32_to_i32_uniform"
-            | _ -> "/* unsupported conversion from uint4x32 */ 0"
-          in
-          func conv_func
+          func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
 
     let ternop_syntax prec v =
       let open PPrint in
@@ -564,12 +681,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
     (* Read and prepend the CUDA builtins file *)
-    let builtins_path = Stdlib.Filename.concat (Stdlib.Filename.dirname __FILE__) "arrayjit_builtins.cu" in
+    let builtins_path =
+      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "arrayjit_builtins.cu"
+    in
     (try
        let builtins_content = Stdio.In_channel.read_all builtins_path in
        Buffer.add_string b builtins_content;
        Buffer.add_string b "\n\n"
-     with _ -> ()); (* Silently skip if file not found *)
+     with _ -> ());
+    (* Silently skip if file not found *)
     let declarations_doc = Syntax.print_declarations () in
     let params_and_docs =
       Array.map2_exn names lowereds
