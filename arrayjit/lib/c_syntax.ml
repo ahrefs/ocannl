@@ -605,7 +605,7 @@ module C_syntax (B : C_syntax_config) = struct
                     failwith "FIXME: Set_from_vec: NOT IMPLEMENTED YET general index");
                 let offset_doc = pp_array_offset (elem_idcs, dims) in
                 ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var
-                ^^ string ("." ^ Printf.sprintf "s%d" i)
+                ^^ string (".v[" ^ Int.to_string i ^ "]")
                 ^^ semi)
           in
           vec_decl ^^ hardline ^^ separate hardline elem_assigns

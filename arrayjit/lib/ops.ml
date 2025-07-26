@@ -234,9 +234,16 @@ let c_typ_of_prec = function
   | Void_prec -> "void"
 
 let c_vec_typ_of_prec ~length prec =
-  ignore length;
-  (* FIXME: NOT IMPLEMENTED YET *)
-  c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+  match prec, length with
+  | Single_prec _, 4 -> "float4_t"
+  | Double_prec _, 2 -> "double2_t"
+  | Int32_prec _, 4 -> "int32x4_t"
+  | (Byte_prec _ | Fp8_prec _), 16 -> "int8x16_t"
+  | (Uint16_prec _ | Bfloat16_prec _), 8 -> "uint16x8_t"
+  | Half_prec _, 8 -> "half8_t"
+  | _ -> 
+    (* Fallback for other combinations *)
+    c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
 
 let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
@@ -588,7 +595,7 @@ let unop_c_syntax prec op =
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 let vec_unop_c_syntax prec op =
-  match op with Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
+  match op with Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

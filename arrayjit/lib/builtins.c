@@ -137,8 +137,18 @@ extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     return result;
 }
 
+/* Vector types for efficient extraction of multiple values */
+typedef struct { float v[4]; } float4_t;
+typedef struct { double v[2]; } double2_t;
+typedef struct { int32_t v[4]; } int32x4_t;
+typedef struct { int64_t v[2]; } int64x2_t;
+typedef struct { int8_t v[16]; } int8x16_t;
+typedef struct { uint16_t v[8]; } uint16x8_t;
+typedef struct { uint8_t v[16]; } uint8x16_t;
+typedef struct { _Float16 v[8]; } half8_t;
+
 /* Conversion functions from uint4x32 to various precisions uniformly */
-// FIXME: we need to return a vector of values, not just a single value
+// These return vectors to efficiently use all random bits
 
 /* Convert to float in [0, 1) */
 extern float uint32_to_single_uniform(uint32_t x) {
@@ -226,6 +236,110 @@ extern uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
 /* Uint4x32 to fp8 uniform - uses first 8 bits */
 extern uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
     return (uint8_t)(x.v[0] & 0xFF);
+}
+
+/* Vectorized conversion functions that use all 128 bits efficiently */
+
+/* Convert uint4x32 to 4 floats in [0, 1) */
+extern float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+    float4_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i] = uint32_to_single_uniform(x.v[i]);
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 2 doubles in [0, 1) */
+extern double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+    double2_t result;
+    uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
+    uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
+    result.v[0] = combined1 * (1.0 / 18446744073709551616.0);
+    result.v[1] = combined2 * (1.0 / 18446744073709551616.0);
+    return result;
+}
+
+/* Convert uint4x32 to 4 int32s - full range */
+extern int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+    int32x4_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i] = (int32_t)x.v[i];
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 2 int64s - full range */
+extern int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+    int64x2_t result;
+    result.v[0] = (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
+    result.v[1] = (int64_t)(((uint64_t)x.v[3] << 32) | x.v[2]);
+    return result;
+}
+
+
+/* Convert uint4x32 to 16 int8s - full range */
+extern int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+    int8x16_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
+        result.v[i*4 + 1] = (int8_t)((x.v[i] >> 8) & 0xFF);
+        result.v[i*4 + 2] = (int8_t)((x.v[i] >> 16) & 0xFF);
+        result.v[i*4 + 3] = (int8_t)((x.v[i] >> 24) & 0xFF);
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 8 uint16s - full range */
+extern uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+    uint16x8_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i*2 + 0] = (uint16_t)(x.v[i] & 0xFFFF);
+        result.v[i*2 + 1] = (uint16_t)((x.v[i] >> 16) & 0xFFFF);
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 8 bfloat16s uniform */
+extern uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+    uint16x8_t result;
+    for (int i = 0; i < 4; i++) {
+        // Convert each uint32 to two bfloat16 values
+        float f1 = ((x.v[i] & 0xFFFF) >> 0) * (1.0f / 65536.0f);
+        float f2 = ((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
+        uint32_t bits1, bits2;
+        memcpy(&bits1, &f1, sizeof(float));
+        memcpy(&bits2, &f2, sizeof(float));
+        result.v[i*2 + 0] = (uint16_t)(bits1 >> 16);
+        result.v[i*2 + 1] = (uint16_t)(bits2 >> 16);
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 8 float16s uniform */
+extern half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+    half8_t result;
+    for (int i = 0; i < 4; i++) {
+        // Extract two 16-bit values and convert to float in [0, 1)
+        float f1 = (x.v[i] & 0xFFFF) * (1.0f / 65536.0f);
+        float f2 = ((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
+        
+        // Convert to _Float16
+        result.v[i*2 + 0] = (_Float16)f1;
+        result.v[i*2 + 1] = (_Float16)f2;
+    }
+    return result;
+}
+
+/* Convert uint4x32 to 16 fp8s uniform */
+extern uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+    uint8x16_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i*4 + 0] = (uint8_t)(x.v[i] & 0xFF);
+        result.v[i*4 + 1] = (uint8_t)((x.v[i] >> 8) & 0xFF);
+        result.v[i*4 + 2] = (uint8_t)((x.v[i] >> 16) & 0xFF);
+        result.v[i*4 + 3] = (uint8_t)((x.v[i] >> 24) & 0xFF);
+    }
+    return result;
 }
 
 /* Conversion functions from various precisions to uint4x32_t */

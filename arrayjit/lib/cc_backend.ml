@@ -24,18 +24,26 @@ typedef struct {
 /* Threefry4x32 random number generator */
 extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter);
 
+/* Vector types for efficient extraction of multiple values */
+typedef struct { float v[4]; } float4_t;
+typedef struct { double v[2]; } double2_t;
+typedef struct { int32_t v[4]; } int32x4_t;
+typedef struct { int64_t v[2]; } int64x2_t;
+typedef struct { int8_t v[16]; } int8x16_t;
+typedef struct { uint16_t v[8]; } uint16x8_t;
+typedef struct { uint8_t v[16]; } uint8x16_t;
+typedef struct { _Float16 v[8]; } half8_t;
+
 /* Conversion functions from uint4x32 to various precisions uniformly */
-extern float uint4x32_to_single_uniform(uint4x32_t x);
-extern double uint4x32_to_double_uniform(uint4x32_t x);
-extern int32_t uint4x32_to_int32_uniform(uint4x32_t x);
-extern int64_t uint4x32_to_int64_uniform(uint4x32_t x);
-extern uint32_t uint4x32_to_uint32_uniform(uint4x32_t x);
-extern uint64_t uint4x32_to_uint64_uniform(uint4x32_t x);
-extern int8_t uint4x32_to_byte_uniform(uint4x32_t x);
-extern uint16_t uint4x32_to_uint16_uniform(uint4x32_t x);
-extern uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x);
-extern uint16_t uint4x32_to_half_uniform(uint4x32_t x);
-extern uint8_t uint4x32_to_fp8_uniform(uint4x32_t x);
+extern float4_t uint4x32_to_single_uniform_vec(uint4x32_t x);
+extern double2_t uint4x32_to_double_uniform_vec(uint4x32_t x);
+extern int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x);
+extern int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x);
+extern int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x);
+extern uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x);
+extern uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x);
+extern half8_t uint4x32_to_half_uniform_vec(uint4x32_t x);
+extern uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x);
 
 /* Conversion functions from various precisions to uint4x32_t */
 extern uint4x32_t single_to_uint4x32(float x);

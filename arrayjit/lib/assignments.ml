@@ -288,8 +288,15 @@ let%diagn2_sexp to_low_level code =
           (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
           let length = match op with
             | Ops.Uint4x32_to_prec_uniform ->
-                (* FIXME: Calculate length based on precision *)
-                16  (* Default for now, should be calculated from target precision *)
+                (* Calculate length based on precision - how many values we can extract from 128 bits *)
+                let target_prec = Lazy.force lhs.prec in
+                match target_prec with
+                | Ops.Byte_prec _ | Ops.Fp8_prec _ -> 16  (* 8-bit values *)
+                | Ops.Uint16_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ -> 8  (* 16-bit values *)
+                | Ops.Int32_prec _ | Ops.Single_prec _ -> 4  (* 32-bit values *)
+                | Ops.Double_prec _ -> 2  (* 64-bit values *)
+                | Ops.Uint4x32_prec _ -> 1  (* 128-bit value *)
+                | Ops.Void_prec -> failwith "Cannot use vector operation with void precision"
           in
           Set_from_vec { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
         in
