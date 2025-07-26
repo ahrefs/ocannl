@@ -24,7 +24,7 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
-  | Set of { tn : Tnode.t; idcs : Indexing.axis_index array; llv : scalar_t; mutable debug : string }
+  | Set of { tn : Tnode.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
   | Set_local of scope_id * scalar_t
 [@@deriving sexp_of, equal]
 

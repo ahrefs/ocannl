@@ -178,7 +178,7 @@ let%diagn2_sexp to_low_level code =
         (* FIXME: NOT IMPLEMENTED YET - need to handle merge buffer access differently now *)
         Low_level.Get (tn, idcs)
   in
-  let set tn idcs llv =
+  let set tn idcs llsc =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "set",
@@ -189,7 +189,7 @@ let%diagn2_sexp to_low_level code =
         (idcs : Indexing.axis_index array),
         (Lazy.force tn.dims : int array)];
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
-    Low_level.Set { tn; idcs; llv; debug = "" }
+    Low_level.Set { tn; idcs; llsc; debug = "" }
   in
   let rec loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections =
     let projections = Lazy.force projections in

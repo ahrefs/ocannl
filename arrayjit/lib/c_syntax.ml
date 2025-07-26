@@ -503,12 +503,12 @@ module C_syntax (B : C_syntax_config) = struct
     | Zero_out tn ->
         pp_ll
           (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
-               Set { tn; idcs; llv = Constant 0.0; debug = get_ident tn ^ " := 0" }))
-    | Set { tn; idcs; llv; debug } ->
+               Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
+    | Set { tn; idcs; llsc; debug } ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let prec = Lazy.force tn.prec in
-        let local_defs, val_doc = pp_float prec llv in
+        let local_defs, val_doc = pp_float prec llsc in
         let offset_doc = pp_array_offset (idcs, dims) in
         let assignment =
           group
@@ -520,7 +520,7 @@ module C_syntax (B : C_syntax_config) = struct
           let num_typ = string (B.typ_of_prec prec) in
           let new_var = string "new_set_v" in
           let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ val_doc ^^ semi in
-          let debug_val_doc, debug_args_docs = debug_float prec llv in
+          let debug_val_doc, debug_args_docs = debug_float prec llsc in
           let debug_val_str = doc_to_string debug_val_doc in
           let pp_args_docs =
             List.map debug_args_docs ~f:(function
