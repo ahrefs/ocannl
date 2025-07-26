@@ -138,6 +138,7 @@ extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
 }
 
 /* Conversion functions from uint4x32 to various precisions uniformly */
+// FIXME: we need to return a vector of values, not just a single value
 
 /* Convert to float in [0, 1) */
 extern float uint32_to_single_uniform(uint32_t x) {

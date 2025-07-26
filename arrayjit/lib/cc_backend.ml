@@ -171,6 +171,7 @@ struct
 
   (* Override to add our custom type and conversion support *)
   let typ_of_prec = typ_of_prec
+  let vec_typ_of_prec = vec_typ_of_prec
   let extra_declarations = extra_declarations (* Our bfloat16/fp8 conversion functions *)
   let convert_precision = convert_precision
 end

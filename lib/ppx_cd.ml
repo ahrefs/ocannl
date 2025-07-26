@@ -419,9 +419,19 @@ let translate (expr : expression) : result =
              ( [%expr Shape.Pointwise_un],
                Ast_builder.Default.pexp_extension ~loc
                @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected an assignment operator, one of: %s"
+                    "ppx_ocannl %%cd: expected a unary operator, one of: %s"
                     "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, \
-                     neg, tanh, uint4x32_to_prec_uniform" ))
+                     neg, tanh" ))
+    in
+    let vec_unary_op vec_un_op =
+      loc
+      |> Option.value_or_thunk (Hashtbl.find vec_unary_ops vec_un_op) ~default:(fun () loc ->
+             ( [%expr Shape.Uint4x32_to_prec_uniform],
+               Ast_builder.Default.pexp_extension ~loc
+               @@ Location.error_extensionf ~loc
+                    "ppx_ocannl %%cd: expected a vector unary operator, one of: \
+                     uint4x32_to_prec_uniform; found: %s"
+                    vec_un_op ))
     in
     let binary_op bin_op =
       loc
@@ -629,14 +639,7 @@ let translate (expr : expression) : result =
     in
     let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
       (* Vector unary operations do not have accumulation, they directly set values *)
-      let _, op = 
-        loc
-        |> Option.value_or_thunk (Hashtbl.find vec_unary_ops vec_un_op) ~default:(fun () loc ->
-               ( [%expr Shape.Pointwise_un],
-                 Ast_builder.Default.pexp_extension ~loc
-                 @@ Location.error_extensionf ~loc
-                      "ppx_ocannl %%cd: expected a vector unary operator, found: %s" vec_un_op ))
-      in
+      let _, op = vec_unary_op vec_un_op in
       let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let projections =
@@ -673,12 +676,7 @@ let translate (expr : expression) : result =
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
                  Ir.Assignments.Set_vec_unop
-                   {
-                     lhs;
-                     op = [%e op];
-                     rhs;
-                     projections = [%e projections];
-                   })]
+                   { lhs; op = [%e op]; rhs; projections = [%e projections] })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
     in
@@ -1007,8 +1005,8 @@ let translate (expr : expression) : result =
           ([%e? { pexp_desc = Pexp_ident { txt = Lident bin_op; _ }; _ }]
              [%e? rhs1]
              ([%e? rhs2] ~projections:[%e? projections]))] ->
-        (* Note: when clause not needed here and below, it's an error if bin_op is not a primitive
-           binary op. *)
+        (* TODO: when clause not needed here and below, it's an error if bin_op is not a primitive
+           binary op. But this is error-prone with regard to ordering of the clauses. *)
         process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~projections ~proj_in_scope:true ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
@@ -1040,6 +1038,17 @@ let translate (expr : expression) : result =
              ([%e? rhs] ~projections:[%e? projections]))]
       when Hashtbl.mem unary_ops un_op ->
         process_assign_unop ~accu_op ~lhs ~un_op ~rhs ~projections ~proj_in_scope:true ()
+    | [%expr
+        [%e? lhs]
+        =: [%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }]
+             [%e? rhs]
+             ~projections:[%e? projections]]
+      when Hashtbl.mem vec_unary_ops vec_un_op ->
+        process_vec_unop ~lhs ~vec_un_op ~rhs ~projections ~proj_in_scope:true ()
+    | [%expr
+        [%e? lhs] =: [%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }] [%e? rhs]]
+      when Hashtbl.mem vec_unary_ops vec_un_op && proj_in_scope ->
+        process_vec_unop ~lhs ~vec_un_op ~rhs ~proj_in_scope ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]
@@ -1165,17 +1174,7 @@ let translate (expr : expression) : result =
       when is_assignment accu_op && proj_in_scope ->
         process_assign_unop ~accu_op ~lhs ~un_op:"id" ~rhs ~proj_in_scope ()
     | [%expr
-        [%e? lhs]
-        :=
-        ([%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }]
-           [%e? rhs]
-           ~projections:[%e? projections])]
-      when Hashtbl.mem vec_unary_ops vec_un_op ->
-        process_vec_unop ~lhs ~vec_un_op ~rhs ~projections ~proj_in_scope:true ()
-    | [%expr
-        [%e? lhs]
-        :=
-        ([%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }] [%e? rhs])]
+        [%e? lhs] =: [%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }] [%e? rhs]]
       when Hashtbl.mem vec_unary_ops vec_un_op && proj_in_scope ->
         process_vec_unop ~lhs ~vec_un_op ~rhs ~proj_in_scope ()
     | [%expr

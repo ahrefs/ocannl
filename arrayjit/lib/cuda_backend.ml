@@ -322,6 +322,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Double_prec _ -> "double"
       | Ops.Void_prec -> "void"
 
+    let vec_typ_of_prec ~length prec =
+      ignore length;
+      (* FIXME: NOT IMPLEMENTED YET *)
+      failwith "NOT IMPLEMENTED YET"
+
     let binop_syntax prec v =
       (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only where
          different. *)

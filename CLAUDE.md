@@ -14,8 +14,11 @@ OCANNL (OCaml Compiles Algorithms for Neural Networks Learning) is a from-scratc
 The project uses Dune for building and testing:
 
 ```bash
-# Build all packages
+# Build all packages; this triggers running executables for cram-style tests
 dune build
+
+# Only compile -- do not link nor run any executable
+dune build @check
 
 # Build specific package
 dune build -p neural_nets_lib

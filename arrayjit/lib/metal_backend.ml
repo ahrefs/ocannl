@@ -451,6 +451,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Double_prec _ -> "double"
       | Ops.Void_prec -> "void"
 
+    let vec_typ_of_prec ~length prec =
+      ignore (length, prec);
+      (* FIXME: NOT IMPLEMENTED YET *)
+      failwith "NOT IMPLEMENTED YET"
+
     let metal_prec_suffix_float = function
       | Ops.Byte_prec _ -> ""
       | Ops.Uint16_prec _ -> ""
@@ -557,9 +562,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Not, _ -> fun v -> string "!" ^^ v
     (* Logical not *)
 
-    let vec_unop_syntax prec op =
-      match op with
-      | Ops.Uint4x32_to_prec_uniform -> "uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform("
+    (* Keep vec_unop_syntax same as in pure C syntax. *)
 
     let convert_precision ~from ~to_ =
       if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")

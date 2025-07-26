@@ -28,6 +28,7 @@ module type C_syntax_config = sig
   val includes : string list
   val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
+  val vec_typ_of_prec : length:int -> Ops.prec -> string
   val ident_blacklist : string list
 
   val float_log_style : string
@@ -46,7 +47,7 @@ module type C_syntax_config = sig
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
-  val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> string
+  val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 
   val kernel_log_param : (string * string) option
@@ -152,6 +153,7 @@ struct
     ]
 
   let typ_of_prec = Ops.c_typ_of_prec
+  let vec_typ_of_prec = Ops.c_vec_typ_of_prec
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =
@@ -220,10 +222,7 @@ struct
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
             if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
         List.iter
-          Ops.
-            [
-              Uint4x32_to_prec_uniform;
-            ]
+          Ops.[ Uint4x32_to_prec_uniform ]
           ~f:(fun op ->
             let p, _ = try Ops.vec_unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
             if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
@@ -418,9 +417,10 @@ struct
         let open PPrint in
         group (string op_prefix ^^ v ^^ string op_suffix)
 
-  let vec_unop_syntax prec op =
-    let prefix, _ = Ops.vec_unop_c_syntax prec op in
-    prefix
+  let vec_unop_syntax prec op v =
+    let op_prefix, op_suffix = Ops.vec_unop_c_syntax prec op in
+    let open PPrint in
+    group (string op_prefix ^^ v ^^ string op_suffix)
 
   let convert_precision = Ops.c_convert_precision
   let kernel_log_param = Some ("const char*", "log_file_name")
@@ -588,25 +588,33 @@ module C_syntax (B : C_syntax_config) = struct
         let arg_prec = Ops.uint4x32 in
         let local_defs, arg_doc = pp_float arg_prec arg in
         (* Generate the function call *)
-        let func_name = string (Ops.vec_unop_c_syntax prec vec_unop |> fst) in
+        let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
         (* Generate assignments for each output element *)
-        let assignments = 
+        let assignments =
           let open PPrint in
           let vec_var = string "vec_result" in
-          let vec_typ = string (B.typ_of_prec prec ^ Int.to_string length) in
-          let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ func_name ^^ arg_doc ^^ semi in
-          let elem_assigns = 
+          let vec_typ = string (B.vec_typ_of_prec ~length prec) in
+          let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
+          let elem_assigns =
             List.init length ~f:(fun i ->
-              let elem_idcs = Array.copy idcs in
-              (match elem_idcs.(Array.length elem_idcs - 1) with
-               | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
-               | _ -> failwith "Set_from_vec: last index must be Fixed_idx");
-              let offset_doc = pp_array_offset (elem_idcs, dims) in
-              ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var ^^ string ("." ^ Printf.sprintf "s%d" i) ^^ semi)
+                let elem_idcs = Array.copy idcs in
+                (match elem_idcs.(Array.length elem_idcs - 1) with
+                | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
+                | _ ->
+                    (* FIXME: NOT IMPLEMENTED YET *)
+                    failwith "FIXME: Set_from_vec: NOT IMPLEMENTED YET general index");
+                let offset_doc = pp_array_offset (elem_idcs, dims) in
+                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var
+                ^^ string ("." ^ Printf.sprintf "s%d" i)
+                ^^ semi)
           in
           vec_decl ^^ hardline ^^ separate hardline elem_assigns
         in
-        if PPrint.is_empty local_defs then assignments else local_defs ^^ hardline ^^ assignments
+        if Utils.debug_log_from_routines () then
+          (* FIXME: NOT IMPLEMENTED YET *)
+          failwith "FIXME: debug log for Set_from_vec"
+        else if PPrint.is_empty local_defs then assignments
+        else local_defs ^^ hardline ^^ assignments
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
         let local_defs, value_doc = pp_float (Lazy.force prec) value in
         let assignment =

@@ -277,6 +277,8 @@ let%diagn2_sexp to_low_level code =
             | Indexing.Fixed_idx _ as idx -> idx
             | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
             | Indexing.Affine { symbols; offset } ->
+                (* FIXME: we need to substitute in the affine index, reuse code from
+                   loop_accum *)
                 Indexing.Affine { symbols; offset }
           in
           let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
@@ -286,7 +288,7 @@ let%diagn2_sexp to_low_level code =
           (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
           let length = match op with
             | Ops.Uint4x32_to_prec_uniform ->
-                (* TODO: Calculate length based on precision *)
+                (* FIXME: Calculate length based on precision *)
                 16  (* Default for now, should be calculated from target precision *)
           in
           Set_from_vec { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
@@ -484,17 +486,15 @@ let to_doc ?name ?static_indices () c =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
           else "<not-in-yet>"
         in
-        string (ident lhs)
-        ^^ string " := "
-        ^^ string (Ops.vec_unop_cd_syntax op)
-        ^^ string "("
+        string (ident lhs) ^^ space
+        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral:false Arg2) ^^ space
+        ^^ string (Ops.vec_unop_cd_syntax op) ^^ space
         ^^ string (buffer_ident rhs)
-        ^^ string ")"
         ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
             else empty)
         ^^ string ";" ^^ break 1
     | Fetch { array; fetch_op; dims = _ } ->
-        string (ident array) ^^ string " := " ^^ doc_of_fetch_op fetch_op ^^ string ";" ^^ break 1
+        string (ident array) ^^ string " =: " ^^ doc_of_fetch_op fetch_op ^^ string ";" ^^ break 1
   in
 
   (* Create the header document *)

@@ -197,7 +197,8 @@ let vec_unary_ops =
     (module String)
     [
       ( "uint4x32_to_prec_uniform",
-        fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_uniform]) );
+        fun loc -> ([%expr Shape.Uint4x32_to_prec], [%expr Ir.Ops.Uint4x32_to_prec_uniform])
+      );
     ]
 
 (** Ternary primitive ops. *)

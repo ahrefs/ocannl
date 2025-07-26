@@ -233,6 +233,11 @@ let c_typ_of_prec = function
   | Double_prec _ -> "double"
   | Void_prec -> "void"
 
+let c_vec_typ_of_prec ~length prec =
+  ignore length;
+  (* FIXME: NOT IMPLEMENTED YET *)
+  c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+
 let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
   | Uint16_prec _ -> "uint16"
@@ -535,8 +540,7 @@ let unop_cd_syntax = function
   | Tanh_approx -> "tanh"
   | Not -> "not"
 
-let vec_unop_cd_syntax = function
-  | Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
+let vec_unop_cd_syntax = function Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -584,10 +588,7 @@ let unop_c_syntax prec op =
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 let vec_unop_c_syntax prec op =
-  match (op, prec) with
-  | Uint4x32_to_prec_uniform, _ ->
-      (* FIXME: NOT IMPLEMENTED YET *)
-      ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
+  match op with Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
@@ -680,7 +681,7 @@ external single_to_fp8 : float -> int = "arrayjit_single_to_fp8"
 external copy_with_padding_c :
   ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
   ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
-    axis_padding array ->
+  axis_padding array ->
   unit = "arrayjit_copy_with_padding"
 
 external threefry4x32 : int array -> int array -> int array = "arrayjit_threefry4x32_ocaml"
