@@ -35,18 +35,18 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
-  | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
-  | Set_local of scope_id * float_t
+  | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llv : scalar_t; mutable debug : string }
+  | Set_local of scope_id * scalar_t
 [@@deriving sexp_of, equal]
 
-and float_t =
+and scalar_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Get of Tn.t * Indexing.axis_index array
   | Get_merge_buffer of Tn.t * Indexing.axis_index array
-  | Ternop of Ops.ternop * float_t * float_t * float_t
-  | Binop of Ops.binop * float_t * float_t
-  | Unop of Ops.unop * float_t
+  | Ternop of Ops.ternop * scalar_t * scalar_t * scalar_t
+  | Binop of Ops.binop * scalar_t * scalar_t
+  | Unop of Ops.unop * scalar_t
   | Constant of float
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
@@ -530,7 +530,7 @@ let inline_computation ~id computations_table traced static_indices call_args =
       | Set_local (id, llv) -> Some (Set_local (id, loop_float env llv))
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
-    and loop_float env llv : float_t =
+    and loop_float env llv : scalar_t =
       match llv with
       | Constant _ -> llv
       | Get (tn, indices) when Tn.equal tn traced.tn ->
@@ -564,7 +564,7 @@ let inline_computation ~id computations_table traced static_indices call_args =
 
 let optimize_integer_pow = ref true
 
-let rec unroll_pow ~(base : float_t) ~(exp : int) : float_t =
+let rec unroll_pow ~(base : scalar_t) ~(exp : int) : scalar_t =
   if exp < 0 then unroll_pow ~base:(Binop (Div, Constant 1., base)) ~exp:(Int.neg exp)
   else if exp = 0 then Constant 1.
   else Fn.apply_n_times ~n:(exp - 1) (fun accu -> Binop (Mul, base, accu)) base
@@ -603,7 +603,7 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
     | Set_local (id, llv) -> Set_local (id, loop_float ~process_for llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
-  and loop_float ~process_for (llv : float_t) : float_t =
+  and loop_float ~process_for (llv : scalar_t) : scalar_t =
     match llv with
     | Constant _ -> llv
     | Get (tn, _) when Set.mem process_for tn ->
@@ -680,7 +680,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         Some (Set_local (id, loop_float ~balanced ~env_dom llv))
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
-  and loop_float ~balanced ~env_dom (llv : float_t) : float_t =
+  and loop_float ~balanced ~env_dom (llv : scalar_t) : scalar_t =
     let loop = loop_float ~balanced ~env_dom in
     match llv with
     | Constant _ -> llv
@@ -770,7 +770,7 @@ let simplify_llc llc =
     | Set_local (id, llv) -> Set_local (id, loop_float llv)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
-  and loop_float (llv : float_t) : float_t =
+  and loop_float (llv : scalar_t) : scalar_t =
     let local_scope_body, llv' =
       match llv with
       | Local_scope opts ->
@@ -838,9 +838,9 @@ let simplify_llc llc =
     | Binop (Div, Binop (Div, llv1, llv2), llv3) ->
         loop_float @@ Binop (Div, llv1, Binop (Mul, llv2, llv3))
     | Binop (ToPowOf, llv1, llv2) -> (
-        let v1 : float_t = loop_float llv1 in
-        let v2 : float_t = loop_float llv2 in
-        let result : float_t = Binop (ToPowOf, v1, v2) in
+        let v1 : scalar_t = loop_float llv1 in
+        let v2 : scalar_t = loop_float llv2 in
+        let result : scalar_t = Binop (ToPowOf, v1, v2) in
         if not !optimize_integer_pow then result
         else
           match v2 with

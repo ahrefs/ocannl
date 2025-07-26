@@ -16,7 +16,7 @@ type scope_id = Scope_id.t = { tn : Tnode.t; scope_id : int }
 
 (** {2 Low-level representation} *)
 
-(** Cases: [t] -- code, [float_t] -- single number at some precision. *)
+(** Cases: [t] -- code, [scalar_t] -- single number at some precision. *)
 type t =
   | Noop
   | Comment of string
@@ -24,23 +24,24 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
-  | Set of { tn : Tnode.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
-  | Set_local of scope_id * float_t
+  | Set of { tn : Tnode.t; idcs : Indexing.axis_index array; llv : scalar_t; mutable debug : string }
+  | Set_local of scope_id * scalar_t
 [@@deriving sexp_of, equal]
 
-and float_t =
+and scalar_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Get of Tnode.t * Indexing.axis_index array
   | Get_merge_buffer of Tnode.t * Indexing.axis_index array
-  | Ternop of Ops.ternop * float_t * float_t * float_t
-  | Binop of Ops.binop * float_t * float_t
-  | Unop of Ops.unop * float_t
+  | Ternop of Ops.ternop * scalar_t * scalar_t * scalar_t
+  | Binop of Ops.binop * scalar_t * scalar_t
+  | Unop of Ops.unop * scalar_t
   | Constant of float
   | Embed_index of Indexing.axis_index
+  | Vec of int * scalar_t
 [@@deriving sexp_of, equal, compare]
 
-val apply_op : Ops.op -> float_t array -> float_t
+val apply_op : Ops.op -> scalar_t array -> scalar_t
 val flat_lines : t list -> t list
 val unflat_lines : t list -> t
 val loop_over_dims : int array -> body:(Indexing.axis_index array -> t) -> t

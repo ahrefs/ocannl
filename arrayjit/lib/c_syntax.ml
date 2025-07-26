@@ -576,7 +576,7 @@ module C_syntax (B : C_syntax_config) = struct
         in
         if PPrint.is_empty local_defs then assignment else local_defs ^^ hardline ^^ assignment
 
-  and pp_float (prec : Ops.prec) (vcomp : Low_level.float_t) : PPrint.document * PPrint.document =
+  and pp_float (prec : Ops.prec) (vcomp : Low_level.scalar_t) : PPrint.document * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in
     match vcomp with
@@ -658,7 +658,7 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = group (B.unop_syntax prec op expr_v) in
         (defs, expr)
 
-  and debug_float (prec : Ops.prec) (value : Low_level.float_t) :
+  and debug_float (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document
       * [ `Accessor of Indexing.axis_index array * int array | `Value of PPrint.document ] list =
     (* Returns (value expression doc, list of arguments for printf) *)

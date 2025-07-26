@@ -14,22 +14,22 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
-  | Set of { array : Tnode.t; idcs : Indexing.axis_index array; llv : float_t; mutable debug : string }
-  | Set_local of scope_id * float_t
+  | Set of { array : Tnode.t; idcs : Indexing.axis_index array; llv : scalar_t; mutable debug : string }
+  | Set_local of scope_id * scalar_t
 
-and float_t =
+and scalar_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Access of dedicated_access * Indexing.axis_index array option
   | Get of Tnode.t * Indexing.axis_index array
-  | Ternop of Ops.ternop * float_t * float_t * float_t
-  | Binop of Ops.binop * float_t * float_t
-  | Unop of Ops.unop * float_t
+  | Ternop of Ops.ternop * scalar_t * scalar_t * scalar_t
+  | Binop of Ops.binop * scalar_t * scalar_t
+  | Unop of Ops.unop * scalar_t
   | Constant of float
   | Embed_index of Indexing.axis_index
 ```
 
-`t` represents code/statements while `float_t` represents scalar expressions. The `trace_it` flag in `For_loop` indicates whether the loop should be traced for optimization (its initial segment will be unrolled for analysis).
+`t` represents code/statements while `scalar_t` represents scalar expressions. The `trace_it` flag in `For_loop` indicates whether the loop should be traced for optimization (its initial segment will be unrolled for analysis).
 
 ## Translation from Assignments
 
