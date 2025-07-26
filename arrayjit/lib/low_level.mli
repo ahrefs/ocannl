@@ -25,6 +25,7 @@ type t =
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
   | Set of { tn : Tnode.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
+  | Set_from_vec of { tn : Tnode.t; idcs : Indexing.axis_index array; length : int; vec_unop : Ops.vec_unop; arg : scalar_t; mutable debug : string }
   | Set_local of scope_id * scalar_t
 [@@deriving sexp_of, equal]
 
@@ -38,7 +39,6 @@ and scalar_t =
   | Unop of Ops.unop * scalar_t
   | Constant of float
   | Embed_index of Indexing.axis_index
-  | Vec of int * scalar_t
 [@@deriving sexp_of, equal, compare]
 
 val apply_op : Ops.op -> scalar_t array -> scalar_t

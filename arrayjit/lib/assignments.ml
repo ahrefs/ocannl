@@ -66,6 +66,12 @@ and t =
       rhs : buffer;
       projections : Indexing.projections Lazy.t;
     }
+  | Set_vec_unop of {
+      op : Ops.vec_unop;
+      lhs : Tn.t;
+      rhs : buffer;
+      projections : Indexing.projections Lazy.t;
+    }
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
@@ -116,6 +122,7 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
     | Seq (t1, t2) -> loop t1 + loop t2
     | Block_comment (_, t) -> loop t
     | Accum_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
+    | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
     | Accum_binop { lhs; rhs1; rhs2; _ } ->
         Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2 ]
     | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
@@ -138,6 +145,7 @@ let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
         (i1 + i2, o1 + o2 - (i1 + i2))
     | Block_comment (_, t) -> loop t
     | Accum_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
+    | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
     | Accum_binop { lhs; rhs1; rhs2; _ } -> (of_node rhs1 + of_node rhs2, one lhs)
     | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
         (of_node rhs1 + of_node rhs2 + of_node rhs3, one lhs)
@@ -254,6 +262,49 @@ let%diagn2_sexp to_low_level code =
           projections
     | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
         loop_accum ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~rhses:[| rhs |] projections
+    | Set_vec_unop { op; lhs; rhs; projections } ->
+        (* Handle vector unary operations *)
+        let projections = Lazy.force projections in
+        let basecase rev_iters =
+          let subst_map =
+            let loop_iters = Array.of_list_rev rev_iters in
+            Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
+                (prod_iter, Indexing.Iterator loop_iters.(i)))
+            |> Array.to_list
+            |> Map.of_alist_exn (module Indexing.Symbol)
+          in
+          let subst_index = function
+            | Indexing.Fixed_idx _ as idx -> idx
+            | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
+            | Indexing.Affine { symbols; offset } ->
+                Indexing.Affine { symbols; offset }
+          in
+          let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
+          let rhs_idcs = Array.map projections.project_rhs.(0) ~f:subst_index in
+          let open Low_level in
+          let rhs_ll = get rhs rhs_idcs in
+          (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
+          let length = match op with
+            | Ops.Uint4x32_to_prec_uniform ->
+                (* TODO: Calculate length based on precision *)
+                16  (* Default for now, should be calculated from target precision *)
+          in
+          Set_from_vec { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
+        in
+        let rec for_loop rev_iters = function
+          | [] -> basecase rev_iters
+          | d :: product ->
+              let index = Indexing.get_symbol () in
+              For_loop
+                {
+                  index;
+                  from_ = 0;
+                  to_ = d - 1;
+                  body = for_loop (index :: rev_iters) product;
+                  trace_it = true;
+                }
+        in
+        for_loop [] (Array.to_list projections.product_space)
     | Noop -> Low_level.Noop
     | Block_comment (s, c) -> Low_level.unflat_lines [ Comment s; loop c; Comment "end" ]
     | Seq (c1, c2) ->
@@ -297,7 +348,7 @@ let flatten c =
     | Noop -> []
     | Seq (c1, c2) -> loop c1 @ loop c2
     | Block_comment (s, c) -> Block_comment (s, Noop) :: loop c
-    | (Accum_ternop _ | Accum_binop _ | Accum_unop _ | Fetch _) as c -> [ c ]
+    | (Accum_ternop _ | Accum_binop _ | Accum_unop _ | Set_vec_unop _ | Fetch _) as c -> [ c ]
   in
   loop c
 
@@ -330,6 +381,8 @@ let get_ident_within_code ?no_dots c =
     | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
         List.iter ~f:visit [ lhs; tn rhs1; tn rhs2 ]
     | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
+        List.iter ~f:visit [ lhs; tn rhs ]
+    | Set_vec_unop { op = _; lhs; rhs; projections = _ } ->
         List.iter ~f:visit [ lhs; tn rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
@@ -423,6 +476,20 @@ let to_doc ?name ?static_indices () c =
         ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
             else empty)
         ^^ string (buffer_ident rhs)
+        ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+            else empty)
+        ^^ string ";" ^^ break 1
+    | Set_vec_unop { op; lhs; rhs; projections } ->
+        let proj_spec =
+          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
+          else "<not-in-yet>"
+        in
+        string (ident lhs)
+        ^^ string " := "
+        ^^ string (Ops.vec_unop_cd_syntax op)
+        ^^ string "("
+        ^^ string (buffer_ident rhs)
+        ^^ string ")"
         ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
             else empty)
         ^^ string ";" ^^ break 1

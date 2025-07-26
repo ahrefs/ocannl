@@ -555,8 +555,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, _ -> func_doc "rsqrt"
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
-      | Uint4x32_to_prec_uniform, _ -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
     (* Logical not *)
+
+    let vec_unop_syntax prec op =
+      match op with
+      | Ops.Uint4x32_to_prec_uniform -> "uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform("
 
     let convert_precision ~from ~to_ =
       if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")

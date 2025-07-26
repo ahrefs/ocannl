@@ -36,6 +36,7 @@ type t =
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
+  | Set_from_vec of { tn : Tn.t; idcs : Indexing.axis_index array; length : int; vec_unop : Ops.vec_unop; arg : scalar_t; mutable debug : string }
   | Set_local of scope_id * scalar_t
 [@@deriving sexp_of, equal]
 
@@ -249,6 +250,30 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               List.iter symbols ~f:(fun (_, s) ->
                   let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
                   assert (Tn.equal old_tn tn)))
+    | Set_from_vec { tn; idcs; length; vec_unop = _; arg; debug = _ } ->
+        loop_float env arg;
+        let traced : traced_array = get_node traced_store tn in
+        (* Vector operations cannot be scalar constexpr *)
+        traced.is_scalar_constexpr <- false;
+        if first_visit then
+          traced.is_complex <- traced.is_complex || is_complex_comp traced_store arg;
+        (* Mark all positions that will be written to *)
+        for i = 0 to length - 1 do
+          let pos_idcs = Array.copy idcs in
+          (match pos_idcs.(Array.length pos_idcs - 1) with
+          | Fixed_idx idx -> pos_idcs.(Array.length pos_idcs - 1) <- Fixed_idx (idx + i)
+          | _ -> failwith "Set_from_vec: last index must be Fixed_idx");
+          Hash_set.add traced.assignments (lookup env pos_idcs)
+        done;
+        Array.iter idcs ~f:(function
+          | Fixed_idx _ -> ()
+          | Iterator s ->
+              let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+              assert (Tn.equal old_tn tn)
+          | Indexing.Affine { symbols; _ } ->
+              List.iter symbols ~f:(fun (_, s) ->
+                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+                  assert (Tn.equal old_tn tn)))
     | Set_local (_, llsc) -> loop_float env llsc
     | Comment _ -> ()
     | Staged_compilation _ -> ()
@@ -387,6 +412,22 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                 raise @@ Non_virtual 7
             | _ -> ());
         loop_float ~env_dom llsc
+    | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg; debug = _ } ->
+        if Tn.equal tn top_tn then (
+          check_idcs idcs;
+          has_setter := true)
+        else
+          (* Check for escaping variables. *)
+          Array.iter idcs ~f:(function
+            | Iterator s as _idx when not (Set.mem static_indices s) ->
+                if not @@ Set.mem env_dom s then
+                  [%log2
+                    "INFO: Inlining candidate has an escaping variable",
+                    (_idx : Indexing.axis_index),
+                    (top_llc : t)];
+                raise @@ Non_virtual 7
+            | _ -> ());
+        loop_float ~env_dom arg
     | Set_local (_, llsc) -> loop_float ~env_dom llsc
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual 8
@@ -525,8 +566,13 @@ let inline_computation ~id computations_table traced static_indices call_args =
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           Some (Set_local (id, loop_float env llsc))
+      | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = _; debug = _ } when Tn.equal tn traced.tn ->
+          assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
+          (* For vector operations, we cannot inline them as scalar operations *)
+          raise @@ Non_virtual 14
       | Zero_out _ -> None
       | Set _ -> None
+      | Set_from_vec _ -> None
       | Set_local (id, llsc) -> Some (Set_local (id, loop_float env llsc))
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
@@ -597,6 +643,13 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
         let traced : traced_array = get_node traced_store tn in
         let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
         let result = Set { tn; idcs; llsc = loop_float ~process_for:next llsc; debug } in
+        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
+          check_and_store_virtual computations_table traced static_indices result;
+        result
+    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
+        let traced : traced_array = get_node traced_store tn in
+        let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
+        let result = Set_from_vec { tn; idcs; length; vec_unop; arg = loop_float ~process_for:next arg; debug } in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual computations_table traced static_indices result;
         result
@@ -674,6 +727,15 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
           assert (
             Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
           Some (Set { tn; idcs; llsc = loop_float ~balanced ~env_dom llsc; debug }))
+    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
+        if not @@ Tn.known_non_virtual tn then (
+          (* FIXME(#296): *)
+          Tn.update_memory_mode tn Virtual 152;
+          None)
+        else (
+          assert (
+            Array.for_all idcs ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
+          Some (Set_from_vec { tn; idcs; length; vec_unop; arg = loop_float ~balanced ~env_dom arg; debug }))
     | Set_local (id, llsc) ->
         assert (not @@ Tn.known_non_virtual id.tn);
         Tn.update_memory_mode id.tn Virtual 16;
@@ -725,7 +787,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
 let rec substitute_float ~var ~value llsc =
   let loop_float = substitute_float ~var ~value in
   let loop_proc = substitute_proc ~var ~value in
-  if equal_float_t var llsc then value
+  if equal_scalar_t var llsc then value
   else
     match llsc with
     | Constant _ -> llsc
@@ -750,6 +812,8 @@ and substitute_proc ~var ~value llc =
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
   | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_float llsc; debug }
+  | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
+      Set_from_vec { tn; idcs; length; vec_unop; arg = loop_float arg; debug }
   | Set_local (id, llsc) -> Set_local (id, loop_float llsc)
   | Comment _ -> llc
   | Staged_compilation _ -> llc
@@ -767,6 +831,8 @@ let simplify_llc llc =
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
     | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_float llsc; debug }
+    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
+        Set_from_vec { tn; idcs; length; vec_unop; arg = loop_float arg; debug }
     | Set_local (id, llsc) -> Set_local (id, loop_float llsc)
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -854,19 +920,19 @@ let simplify_llc llc =
         let v1 = loop_float llv1 in
         let v2 = loop_float llv2 in
         let result = Binop (op, v1, v2) in
-        if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
+        if equal_scalar_t llv1 v1 && equal_scalar_t llv2 v2 then result else loop_float result
     | Ternop (op, llv1, llv2, llv3) ->
         let v1 = loop_float llv1 in
         let v2 = loop_float llv2 in
         let v3 = loop_float llv3 in
         let result = Ternop (op, v1, v2, v3) in
-        if equal_float_t llv1 v1 && equal_float_t llv2 v2 then result else loop_float result
+        if equal_scalar_t llv1 v1 && equal_scalar_t llv2 v2 then result else loop_float result
     | Unop (Identity, llsc) -> loop_float llsc
     | Unop (op, Constant c) -> Constant (Ops.interpret_unop op c)
     | Unop (op, llsc) ->
         let v = loop_float llsc in
         let result = Unop (op, v) in
-        if equal_float_t llsc v then result else loop_float result
+        if equal_scalar_t llsc v then result else loop_float result
   in
   let check_constant tn c =
     if Tn.exceeds_fp16_cutoff tn c then
@@ -885,6 +951,7 @@ let simplify_llc llc =
     | For_loop { body; _ } -> loop body
     | Zero_out _ -> ()
     | Set { tn; llsc; _ } -> check_float tn llsc
+    | Set_from_vec { tn; arg; _ } -> check_float tn arg
     | Set_local (id, llsc) -> check_float id.tn llsc
     | Noop | Comment _ | Staged_compilation _ -> ()
   and check_float tn llsc =
@@ -991,6 +1058,9 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
     | Set { tn; llsc; _ } ->
         visit tn;
         loop_float llsc
+    | Set_from_vec { tn; arg; _ } ->
+        visit tn;
+        loop_float arg
     | Set_local ({ tn; _ }, llsc) ->
         visit tn;
         loop_float llsc
@@ -1053,6 +1123,21 @@ let to_doc_cstyle ?name ?static_indices () llc =
             (doc_ident p.tn
             ^^ brackets (pp_indices p.idcs)
             ^^ string " := " ^^ doc_of_float prec p.llsc ^^ string ";")
+        in
+        if not (String.is_empty p.debug) then (
+          let b = Buffer.create 100 in
+          PPrint.ToBuffer.pretty 0.7 100 b result;
+          p.debug <- Buffer.contents b);
+        result
+    | Set_from_vec p ->
+        let result =
+          group
+            (doc_ident p.tn
+            ^^ brackets (pp_indices p.idcs)
+            ^^ string " := "
+            ^^ string (Ops.vec_unop_cd_syntax p.vec_unop)
+            ^^ string "(" ^^ doc_of_float (Ops.uint4x32) p.arg ^^ string ", "
+            ^^ int p.length ^^ string ");")
         in
         if not (String.is_empty p.debug) then (
           let b = Buffer.create 100 in
@@ -1124,6 +1209,20 @@ let to_doc ?name ?static_indices () llc =
             (doc_ident p.tn
             ^^ brackets (pp_indices p.idcs)
             ^^ string " := " ^^ doc_of_float p.llsc ^^ string ";")
+        in
+        let b = Buffer.create 100 in
+        PPrint.ToBuffer.pretty 0.7 100 b result;
+        p.debug <- Buffer.contents b;
+        result
+    | Set_from_vec p ->
+        let result =
+          group
+            (doc_ident p.tn
+            ^^ brackets (pp_indices p.idcs)
+            ^^ string " := "
+            ^^ string (Ops.vec_unop_cd_syntax p.vec_unop)
+            ^^ string "(" ^^ doc_of_float p.arg ^^ string ", "
+            ^^ int p.length ^^ string ");")
         in
         let b = Buffer.create 100 in
         PPrint.ToBuffer.pretty 0.7 100 b result;

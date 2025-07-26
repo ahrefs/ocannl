@@ -627,6 +627,61 @@ let translate (expr : expression) : result =
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
     in
+    let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
+      (* Vector unary operations do not have accumulation, they directly set values *)
+      let _, op = 
+        loc
+        |> Option.value_or_thunk (Hashtbl.find vec_unary_ops vec_un_op) ~default:(fun () loc ->
+               ( [%expr Shape.Pointwise_un],
+                 Ast_builder.Default.pexp_extension ~loc
+                 @@ Location.error_extensionf ~loc
+                      "ppx_ocannl %%cd: expected a vector unary operator, found: %s" vec_un_op ))
+      in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let projections =
+        match projections with
+        | Some prjs -> prjs
+        | None ->
+            let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
+            let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r.slot in
+            let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
+            let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r.slot in
+            [%expr
+              lazy
+                (let p = Lazy.force projections in
+                 Ir.Indexing.
+                   {
+                     product_space = p.product_space;
+                     product_iterators = p.product_iterators;
+                     lhs_dims = [%e lhs_dims];
+                     rhs_dims = [| [%e rhs1_dims] |];
+                     project_lhs = [%e project_lhs];
+                     project_rhs = [| [%e project_rhs1] |];
+                     debug_info =
+                       {
+                         p.debug_info with
+                         trace =
+                           ( "ppx_cd vec " ^ [%e string_expr ~loc vec_un_op],
+                             Ir.Indexing.unique_debug_id () )
+                           :: p.debug_info.trace;
+                       };
+                   })]
+      in
+      let body =
+        [%expr
+          Option.value ~default:Ir.Assignments.Noop
+          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
+                 Ir.Assignments.Set_vec_unop
+                   {
+                     lhs;
+                     op = [%e op];
+                     rhs;
+                     projections = [%e projections];
+                   })]
+      in
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
+    in
     let process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
@@ -1109,6 +1164,20 @@ let translate (expr : expression) : result =
     | [%expr [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }] [%e? lhs] [%e? rhs]]
       when is_assignment accu_op && proj_in_scope ->
         process_assign_unop ~accu_op ~lhs ~un_op:"id" ~rhs ~proj_in_scope ()
+    | [%expr
+        [%e? lhs]
+        :=
+        ([%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }]
+           [%e? rhs]
+           ~projections:[%e? projections])]
+      when Hashtbl.mem vec_unary_ops vec_un_op ->
+        process_vec_unop ~lhs ~vec_un_op ~rhs ~projections ~proj_in_scope:true ()
+    | [%expr
+        [%e? lhs]
+        :=
+        ([%e? { pexp_desc = Pexp_ident { txt = Lident vec_un_op; _ }; _ }] [%e? rhs])]
+      when Hashtbl.mem vec_unary_ops vec_un_op && proj_in_scope ->
+        process_vec_unop ~lhs ~vec_un_op ~rhs ~proj_in_scope ()
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident accu_op; _ }; _ }]
           [%e? lhs]

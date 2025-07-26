@@ -46,6 +46,7 @@ module type C_syntax_config = sig
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
+  val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> string
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
 
   val kernel_log_param : (string * string) option
@@ -214,10 +215,17 @@ struct
               Neg;
               Tanh_approx;
               Not;
-              Uint4x32_to_prec_uniform;
             ]
           ~f:(fun op ->
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
+            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+        List.iter
+          Ops.
+            [
+              Uint4x32_to_prec_uniform;
+            ]
+          ~f:(fun op ->
+            let p, _ = try Ops.vec_unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
             if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
     Set.to_list !functions
 
@@ -410,6 +418,10 @@ struct
         let open PPrint in
         group (string op_prefix ^^ v ^^ string op_suffix)
 
+  let vec_unop_syntax prec op =
+    let prefix, _ = Ops.vec_unop_c_syntax prec op in
+    prefix
+
   let convert_precision = Ops.c_convert_precision
   let kernel_log_param = Some ("const char*", "log_file_name")
   let log_involves_file_management = true
@@ -569,6 +581,32 @@ module C_syntax (B : C_syntax_config) = struct
             ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback -> callback ()
+    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug = _ } ->
+        let ident_doc = string (get_ident tn) in
+        let dims = Lazy.force tn.dims in
+        let prec = Lazy.force tn.prec in
+        let arg_prec = Ops.uint4x32 in
+        let local_defs, arg_doc = pp_float arg_prec arg in
+        (* Generate the function call *)
+        let func_name = string (Ops.vec_unop_c_syntax prec vec_unop |> fst) in
+        (* Generate assignments for each output element *)
+        let assignments = 
+          let open PPrint in
+          let vec_var = string "vec_result" in
+          let vec_typ = string (B.typ_of_prec prec ^ Int.to_string length) in
+          let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ func_name ^^ arg_doc ^^ semi in
+          let elem_assigns = 
+            List.init length ~f:(fun i ->
+              let elem_idcs = Array.copy idcs in
+              (match elem_idcs.(Array.length elem_idcs - 1) with
+               | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
+               | _ -> failwith "Set_from_vec: last index must be Fixed_idx");
+              let offset_doc = pp_array_offset (elem_idcs, dims) in
+              ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var ^^ string ("." ^ Printf.sprintf "s%d" i) ^^ semi)
+          in
+          vec_decl ^^ hardline ^^ separate hardline elem_assigns
+        in
+        if PPrint.is_empty local_defs then assignments else local_defs ^^ hardline ^^ assignments
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
         let local_defs, value_doc = pp_float (Lazy.force prec) value in
         let assignment =
@@ -647,12 +685,6 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
-    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
-        let defs, expr_v = pp_float Ops.uint4x32 v in
-        let expr =
-          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(") ^^ expr_v ^^ string ")"
-        in
-        (defs, expr)
     | Unop (op, v) ->
         let defs, expr_v = pp_float prec v in
         let expr = group (B.unop_syntax prec op expr_v) in
@@ -720,13 +752,6 @@ module C_syntax (B : C_syntax_config) = struct
         let v1_doc, idcs1 = debug_float prec v1 in
         let v2_doc, idcs2 = debug_float prec v2 in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
-    | Unop (Ops.Uint4x32_to_prec_uniform, v) ->
-        let v_doc, idcs = debug_float Ops.uint4x32 v in
-        let expr_doc =
-          string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform(")
-          ^^ v_doc ^^ string "){=" ^^ string B.float_log_style ^^ string "}"
-        in
-        (expr_doc, idcs)
     | Unop (op, v) ->
         let v_doc, idcs = debug_float prec v in
         (B.unop_syntax prec op v_doc, idcs)

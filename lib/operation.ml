@@ -267,7 +267,7 @@ let not ?(label = []) =
 
 let uint4x32_to_prec_uniform ?(label = []) =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
+  let%cd op_asn ~v ~t1 ~projections = v := uint4x32_to_prec_uniform v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   fun ?grad_spec t1 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
