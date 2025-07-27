@@ -336,6 +336,8 @@ let collect_factors dims =
   let f acc d = Result.of_option ~error:() @@ collect_dim_factors acc d in
   Result.ok @@ List.fold_result dims ~init:(1, []) ~f
 
+let known_dims_product dims = match collect_factors dims with Some (_, []) -> true | _ -> false
+
 let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise
@@ -970,6 +972,17 @@ and apply_row_constraint stage (r : row) (constr : row_constraint) env : constra
     match (r, constr) with
     | _ when stored && not updated -> (extras, env)
     | _, Unconstrained -> assert false
+    | ( { dims; bcast = Broadcastable; _ },
+        Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] } )
+      when is_stage2_up stage && known_dims_product dims ->
+        let (d : int), _ = Option.value_exn (collect_factors dims) in
+        let coeff : int = Utils.safe_force coeff in
+        if denom * d % coeff = 0 then
+          (Dim_eq { d1 = Var var; d2 = get_dim ~d:(denom * d / coeff) () } :: extras, env)
+        else
+          raise
+          @@ Shape_error
+               ("apply_row_constraint: Total_elems constraint failed", [ Row_mismatch [ r ] ])
     | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
       when List.length divided_by <= 1 -> (
         try
@@ -1936,7 +1949,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list
 
 and eliminate_row_constraint ~depth stage ~lub (r : row) (constr : row_constraint) env :
     constraint_ list =
-  let keep_constr = if is_stage5_up stage then [] else [ Rows_constr { r = [ r ]; constr } ] in
+  let keep_constr = if is_stage6_up stage then [] else [ Rows_constr { r = [ r ]; constr } ] in
   match r with
   | { bcast = Broadcastable; _ } ->
       (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
