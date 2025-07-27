@@ -2359,6 +2359,7 @@ let get_proj_index proj_env =
         (* Expand output index - multiply by stride *)
         (match output_idx with
         | Idx.Fixed_idx i -> offset := !offset + (stride * i)
+        | Idx.Sub_axis -> ()
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
         | Idx.Affine { symbols = output_syms; offset = output_offset } ->
             symbols := List.map output_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
@@ -2390,6 +2391,7 @@ let get_proj_index proj_env =
         (* Expand output index - multiply by stride *)
         (match output_idx with
         | Idx.Fixed_idx i -> offset := !offset + (stride * i)
+        | Idx.Sub_axis -> ()
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
         | Idx.Affine { symbols = output_syms; offset = output_offset } ->
             symbols := List.map output_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
@@ -2397,6 +2399,7 @@ let get_proj_index proj_env =
 
         (match kernel_idx with
         | Idx.Fixed_idx i -> offset := !offset + (dilation * i)
+        | Idx.Sub_axis -> ()
         | Idx.Iterator s -> symbols := (dilation, s) :: !symbols
         | Idx.Affine { symbols = kernel_syms; offset = kernel_offset } ->
             symbols := List.map kernel_syms ~f:(fun (c, s) -> (dilation * c, s)) @ !symbols;

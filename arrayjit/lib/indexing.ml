@@ -108,6 +108,7 @@ type axis_index =
           Note: for readability, we use [Fixed_idx] and [Iterator] as separate variants and require
           [Affine] to not be ambiguous: [symbols] should be longer than 1 or have a coefficient
           different from 1 and 0. *)
+  | Sub_axis  (** This axis belongs to an adjacent multi-axis index. *)
 [@@deriving compare, equal, sexp]
 
 type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base.Map.t
@@ -157,7 +158,8 @@ let is_bijective proj =
          | Affine { symbols; _ } ->
              (* For affine indices, we consider all symbols with coefficient 1 *)
              List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
-             |> Array.of_list)
+             |> Array.of_list
+         | Sub_axis -> [||])
   in
   Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
 
@@ -208,7 +210,8 @@ let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
              let new_symbols =
                List.map affine_symbols ~f:(fun (coeff, sym) -> (coeff * stride, sym))
              in
-             (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride)))
+             (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride))
+         | Sub_axis -> (stride * dim, symbols, offset))
   |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
 module Pp_helpers = struct
@@ -240,6 +243,7 @@ module Pp_helpers = struct
         | [] -> OCaml.int 0
         | [ t ] -> t
         | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
+    | Sub_axis -> empty
 
   let pp_indices idcs = separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)
   let print ppf doc = ToFormatter.pretty 1.0 80 ppf doc
@@ -264,7 +268,7 @@ module Doc_helpers = struct
     match idx with
     | Iterator sym -> pp_symbol sym
     | Fixed_idx i -> PPrint.OCaml.int i
-    | Affine { symbols; offset } -> (
+    | Affine { symbols; offset } -> 
         let open PPrint in
         let terms =
           List.map symbols ~f:(fun (coeff, sym) ->
@@ -275,10 +279,11 @@ module Doc_helpers = struct
           else if offset > 0 then terms @ [ int offset ]
           else terms @ [ string "-" ^^ int (-offset) ]
         in
-        match all_terms with
+        (match all_terms with
         | [] -> int 0
         | [ t ] -> t
         | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
+    | Sub_axis -> PPrint.empty
 
   let pp_indices idcs =
     PPrint.separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)

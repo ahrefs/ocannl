@@ -212,7 +212,7 @@ let%diagn2_sexp to_low_level code =
       in
       (* Substitute in projections *)
       let subst_index = function
-        | Indexing.Fixed_idx _ as idx -> idx
+        | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
         | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
         | Indexing.Affine { symbols; offset } ->
             (* For affine indices, we don't substitute - they should already use the right
@@ -274,7 +274,7 @@ let%diagn2_sexp to_low_level code =
             |> Map.of_alist_exn (module Indexing.Symbol)
           in
           let subst_index = function
-            | Indexing.Fixed_idx _ as idx -> idx
+            | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
             | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
             | Indexing.Affine { symbols; offset } ->
                 (* FIXME: we need to substitute in the affine index, reuse code from

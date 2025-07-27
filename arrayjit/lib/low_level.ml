@@ -204,9 +204,11 @@ let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
+  (* FIXME: migrate hashtable to use offsets instead of indices *)
   let lookup env indices =
     Array.map indices ~f:(function
       | Indexing.Fixed_idx i -> i
+      | Indexing.Sub_axis -> 0
       | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s
       | Indexing.Affine { symbols; offset } ->
           List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
@@ -249,6 +251,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         Hash_set.add traced.assignments (lookup env idcs);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
+          | Sub_axis -> ()
           | Iterator s ->
               let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
               (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
@@ -275,6 +278,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         done;
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
+          | Sub_axis -> ()
           | Iterator s ->
               let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
               assert (Tn.equal old_tn tn)
@@ -377,6 +381,7 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
              Indexing.(
                function
                | Fixed_idx _ -> None
+               | Sub_axis -> None
                | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
                | Affine { symbols; offset = _ } -> (
                    (* For affine indices, collect all symbols that are not static *)
@@ -470,7 +475,7 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                     (top_llc : t)];
                   raise @@ Non_virtual 9)
             | _ -> ())
-    | Embed_index (Fixed_idx _) -> ()
+    | Embed_index (Fixed_idx _ | Sub_axis) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
           if not (Set.mem static_indices s) then
@@ -536,7 +541,7 @@ let inline_computation ~id computations_table traced static_indices call_args =
           let expand_symbol (coeff, s) =
             match Map.find env s with
             | Some (Indexing.Iterator new_s) -> [ (coeff, new_s) ]
-            | Some (Indexing.Fixed_idx _) -> [] (* Fixed index contributes to offset *)
+            | Some (Indexing.Fixed_idx _ | Indexing.Sub_axis) -> [] (* Fixed index contributes to offset *)
             | Some (Indexing.Affine { symbols = inner_symbols; offset = _ }) ->
                 (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
                 List.map inner_symbols ~f:(fun (inner_coeff, inner_s) ->
@@ -780,7 +785,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         Tn.update_memory_mode id.tn Virtual 16;
         llsc
     | Get_merge_buffer (_, _) -> llsc
-    | Embed_index (Fixed_idx _) -> llsc
+    | Embed_index (Fixed_idx _ | Sub_axis) -> llsc
     | Embed_index (Iterator s) ->
         assert (Set.mem env_dom s);
         llsc
@@ -875,6 +880,7 @@ let simplify_llc llc =
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index (Fixed_idx i) -> Constant (Float.of_int i)
+    | Embed_index Sub_axis -> Constant 0.
     | Embed_index (Iterator _) -> llsc
     | Embed_index (Affine _) -> llsc (* Cannot simplify affine expressions to constants *)
     | Binop (Arg1, llv1, _) -> loop_float llv1
