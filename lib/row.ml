@@ -215,6 +215,9 @@ type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp_of]
     appear elsewhere in the environment. In particular, per-dim and per-row constraints might not
     have been applied. *)
 
+let get_dim_val env var =
+  match Map.find env.dim_env var with Some (Solved_dim (Dim { d; _ })) -> Some d | _ -> None
+
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }
@@ -796,7 +799,15 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) 
   match row_vars with
   | [] ->
       (* No row variables found *)
-      let first_id = match rows with [] -> phantom_row_id | first_row :: _ -> first_row.id in
+      let first_id =
+        match
+          List.find_map rows ~f:(function
+            | { id = { kind = `Output; _ } as id; _ } -> Some id
+            | _ -> None)
+        with
+        | None -> phantom_row_id
+        | Some id -> id
+      in
       Either.First { dims = all_dims; bcast = Broadcastable; id = first_id }
   | [ (v, id) ] ->
       (* Exactly one row variable - reconstruct the proper row structure *)
@@ -972,6 +983,13 @@ and apply_row_constraint stage (r : row) (constr : row_constraint) env : constra
     match (r, constr) with
     | _ when stored && not updated -> (extras, env)
     | _, Unconstrained -> assert false
+    | _, Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] }
+      when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
+        let tot = Option.value_exn (get_dim_val env var) in
+        let tot = Utils.safe_force coeff * tot / denom in
+        apply_row_constraint stage r
+          (Total_elems { numerator = Num_elems tot; divided_by = [] })
+          env
     | ( { dims; bcast = Broadcastable; _ },
         Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] } )
       when is_stage2_up stage && known_dims_product dims ->
