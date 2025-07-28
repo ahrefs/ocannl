@@ -271,9 +271,23 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           let pos_idcs = Array.copy idcs in
           (match pos_idcs.(Array.length pos_idcs - 1) with
           | Fixed_idx idx -> pos_idcs.(Array.length pos_idcs - 1) <- Fixed_idx (idx + i)
-          | _ ->
-              (* FIXME: NOT IMPLEMENTED YET *)
-              failwith "FIXME: Set_from_vec: NOT IMPLEMENTED YET general index");
+          | _ -> 
+              (* For non-Fixed_idx, we need to increment through the dimension *)
+              let dims = Tn.dims_without_padding tn in
+              let base_pos = lookup env idcs in
+              (* Compute the flat position from base_pos *)
+              let flat_pos = ref 0 in
+              let stride = ref 1 in
+              for j = Array.length base_pos - 1 downto 0 do
+                flat_pos := !flat_pos + base_pos.(j) * !stride;
+                stride := !stride * dims.(j)
+              done;
+              flat_pos := !flat_pos + i;
+              (* Convert back to multi-dimensional indices *)
+              for j = Array.length pos_idcs - 1 downto 0 do
+                pos_idcs.(j) <- Fixed_idx (!flat_pos % dims.(j));
+                flat_pos := !flat_pos / dims.(j)
+              done);
           Hash_set.add traced.assignments (lookup env pos_idcs)
         done;
         Array.iter idcs ~f:(function

@@ -66,6 +66,13 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name test_vec_simple)
+ (modules test_vec_simple)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

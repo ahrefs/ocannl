@@ -581,7 +581,7 @@ module C_syntax (B : C_syntax_config) = struct
             ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback -> callback ()
-    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug = _ } ->
+    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let prec = Lazy.force tn.prec in
@@ -597,13 +597,17 @@ module C_syntax (B : C_syntax_config) = struct
           let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
           let elem_assigns =
             List.init length ~f:(fun i ->
-                let elem_idcs = Array.copy idcs in
-                (match elem_idcs.(Array.length elem_idcs - 1) with
-                | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
-                | _ ->
-                    (* FIXME: NOT IMPLEMENTED YET *)
-                    failwith "FIXME: Set_from_vec: NOT IMPLEMENTED YET general index");
-                let offset_doc = pp_array_offset (elem_idcs, dims) in
+                let offset_doc = 
+                  match idcs.(Array.length idcs - 1) with
+                  | Fixed_idx idx ->
+                      (* For Fixed_idx, update the index and compute offset normally *)
+                      let elem_idcs = Array.copy idcs in
+                      elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i);
+                      pp_array_offset (elem_idcs, dims)
+                  | _ ->
+                      (* For non-Fixed_idx (Iterator, etc), add i to the computed offset *)
+                      pp_array_offset (idcs, dims) ^^ string (" + " ^ Int.to_string i)
+                in
                 ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var
                 ^^ string (".v[" ^ Int.to_string i ^ "]")
                 ^^ semi)
@@ -611,8 +615,50 @@ module C_syntax (B : C_syntax_config) = struct
           vec_decl ^^ hardline ^^ separate hardline elem_assigns
         in
         if Utils.debug_log_from_routines () then
-          (* FIXME: NOT IMPLEMENTED YET *)
-          failwith "FIXME: debug log for Set_from_vec"
+          let open PPrint in
+          let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
+          let comment_base_msg = "# " ^ debug ^ "\n" in
+          let comment_log =
+            B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+              ~base_message_literal:comment_base_msg ~args_docs:[]
+          in
+          let value_logs =
+            List.init length ~f:(fun i ->
+              let elem_idcs = Array.copy idcs in
+              (match elem_idcs.(Array.length elem_idcs - 1) with
+              | Fixed_idx idx -> elem_idcs.(Array.length elem_idcs - 1) <- Fixed_idx (idx + i)
+              | _ -> ());
+              let offset_doc = 
+                let base_offset = pp_array_offset (elem_idcs, dims) in
+                match elem_idcs.(Array.length elem_idcs - 1) with
+                | Fixed_idx _ -> base_offset
+                | _ -> base_offset ^^ string (" + " ^ Int.to_string i)
+              in
+              let value_base_msg =
+                Printf.sprintf "%s[%%u]{=%s} = vec_result.v[%d] = %s\n" 
+                  (get_ident tn) B.float_log_style i B.float_log_style
+              in
+              let log_args =
+                offset_doc
+                :: B.styled_log_arg (ident_doc ^^ brackets offset_doc)
+                :: B.styled_log_arg (string ("vec_result.v[" ^ Int.to_string i ^ "]"))
+                :: []
+              in
+              B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                ~base_message_literal:value_base_msg ~args_docs:log_args)
+          in
+          let flush_log =
+            if B.log_involves_file_management then string "fflush(log_file);" else empty
+          in
+          let log_docs = 
+            comment_log ^^ hardline ^^ separate hardline value_logs ^^ hardline ^^ flush_log
+          in
+          let block_content =
+            if PPrint.is_empty local_defs then
+              assignments ^^ hardline ^^ log_docs
+            else local_defs ^^ hardline ^^ assignments ^^ hardline ^^ log_docs
+          in
+          lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
         else if PPrint.is_empty local_defs then assignments
         else local_defs ^^ hardline ^^ assignments
     | Set_local ({ scope_id; tn = { prec; _ } }, value) ->

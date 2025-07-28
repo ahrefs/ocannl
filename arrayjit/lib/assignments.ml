@@ -277,9 +277,14 @@ let%diagn2_sexp to_low_level code =
             | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
             | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
             | Indexing.Affine { symbols; offset } ->
-                (* FIXME: we need to substitute in the affine index, reuse code from
-                   loop_accum *)
-                Indexing.Affine { symbols; offset }
+                (* Substitute symbols in affine index *)
+                let subst_symbols = 
+                  List.map symbols ~f:(fun (coeff, s) ->
+                    match Map.find subst_map s with
+                    | Some (Indexing.Iterator new_s) -> (coeff, new_s)
+                    | _ -> (coeff, s))
+                in
+                Indexing.Affine { symbols = subst_symbols; offset }
           in
           let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
           let rhs_idcs = Array.map projections.project_rhs.(0) ~f:subst_index in
