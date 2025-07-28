@@ -1023,10 +1023,7 @@ let subst_row_constraint stage env constr =
     match collect_factors substituted_divided_by with
     | Some (known_product, residual_vars) ->
         Total_elems
-          {
-            numerator = total_elems_divide numerator known_product;
-            divided_by = residual_vars;
-          }
+          { numerator = total_elems_divide numerator known_product; divided_by = residual_vars }
     | None ->
         (* Fall back to preserving the original constraint *)
         Total_elems { numerator; divided_by }
@@ -1036,12 +1033,9 @@ let subst_row_constraint stage env constr =
     when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
       let dim = Option.value_exn (get_dim_val env var) in
       let tot = Utils.safe_force coeff * dim in
-      if tot % denom = 0 then
-        subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
-      else
-        raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
-  | Total_elems { numerator; divided_by } ->
-      subst_total_elems_divided_by numerator divided_by
+      if tot % denom = 0 then subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
+      else raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
+  | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
   | Exact dims -> Exact (List.map dims ~f:(subst_dim env))
   | Unconstrained -> constr
 
@@ -2315,9 +2309,7 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
      environment. *)
   let rec to_proj : dim -> proj = function
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
-    | Dim { d = 0; _ } ->
-        (* Dummy: don't do anything for 0-dimensional axes *)
-        Solved (Fixed_idx 0)
+    | Dim { d = 0; _ } -> Solved (Fixed_idx 0)
     | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
     | Conv_input { stride; output; dilation = 0; kernel = _ } ->
         (* Strided iteration: ignore kernel since dilation=0 *)
@@ -2400,6 +2392,37 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
              | eq -> [ eq ])
     | Terminal_dim d -> [ Iterated (to_proj d) ]
     | Terminal_row { dims; _ } -> List.map ~f:(fun d -> Iterated (to_proj d)) dims
+    | Rows_constr
+        { r; constr = Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by } }
+      -> (
+        let divided_by = List.map divided_by ~f:(fun v -> subst_dim env (Var v)) in
+        match collect_factors divided_by with
+        | Some (known_product, residual_vars) ->
+            assert (List.is_empty residual_vars);
+            let coeff = Utils.safe_force coeff in
+            let denom = known_product * denom in
+            (* TODO: check if this is correct *)
+            if coeff % denom = 0 then
+              let stride = coeff / denom in
+              match rows_to_row_or_vars @@ List.map ~f:(subst_row env) r with
+              | Second _ -> assert false
+              | Either.First { dims; _ } -> (
+                  match List.rev dims with
+                  | [] -> assert false
+                  | inner :: other_dims ->
+                      Proj_eq
+                        ( to_proj
+                            (Conv_input
+                               {
+                                 stride;
+                                 output = subst_dim env (Var var);
+                                 dilation = 0;
+                                 kernel = get_dim ~d:0 ();
+                               }),
+                          to_proj inner )
+                      :: List.map other_dims ~f:(fun d -> Proj_eq (to_proj d, Solved Sub_axis)))
+            else assert false
+        | None -> [])
     | Dim_constr _ | Rows_constr _ -> []
   in
   List.concat_map inequalities ~f
