@@ -2295,12 +2295,7 @@ type proj_env = {
 }
 [@@deriving sexp_of]
 
-type proj_equation =
-  | Proj_eq of proj * proj
-      (** Two projections are the same, e.g. two axes share the same iterator. *)
-  | Iterated of proj
-      (** The projection needs to be an iterator even if an axis is not matched with another axis,
-          e.g. for broadcasted-to axes of a tensor assigned a constant. *)
+type proj_equation = Proj_eq of proj * proj | Iterated of proj | Non_iterated of proj
 [@@deriving compare, equal, sexp]
 
 let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env
@@ -2410,16 +2405,15 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                   match List.rev dims with
                   | [] -> assert false
                   | inner :: other_dims ->
-                      Proj_eq
-                        ( to_proj
-                            (Conv_input
-                               {
-                                 stride;
-                                 output = subst_dim env (Var var);
-                                 dilation = 0;
-                                 kernel = get_dim ~d:0 ();
-                               }),
-                          to_proj inner )
+                      let output = subst_dim env (Var var) in
+                      let input = to_proj inner in
+                      Iterated (to_proj output)
+                      :: Non_iterated input
+                      :: Proj_eq
+                           ( to_proj
+                               (Conv_input
+                                  { stride; output; dilation = 0; kernel = get_dim ~d:0 () }),
+                             input )
                       :: List.map other_dims ~f:(fun d -> Proj_eq (to_proj d, Solved Sub_axis)))
             else assert false
         | None -> [])
@@ -2637,6 +2631,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
+  let non_product = ref @@ Set.empty (module Proj_id) in
   let rec loop = function
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
         p_dims := (p1, d) :: !p_dims
@@ -2682,6 +2677,11 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         match Hashtbl.find v_env v with
         | None -> Hashtbl.add_exn v_env ~key:v ~data:p
         | Some p2 -> loop (Proj_eq (p, p2)))
+    | Non_iterated p -> (
+        match p with
+        | Proj (proj_id, _) | Conv_input { input_id = Some proj_id; _ } ->
+            non_product := Set.add !non_product proj_id
+        | _ -> ())
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
     | Iterated (Conv_input { output; dilation = 0; kernel = _; _ }) ->
@@ -2698,8 +2698,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | Some proj -> loop @@ Iterated proj)
   in
   List.iter eqs ~f:loop;
-  let projs = ref @@ Map.empty (module Proj_id)
-  and non_product = ref @@ Set.empty (module Proj_id) in
+  let projs = ref @@ Map.empty (module Proj_id) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       non_product := Set.add !non_product repr;
