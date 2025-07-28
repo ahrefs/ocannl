@@ -297,7 +297,11 @@ let total_elems_divide t d =
   if d <= 0 then raise @@ Shape_error ([%string "Division by non-positive number: %{d#Int}"], [])
   else
     match t with
-    | Num_elems n -> Num_elems (n / d)
+    | Num_elems n ->
+        if n % d = 0 then Num_elems (n / d)
+        else
+          raise
+          @@ Shape_error ([%string "Total_elems constraint: %{n#Int} not divisible by %{d#Int}"], [])
     | Strided_var { coeff; var; denom } -> Strided_var { coeff; var; denom = denom * d }
 
 let safe_multiply coeff d = Utils.safe_map ~upd:[%string "*%{d#Int}"] ~f:(( * ) d) coeff
@@ -842,230 +846,6 @@ let check_empty_row r =
         [ Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } } ]
       else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
 
-let%track5_sexp rec apply_rows_constraint ~stage (rows : row list) (constr : row_constraint)
-    (env : environment) : constraint_ list * environment =
-  match rows_to_row_or_vars rows with
-  | Either.First single_row -> apply_row_constraint stage single_row constr env
-  | Either.Second (all_dims, row_vars) -> (
-      match constr with
-      | Exact dims when List.length dims < List.length all_dims ->
-          (* Case 1: Exact dims has fewer axes than all_dims - raise mismatch *)
-          raise
-          @@ Shape_error
-               ("apply_rows_constraint: Exact constraint has too few axes", [ Row_mismatch rows ])
-      | Exact dims when List.length dims = List.length all_dims ->
-          (* Case 2: Exact dims has same length as all_dims - derive pairwise equations *)
-          let dim_eqs = List.map2_exn dims all_dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) in
-          let row_eqs =
-            List.map row_vars ~f:(fun (v, id) ->
-                Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } })
-          in
-          (dim_eqs @ row_eqs, env)
-      | Total_elems { numerator = Num_elems n; divided_by } -> (
-          (* Case 3: Total_elems with known numerator *)
-          match collect_factors all_dims with
-          | None -> ([ Rows_constr { r = rows; constr } ], env) (* Give up on complex cases *)
-          | Some (known_product, product_vars) ->
-              (* Move divided_by variables to the other side by combining with product_vars *)
-              let all_product_vars = product_vars @ divided_by in
-              if n % known_product <> 0 then
-                raise
-                @@ Shape_error
-                     ( [%string
-                         "Total_elems constraint: %{n#Int} not divisible by known product \
-                          %{known_product#Int}"],
-                       [] )
-              else if n = known_product then
-                (* Equate all product vars to d=1 and add Total_elems 1 for each row var *)
-                let var_eqs =
-                  List.map all_product_vars ~f:(fun v ->
-                      Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
-                in
-                let row_constrs =
-                  List.map row_vars ~f:(fun (v, id) ->
-                      Rows_constr
-                        {
-                          r = [ row_of_var v id ];
-                          constr = Total_elems { numerator = Num_elems 1; divided_by = [] };
-                        })
-                in
-                (var_eqs @ row_constrs, env)
-              else
-                (* Cannot deduce no_further_axes, return unchanged *)
-                ([ Rows_constr { r = rows; constr } ], env))
-      | Exact [ single_dim ] -> (
-          (* Handle exact single dimension constraint, preferring non-empty output rows. *)
-          match List.rev rows with
-          | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
-              apply_rows_constraint ~stage (List.rev more_rows) constr env
-          | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Input; _ } as id }
-            :: more_rows ->
-              let more_eqs, env = apply_rows_constraint ~stage (List.rev more_rows) constr env in
-              ( Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
-                :: more_eqs,
-                env )
-          | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Output; _ } as id }
-            :: more_rows ->
-              ( Row_eq
-                  {
-                    r1 = row_of_var v id;
-                    r2 = { dims = [ single_dim ]; bcast = Broadcastable; id };
-                  }
-                :: List.concat_map ~f:check_empty_row more_rows,
-                env )
-          | { dims = _; bcast = Row_var { v = _; beg_dims = _ }; id = { kind = `Output; _ } } :: _
-            ->
-              assert false
-          | _ -> raise @@ Shape_error ("apply_rows_constraint: shape too big", [ Row_mismatch rows ])
-          )
-      | _ -> ([ Rows_constr { r = rows; constr } ], env))
-
-and apply_row_constraint stage (r : row) (constr : row_constraint) env : constraint_ list * _ =
-  if is_unconstrained constr then ([], env)
-  else
-    let reduce constr ~beg_dims ~dims =
-      try reduce_row_constraint constr ~beg_dims ~dims
-      with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r ] :: trace)
-    in
-    let extras, constr, env, stored, updated =
-      match r with
-      | { bcast = Broadcastable; _ } -> ([], constr, env, false, false)
-      | { bcast = Row_var { v; beg_dims }; dims; _ } -> (
-          match Map.find env.row_env v with
-          | Some (Solved_row _) -> ([], constr, env, false, false)
-          | None ->
-              ( [],
-                constr,
-                {
-                  env with
-                  row_env =
-                    Map.set env.row_env ~key:v
-                      ~data:
-                        (Bounds_row
-                           {
-                             constr = reduce constr ~beg_dims ~dims;
-                             cur = [];
-                             subr = [];
-                             lub = None;
-                           });
-                },
-                true,
-                false )
-          | Some (Bounds_row ({ constr = Unconstrained; _ } as bounds)) ->
-              ( [],
-                constr,
-                {
-                  env with
-                  row_env =
-                    Map.set env.row_env ~key:v
-                      ~data:(Bounds_row { bounds with constr = reduce constr ~beg_dims ~dims });
-                },
-                true,
-                false )
-          | Some (Bounds_row bounds) -> (
-              match
-                row_conjunction ~id:r.id stage (reduce constr ~beg_dims ~dims) bounds.constr
-              with
-              | None -> ([], constr, env, false, false)
-              | Some (extras, constr) ->
-                  if phys_equal constr bounds.constr then (extras, constr, env, true, false)
-                  else
-                    ( extras,
-                      constr,
-                      {
-                        env with
-                        row_env =
-                          Map.set env.row_env ~key:v ~data:(Bounds_row { bounds with constr });
-                      },
-                      true,
-                      true )))
-    in
-    match (r, constr) with
-    | _ when stored && not updated -> (extras, env)
-    | _, Unconstrained -> assert false
-    | _, Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] }
-      when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
-        let tot = Option.value_exn (get_dim_val env var) in
-        let tot = Utils.safe_force coeff * tot / denom in
-        apply_row_constraint stage r
-          (Total_elems { numerator = Num_elems tot; divided_by = [] })
-          env
-    | ( { dims; bcast = Broadcastable; _ },
-        Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] } )
-      when is_stage2_up stage && known_dims_product dims ->
-        let (d : int), _ = Option.value_exn (collect_factors dims) in
-        let coeff : int = Utils.safe_force coeff in
-        if denom * d % coeff = 0 then
-          (Dim_eq { d1 = Var var; d2 = get_dim ~d:(denom * d / coeff) () } :: extras, env)
-        else
-          raise
-          @@ Shape_error
-               ("apply_row_constraint: Total_elems constraint failed", [ Row_mismatch [ r ] ])
-    | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
-      when List.length divided_by <= 1 -> (
-        try
-          let d, vars =
-            match collect_factors dims with Some (d, vars) -> (d, vars) | None -> raise Given_up
-          in
-          let numerator = total_elems_divide numerator d in
-          if total_elems_known_zero numerator then
-            raise
-            @@ Shape_error
-                 ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
-                   [ Dim_mismatch dims ] );
-          match (numerator, vars, divided_by) with
-          | Num_elems 1, [], [] -> (extras, env)
-          | Num_elems _, [], [] ->
-              raise
-              @@ Shape_error
-                   ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
-                     [ Row_mismatch [ r ] ] )
-          | Num_elems n, [ v ], [] | Num_elems n, [], [ v ] ->
-              (Dim_eq { d1 = Var v; d2 = get_dim ~d:n () } :: extras, env)
-          | Num_elems 1, vs1, vs2 ->
-              ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2)
-                @ extras,
-                env )
-          | Strided_var { coeff; var; denom }, [], [ v ]
-            when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
-              (* Total = (coeff * v / denom) / v = coeff / denom *)
-              if Utils.safe_force coeff % denom = 0 then
-                ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () }
-                  :: extras,
-                  env )
-              else if
-                (* coeff not divisible by denom - keep as constraint *)
-                stored
-              then (extras, env)
-              else (Rows_constr { r = [ r ]; constr } :: extras, env)
-          | _ ->
-              if stored then (extras, env)
-              else
-                ( Rows_constr { r = [ r ]; constr } :: extras,
-                  env (* Wait for more shape inference. *) )
-        with Given_up ->
-          if stored then (extras, env)
-          else
-            (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *)))
-    | { dims; bcast = Row_var { v; beg_dims }; _ }, Exact exact_dims
-      when List.length beg_dims + List.length dims >= List.length exact_dims ->
-        assert (not stored);
-        if List.length dims + List.length beg_dims > List.length exact_dims then
-          raise
-          @@ Shape_error
-               ( "apply_row_constraint: Exact constraint failed, shape is too long",
-                 [ Row_mismatch [ r ] ] );
-        ( Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } }
-          :: List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 -> Dim_eq { d1; d2 })
-          @ extras,
-          env )
-    | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = _ } ->
-        if stored then (extras, env)
-        else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
-    | { dims; bcast = Broadcastable; _ }, Exact exact_dims ->
-        assert (not stored);
-        (List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) @ extras, env)
-
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
   | Solved_dim in_ -> ([], Solved_dim (s_dim_one v ~value ~in_))
@@ -1236,6 +1016,266 @@ let%debug6_sexp subst_row (env : environment) ({ dims; bcast; id } : t) : t =
                 bcast = Row_var { v = v2; beg_dims = beg_dims @ more_beg_dims };
                 id;
               }))
+
+let subst_row_constraint stage env constr =
+  let subst_total_elems_divided_by numerator divided_by =
+    let substituted_divided_by = List.map divided_by ~f:(fun v -> subst_dim env (Var v)) in
+    match collect_factors substituted_divided_by with
+    | Some (known_product, residual_vars) ->
+        Total_elems
+          {
+            numerator = total_elems_divide numerator known_product;
+            divided_by = residual_vars;
+          }
+    | None ->
+        (* Fall back to preserving the original constraint *)
+        Total_elems { numerator; divided_by }
+  in
+  match constr with
+  | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
+    when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
+      let dim = Option.value_exn (get_dim_val env var) in
+      let tot = Utils.safe_force coeff * dim in
+      if tot % denom = 0 then
+        subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
+      else
+        raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
+  | Total_elems { numerator; divided_by } ->
+      subst_total_elems_divided_by numerator divided_by
+  | Exact dims -> Exact (List.map dims ~f:(subst_dim env))
+  | Unconstrained -> constr
+
+let%track5_sexp rec apply_rows_constraint ~depth ~stage (rows : row list) (constr : row_constraint)
+    (env : environment) : constraint_ list * environment =
+  if depth > 16 then ([], env)
+  else
+    match rows_to_row_or_vars rows with
+    | Either.First single_row -> apply_row_constraint ~depth stage single_row constr env
+    | Either.Second (all_dims, row_vars) -> (
+        match constr with
+        | Exact dims when List.length dims < List.length all_dims ->
+            (* Case 1: Exact dims has fewer axes than all_dims - raise mismatch *)
+            raise
+            @@ Shape_error
+                 ("apply_rows_constraint: Exact constraint has too few axes", [ Row_mismatch rows ])
+        | Exact dims when List.length dims = List.length all_dims ->
+            (* Case 2: Exact dims has same length as all_dims - derive pairwise equations *)
+            let dim_eqs = List.map2_exn dims all_dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) in
+            let row_eqs =
+              List.map row_vars ~f:(fun (v, id) ->
+                  Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } })
+            in
+            (dim_eqs @ row_eqs, env)
+        | Total_elems { numerator = Num_elems n; divided_by } -> (
+            (* Case 3: Total_elems with known numerator *)
+            match collect_factors all_dims with
+            | None -> ([ Rows_constr { r = rows; constr } ], env) (* Give up on complex cases *)
+            | Some (known_product, product_vars) ->
+                (* Move divided_by variables to the other side by combining with product_vars *)
+                let all_product_vars = product_vars @ divided_by in
+                if n % known_product <> 0 then
+                  raise
+                  @@ Shape_error
+                       ( [%string
+                           "Total_elems constraint: %{n#Int} not divisible by known product \
+                            %{known_product#Int}"],
+                         [] )
+                else if n = known_product then
+                  (* Equate all product vars to d=1 and add Total_elems 1 for each row var *)
+                  let var_eqs =
+                    List.map all_product_vars ~f:(fun v ->
+                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () })
+                  in
+                  let row_constrs =
+                    List.map row_vars ~f:(fun (v, id) ->
+                        Rows_constr
+                          {
+                            r = [ row_of_var v id ];
+                            constr = Total_elems { numerator = Num_elems 1; divided_by = [] };
+                          })
+                  in
+                  (var_eqs @ row_constrs, env)
+                else
+                  (* Cannot deduce no_further_axes, return unchanged *)
+                  ([ Rows_constr { r = rows; constr } ], env))
+        | Exact [ single_dim ] -> (
+            (* Handle exact single dimension constraint, preferring non-empty output rows. *)
+            match List.rev rows with
+            | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
+                apply_rows_constraint ~depth:(depth + 1) ~stage (List.rev more_rows) constr env
+            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Input; _ } as id }
+              :: more_rows ->
+                let more_eqs, env =
+                  apply_rows_constraint ~depth:(depth + 1) ~stage (List.rev more_rows) constr env
+                in
+                ( Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id } }
+                  :: more_eqs,
+                  env )
+            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Output; _ } as id }
+              :: more_rows ->
+                ( Row_eq
+                    {
+                      r1 = row_of_var v id;
+                      r2 = { dims = [ single_dim ]; bcast = Broadcastable; id };
+                    }
+                  :: List.concat_map ~f:check_empty_row more_rows,
+                  env )
+            | { dims = _; bcast = Row_var { v = _; beg_dims = _ }; id = { kind = `Output; _ } } :: _
+              ->
+                assert false
+            | _ ->
+                raise @@ Shape_error ("apply_rows_constraint: shape too big", [ Row_mismatch rows ])
+            )
+        | _ -> ([ Rows_constr { r = rows; constr } ], env))
+
+and apply_row_constraint ~depth stage (r : row) (constr : row_constraint) env : constraint_ list * _
+    =
+  if depth > 16 then ([], env)
+  else if is_unconstrained constr then ([], env)
+  else
+    let constr = subst_row_constraint stage env constr in
+    let reduce constr ~beg_dims ~dims =
+      try reduce_row_constraint constr ~beg_dims ~dims
+      with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r ] :: trace)
+    in
+    let extras, constr, env, stored, updated =
+      match r with
+      | { bcast = Broadcastable; _ } -> ([], constr, env, false, false)
+      | { bcast = Row_var { v; beg_dims }; dims; _ } -> (
+          match Map.find env.row_env v with
+          | Some (Solved_row _) -> ([], constr, env, false, false)
+          | None ->
+              ( [],
+                constr,
+                {
+                  env with
+                  row_env =
+                    Map.set env.row_env ~key:v
+                      ~data:
+                        (Bounds_row
+                           {
+                             constr = reduce constr ~beg_dims ~dims;
+                             cur = [];
+                             subr = [];
+                             lub = None;
+                           });
+                },
+                true,
+                false )
+          | Some (Bounds_row ({ constr = Unconstrained; _ } as bounds)) ->
+              ( [],
+                constr,
+                {
+                  env with
+                  row_env =
+                    Map.set env.row_env ~key:v
+                      ~data:(Bounds_row { bounds with constr = reduce constr ~beg_dims ~dims });
+                },
+                true,
+                false )
+          | Some (Bounds_row bounds) -> (
+              match
+                row_conjunction ~id:r.id stage (reduce constr ~beg_dims ~dims) bounds.constr
+              with
+              | None -> ([], constr, env, false, false)
+              | Some (extras, constr) ->
+                  if phys_equal constr bounds.constr then (extras, constr, env, true, false)
+                  else
+                    ( extras,
+                      constr,
+                      {
+                        env with
+                        row_env =
+                          Map.set env.row_env ~key:v ~data:(Bounds_row { bounds with constr });
+                      },
+                      true,
+                      true )))
+    in
+    match (r, constr) with
+    | _ when stored && not updated -> (extras, env)
+    | _, Unconstrained -> assert false
+    | _, Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] }
+      when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
+        let tot = Option.value_exn (get_dim_val env var) in
+        let tot = Utils.safe_force coeff * tot / denom in
+        apply_row_constraint ~depth:(depth + 1) stage r
+          (Total_elems { numerator = Num_elems tot; divided_by = [] })
+          env
+    | ( { dims; bcast = Broadcastable; _ },
+        Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by = [] } )
+      when is_stage2_up stage && known_dims_product dims ->
+        let (d : int), _ = Option.value_exn (collect_factors dims) in
+        let coeff : int = Utils.safe_force coeff in
+        if denom * d % coeff = 0 then
+          (Dim_eq { d1 = Var var; d2 = get_dim ~d:(denom * d / coeff) () } :: extras, env)
+        else
+          raise
+          @@ Shape_error
+               ("apply_row_constraint: Total_elems constraint failed", [ Row_mismatch [ r ] ])
+    | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
+      when List.length divided_by <= 1 -> (
+        try
+          let d, vars =
+            match collect_factors dims with Some (d, vars) -> (d, vars) | None -> raise Given_up
+          in
+          let numerator = total_elems_divide numerator d in
+          if total_elems_known_zero numerator then
+            raise
+            @@ Shape_error
+                 ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
+                   [ Dim_mismatch dims ] );
+          match (numerator, vars, divided_by) with
+          | Num_elems 1, [], [] -> (extras, env)
+          | Num_elems _, [], [] ->
+              raise
+              @@ Shape_error
+                   ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
+                     [ Row_mismatch [ r ] ] )
+          | Num_elems n, [ v ], [] | Num_elems n, [], [ v ] ->
+              (Dim_eq { d1 = Var v; d2 = get_dim ~d:n () } :: extras, env)
+          | Num_elems 1, vs1, vs2 ->
+              ( List.map ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 () }) (vs1 @ vs2)
+                @ extras,
+                env )
+          | Strided_var { coeff; var; denom }, [], [ v ]
+            when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
+              (* Total = (coeff * v / denom) / v = coeff / denom *)
+              if Utils.safe_force coeff % denom = 0 then
+                ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) () }
+                  :: extras,
+                  env )
+              else if
+                (* coeff not divisible by denom - keep as constraint *)
+                stored
+              then (extras, env)
+              else (Rows_constr { r = [ r ]; constr } :: extras, env)
+          | _ ->
+              if stored then (extras, env)
+              else
+                ( Rows_constr { r = [ r ]; constr } :: extras,
+                  env (* Wait for more shape inference. *) )
+        with Given_up ->
+          if stored then (extras, env)
+          else
+            (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *)))
+    | { dims; bcast = Row_var { v; beg_dims }; _ }, Exact exact_dims
+      when List.length beg_dims + List.length dims >= List.length exact_dims ->
+        assert (not stored);
+        if List.length dims + List.length beg_dims > List.length exact_dims then
+          raise
+          @@ Shape_error
+               ( "apply_row_constraint: Exact constraint failed, shape is too long",
+                 [ Row_mismatch [ r ] ] );
+        ( Row_eq { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id } }
+          :: List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 -> Dim_eq { d1; d2 })
+          @ extras,
+          env )
+    | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = _ } ->
+        if stored then (extras, env)
+        else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
+    | { dims; bcast = Broadcastable; _ }, Exact exact_dims ->
+        assert (not stored);
+        (List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2 }) @ extras, env)
 
 let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
     constraint_ list * environment =
@@ -1459,7 +1499,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
                 List.iter subr ~f:(fun subr ->
                     ineqs := Row_ineq { subr = row_of_var subr value.id; cur = r2 } :: !ineqs);
                 Option.iter lub ~f:(fun lub -> ineqs := Row_ineq { cur = lub; subr = r2 } :: !ineqs);
-                let extras, env = apply_row_constraint stage value constr env in
+                let extras, env = apply_row_constraint ~depth:0 stage value constr env in
                 ineqs := extras @ !ineqs;
                 env)
               else env
@@ -1936,8 +1976,8 @@ let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
 
 let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list)
-    (constr : row_constraint) (env : environment) : constraint_ list =
-  if depth > 16 then []
+    (constr : row_constraint) (env : environment) : constraint_ list * environment =
+  if depth > 16 then ([], env)
   else
     match rows_to_row_or_vars rows with
     | Either.First single_row ->
@@ -1962,20 +2002,27 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list
                 | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
                 | r -> { r with dims = r_dims r; bcast = Broadcastable })
             in
-            other_eqs @ eliminate_rows_constraint ~depth:(depth + 1) stage ~lub rows constr env
-        | _ -> [ Rows_constr { r = rows; constr } ])
+            let ineqs, env =
+              eliminate_rows_constraint ~depth:(depth + 1) stage ~lub rows constr env
+            in
+            (other_eqs @ ineqs, env)
+        | _ -> ([ Rows_constr { r = rows; constr } ], env))
 
 and eliminate_row_constraint ~depth stage ~lub (r : row) (constr : row_constraint) env :
-    constraint_ list =
-  let keep_constr = if is_stage6_up stage then [] else [ Rows_constr { r = [ r ]; constr } ] in
-  match r with
-  | { bcast = Broadcastable; _ } ->
-      (* The environment is unchanged, as apply_row_constraint would update only the constr. *)
-      let ineqs, _env = apply_row_constraint stage r constr env in
-      List.concat_map ineqs ~f:(function
+    constraint_ list * environment =
+  let keep_constr () =
+    let ineqs, env = apply_row_constraint ~depth stage r constr env in
+    List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
+        match ineq with
         | Rows_constr { r = rows; constr } ->
-            eliminate_rows_constraint ~depth stage ~lub:None rows constr env
-        | ineq -> [ ineq ])
+            let ineqs', env =
+              eliminate_rows_constraint ~depth:(depth + 1) stage ~lub:None rows constr env
+            in
+            (ineqs @ ineqs', env)
+        | ineq -> ([ ineq ], env))
+  in
+  match r with
+  | { bcast = Broadcastable; _ } -> keep_constr ()
   | { bcast = Row_var { v; beg_dims }; dims; id } -> (
       let r1 = row_of_var v id in
       let no_further_axes = Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } } in
@@ -1984,39 +2031,40 @@ and eliminate_row_constraint ~depth stage ~lub (r : row) (constr : row_constrain
       | Total_elems { numerator; divided_by } -> (
           match (numerator, divided_by, lub) with
           | Num_elems 1, vs, _ when is_stage5_up stage ->
-              no_further_axes
-              :: List.map vs ~f:(fun v ->
-                     let d2 = get_dim ~d:1 () in
-                     Dim_eq { d1 = Var v; d2 })
+              ( no_further_axes
+                :: List.map vs ~f:(fun v ->
+                       let d2 = get_dim ~d:1 () in
+                       Dim_eq { d1 = Var v; d2 }),
+                env )
           | Num_elems d, [], None when d <> 1 && is_stage3_up stage ->
               let dim = get_dim ~d () in
-              [ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ]
+              ([ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ], env)
           | Num_elems d, [], Some { dims; _ } when d <> 1 && last_dim_is dims (( = ) d) ->
               let dim = get_dim ~d () in
-              [ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ]
+              ([ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id } } ], env)
           | Num_elems _, [], Some lub ->
-              let ineqs, _env = apply_row_constraint stage lub constr env in
-              List.concat_map ineqs ~f:(function
-                | Rows_constr { r = rows; constr } ->
-                    eliminate_rows_constraint ~depth stage ~lub:None rows constr env
-                | ineq -> [ ineq ])
+              let ineqs, env = apply_row_constraint ~depth:(depth + 1) stage lub constr env in
+              List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
+                  match ineq with
+                  | Rows_constr { r = rows; constr } ->
+                      let ineqs', env =
+                        eliminate_rows_constraint ~depth stage ~lub:None rows constr env
+                      in
+                      (ineqs @ ineqs', env)
+                  | ineq -> ([ ineq ], env))
           | Num_elems d, [ v ], None when is_stage4_up stage ->
-              no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ]
+              (no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d () } ], env)
           | Num_elems d, [ v ], Some ({ dims; _ } as r2)
             when last_dim_is dims (fun d2 -> d % d2 = 0) ->
               let d2 = match List.last dims with Some (Dim { d; _ }) -> d | _ -> assert false in
               let row_eq =
                 if d = d2 && is_stage5_up stage then no_further_axes else Row_eq { r1; r2 }
               in
-              row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) () } ]
-          | Strided_var { coeff = _; var = _; denom = _ }, _, _ ->
-              (* The row variable should have coeff * var elements total *)
-              (* We can't determine the exact shape without knowing var *)
-              (* FIXME: probably can do better here *)
-              keep_constr
-          | _ -> keep_constr)
-      | Exact dims -> [ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ]
-      | Unconstrained -> [])
+              (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) () } ], env)
+          | Strided_var { coeff = _; var = _; denom = _ }, _, _ -> keep_constr ()
+          | _ -> keep_constr ())
+      | Exact dims -> ([ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ], env)
+      | Unconstrained -> ([], env))
 
 let%track5_sexp close_row_terminal ~(stage : stage) (env : environment)
     ({ dims; bcast; id } as _r : row) : constraint_ list =
@@ -2033,7 +2081,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) (env : environment)
           no_further_axes :: term_dims ()
       | Some (Bounds_row { lub = None; constr; _ })
         when is_stage2_up stage && not (equal_row_constraint constr Unconstrained) ->
-          let ineqs =
+          let ineqs, _env =
             (* This is the constraint on the row variable, not on the original row. *)
             try eliminate_row_constraint ~depth:0 stage r1 ~lub:None constr env
             with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1 ] :: trace)
@@ -2084,6 +2132,8 @@ let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as 
       let r2 = { dims = []; bcast = Broadcastable; id } in
       let elim_var = Row_eq { r1 = row_of_var v id; r2 } in
       match Map.find env.row_env v with
+      | Some (Bounds_row { constr = Total_elems { numerator = Num_elems 1; _ }; _ }) ->
+          elim_var :: elim_dims
       | Some (Bounds_row { constr = Total_elems _; _ }) -> assert false
       | _ -> elim_var :: elim_dims)
 
@@ -2128,11 +2178,12 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           in
           (extras @ ineqs, env)
       | Rows_constr { r = rows; constr } ->
+          let constr = subst_row_constraint stage env constr in
           let substituted_rows = List.map rows ~f:(subst_row env) in
           let more_ineqs, env =
             if is_stage5_up stage then
-              (eliminate_rows_constraint ~depth:0 stage ~lub:None substituted_rows constr env, env)
-            else apply_rows_constraint ~stage substituted_rows constr env
+              eliminate_rows_constraint ~depth:0 stage ~lub:None substituted_rows constr env
+            else apply_rows_constraint ~depth:0 ~stage substituted_rows constr env
           in
           (more_ineqs @ ineqs, env)
       | Terminal_dim d ->
@@ -2164,16 +2215,17 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
       in
       solve (finalizing_entries @ ineqs) env
   | Stage5 ->
-      let finalize_total_elems v = function
+      let finalize_total_elems env v = function
         | Bounds_row { lub; constr; _ } ->
             (* TODO: should we store the id somewhere? *)
             let id = phantom_row_id in
             eliminate_row_constraint ~depth:0 stage (row_of_var v id) ~lub constr env
-        | _ -> []
+        | _ -> ([], env)
       in
-      let finalizing_entries : constraint_ list =
-        Map.fold env.row_env ~init:[] ~f:(fun ~key ~data accu ->
-            finalize_total_elems key data @ accu)
+      let finalizing_entries, env =
+        Map.fold env.row_env ~init:([], env) ~f:(fun ~key ~data (accu, env) ->
+            let ineqs, env = finalize_total_elems env key data in
+            (ineqs @ accu, env))
       in
       solve (finalizing_entries @ ineqs) env
 
