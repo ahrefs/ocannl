@@ -234,16 +234,16 @@ let c_typ_of_prec = function
   | Void_prec -> "void"
 
 let c_vec_typ_of_prec ~length prec =
-  match prec, length with
+  match (prec, length) with
   | Single_prec _, 4 -> "float4_t"
   | Double_prec _, 2 -> "double2_t"
   | Int32_prec _, 4 -> "int32x4_t"
   | (Byte_prec _ | Fp8_prec _), 16 -> "int8x16_t"
   | (Uint16_prec _ | Bfloat16_prec _), 8 -> "uint16x8_t"
   | Half_prec _, 8 -> "half8_t"
-  | _ -> 
-    (* Fallback for other combinations *)
-    c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+  | _ ->
+      (* Fallback for other combinations *)
+      c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
 
 let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
@@ -366,15 +366,7 @@ let interpret_binop op v1 v2 =
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
-  | Threefry4x32 ->
-      (* NOTE: the purpose of this code is to reflect the reference implementation that all backends
-         should implement. Due to precision constraints and the fact that threefry is inherently a
-         non-numerical, bit-level operation, this code reinterprets the arguments and the result as
-         the lower 64 bits of the 128-bit values; with the upper 64 bits being 0 for the arguments
-         and ignored for the result. This agrees with the Bigarray reinterpretation of the
-         [Uint4x32] precision as the [Complex.t] type with the real part exposed. *)
-      (* FIXME: NOT IMPLEMENTED YET *)
-      failwith "NOT IMPLEMENTED YET: Threefry4x32"
+  | Threefry4x32 -> invalid_arg "Ops.interpret_binop: Threefry4x32 is outside the domain of float"
 
 let interpret_unop op v =
   let open Float in
@@ -595,7 +587,8 @@ let unop_c_syntax prec op =
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 let vec_unop_c_syntax prec op =
-  match op with Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
+  match op with
+  | Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
