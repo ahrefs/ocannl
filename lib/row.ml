@@ -873,11 +873,14 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
 let s_dim_one_in_row v ~value in_ =
   { in_ with dims = List.map in_.dims ~f:(fun in_ -> s_dim_one v ~value ~in_) }
 
+let reapply_rows_constr = ref false
+
 let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
   let subst_total_elems_divided_by numerator divided_by =
     let substituted_divided_by = List.map divided_by ~f:(fun v -> subst_in_dim (Var v)) in
     match collect_factors substituted_divided_by with
     | Some (known_product, residual_vars) ->
+        reapply_rows_constr := true;
         Total_elems
           { numerator = total_elems_divide numerator known_product; divided_by = residual_vars }
     | None ->
@@ -889,10 +892,12 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
     when is_stage2_up stage && Option.is_some (get_dim_val var) ->
       let dim = Option.value_exn (get_dim_val var) in
       let tot = Utils.safe_force coeff * dim in
+      reapply_rows_constr := true;
       if tot % denom = 0 then subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
       else raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
   | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
     when not (equal_dim (Var var) (subst_in_dim (Var var))) -> (
+      reapply_rows_constr := true;
       match subst_in_dim (Var var) with
       | Dim { d; _ } as value ->
           (* Replace (coeff * v / denom) with (coeff * d / denom) *)
@@ -910,7 +915,9 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
           (* FIXME: NOT IMPLEMENTED YET *)
           failwith "NOT IMPLEMENTED YET")
   | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
-  | Exact dims -> Exact (List.map dims ~f:subst_in_dim)
+  | Exact dims ->
+      (* The constraint update does not affect its applicability, so we don't need to reapply it. *)
+      Exact (List.map dims ~f:subst_in_dim)
   | Unconstrained -> constr
 
 let s_dim_one_in_row_constr stage v ~value constr =
@@ -921,12 +928,23 @@ let s_dim_one_in_row_constr stage v ~value constr =
     ~subst_in_dim:(fun in_ -> s_dim_one v ~value ~in_)
     ~get_dim_val stage constr
 
-let s_dim_one_in_row_entry stage v ~value in_ =
-  match in_ with
-  | Solved_row in_ -> Solved_row (s_dim_one_in_row v ~value in_)
-  | Bounds_row { cur; subr; lub; constr } ->
-      let constr = s_dim_one_in_row_constr stage v ~value constr in
-      Bounds_row { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr }
+let ineqs_from_reapply_rows_constr = ref []
+
+let s_dim_one_in_row_entry stage v ~value ~key ~data =
+  assert (not !reapply_rows_constr);
+  let result =
+    match data with
+    | Solved_row in_ -> Solved_row (s_dim_one_in_row v ~value in_)
+    | Bounds_row { cur; subr; lub; constr } ->
+        let constr = s_dim_one_in_row_constr stage v ~value constr in
+        if !reapply_rows_constr then
+          ineqs_from_reapply_rows_constr :=
+            Rows_constr { r = [ row_of_var key phantom_row_id ]; constr }
+            :: !ineqs_from_reapply_rows_constr;
+        reapply_rows_constr := false;
+        Bounds_row { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr }
+  in
+  result
 
 let rec vars_of_dim = function
   | Dim _ -> Set.empty (module Dim_var)
@@ -1112,6 +1130,7 @@ and apply_row_constraint ~depth stage (r : row) (constr : row_constraint) env : 
   else if is_unconstrained constr then ([], env)
   else
     let constr = subst_row_constraint stage env constr in
+    reapply_rows_constr := false;
     let reduce constr ~beg_dims ~dims =
       try reduce_row_constraint constr ~beg_dims ~dims
       with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r ] :: trace)
@@ -1308,7 +1327,7 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
             let dim_env = Map.map env.dim_env ~f in
             {
               dim_env = Map.add_exn dim_env ~key:v ~data:(Solved_dim dim2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
+              row_env = Map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
             }
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { cur; subr; lub; constr }) ->
@@ -1325,9 +1344,11 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
             ineqs := extras @ !ineqs;
             {
               dim_env = Map.set dim_env ~key:v ~data:(Solved_dim dim2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
+              row_env = Map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
             }
       in
+      ineqs := !ineqs_from_reapply_rows_constr @ !ineqs;
+      ineqs_from_reapply_rows_constr := [];
       let dim_eqs, ineqs =
         List.partition_map !ineqs ~f:(function
           | Dim_eq { d1; d2 } -> Either.First (d1, d2)
@@ -2119,6 +2140,7 @@ let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as 
               (subst_row_constraint stage env constr)
               env
           in
+          reapply_rows_constr := false;
           ineqs @ elim_dims
       | _ -> elim_var :: elim_dims)
 
@@ -2164,6 +2186,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           (extras @ ineqs, env)
       | Rows_constr { r = rows; constr } ->
           let constr : row_constraint = subst_row_constraint stage env constr in
+          reapply_rows_constr := false;
           let substituted_rows = List.map rows ~f:(subst_row env) in
           let (more_ineqs : constraint_ list), env =
             if is_stage5_up stage then
@@ -2424,7 +2447,7 @@ let get_proj_index proj_env =
         let repr, _ =
           Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
         in
-        match d, Map.find proj_env.proj_to_index repr with
+        match (d, Map.find proj_env.proj_to_index repr) with
         | _, Some i -> i
         | (0 | 1), None -> Fixed_idx 0
         | _ -> unknown_projection proj_id d)
@@ -2606,7 +2629,7 @@ let get_dim_index proj_env =
         let repr, _ =
           Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
         in
-        match d, Map.find proj_env.proj_to_index repr with
+        match (d, Map.find proj_env.proj_to_index repr) with
         | _, Some i -> i
         | (0 | 1), None -> Fixed_idx 0
         | _ -> unknown_projection proj_id d)
@@ -2625,7 +2648,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let non_product = ref @@ Set.empty (module Proj_id) in
-  let rec loop (eq : proj_equation) : unit = match eq with
+  let rec loop (eq : proj_equation) : unit =
+    match eq with
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
         p_dims := (p1, d) :: !p_dims
     | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()

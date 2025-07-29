@@ -694,13 +694,13 @@ let apply_env_update ~eliminate_variables env update_step =
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
-  ignore (apply_env_update ~eliminate_variables:false !state update_step);
+  assert (List.is_empty (apply_env_update ~eliminate_variables:false !state update_step));
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
-  ignore (apply_env_update ~eliminate_variables:false env update_step);
+  assert (List.is_empty (apply_env_update ~eliminate_variables:false env update_step));
   state := env
 
 let%debug4_sexp finish_inference (() : unit) : unit =
@@ -712,18 +712,23 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
+  let _active_update_steps : update_step list = !active_update_steps in
   let eliminated =
     List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps
   in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 (eliminated @ unsolved) env in
   assert (List.is_empty unsolved);
-  ignore @@ List.map ~f:(apply_env_update ~eliminate_variables:false env) !active_update_steps;
+  List.iter
+    ~f:(fun update_step ->
+      assert (List.is_empty (apply_env_update ~eliminate_variables:false env update_step)))
+    !active_update_steps;
+  let _applied_update_steps : update_step list = !active_update_steps in
   active_constraints := [];
   active_update_steps := [];
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env
 
-let row_to_dims row =
+let%debug4_sexp row_to_dims (row : Row.t) : int array =
   let open Row in
   let f = function
     | Dim { d; _ } -> d
@@ -734,6 +739,7 @@ let row_to_dims row =
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Row_mismatch [ row ] ] )
     | Conv_input _ ->
+        (* FIXME: reconsider this, we could return the input dimension of the convolution. *)
         raise
         @@ Row.Shape_error
              ( "Not enough shape information: affine dimension cannot be converted to single int",
