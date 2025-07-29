@@ -2112,7 +2112,14 @@ let%debug5_sexp eliminate_variables (env : environment) ({ dims; bcast; id } as 
       match Map.find env.row_env v with
       | Some (Bounds_row { constr = Total_elems { numerator = Num_elems 1; _ }; _ }) ->
           elim_var :: elim_dims
-      | Some (Bounds_row { constr = Total_elems _; _ }) -> assert false
+      | Some (Bounds_row { constr = Total_elems _ as constr; lub; _ }) ->
+          let stage = Stage7 in
+          let ineqs, _env =
+            eliminate_row_constraint ~depth:0 stage ~lub (row_of_var v id)
+              (subst_row_constraint stage env constr)
+              env
+          in
+          ineqs @ elim_dims
       | _ -> elim_var :: elim_dims)
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
