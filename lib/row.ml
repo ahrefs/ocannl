@@ -873,57 +873,59 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
 let s_dim_one_in_row v ~value in_ =
   { in_ with dims = List.map in_.dims ~f:(fun in_ -> s_dim_one v ~value ~in_) }
 
-let rec s_dim_one_in_row_constr v ~value constr =
+let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
+  let subst_total_elems_divided_by numerator divided_by =
+    let substituted_divided_by = List.map divided_by ~f:(fun v -> subst_in_dim (Var v)) in
+    match collect_factors substituted_divided_by with
+    | Some (known_product, residual_vars) ->
+        Total_elems
+          { numerator = total_elems_divide numerator known_product; divided_by = residual_vars }
+    | None ->
+        (* Fall back to preserving the original constraint *)
+        Total_elems { numerator; divided_by }
+  in
   match constr with
-  | Total_elems { numerator; divided_by } -> (
-      (* Check if the variable being substituted appears in the numerator *)
-      match numerator with
-      | Strided_var { coeff; var = num_var; denom } when equal_dim_var v num_var -> (
-          (* The variable being substituted appears in the numerator *)
-          match value with
-          | Dim { d; _ } ->
-              (* Replace (coeff * v / denom) with (coeff * d / denom) *)
-              let new_num = Utils.safe_force coeff * d in
-              if new_num % denom = 0 then
-                Total_elems { numerator = Num_elems (new_num / denom); divided_by }
-              else
-                (* Can't simplify further, keep as Strided_var with a different variable *)
-                Unconstrained
-          | Var v' -> Total_elems { numerator = Strided_var { coeff; var = v'; denom }; divided_by }
-          | Conv_input _ ->
-              (* Complex case, give up for now *)
-              Unconstrained)
-      | _ when List.mem divided_by v ~equal:equal_dim_var -> (
-          (* Variable is in divided_by - remove one occurrence *)
-          let divided_by = remove_var v divided_by in
-          match value with
-          | Var v' -> Total_elems { numerator; divided_by = v' :: divided_by }
-          | Dim { d; _ } ->
-              let numerator = total_elems_divide numerator d in
-              if total_elems_known_zero numerator then
-                raise
-                @@ Shape_error
-                     ( "s_dim_one_in_row_constr: Total_elems constraint failed: shape is too big",
-                       [ Dim_mismatch [ value ] ] )
-              else Total_elems { numerator; divided_by }
-          | Conv_input { stride; output; _ } ->
-              if not !use_padding then Unconstrained
-              else
-                s_dim_one_in_row_constr v ~value:output
-                  (Total_elems
-                     {
-                       numerator = total_elems_divide numerator stride;
-                       divided_by = v :: divided_by;
-                     }))
-      | _ -> constr)
-  | Exact exact_dims -> Exact (List.map exact_dims ~f:(fun in_ -> s_dim_one v ~value ~in_))
+  | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
+    when is_stage2_up stage && Option.is_some (get_dim_val var) ->
+      let dim = Option.value_exn (get_dim_val var) in
+      let tot = Utils.safe_force coeff * dim in
+      if tot % denom = 0 then subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
+      else raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
+  | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
+    when not (equal_dim (Var var) (subst_in_dim (Var var))) -> (
+      match subst_in_dim (Var var) with
+      | Dim { d; _ } as value ->
+          (* Replace (coeff * v / denom) with (coeff * d / denom) *)
+          let new_num = Utils.safe_force coeff * d in
+          if new_num % denom = 0 then
+            Total_elems { numerator = Num_elems (new_num / denom); divided_by }
+          else
+            raise
+            @@ Shape_error
+                 ( "s_dim_one_in_row_constr: Total_elems constraint failed: dimension is not \
+                    divisible",
+                   [ Dim_mismatch [ value ] ] )
+      | Var v' -> Total_elems { numerator = Strided_var { coeff; var = v'; denom }; divided_by }
+      | Conv_input _ ->
+          (* FIXME: NOT IMPLEMENTED YET *)
+          failwith "NOT IMPLEMENTED YET")
+  | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
+  | Exact dims -> Exact (List.map dims ~f:subst_in_dim)
   | Unconstrained -> constr
 
-let s_dim_one_in_row_entry v ~value in_ =
+let s_dim_one_in_row_constr stage v ~value constr =
+  let get_dim_val v' =
+    if equal_dim_var v v' then match value with Dim { d; _ } -> Some d | _ -> None else None
+  in
+  subst_row_constraint_impl
+    ~subst_in_dim:(fun in_ -> s_dim_one v ~value ~in_)
+    ~get_dim_val stage constr
+
+let s_dim_one_in_row_entry stage v ~value in_ =
   match in_ with
   | Solved_row in_ -> Solved_row (s_dim_one_in_row v ~value in_)
   | Bounds_row { cur; subr; lub; constr } ->
-      let constr = s_dim_one_in_row_constr v ~value constr in
+      let constr = s_dim_one_in_row_constr stage v ~value constr in
       Bounds_row { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr }
 
 let rec vars_of_dim = function
@@ -1018,26 +1020,8 @@ let%debug6_sexp subst_row (env : environment) ({ dims; bcast; id } : t) : t =
               }))
 
 let subst_row_constraint stage env constr =
-  let subst_total_elems_divided_by numerator divided_by =
-    let substituted_divided_by = List.map divided_by ~f:(fun v -> subst_dim env (Var v)) in
-    match collect_factors substituted_divided_by with
-    | Some (known_product, residual_vars) ->
-        Total_elems
-          { numerator = total_elems_divide numerator known_product; divided_by = residual_vars }
-    | None ->
-        (* Fall back to preserving the original constraint *)
-        Total_elems { numerator; divided_by }
-  in
-  match constr with
-  | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
-    when is_stage2_up stage && Option.is_some (get_dim_val env var) ->
-      let dim = Option.value_exn (get_dim_val env var) in
-      let tot = Utils.safe_force coeff * dim in
-      if tot % denom = 0 then subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
-      else raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
-  | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
-  | Exact dims -> Exact (List.map dims ~f:(subst_dim env))
-  | Unconstrained -> constr
+  subst_row_constraint_impl ~subst_in_dim:(subst_dim env) ~get_dim_val:(get_dim_val env) stage
+    constr
 
 let%track5_sexp rec apply_rows_constraint ~depth ~stage (rows : row list) (constr : row_constraint)
     (env : environment) : constraint_ list * environment =
@@ -1324,7 +1308,7 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
             let dim_env = Map.map env.dim_env ~f in
             {
               dim_env = Map.add_exn dim_env ~key:v ~data:(Solved_dim dim2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:dim2);
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
             }
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { cur; subr; lub; constr }) ->
@@ -1341,7 +1325,7 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
             ineqs := extras @ !ineqs;
             {
               dim_env = Map.set dim_env ~key:v ~data:(Solved_dim dim2);
-              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry v ~value:dim2);
+              row_env = Map.map env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
             }
       in
       let dim_eqs, ineqs =
