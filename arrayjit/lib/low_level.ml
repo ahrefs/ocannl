@@ -271,7 +271,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           let pos_idcs = Array.copy idcs in
           (match pos_idcs.(Array.length pos_idcs - 1) with
           | Fixed_idx idx -> pos_idcs.(Array.length pos_idcs - 1) <- Fixed_idx (idx + i)
-          | _ -> 
+          | _ ->
               (* For non-Fixed_idx, we need to increment through the dimension *)
               let dims = Tn.dims_without_padding tn in
               let base_pos = lookup env idcs in
@@ -279,7 +279,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               let flat_pos = ref 0 in
               let stride = ref 1 in
               for j = Array.length base_pos - 1 downto 0 do
-                flat_pos := !flat_pos + base_pos.(j) * !stride;
+                flat_pos := !flat_pos + (base_pos.(j) * !stride);
                 stride := !stride * dims.(j)
               done;
               flat_pos := !flat_pos + i;
@@ -555,7 +555,8 @@ let inline_computation ~id computations_table traced static_indices call_args =
           let expand_symbol (coeff, s) =
             match Map.find env s with
             | Some (Indexing.Iterator new_s) -> [ (coeff, new_s) ]
-            | Some (Indexing.Fixed_idx _ | Indexing.Sub_axis) -> [] (* Fixed index contributes to offset *)
+            | Some (Indexing.Fixed_idx _ | Indexing.Sub_axis) ->
+                [] (* Fixed index contributes to offset *)
             | Some (Indexing.Affine { symbols = inner_symbols; offset = _ }) ->
                 (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
                 List.map inner_symbols ~f:(fun (inner_coeff, inner_s) ->

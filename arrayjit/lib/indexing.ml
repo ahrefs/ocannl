@@ -268,7 +268,7 @@ module Doc_helpers = struct
     match idx with
     | Iterator sym -> pp_symbol sym
     | Fixed_idx i -> PPrint.OCaml.int i
-    | Affine { symbols; offset } -> 
+    | Affine { symbols; offset } -> (
         let open PPrint in
         let terms =
           List.map symbols ~f:(fun (coeff, sym) ->
@@ -279,7 +279,7 @@ module Doc_helpers = struct
           else if offset > 0 then terms @ [ int offset ]
           else terms @ [ string "-" ^^ int (-offset) ]
         in
-        (match all_terms with
+        match all_terms with
         | [] -> int 0
         | [ t ] -> t
         | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))

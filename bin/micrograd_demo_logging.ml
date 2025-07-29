@@ -33,8 +33,6 @@ let () =
 let _suspended () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  
-  
   let%op c = "a" [ -4 ] + "b" [ 2 ] in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in

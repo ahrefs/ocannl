@@ -201,7 +201,8 @@ let%expect_test "Graph drawing fetch" =
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect {|
+  [%expect
+    {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+2 │#                                                                                                   │
     │         │#                                                                                                   │
@@ -399,7 +400,8 @@ let%expect_test "Simple gradients virtual" =
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   (* Check out the state without running a forward pass or compiling the SGD update. *)
   Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                    #12 *._l
                     0.00
                    #13 grad_*._l Virt/40
@@ -421,7 +423,8 @@ let%expect_test "Simple gradients virtual" =
      specified in the tensor in the brackets. *)
   Train.run grad_routine;
   Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
@@ -446,7 +449,8 @@ let%expect_test "Simple gradients virtual" =
      always be recomputed using the latest parameter state. *)
   Train.run sgd_routine;
   Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
@@ -468,7 +472,8 @@ let%expect_test "Simple gradients virtual" =
      other nodes will change thanks to the forward and backward passes. *)
   Train.run grad_routine;
   Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect {|
+  [%expect
+    {|
                    #12 *._l
                     -1.57e+1
                    #13 grad_*._l Virt/40

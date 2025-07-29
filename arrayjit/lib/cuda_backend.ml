@@ -323,16 +323,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Void_prec -> "void"
 
     let vec_typ_of_prec ~length prec =
-      match prec, length with
+      match (prec, length) with
       | Ops.Single_prec _, 4 -> "float4_t"
       | Ops.Double_prec _, 2 -> "double2_t"
       | Ops.Int32_prec _, 4 -> "int32x4_t"
       | (Ops.Byte_prec _ | Ops.Fp8_prec _), 16 -> "int8x16_t"
       | (Ops.Uint16_prec _ | Ops.Bfloat16_prec _), 8 -> "uint16x8_t"
       | Ops.Half_prec _, 8 -> "half8_t"
-      | _ -> 
-        (* Fallback for other combinations *)
-        typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+      | _ ->
+          (* Fallback for other combinations *)
+          typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
 
     let binop_syntax prec v =
       (* TODO: consider using binop_syntax inherited from Pure_C_config and overriding only where

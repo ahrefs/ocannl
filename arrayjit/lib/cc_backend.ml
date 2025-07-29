@@ -13,7 +13,8 @@ open Backend_intf
 let name = "cc"
 
 (* Header declarations for arrayjit builtins *)
-let builtins_header = {|
+let builtins_header =
+  {|
 /* ArrayJIT builtins declarations */
 #include <stdint.h>
 
@@ -111,15 +112,15 @@ let%track7_sexp c_compile_and_load ~f_name =
   let libname = base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so" in
   (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
-  let kernel_link_flags = 
+  let kernel_link_flags =
     match Sys.os_type with
-    | "Unix" -> 
+    | "Unix" ->
         if Stdlib.Sys.command "uname -s | grep -q Darwin" = 0 then
           "-bundle -undefined dynamic_lookup"
-        else
-          "-shared -fPIC"
+        else "-shared -fPIC"
     | "Win32" | "Cygwin" -> "-shared"
-    | _ -> "-shared -fPIC" in
+    | _ -> "-shared -fPIC"
+  in
   let cmdline : string =
     Printf.sprintf "%s %s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_name
       (optimization_level ()) libname kernel_link_flags log_fname

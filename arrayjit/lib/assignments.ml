@@ -167,19 +167,21 @@ let%diagn2_sexp to_low_level code =
   let open Indexing in
   let get buffer idcs =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
-    let idcs = (match (idcs, Lazy.force tn.Tn.dims) with
-    | [||], [|1|] -> [| Fixed_idx 0 |]
-    | [| Fixed_idx 0 |], [||] -> idcs
-    | idcs, dims when Array.length idcs = Array.length dims -> idcs
-    | _ ->
-        [%log
-          "get a=",
-          (tn : Tn.t),
-          ":",
-          Tn.label tn,
-          (idcs : Indexing.axis_index array),
-          (Lazy.force tn.dims : int array)];
-        assert false) in
+    let idcs =
+      match (idcs, Lazy.force tn.Tn.dims) with
+      | [||], [| 1 |] -> [| Fixed_idx 0 |]
+      | [| Fixed_idx 0 |], [||] -> idcs
+      | idcs, dims when Array.length idcs = Array.length dims -> idcs
+      | _ ->
+          [%log
+            "get a=",
+            (tn : Tn.t),
+            ":",
+            Tn.label tn,
+            (idcs : Indexing.axis_index array),
+            (Lazy.force tn.dims : int array)];
+          assert false
+    in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn ->
@@ -278,11 +280,11 @@ let%diagn2_sexp to_low_level code =
             | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
             | Indexing.Affine { symbols; offset } ->
                 (* Substitute symbols in affine index *)
-                let subst_symbols = 
+                let subst_symbols =
                   List.map symbols ~f:(fun (coeff, s) ->
-                    match Map.find subst_map s with
-                    | Some (Indexing.Iterator new_s) -> (coeff, new_s)
-                    | _ -> (coeff, s))
+                      match Map.find subst_map s with
+                      | Some (Indexing.Iterator new_s) -> (coeff, new_s)
+                      | _ -> (coeff, s))
                 in
                 Indexing.Affine { symbols = subst_symbols; offset }
           in
@@ -291,19 +293,22 @@ let%diagn2_sexp to_low_level code =
           let open Low_level in
           let rhs_ll = get rhs rhs_idcs in
           (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
-          let length = match op with
-            | Ops.Uint4x32_to_prec_uniform ->
-                (* Calculate length based on precision - how many values we can extract from 128 bits *)
+          let length =
+            match op with
+            | Ops.Uint4x32_to_prec_uniform -> (
+                (* Calculate length based on precision - how many values we can extract from 128
+                   bits *)
                 let target_prec = Lazy.force lhs.prec in
                 match target_prec with
-                | Ops.Byte_prec _ | Ops.Fp8_prec _ -> 16  (* 8-bit values *)
-                | Ops.Uint16_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ -> 8  (* 16-bit values *)
-                | Ops.Int32_prec _ | Ops.Single_prec _ -> 4  (* 32-bit values *)
-                | Ops.Double_prec _ -> 2  (* 64-bit values *)
-                | Ops.Uint4x32_prec _ -> 1  (* 128-bit value *)
-                | Ops.Void_prec -> failwith "Cannot use vector operation with void precision"
+                | Ops.Byte_prec _ | Ops.Fp8_prec _ -> 16 (* 8-bit values *)
+                | Ops.Uint16_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ -> 8 (* 16-bit values *)
+                | Ops.Int32_prec _ | Ops.Single_prec _ -> 4 (* 32-bit values *)
+                | Ops.Double_prec _ -> 2 (* 64-bit values *)
+                | Ops.Uint4x32_prec _ -> 1 (* 128-bit value *)
+                | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
           in
-          Set_from_vec { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
+          Set_from_vec
+            { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
@@ -396,8 +401,7 @@ let get_ident_within_code ?no_dots c =
         List.iter ~f:visit [ lhs; tn rhs1; tn rhs2 ]
     | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
         List.iter ~f:visit [ lhs; tn rhs ]
-    | Set_vec_unop { op = _; lhs; rhs; projections = _ } ->
-        List.iter ~f:visit [ lhs; tn rhs ]
+    | Set_vec_unop { op = _; lhs; rhs; projections = _ } -> List.iter ~f:visit [ lhs; tn rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
   loop c;
@@ -498,9 +502,12 @@ let to_doc ?name ?static_indices () c =
           if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
           else "<not-in-yet>"
         in
-        string (ident lhs) ^^ space
-        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral:false Arg2) ^^ space
-        ^^ string (Ops.vec_unop_cd_syntax op) ^^ space
+        string (ident lhs)
+        ^^ space
+        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral:false Arg2)
+        ^^ space
+        ^^ string (Ops.vec_unop_cd_syntax op)
+        ^^ space
         ^^ string (buffer_ident rhs)
         ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
             else empty)

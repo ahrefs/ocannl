@@ -224,7 +224,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Data init_data) -> Terminal (Data init_data)
   in
   let dims = lazy_to_dims shape in
-   let padding = lazy (Shape.to_padding shape) in
+  let padding = lazy (Shape.to_padding shape) in
   let v =
     match terminal_op with
     | Some (Shape.Data (Asgns.Reshape data)) ->
@@ -238,8 +238,7 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   in
   let transpose_op =
     match transpose_op with
-    |  (Uint4x32_to_prec _) ->
-         (Shape.Uint4x32_to_prec v.Tn.prec)
+    | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.prec
     | _ -> transpose_op
   in
   let rec shape_logics = function

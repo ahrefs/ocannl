@@ -25,11 +25,10 @@ let _suspended () =
        and type event = Backend.event
        and type optimize_ctx = Backend.optimize_ctx)
   in
-  
-  
+
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op _ho = hey ++ "b|i->o => o|b->i" in
-  
+
   let hey2 =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
@@ -48,8 +47,7 @@ let () =
        and type event = Backend.event
        and type optimize_ctx = Backend.optimize_ctx)
   in
-  
-  
+
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op _ = a *+ "b|i->o; b|i->o => b|i->o" a in
