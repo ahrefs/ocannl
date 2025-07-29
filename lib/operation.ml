@@ -402,6 +402,22 @@ let embed_symbol ?(label = []) static_sym : Tensor.t =
     (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
     []
 
+let embed_self_id ?(label = []) () : Tensor.t =
+  let module NTDSL = Initial_NTDSL in
+  let op_asn ~v ~projections =
+    Asgns.to_comp
+    @@ Fetch
+         {
+           array = v;
+           fetch_op = Embed_self_id;
+           dims = lazy (Lazy.force projections).Idx.lhs_dims;
+         }
+  in
+  let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.op ~label:("!@self_id" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
+    (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
+    []
+
 module DO = struct
   let ( * ) = matmul ~grad_spec:If_needed
   let ( *. ) = pointmul ~grad_spec:If_needed
@@ -436,6 +452,7 @@ module DO = struct
   let ( <> ) = ne ~grad_spec:Prohibit_grad
   let threefry4x32 = threefry4x32
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let embed_self_id = embed_self_id
 end
 
 module NDO = struct
@@ -443,6 +460,7 @@ module NDO = struct
 
   let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
   let ( @| ) ?label t1 idx = slice ?label ~grad_spec:Prohibit_grad idx t1
+  let ( !@ ) = embed_symbol
   let relu = relu ~grad_spec:Prohibit_grad
   let sat01 = sat01 ~grad_spec:Prohibit_grad
   let fma = fma ~grad_spec:Prohibit_grad
@@ -465,6 +483,7 @@ module NDO = struct
   let ( <> ) = ne ~grad_spec:Prohibit_grad
   let threefry4x32 = threefry4x32
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let embed_self_id = embed_self_id
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
@@ -527,6 +546,7 @@ module TDSL = struct
   let rebatch = rebatch ~grad_spec:If_needed
   let threefry4x32 = threefry4x32
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let embed_self_id = embed_self_id
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
@@ -561,6 +581,7 @@ module NTDSL = struct
   let rebatch = rebatch ~grad_spec:Prohibit_grad
   let threefry4x32 = threefry4x32
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let embed_self_id = embed_self_id
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in

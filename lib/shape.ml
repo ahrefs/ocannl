@@ -467,6 +467,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Fetch Embed_self_id) -> (Row.dim_map_empty, mark_terminal ())
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [

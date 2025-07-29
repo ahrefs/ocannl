@@ -370,7 +370,7 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some
-        ((Constant _ | Slice _ | Embed_symbol _ | Range_over_offsets | Constant_fill _) as fetch_op)
+        ((Constant _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets | Constant_fill _) as fetch_op)
       ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in

@@ -33,6 +33,7 @@ type fetch_op =
           positions in a buffer instantiating the node can differ.) *)
   | Slice of { batch_idx : Indexing.static_symbol; sliced : Tn.t }
   | Embed_symbol of Indexing.static_symbol
+  | Embed_self_id  (** Embeds the id of the [array] field of the [Fetch] constructor. *)
 [@@deriving sexp_of, equal]
 
 and t =
@@ -340,6 +341,9 @@ let%diagn2_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
+    | Fetch { array; fetch_op = Embed_self_id; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            set array idcs @@ Constant (Float.of_int array.id))
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
         Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
@@ -434,6 +438,7 @@ let to_doc ?name ?static_indices () c =
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->
         string ("!@" ^ Indexing.symbol_ident static_symbol)
+    | Embed_self_id -> string "!@self_id"
   in
 
   let rec doc_of_code = function
