@@ -1,0 +1,7 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Created tensors with configurable shapes using the new interface!
+tensor1 shape: my_uniform
+tensor2 shape: my_uniform
+matrix_5x5 shape: my_uniform
+matrix_3x7 shape: my_uniform

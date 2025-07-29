@@ -559,7 +559,7 @@ let%expect_test "Big matrix" =
   in
 
   (* Hey is inferred to be a matrix. *)
-  let hey = TDSL.param ~value:0.5 "hey" in
+  let hey = TDSL.param ~value:0.5 "hey" () in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   ignore (Train.forward_once backend y);

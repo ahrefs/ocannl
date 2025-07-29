@@ -112,43 +112,49 @@ let einsum1 ?(label = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~label:("=>" :: label) ~transpose_op:(Shape.Permute spec) ~op_asn ~grad_asn
+  Tensor.unop ~transpose_op:(Shape.Permute spec) ~op_asn ~grad_asn ~label:("=>" :: label)
 
 module NDO_before_pow = struct
-  let ( * ) = matmul ~grad_spec:Prohibit_grad
-  let ( *. ) = pointmul ~grad_spec:Prohibit_grad
-  let ( + ) = add ~grad_spec:Prohibit_grad
-  let ( !. ) = Tensor.number ~grad_spec:Prohibit_grad
+  let ( * ) t1 t2 = matmul ~grad_spec:Prohibit_grad t1 t2 ()
+  let ( *. ) t1 t2 = pointmul ~grad_spec:Prohibit_grad t1 t2 ()
+  let ( + ) t1 t2 = add ~grad_spec:Prohibit_grad t1 t2 ()
+  let ( !. ) f = Tensor.number ~grad_spec:Prohibit_grad f
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:Prohibit_grad @@ Float.of_int i
-  let ( - ) = sub ~grad_spec:Prohibit_grad
-  let ( ~- ) ?label t = ( *. ) ?label !.(-1.) t
+  let ( - ) t1 t2 = sub ~grad_spec:Prohibit_grad t1 t2 ()
+
+  let ( ~- ) ?label t =
+    pointmul ~grad_spec:Prohibit_grad ?label (Tensor.number ~grad_spec:Prohibit_grad (-1.)) t ()
 end
 
-let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
+let is_prohibit_grad = function Some Tensor.Prohibit_grad -> true | _ -> false
+
+let rec pointpow ?grad_spec p t1 : Tensor.op_fun =
   let module NTDSL = struct
     include Initial_NTDSL
 
     module O = struct
       include NDO_before_pow
 
-      let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
+      let ( **. ) base exp = pointpow ~grad_spec:Tensor.Prohibit_grad exp base ()
     end
   end in
   let p_t = NTDSL.number p in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
-  let%cd grad_asn =
-    if Tensor.is_prohibit_grad grad_spec then fun ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ ->
-      Asgns.empty_comp
-    else if Float.equal p 2.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
-    else if Float.equal p 1.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
-    else fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
-  in
-  Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
+  fun ?(label = []) ->
+    let%cd grad_asn =
+      if is_prohibit_grad grad_spec then fun ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ ->
+        Asgns.empty_comp
+      else if Float.equal p 2.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
+      else if Float.equal p 1.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
+      else fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
+    in
+    Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 p_t ?grad_spec
+      ~label:("**." :: label)
 
 module NDO_before_div = struct
   include NDO_before_pow
 
-  let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
+  let ( **. ) base exp = pointpow ~grad_spec:Tensor.Prohibit_grad exp base ()
 end
 
 module NTDSL_before_div = struct
@@ -156,14 +162,14 @@ module NTDSL_before_div = struct
   module O = NDO_before_div
 end
 
-let rec pointdiv ?(label : string list = []) ~grad_spec t1 t2 =
+let rec pointdiv ?grad_spec t1 t2 : Tensor.op_fun =
   let module NTDSL = struct
     include Initial_NTDSL
 
     module O = struct
       include NDO_before_div
 
-      let ( /. ) = pointdiv ~grad_spec:Tensor.Prohibit_grad
+      let ( /. ) t1 t2 = pointdiv ~grad_spec:Tensor.Prohibit_grad t1 t2 ()
     end
   end in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
@@ -173,7 +179,8 @@ let rec pointdiv ?(label : string list = []) ~grad_spec t1 t2 =
     g1 =+ g / v2;
     g2 =+ g * (-1 *. t1 /. (t2 **. 2))
   in
-  Tensor.binop ~label:("/." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 t2
+  fun ?(label = []) ->
+    Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn ?grad_spec t1 t2 ~label:("/." :: label)
 
 let relu ?(label = []) =
   let module NTDSL = Initial_NTDSL in
@@ -213,21 +220,23 @@ let log2 ?(label = []) =
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g / (t1 *. !.log_2) in
   Tensor.unop ~label:("log2" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
-let rec sin ?(label = []) =
+let rec sin ?grad_spec =
   let module NTDSL = NTDSL_before_div in
   let%cd op_asn ~v ~t1 ~projections = v =: sin v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
-    g1 =+ g * (cos ?grad_spec:(Some Tensor.Prohibit_grad)) t1
+    g1 =+ g * (cos ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ()
   in
-  Tensor.unop ~label:("sin" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+  fun ?(label = []) ->
+    Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn ~label:("sin" :: label)
 
-and cos ?(label = []) =
+and cos ?grad_spec : Tensor.t -> Tensor.op_fun =
   let module NTDSL = NTDSL_before_div in
   let%cd op_asn ~v ~t1 ~projections = v =: cos v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
-    g1 =+ g * (-1 *. (sin ?grad_spec:(Some Tensor.Prohibit_grad)) t1)
+    g1 =+ g * (-1 *. (sin ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ())
   in
-  Tensor.unop ~label:("cos" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+  fun t ?(label = []) ->
+    Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn t ~label:("cos" :: label)
 
 let sqrt ?(label = []) =
   let module NTDSL = NTDSL_before_div in
@@ -265,15 +274,13 @@ let not ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   Tensor.unop ~label:("not" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
-let uint4x32_to_prec_uniform ?(label = []) =
+let uint4x32_to_prec_uniform ?grad_spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
-  fun ?grad_spec t1 ->
+  fun t1 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
-    Tensor.unop
-      ~label:("uint4x32_to_prec_uniform" :: label)
-        (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
+    Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
       ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
       ~op_asn ~grad_asn ?grad_spec t1
 
@@ -295,20 +302,32 @@ let ne ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~label:("<>" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
-let threefry4x32 ?(label = []) =
+let threefry4x32 =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
-  fun ?grad_spec t1 t2 ->
+  fun t1 t2 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
-    let result =
-      Tensor.binop ~label:("threefry4x32" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
-        ?grad_spec t1 t2
-    in
-    (* Set output precision to uint4x32 *)
-    Tn.update_prec result.value Ir.Ops.uint4x32;
-    result
+    fun ?(label = [])
+      ?grad_spec
+      ?batch_dims
+      ?batch_axes
+      ?input_dims
+      ?output_dims
+      ?input_axes
+      ?output_axes
+      ?deduced
+      ()
+    ->
+      let result =
+        Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 t2
+          ~label:("threefry4x32" :: label) ?grad_spec ?batch_dims ?batch_axes ?input_dims
+          ?output_dims ?input_axes ?output_axes ?deduced ()
+      in
+      (* Set output precision to uint4x32 *)
+      Tn.update_prec result.value Ir.Ops.uint4x32;
+      result
 
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
@@ -335,9 +354,9 @@ let where ?(label = []) ~grad_spec t1 t2 t3 =
 
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
-    Tensor.term
+    Tensor.term ~fetch_op:Range_over_offsets ~grad_spec ~batch_dims:[]
       ~label:(("0" ^ "..." ^ Int.to_string upto) :: label)
-      ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op:Range_over_offsets
+      ~input_dims:[]
   in
   match axis_label with
   | None -> result ~output_dims:[ upto + 1 ] ()
@@ -358,10 +377,9 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
   let output_dims =
     Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
   in
-  Tensor.term
+  Tensor.term ~fetch_op:Range_over_offsets ~grad_spec ?batch_dims ?batch_axes
     ~label:(("r" ^ Idx.dims_to_string dims) :: label)
-    ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ~fetch_op:Range_over_offsets ()
+    ?input_dims ?output_dims ?input_axes ?output_axes ()
 
 (** A [stop_gradient] is an identity in the forward pass and a no-op in the backprop pass. *)
 let stop_gradient ?(label = []) =
@@ -371,7 +389,7 @@ let stop_gradient ?(label = []) =
   Tensor.unop ~label:("stop_grad" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
     ~grad_spec:Prohibit_grad
 
-let slice ?(label = []) ~grad_spec (batch_idx : Idx.static_symbol) t1 : Tensor.t =
+let slice (batch_idx : Idx.static_symbol) =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~t1 ~projections =
     Asgns.to_comp
@@ -383,8 +401,8 @@ let slice ?(label = []) ~grad_spec (batch_idx : Idx.static_symbol) t1 : Tensor.t
          }
   in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~label:("@|" :: label) ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn
-    ~grad_spec t1
+  fun ?(label = []) ->
+    Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~label:("@|" :: label)
 
 let embed_symbol ?(label = []) static_sym : Tensor.t =
   let module NTDSL = Initial_NTDSL in
@@ -407,11 +425,7 @@ let embed_self_id ?(label = []) () : Tensor.t =
   let op_asn ~v ~projections =
     Asgns.to_comp
     @@ Fetch
-         {
-           array = v;
-           fetch_op = Embed_self_id;
-           dims = lazy (Lazy.force projections).Idx.lhs_dims;
-         }
+         { array = v; fetch_op = Embed_self_id; dims = lazy (Lazy.force projections).Idx.lhs_dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   Tensor.op ~label:("!@self_id" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
@@ -419,92 +433,103 @@ let embed_self_id ?(label = []) () : Tensor.t =
     []
 
 module DO = struct
-  let ( * ) = matmul ~grad_spec:If_needed
-  let ( *. ) = pointmul ~grad_spec:If_needed
-  let ( + ) = add ~grad_spec:If_needed
-  let threefry4x32 = threefry4x32 ~grad_spec:If_needed
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:If_needed
-  let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed
-  let relu = relu ~grad_spec:If_needed
-  let sat01 = sat01 ~grad_spec:If_needed
-  let fma = fma ~grad_spec:If_needed
-  let ( !. ) = Tensor.number ~grad_spec:If_needed
+  let ( * ) ?label t1 t2 = matmul ~grad_spec:If_needed ?label t1 t2 ()
+  let ( *. ) ?label t1 t2 = pointmul ~grad_spec:If_needed ?label t1 t2 ()
+  let ( + ) ?label t1 t2 = add ~grad_spec:If_needed ?label t1 t2 ()
+  let threefry4x32 ?label t1 t2 = threefry4x32 ~grad_spec:If_needed ?label t1 t2 ()
+
+  let uint4x32_to_prec_uniform ?label t1 =
+    uint4x32_to_prec_uniform ~grad_spec:If_needed t1 ?label ()
+
+  let ( **. ) ?label base exp = pointpow ?label exp base ~grad_spec:If_needed ()
+  let relu ?label t = relu ~grad_spec:If_needed ?label t ()
+  let sat01 ?label t = sat01 ~grad_spec:If_needed ?label t ()
+  let fma ?label t1 t2 t3 = fma ~grad_spec:If_needed ?label t1 t2 t3 ()
+  let ( !. ) f = Tensor.number ~grad_spec:If_needed f
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:If_needed @@ Float.of_int i
   let ( !@ ) = embed_symbol
-  let ( - ) = sub ~grad_spec:If_needed
-  let ( ~- ) ?label t = ( *. ) ?label !.(-1.) t
-  let ( /. ) = pointdiv ~grad_spec:If_needed
-  let ( @| ) ?label t1 idx = slice ?label ~grad_spec:If_needed idx t1
-  let exp = exp ~grad_spec:If_needed
-  let log = log ~grad_spec:If_needed
-  let log2 = log2 ~grad_spec:If_needed
-  let sin = sin ~grad_spec:If_needed
-  let cos = cos ~grad_spec:If_needed
-  let neg = neg ~grad_spec:If_needed
-  let not = not ~grad_spec:Prohibit_grad
-  let sqrt = sqrt ~grad_spec:If_needed
-  let recip = recip ~grad_spec:If_needed
-  let recip_sqrt = recip_sqrt ~grad_spec:If_needed
-  let tanh = tanh ~grad_spec:If_needed
-  let where = where ~grad_spec:If_needed
-  let ( < ) = lt ~grad_spec:Prohibit_grad
-  let ( = ) = eq ~grad_spec:Prohibit_grad
-  let ( <> ) = ne ~grad_spec:Prohibit_grad
-  let threefry4x32 = threefry4x32
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let ( - ) ?label t1 t2 = sub ~grad_spec:If_needed ?label t1 t2 ()
+
+  let ( ~- ) ?label t =
+    pointmul ~grad_spec:If_needed ?label (Tensor.number ~grad_spec:If_needed (-1.)) t ()
+
+  let ( /. ) ?label t1 t2 = pointdiv ~grad_spec:If_needed ?label t1 t2 ()
+  let ( @| ) ?label t1 idx = slice ?label ~grad_spec:If_needed idx t1 ()
+  let exp ?label t = exp ~grad_spec:If_needed ?label t ()
+  let log ?label t = log ~grad_spec:If_needed ?label t ()
+  let log2 ?label t = log2 ~grad_spec:If_needed ?label t ()
+  let sin ?label t = sin ~grad_spec:If_needed ?label t ()
+  let cos ?label t = cos ~grad_spec:If_needed ?label t ()
+  let neg ?label t = neg ~grad_spec:If_needed ?label t ()
+  let not t = not ~grad_spec:Prohibit_grad t ()
+  let sqrt ?label t = sqrt ~grad_spec:If_needed ?label t ()
+  let recip ?label t = recip ~grad_spec:If_needed ?label t ()
+  let recip_sqrt ?label t = recip_sqrt ~grad_spec:If_needed ?label t ()
+  let tanh ?label t = tanh ~grad_spec:If_needed ?label t ()
+  let where ?label t1 t2 t3 = where ~grad_spec:If_needed ?label t1 t2 t3 ()
+  let ( < ) ?label t1 t2 = lt ~grad_spec:Prohibit_grad ?label t1 t2 ()
+  let ( = ) ?label t1 t2 = eq ~grad_spec:Prohibit_grad ?label t1 t2 ()
+  let ( <> ) ?label t1 t2 = ne ~grad_spec:Prohibit_grad ?label t1 t2 ()
   let embed_self_id = embed_self_id
+  let einsum ?label spec t1 t2 = einsum ?label spec t1 t2 ~grad_spec:If_needed ()
+  let einsum1 ?label spec t1 = einsum1 ?label spec t1 ~grad_spec:If_needed ()
+  let ndarray = Tensor.ndarray ~grad_spec:If_needed
 end
 
 module NDO = struct
   include NDO_before_div
 
-  let ( /. ) = pointdiv ~grad_spec:Prohibit_grad
-  let ( @| ) ?label t1 idx = slice ?label ~grad_spec:Prohibit_grad idx t1
+  let ( /. ) ?label t1 t2 = pointdiv ~grad_spec:Prohibit_grad ?label t1 t2 ()
+  let ( @| ) ?label t1 idx = slice ?label ~grad_spec:Prohibit_grad idx t1 ()
   let ( !@ ) = embed_symbol
-  let relu = relu ~grad_spec:Prohibit_grad
-  let sat01 = sat01 ~grad_spec:Prohibit_grad
-  let fma = fma ~grad_spec:Prohibit_grad
-  let exp = exp ~grad_spec:Prohibit_grad
-  let log = log ~grad_spec:Prohibit_grad
-  let log2 = log2 ~grad_spec:Prohibit_grad
-  let sin = sin ~grad_spec:Prohibit_grad
-  let cos = cos ~grad_spec:Prohibit_grad
-  let neg = neg ~grad_spec:Prohibit_grad
-  let not = not ~grad_spec:Prohibit_grad
-  let sqrt = sqrt ~grad_spec:Prohibit_grad
-  let threefry4x32 = threefry4x32 ~grad_spec:Prohibit_grad
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
-  let recip = recip ~grad_spec:Prohibit_grad
-  let recip_sqrt = recip_sqrt ~grad_spec:Prohibit_grad
-  let tanh = tanh ~grad_spec:Prohibit_grad
-  let where = where ~grad_spec:Prohibit_grad
-  let ( < ) = lt ~grad_spec:Prohibit_grad
-  let ( = ) = eq ~grad_spec:Prohibit_grad
-  let ( <> ) = ne ~grad_spec:Prohibit_grad
-  let threefry4x32 = threefry4x32
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let relu ?label t = relu ~grad_spec:Prohibit_grad ?label t ()
+  let sat01 ?label t = sat01 ~grad_spec:Prohibit_grad ?label t ()
+  let fma ?label t1 t2 t3 = fma ~grad_spec:Prohibit_grad ?label t1 t2 t3 ()
+  let exp ?label t = exp ~grad_spec:Prohibit_grad ?label t ()
+  let log ?label t = log ~grad_spec:Prohibit_grad ?label t ()
+  let log2 ?label t = log2 ~grad_spec:Prohibit_grad ?label t ()
+  let sin ?label t = sin ~grad_spec:Prohibit_grad ?label t ()
+  let cos ?label t = cos ~grad_spec:Prohibit_grad ?label t ()
+  let neg ?label t = neg ~grad_spec:Prohibit_grad ?label t ()
+  let not ?label t = not ~grad_spec:Prohibit_grad ?label t ()
+  let sqrt ?label t = sqrt ~grad_spec:Prohibit_grad ?label t ()
+  let threefry4x32 ?label t1 t2 = threefry4x32 ~grad_spec:Prohibit_grad ?label t1 t2 ()
+
+  let uint4x32_to_prec_uniform ?label t1 =
+    uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad ?label t1 ()
+
+  let recip ?label t = recip ~grad_spec:Prohibit_grad ?label t ()
+  let recip_sqrt ?label t = recip_sqrt ~grad_spec:Prohibit_grad ?label t ()
+  let tanh ?label t = tanh ~grad_spec:Prohibit_grad ?label t ()
+  let where ?label t1 t2 t3 = where ~grad_spec:Prohibit_grad ?label t1 t2 t3 ()
+  let ( < ) ?label t1 t2 = lt ~grad_spec:Prohibit_grad ?label t1 t2 ()
+  let ( = ) ?label t1 t2 = eq ~grad_spec:Prohibit_grad ?label t1 t2 ()
+  let ( <> ) ?label t1 t2 = ne ~grad_spec:Prohibit_grad ?label t1 t2 ()
   let embed_self_id = embed_self_id
+  let einsum ?label spec t1 t2 = einsum spec t1 t2 ~grad_spec:Prohibit_grad ?label ()
+  let einsum1 ?label spec t1 = einsum1 spec t1 ~grad_spec:Prohibit_grad ?label ()
+  let ndarray = Tensor.ndarray ~grad_spec:Prohibit_grad
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
     omitted. Note: the data should have no padding and if padding is inferred, the data will be
     copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
 let reshape ~l ?b ?(i = []) ?o ndarray =
-  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
-    ~init_data:(Asgns.Reshape ndarray) ()
+  Tensor.term ~init_data:(Asgns.Reshape ndarray) ?batch_dims:b ~label:[ l ] ~input_dims:i
+    ?output_dims:o
 
 (** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
     be inferred (or provided). Assumes no padding. See also: {!reshape} and {!TDSL.wrap_param}. *)
 let wrap ~l ?b ?(i = []) ?o ndarray =
-  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
-    ~init_data:(Asgns.Keep_shape_no_padding ndarray) ()
+  Tensor.term ~init_data:(Asgns.Keep_shape_no_padding ndarray) ?batch_dims:b ~label:[ l ]
+    ~input_dims:i ?output_dims:o
 
 (** Assumes the ndarray is padded as given. This means the dimensions of the ndarray will differ
     from the dimensions of the tensor by the padding. See also: {!TDSL.wrap}. *)
 let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
-  Tensor.term ~label:[ l ] ?batch_dims:b ~input_dims:i ?output_dims:o
+  Tensor.term
     ~init_data:(Padded { data = ndarray; padding; padded_value })
-    ()
+    ?batch_dims:b ~label:[ l ] ~input_dims:i ?output_dims:o
 
 (** The output dimensions are taken from the provided ndarray, assuming precisely the first axis is
     a batch axis, assumes no input axes and the batch dimensions are inferred. Empty output
@@ -512,7 +537,14 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
     copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
-  Tensor.term ~label:[ l ] ~input_dims:[] ~output_dims ~init_data:(Reshape ndarray) ()
+  Tensor.term ~init_data:(Reshape ndarray) ~batch_dims:[] ~label:[ l ] ~input_dims:[] ~output_dims
+
+let uniform ?grad_spec =
+  uint4x32_to_prec_uniform ?grad_spec
+    (threefry4x32 (embed_self_id ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
 
 module TDSL = struct
   module O = DO
@@ -520,9 +552,12 @@ module TDSL = struct
   let term = Tensor.term ~grad_spec:If_needed
   let number = Tensor.number ~grad_spec:If_needed
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
+  let threefry4x32 = threefry4x32 ~grad_spec:If_needed
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:If_needed
+  let embed_self_id = embed_self_id
 
   (** The default initialization operation for {!param} calls. *)
-  let default_param_init = ref @@ Tensor.param_init [| 0.0 |]
+  let default_param_init = ref uniform
 
   let param ?value ?values =
     let t =
@@ -530,7 +565,7 @@ module TDSL = struct
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
       | Some value, None -> Tensor.param_init [| value |]
       | None, Some values -> Tensor.param_init values
-      | None, None -> !default_param_init
+      | None, None -> !default_param_init ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
     in
     Tensor.param ~t
 
@@ -544,9 +579,6 @@ module TDSL = struct
   let wrap = wrap ~grad_spec:If_needed
   let wrap_padded = wrap_padded ~grad_spec:If_needed
   let rebatch = rebatch ~grad_spec:If_needed
-  let threefry4x32 = threefry4x32
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
-  let embed_self_id = embed_self_id
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =

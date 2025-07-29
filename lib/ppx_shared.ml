@@ -1,5 +1,6 @@
 open Base
 open Ppxlib
+open Ppx_arrayjit.Ppx_helper
 
 type li = longident
 
@@ -291,3 +292,20 @@ let translate_str translate ({ pstr_desc; pstr_loc = loc; _ } as str) =
 
 let str_expander_with_punning translate ~loc ~path (payload : structure_item list) =
   flatten_str ~loc ~path @@ List.map payload ~f:(translate_str translate)
+
+let ndarray_op ?axis_labels ?label expr =
+  let loc = expr.pexp_loc in
+  let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
+  let edims dims = Ast_builder.Default.elist ~loc dims in
+  let w_val = [%expr ndarray [%e values]] in
+  let op =
+    match (axis_labels, label) with
+    | None, None -> w_val
+    | Some axis_labels, None -> [%expr [%e w_val] ~axis_labels:[%e axis_labels]]
+    | None, Some label -> [%expr [%e w_val] ~label:[%e label]]
+    | Some axis_labels, Some label ->
+        [%expr [%e w_val] ~axis_labels:[%e axis_labels] ~label:[%e label]]
+  in
+  [%expr
+    [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
+      ~output_dims:[%e edims output_dims] ()]

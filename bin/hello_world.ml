@@ -33,7 +33,7 @@ let hello2 () =
 let hello3 () =
   let module Backend = (val Backends.fresh_backend ()) in
   (* Hey is inferred to be a matrix. *)
-  let hey = TDSL.param "hey" in
+  let hey = TDSL.param "hey" () in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.(( + ) ~label:[ "y" ] (hey * zero_to_twenty) zero_to_twenty) in
   Train.set_hosted hey.value;
@@ -66,7 +66,7 @@ let hello4 () =
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
   let%op tk = rk ++ "k=>k2" in
-  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
+  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
   Train.set_hosted ti.value;
   Train.set_hosted tk.value;
   ignore (Train.forward_once backend positions);

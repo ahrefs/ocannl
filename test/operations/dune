@@ -73,6 +73,13 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name test_uniform_demo)
+ (modules test_uniform_demo)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

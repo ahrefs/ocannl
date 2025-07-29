@@ -19,7 +19,7 @@ let graph_t () : unit =
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   (* let%op f x = sin x in *)
-  let%op f x = uint4x32_to_prec_uniform x in
+  let%op f x = sin x in
   let size = 50 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
   let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in

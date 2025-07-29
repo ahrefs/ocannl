@@ -4,22 +4,6 @@ open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 module A = Ppxlib_ast.Ast_helper
 
-let ndarray_op ?axis_labels ?label expr =
-  let loc = expr.pexp_loc in
-  let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
-  let edims dims = Ast_builder.Default.elist ~loc dims in
-  let op =
-    match (axis_labels, label) with
-    | None, None -> [%expr NTDSL.ndarray]
-    | Some axis_labels, None -> [%expr NTDSL.ndarray ~axis_labels:[%e axis_labels]]
-    | None, Some label -> [%expr NTDSL.ndarray ~label:[%e label]]
-    | Some axis_labels, Some label ->
-        [%expr NTDSL.ndarray ~axis_labels:[%e axis_labels] ~label:[%e label]]
-  in
-  [%expr
-    [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
-      ~output_dims:[%e edims output_dims] [%e values]]
-
 type expr_type =
   | Code
   | Array
@@ -866,14 +850,14 @@ let translate (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Tensor;
           slot;
-          expr = [%expr NTDSL.einsum [%e spec] [%e res1.expr] [%e res2.expr]];
+          expr = [%expr einsum [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-        { res1 with typ = Tensor; expr = [%expr NTDSL.einsum1 [%e spec] [%e res1.expr]] }
+        { res1 with typ = Tensor; expr = [%expr einsum1 [%e spec] [%e res1.expr]] }
     | [%expr [%e? expr1].grad] -> (
         let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with

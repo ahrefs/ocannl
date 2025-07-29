@@ -3,26 +3,23 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
-let ndarray_op ?label ?axis_labels expr =
-  let loc = expr.pexp_loc in
-  let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
-  let edims dims = Ast_builder.Default.elist ~loc dims in
-  let op =
-    match axis_labels with
-    | None -> [%expr TDSL.ndarray]
-    | Some axis_labels -> [%expr TDSL.ndarray ~axis_labels:[%e axis_labels]]
+let make_p ~has_config ~loc ?input_dims ?output_dims ?value ?values name =
+  let more_label = if has_config then [%expr Some config.label] else [%expr None] in
+  let input_dims =
+    match input_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
   in
+  let output_dims =
+    match output_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
+  in
+  let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   [%expr
-    [%e op] ?label:[%e opt_expr ~loc label] ~batch_dims:[%e edims batch_dims]
-      ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims] [%e values]]
-
-let make_p ~has_config ~loc =
-  if has_config then [%expr TDSL.param ~more_label:config.label] else [%expr TDSL.param]
+    TDSL.param ?more_label:[%e more_label] ?input_dims:[%e input_dims] ?output_dims:[%e output_dims]
+      ?value:[%e value] ?values:[%e values] [%e name] ()]
 
 let make_vb ?value ~has_config ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  let v = [%expr [%e make_p ~has_config ~loc] ?value:[%e value] [%e string]] in
+  let v = make_p ~has_config ~loc ?value string in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -32,11 +29,11 @@ let make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims ~dims_loc string =
     let loc = dims_loc in
     List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]])
   in
-  let v = [%expr [%e make_p ~has_config ~loc] ~output_dims:[%e dims] [%e string]] in
+  let v = make_p ~has_config ~loc ~output_dims:dims string in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~has_config ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
+let make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
@@ -46,14 +43,9 @@ let make_vb_nd ~has_config ~loc ~str_loc ?axis_labels ~ident ~init_nd string =
            "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
       let edims dims = Ast_builder.Default.elist ~loc dims in
-      let op =
-        match axis_labels with
-        | None -> make_p ~has_config ~loc
-        | Some axis_labels -> [%expr [%e make_p ~has_config ~loc] ~axis_labels:[%e axis_labels]]
-      in
-      [%expr
-        [%e op] ~input_dims:[%e edims input_dims] ~output_dims:[%e edims output_dims]
-          ~values:[%e values] [%e string]]
+      let input_dims = edims input_dims in
+      let output_dims = edims output_dims in
+      make_p ~has_config ~loc ~input_dims ~output_dims ~values string
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -107,12 +99,12 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr TDSL.einsum ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+        [%expr einsum ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
   | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
     when String.contains spec_str '>' ->
       let vbs1, e1 = loop expr1 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-      (vbs1, [%expr TDSL.einsum1 ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]])
+      (vbs1, [%expr einsum1 ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]])
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e?

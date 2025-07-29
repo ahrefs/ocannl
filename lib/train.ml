@@ -409,8 +409,6 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
         "Train.example_train_loop: too little data: %{data_len#Int} for minibatch size: \
          %{minibatch_size#Int} = %{batch_size#Int} / %{num_streams#Int} streams"];
   assert (epochs > 0);
-  let inputs = inputs ~b:[ n_minibatches; minibatch_size ] in
-  let outputs = outputs ~b:[ n_minibatches; minibatch_size ] in
   (* This is the joint number of steps done by the round-robin scheduler across devices. *)
   let steps = epochs * n_minibatches in
   Utils.settings.fixed_state_for_init <- Some seed;

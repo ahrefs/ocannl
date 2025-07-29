@@ -80,6 +80,13 @@ opam install cudajit  # for CUDA backend
 - Tests are implemented either as inline expectations using `ppx_expect`; or as cram-style tests where an `.ml` file is compiled, executed, and its output compared against an `.expected` file
 - Tutorial files in `test/` serve as both documentation and integration tests
 - Use `dune promote` to accept test output changes
+- **Test Placement Guidelines**:
+  * Always add tests under one of the test subdirectories
+  * Default location is `test/operations`
+  * Use `test/einsum` for tests involving complex einsum specifications
+  * Use `test/training` for tests involving training loops
+  * When adding a test, update the corresponding test stanza
+  * Add an `.expected` file for test results (can initially be empty)
 
 ### Configuration
 

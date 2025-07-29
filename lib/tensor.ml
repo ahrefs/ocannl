@@ -340,23 +340,47 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
 
-let binop ~label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 =
+type param_op_fun =
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t
+
+type op_fun =
+  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> param_op_fun
+
+let binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
-  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2 ]
+  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec
+    (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
+       ())
+    [ t1; t2 ]
 
-let ternop ~label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 =
+let ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
-  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1; t2; t3 ]
+  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec
+    (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
+       ())
+    [ t1; t2; t3 ]
 
-let unop ~label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 =
+let unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
-  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec (Shape.make ()) [ t1 ]
+  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec
+    (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
+       ())
+    [ t1 ]
 
-let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-    ?deduced ?init_data ?fetch_op () =
+let term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -370,14 +394,15 @@ let term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?inp
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some
-        ((Constant _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets | Constant_fill _) as fetch_op)
-      ->
+        (( Constant _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets
+         | Constant_fill _ ) as fetch_op) ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
     Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced ()
   in
+  let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
   op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec make_shape
     []
@@ -416,8 +441,8 @@ let constant_fill ~debug values =
       Nd.set_flat_values nd values;
       (Some (Asgns.Reshape nd), None)
 
-let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?output_dims
-    ?batch_axes ?input_axes ?output_axes values =
+let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch_axes ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () =
   let num_label =
     String.concat ~sep:"," @@ List.map ~f:float_to_label @@ Fn.flip List.take 5
     @@ Array.to_list values
@@ -430,9 +455,10 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
     Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
   in
   let init_data, fetch_op = constant_fill ~debug:"Tensor.ndarray" values in
+  (* Ideally, while the shape is known, the deduced argument will be used for verification. *)
   let t =
-    term ~label ~grad_spec ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
-      ~deduced:Not_constrained ?init_data ?fetch_op ()
+    term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ?input_dims ?output_dims
+      ?input_axes ?output_axes ?deduced ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
@@ -441,17 +467,22 @@ let ndarray ?(label = []) ?(grad_spec = Prohibit_grad) ?batch_dims ?input_dims ?
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param_init values =
+let param_init values ?label ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let init_data, fetch_op = constant_fill ~debug:"Tensor.param_init" values in
-  term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?init_data ?fetch_op
+  term ?init_data ?fetch_op ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?label
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
 
-let term_init values =
+let term_init ?grad_spec values ?(label = []) ?batch_dims ?batch_axes ?input_dims ?output_dims
+    ?input_axes ?output_axes ?deduced () =
   let init_data, fetch_op = constant_fill ~debug:"Tensor.term_init" values in
-  term ?init_data ?fetch_op
+  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?input_dims ?output_dims
+    ?input_axes ?output_axes ?deduced ()
 
-let param ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ~t label =
+let param ~t name ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let t =
-    t ~label:(label :: more_label) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+    t
+      ?label:(Some (name :: more_label))
+      ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

@@ -57,8 +57,8 @@ let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~b
   in
   let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
-  let moons_flat ~b:_ = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray in
-  let moons_classes ~b:_ = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray in
+  let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
+  let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
 
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op mlp x =

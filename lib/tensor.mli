@@ -144,27 +144,36 @@ val op :
     access the tensor's value in a tensor expression. The [terminal_op] is used to specify the
     terminal operation of the tensor. *)
 
+type param_op_fun =
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t
+
+type op_fun =
+  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> param_op_fun
+
 val binop :
-  label:string list ->
   ?compose_op:Shape.compose_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->
-  t
+  op_fun
 
 val unop :
-  label:string list ->
   ?transpose_op:Shape.transpose_type ->
   op_asn:(v:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
-  t
+  op_fun
 
 val ternop :
-  label:string list ->
   ?ternary_op:Shape.ternary_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
@@ -172,22 +181,11 @@ val ternop :
   t ->
   t ->
   t ->
-  t
+  op_fun
 
 val term :
-  label:string list ->
-  grad_spec:grad_spec ->
-  ?batch_dims:int list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?batch_axes:(string * int) list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:Shape.deduce_within_shape ->
-  ?init_data:Ir.Assignments.init_data ->
-  ?fetch_op:fetch_op ->
-  unit ->
-  t
+  ?init_data:Ir.Assignments.init_data -> ?fetch_op:fetch_op -> ?grad_spec:grad_spec -> op_fun
+
 (** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
     is the same as in {!Shape.make}, and by default the shape will be inferred. At most one of
     [init_data] or [fetch_op] should be provided. If [init_data] is provided, it is used to
@@ -202,71 +200,24 @@ val number : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec ->
 (** A number: a tensor with a single axis of one dimension, initialized to the given value.
     [grad_spec] is by default [Prohibit_grad]. *)
 
-val ndarray :
-  ?label:string list ->
-  ?grad_spec:grad_spec ->
-  ?batch_dims:int list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?batch_axes:(string * int) list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  float array ->
-  t
+val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
 (** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to
     no axes. [grad_spec] is by default [Prohibit_grad]. If [strict] is [true] (the default), the
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val param_init :
-  float array ->
-  label:string list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:Shape.deduce_within_shape ->
-  unit ->
-  t
+val param_init : float array -> ?label:string list -> param_op_fun
 (** Helper for {!param} wrappers. *)
 
 val param :
-  ?more_label:string list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:Shape.deduce_within_shape ->
-  t:
-    (label:string list ->
-    ?input_dims:int list ->
-    ?output_dims:int list ->
-    ?input_axes:(string * int) list ->
-    ?output_axes:(string * int) list ->
-    ?deduced:Shape.deduce_within_shape ->
-    unit ->
-    t) ->
-  string ->
-  t
+  t:(?label:string list -> param_op_fun) -> string -> ?more_label:string list -> param_op_fun
 (** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
     should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
     string, appended by [more_label] if any, other parameters are forwarded to [t]. This function
     returns [t]'s result with the field {!field:params} replaced by a singleton set containing that
     result, and it also updates the memory modes. *)
 
-val term_init :
-  float array ->
-  label:string list ->
-  grad_spec:grad_spec ->
-  ?batch_dims:int list ->
-  ?input_dims:int list ->
-  ?output_dims:int list ->
-  ?batch_axes:(string * int) list ->
-  ?input_axes:(string * int) list ->
-  ?output_axes:(string * int) list ->
-  ?deduced:Shape.deduce_within_shape ->
-  unit ->
-  t
+val term_init : ?grad_spec:grad_spec -> float array -> op_fun
 (** A {!term} wrapper that generalizes {!param_init} to tensors with batch axes and {!ndarray} to
     tensors with inferred shapes. *)
 

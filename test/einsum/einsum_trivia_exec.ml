@@ -248,7 +248,7 @@ let () =
   let%op tj = rj ++ "j=>j1" in
   let rk = TDSL.range 5 in
   let%op tk = rk ++ "k=>k2" in
-  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj) tk in
+  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
   Train.set_hosted tk.value;
   ignore (Train.forward_once backend positions);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false positions;

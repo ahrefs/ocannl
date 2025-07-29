@@ -28,10 +28,10 @@ let demo () =
   let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in
   let moons_flat =
-    TDSL.rebatch ~l:"moons_flat" (Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates)
+    TDSL.rebatch ~l:"moons_flat" (Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates) ()
   in
   let moons_classes =
-    TDSL.rebatch ~l:"moons_classes" (Ir.Ndarray.as_array Ir.Ops.Single moons_labels)
+    TDSL.rebatch ~l:"moons_classes" (Ir.Ndarray.as_array Ir.Ops.Single moons_labels) ()
   in
 
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
