@@ -2163,9 +2163,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           in
           (extras @ ineqs, env)
       | Rows_constr { r = rows; constr } ->
-          let constr = subst_row_constraint stage env constr in
+          let constr : row_constraint = subst_row_constraint stage env constr in
           let substituted_rows = List.map rows ~f:(subst_row env) in
-          let more_ineqs, env =
+          let (more_ineqs : constraint_ list), env =
             if is_stage5_up stage then
               eliminate_rows_constraint ~depth:0 stage ~lub:None substituted_rows constr env
             else apply_rows_constraint ~depth:0 ~stage substituted_rows constr env
@@ -2424,9 +2424,10 @@ let get_proj_index proj_env =
         let repr, _ =
           Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
         in
-        match Map.find proj_env.proj_to_index repr with
-        | Some i -> i
-        | None -> unknown_projection proj_id d)
+        match d, Map.find proj_env.proj_to_index repr with
+        | _, Some i -> i
+        | (0 | 1), None -> Fixed_idx 0
+        | _ -> unknown_projection proj_id d)
     | Solved idx -> idx
     | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _ } -> (
         (* Strided iteration: skip kernel computation since dilation=0 *)
@@ -2605,9 +2606,10 @@ let get_dim_index proj_env =
         let repr, _ =
           Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
         in
-        match Map.find proj_env.proj_to_index repr with
-        | Some i -> i
-        | None -> unknown_projection proj_id d)
+        match d, Map.find proj_env.proj_to_index repr with
+        | _, Some i -> i
+        | (0 | 1), None -> Fixed_idx 0
+        | _ -> unknown_projection proj_id d)
     | Conv_input _ as dim -> get_proj_index proj_env (dim_to_proj proj_env dim)
   in
   loop
@@ -2623,7 +2625,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let non_product = ref @@ Set.empty (module Proj_id) in
-  let rec loop = function
+  let rec loop (eq : proj_equation) : unit = match eq with
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
         p_dims := (p1, d) :: !p_dims
     | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
