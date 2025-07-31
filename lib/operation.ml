@@ -537,7 +537,7 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
     copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
-  Tensor.term ~init_data:(Reshape ndarray) ~batch_dims:[] ~label:[ l ] ~input_dims:[] ~output_dims
+  Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ~output_dims
 
 let uniform ?grad_spec =
   uint4x32_to_prec_uniform ?grad_spec
