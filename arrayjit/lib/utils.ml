@@ -1004,3 +1004,7 @@ let sexp_of_safe_lazy sexp_of_elem gated =
       Sexp.List [ Sexp.Atom "id"; Sexp.Atom gated.unique_id ];
       Sexp.List [ Sexp.Atom "value"; status ];
     ]
+
+let gcd a b =
+  let rec loop a b = if b = 0 then a else loop b (a % b) in
+  loop (abs a) (abs b)

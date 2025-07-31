@@ -247,12 +247,15 @@ type error_trace +=
   | Row_mismatch of t list
   | Dim_mismatch of dim list
   | Index_mismatch of Idx.axis_index list
+  | Rows_constr_failed of { constr : row_constraint }
 
 let sexp_of_error_trace = function
   | Row_mismatch rs -> Sexp.List (Sexp.Atom "Row_mismatch" :: List.map rs ~f:sexp_of_t)
   | Dim_mismatch ds -> Sexp.List (Sexp.Atom "Dim_mismatch" :: List.map ds ~f:sexp_of_dim)
   | Index_mismatch idcs ->
       Sexp.List (Sexp.Atom "Index_mismatch" :: List.map idcs ~f:Idx.sexp_of_axis_index)
+  | Rows_constr_failed { constr } ->
+      Sexp.List (Sexp.Atom "Rows_constr_failed" :: [ sexp_of_row_constraint constr ])
   | _ -> Sexp.Atom "<outdated version of sexp_of_error_trace>"
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
@@ -894,7 +897,13 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
       let tot = Utils.safe_force coeff * dim in
       reapply_rows_constr := true;
       if tot % denom = 0 then subst_total_elems_divided_by (Num_elems (tot / denom)) divided_by
-      else raise @@ Shape_error ("Total_elems constraint: shape cannot be strided", [])
+      else
+        raise
+        @@ Shape_error
+             ( [%string
+                 "Total_elems constraint: shape cannot be strided, %{tot#Int} not divisible by \
+                  %{denom#Int}"],
+               [ Rows_constr_failed { constr } ] )
   | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
     when not (equal_dim (Var var) (subst_in_dim (Var var))) -> (
       reapply_rows_constr := true;
@@ -925,7 +934,7 @@ let s_dim_one_in_row_constr stage v ~value constr =
     if equal_dim_var v v' then match value with Dim { d; _ } -> Some d | _ -> None else None
   in
   subst_row_constraint_impl
-    ~subst_in_dim:(fun in_ -> s_dim_one v ~value ~in_)
+    ~subst_in_dim:(fun in_ -> s_dim_one ~keep_conv:true v ~value ~in_)
     ~get_dim_val stage constr
 
 let ineqs_from_reapply_rows_constr = ref []
@@ -1208,7 +1217,10 @@ and apply_row_constraint ~depth stage (r : row) (constr : row_constraint) env : 
         else
           raise
           @@ Shape_error
-               ("apply_row_constraint: Total_elems constraint failed", [ Row_mismatch [ r ] ])
+               ( [%string
+                   "apply_row_constraint: Total_elems constraint failed: %{denom*d#Int} not \
+                    divisible by %{coeff#Int}"],
+                 [ Row_mismatch [ r ] ] )
     | { dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by }
       when List.length divided_by <= 1 -> (
         try
@@ -1321,6 +1333,7 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
         ineqs := more_ineqs @ !ineqs;
         result
       in
+      ineqs_from_reapply_rows_constr := [];
       let env =
         match Map.find env.dim_env v with
         | None ->
@@ -2060,7 +2073,27 @@ and eliminate_row_constraint ~depth stage ~lub (r : row) (constr : row_constrain
                 if d = d2 && is_stage5_up stage then no_further_axes else Row_eq { r1; r2 }
               in
               (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) () } ], env)
-          | Strided_var { coeff = _; var = _; denom = _ }, _, _ -> keep_constr ()
+          | Strided_var { coeff; var; denom }, [], None
+            when is_stage5_up stage
+                 && (Utils.safe_force coeff > denom || denom % Utils.safe_force coeff <> 0) ->
+              let coeff = Utils.safe_force coeff in
+              let gcd = Utils.gcd coeff denom in
+              let d = denom / gcd in
+              let d2 = get_dim ~d () in
+              let d3 = get_dim ~d:(coeff / gcd) () in
+              ( [
+                  Dim_eq { d1 = Var var; d2 };
+                  Row_eq { r1; r2 = { dims = [ d3 ]; bcast = Broadcastable; id } };
+                ],
+                env )
+          | Strided_var { coeff; var; denom }, [], _
+            when is_stage6_up stage && denom % Utils.safe_force coeff = 0 ->
+              let d2 = get_dim ~d:(denom / Utils.safe_force coeff) () in
+              ( [
+                  Dim_eq { d1 = Var var; d2 };
+                  Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } };
+                ],
+                env )
           | _ -> keep_constr ())
       | Exact dims -> ([ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ], env)
       | Unconstrained -> ([], env))
