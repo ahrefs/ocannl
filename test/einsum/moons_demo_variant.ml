@@ -27,7 +27,7 @@ let () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = "b3" + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
+  let%op mlp x = 0.5 + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   (* THIS IS THE SPECIFIC SHAPE INFERENCE ASPECT OF THE TEST. *)

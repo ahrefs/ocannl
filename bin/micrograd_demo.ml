@@ -25,7 +25,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x)))) in
   let%op moons_input = moons_flat @| batch_n in
   (* Tell shape inference to make a minibatch axis. *)
   let () =
@@ -51,9 +51,7 @@ let experiment seed ~no_batch_shape_inference ~use_builtin_weight_decay () =
       (scalar_loss, 0.0002)
     else
       let%op ssq w = (w **. 2) ++ "...|...->... => 0" in
-      let reg_loss =
-        List.map ~f:ssq [ w1; w2; w3; b1; b2; b3 ] |> List.reduce_exn ~f:TDSL.O.( + )
-      in
+      let reg_loss = List.map ~f:ssq [ w1; w2; w3; b1; b2 ] |> List.reduce_exn ~f:TDSL.O.( + ) in
       let%op scalar_loss =
         ((margin_loss ++ "...|... => 0") /. !..batch_size) + (0.0001 *. reg_loss)
       in

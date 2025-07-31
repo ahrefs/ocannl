@@ -23,7 +23,7 @@ let demo () =
   let steps = epochs * n_batches in
   let weight_decay = 0.0002 in
 
-  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = "w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x)))) in
 
   let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in

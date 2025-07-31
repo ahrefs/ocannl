@@ -23,8 +23,8 @@ let experiment ~seed ~backend_name ~config () =
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
-  (* let%op mlp x = "b" + ("w" * x) in *)
+  let%op mlp x = "w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x)))) in
+  (* let%op mlp x = ("w" * x) in *)
   let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)

@@ -18,7 +18,7 @@ let main () =
   let len = batch_size * 20 in
   let init_lr = 0.1 in
   (* let epochs = 10 in *)
-  let epochs = 20 in
+  let epochs = 100 in
   (* let epochs = 1 in *)
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len () in
@@ -26,7 +26,7 @@ let main () =
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = "b3" + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
+  let%op mlp x = 0.5 + ("w3" * relu ("b2" hid_dim + ("w2" * relu ("b1" hid_dim + ("w1" * x))))) in
   (* let%op mlp x = "b" + ("w" * x) in *)
   let%op loss_fn ~output ~expectation = relu (!..1 - (expectation *. output)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
