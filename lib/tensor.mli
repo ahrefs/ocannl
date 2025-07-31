@@ -125,25 +125,6 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed
 
 val is_prohibit_grad : grad_spec -> bool
 
-val op :
-  label:string list ->
-  ?ternary_op:Shape.ternary_type ->
-  ?compose_op:Shape.compose_type ->
-  ?transpose_op:Shape.transpose_type ->
-  ?terminal_op:Shape.terminal_type ->
-  op_asn:(v:tn -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(t:t -> g:tn -> projections:projections Lazy.t -> comp) ->
-  ?grad_spec:grad_spec ->
-  (debug_name:string -> id:int -> Shape.t) ->
-  t list ->
-  t
-(** At most one of [?ternary_op] or [?compose_op] or [?transpose_op] or [?terminal_op] should be
-    provided, except when the operation takes more than three arguments which uses both
-    [?compose_op] or [?transpose_op]. The defaults are pointwise operations. The [grad_asn] function
-    receives the non-differentiable variant of the tensor as an argument, which can be used to
-    access the tensor's value in a tensor expression. The [terminal_op] is used to specify the
-    terminal operation of the tensor. *)
-
 type param_op_fun =
   ?input_dims:int list ->
   ?output_dims:int list ->
@@ -164,6 +145,9 @@ val binop :
   t ->
   t ->
   op_fun
+(** The defaults are pointwise operations. The [grad_asn] function receives the non-differentiable
+    variant of the tensor as an argument, which can be used to access the tensor's value in a tensor
+    expression. *)
 
 val unop :
   ?transpose_op:Shape.transpose_type ->
@@ -172,6 +156,7 @@ val unop :
   ?grad_spec:grad_spec ->
   t ->
   op_fun
+(** See {!binop} -- same comments apply. *)
 
 val ternop :
   ?ternary_op:Shape.ternary_type ->
@@ -182,6 +167,7 @@ val ternop :
   t ->
   t ->
   op_fun
+(** See {!binop} -- same comments apply. *)
 
 val term :
   ?init_data:Ir.Assignments.init_data -> ?fetch_op:fetch_op -> ?grad_spec:grad_spec -> op_fun

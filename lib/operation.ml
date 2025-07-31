@@ -5,6 +5,7 @@ module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Tn = Ir.Tnode
 
+let _get_local_debug_runtime = Utils.get_local_debug_runtime
 let grad t = (Option.value_exn ~here:[%here] ~message:"No-gradient tensor" t.Tensor.diff).grad
 
 module At = struct
@@ -405,32 +406,12 @@ let slice (batch_idx : Idx.static_symbol) =
     Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~label:("@|" :: label)
 
 let embed_symbol ?(label = []) static_sym : Tensor.t =
-  let module NTDSL = Initial_NTDSL in
-  let op_asn ~v ~projections =
-    Asgns.to_comp
-    @@ Fetch
-         {
-           array = v;
-           fetch_op = Embed_symbol static_sym;
-           dims = lazy (Lazy.force projections).Idx.lhs_dims;
-         }
-  in
-  let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
-  Tensor.op ~label:("!@" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
-    (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
-    []
+  Tensor.term ~fetch_op:(Embed_symbol static_sym) ~grad_spec:Prohibit_grad ~label:("!@" :: label)
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
 let embed_self_id ?(label = []) () : Tensor.t =
-  let module NTDSL = Initial_NTDSL in
-  let op_asn ~v ~projections =
-    Asgns.to_comp
-    @@ Fetch
-         { array = v; fetch_op = Embed_self_id; dims = lazy (Lazy.force projections).Idx.lhs_dims }
-  in
-  let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
-  Tensor.op ~label:("!@self_id" :: label) ~op_asn ~grad_asn ~grad_spec:Prohibit_grad
-    (Shape.make ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ())
-    []
+  Tensor.term ~fetch_op:Embed_self_id ~grad_spec:Prohibit_grad ~label:("!@self_id" :: label)
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
 module DO = struct
   let ( * ) ?label t1 t2 = matmul ~grad_spec:If_needed ?label t1 t2 ()

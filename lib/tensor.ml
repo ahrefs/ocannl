@@ -200,12 +200,12 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
+let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
     ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
-  let id = session_state.next_id in
+  let id : int = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   let default_prec =
@@ -241,12 +241,14 @@ let op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.prec
     | _ -> transpose_op
   in
-  let rec shape_logics = function
+  let shape_logics = function
     | [] -> [ terminal_logic () ]
     | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
-    | t1 :: (t2 :: _ as ts) -> Shape.Broadcast (compose_op, t1.shape, t2.shape) :: shape_logics ts
+    | _ ->
+      (* Let's implement what we need when we need it. *)
+      assert false
   in
   let local_shape_updates =
     List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
@@ -352,8 +354,8 @@ type param_op_fun =
 type op_fun =
   ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> param_op_fun
 
-let binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let%track7_sexp binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
   op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec
@@ -361,8 +363,8 @@ let binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_di
        ())
     [ t1; t2 ]
 
-let ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let%track7_sexp ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
   op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec
@@ -370,8 +372,8 @@ let ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batc
        ())
     [ t1; t2; t3 ]
 
-let unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
   op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec
@@ -379,8 +381,8 @@ let unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims
        ())
     [ t1 ]
 
-let term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes ?input_dims
-    ?output_dims ?input_axes ?output_axes ?deduced () =
+let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -409,7 +411,7 @@ let term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes ?
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
-let number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c =
+let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c : t =
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
@@ -478,7 +480,8 @@ let term_init ?grad_spec values ?(label = []) ?batch_dims ?batch_axes ?input_dim
   term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?input_dims ?output_dims
     ?input_axes ?output_axes ?deduced ()
 
-let param ~t name ?(more_label = []) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_dims ?input_axes
+    ?output_axes ?deduced () : t =
   let t =
     t
       ?label:(Some (name :: more_label))
