@@ -520,7 +520,7 @@ let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
   Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ~output_dims
 
-let uniform ?grad_spec =
+let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec
     (threefry4x32 (embed_self_id ())
        (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
@@ -538,7 +538,7 @@ module TDSL = struct
   let embed_self_id = embed_self_id
 
   (** The default initialization operation for {!param} calls. *)
-  let default_param_init = ref uniform
+  let default_param_init = ref (uniform ~grad_spec:Require_grad)
 
   let param ?value ?values =
     let t =
@@ -546,7 +546,7 @@ module TDSL = struct
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
       | Some value, None -> Tensor.param_init [| value |]
       | None, Some values -> Tensor.param_init values
-      | None, None -> !default_param_init ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
+      | None, None -> !default_param_init () ~batch_dims:[] ?batch_axes:None
     in
     Tensor.param ~t
 
