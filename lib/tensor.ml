@@ -203,10 +203,20 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
     ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+  List.iter orig_ts ~f:(fun t ->
+      if t.id >= session_state.next_id then
+        raise
+        @@ Session_error
+             ( [%string
+                 "Tensor #%{t.id#Int} %{Tn.debug_name t.value} has an id greater than the last id \
+                  #%{session_state.next_id - 1#Int} -- check your uses of \
+                  Tensor.unsafe_reinitialize, if all your uses are valid, report this as a bug."],
+               Some t ));
   (* The code needs to be included in the order it was computed due to potential non-tree DAGs. *)
   let ordered_ts = List.dedup_and_sort orig_ts ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id) in
   let id : int = session_state.next_id in
   session_state.next_id <- session_state.next_id + 1;
+  let _session_state_next_id : int = session_state.next_id in
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   let default_prec =
     let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
@@ -247,8 +257,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
     | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
     | _ ->
-      (* Let's implement what we need when we need it. *)
-      assert false
+        (* Let's implement what we need when we need it. *)
+        assert false
   in
   let local_shape_updates =
     List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
@@ -381,8 +391,8 @@ let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
        ())
     [ t1 ]
 
-let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes ?input_dims
-    ?output_dims ?input_axes ?output_axes ?deduced () : t =
+let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -566,7 +576,7 @@ let rec get_random_seed () =
       set_random_seed ();
       get_random_seed ()
 
-let%track5_sexp unsafe_reinitialize () =
+let%track5_sexp unsafe_reinitialize () : unit =
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
