@@ -468,8 +468,11 @@ module C_syntax (B : C_syntax_config) = struct
     else
       let doc = ref (pp_axis_index idcs.(0)) in
       for i = 1 to Array.length idcs - 1 do
-        doc :=
-          parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ pp_axis_index idcs.(i)
+        let idx_doc = pp_axis_index idcs.(i) in
+        if PPrint.is_empty !doc then doc := idx_doc
+        else if PPrint.is_empty idx_doc then
+          doc := parens !doc ^^ string (" * " ^ Int.to_string dims.(i))
+        else doc := parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ idx_doc
       done;
       !doc
 
@@ -714,9 +717,11 @@ module C_syntax (B : C_syntax_config) = struct
         in
         (empty, expr)
     | Embed_index idx ->
-        let from_prec = Ops.double in
+        let from_prec = Ops.int32 in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let expr = string prefix ^^ pp_axis_index idx ^^ string postfix in
+        let idx_doc = pp_axis_index idx in
+        let idx_doc = if PPrint.is_empty idx_doc then string "0" else idx_doc in
+        let expr = string prefix ^^ idx_doc ^^ string postfix in
         (empty, expr)
     | Binop (Arg1, v1, _v2) -> pp_float prec v1
     | Binop (Arg2, _v1, v2) -> pp_float prec v2
@@ -794,7 +799,9 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let c_str = Printf.sprintf "%.16g" c in
         (string prefix ^^ string c_str ^^ string postfix, [])
-    | Embed_index idx -> (pp_axis_index idx, [])
+    | Embed_index idx ->
+        let idx_doc = pp_axis_index idx in
+        ((if PPrint.is_empty idx_doc then string "0" else idx_doc), [])
     | Binop (Arg1, v1, _v2) -> debug_float prec v1
     | Binop (Arg2, _v1, v2) -> debug_float prec v2
     | Ternop (op, v1, v2, v3) ->

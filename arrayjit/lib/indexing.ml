@@ -214,41 +214,6 @@ let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
          | Sub_axis -> (stride * dim, symbols, offset))
   |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
-module Pp_helpers = struct
-  open PPrint
-
-  let pp_comma () = comma ^^ space
-  let pp_symbol sym = string (symbol_ident sym)
-
-  let pp_static_symbol { static_symbol; static_range } =
-    match static_range with
-    | None -> pp_symbol static_symbol
-    | Some range ->
-        infix 4 1 colon (pp_symbol static_symbol) (brackets (string "0.." ^^ OCaml.int (range - 1)))
-
-  let pp_axis_index = function
-    | Iterator sym -> pp_symbol sym
-    | Fixed_idx i -> OCaml.int i
-    | Affine { symbols; offset } -> (
-        let terms =
-          List.map symbols ~f:(fun (coeff, sym) ->
-              if coeff = 1 then pp_symbol sym else OCaml.int coeff ^^ string "*" ^^ pp_symbol sym)
-        in
-        let all_terms =
-          if offset = 0 then terms
-          else if offset > 0 then terms @ [ OCaml.int offset ]
-          else terms @ [ string "-" ^^ OCaml.int (-offset) ]
-        in
-        match all_terms with
-        | [] -> OCaml.int 0
-        | [ t ] -> t
-        | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
-    | Sub_axis -> empty
-
-  let pp_indices idcs = separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)
-  let print ppf doc = ToFormatter.pretty 1.0 80 ppf doc
-end
-
 module Doc_helpers = struct
   let ( ^^ ) = PPrint.( ^^ )
   let ( !^ ) = PPrint.( !^ )

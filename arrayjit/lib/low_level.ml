@@ -1201,7 +1201,9 @@ let to_doc_cstyle ?name ?static_indices () llc =
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
-    | Embed_index idx -> pp_axis_index idx
+    | Embed_index idx ->
+        let idx_doc = pp_axis_index idx in
+        if PPrint.is_empty idx_doc then string "0" else idx_doc
     | Ternop (op, v1, v2, v3) ->
         let prefix, comma1, comma2, postfix = Ops.ternop_c_syntax prec op in
         group
@@ -1284,7 +1286,9 @@ let to_doc ?name ?static_indices () llc =
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
-    | Embed_index idx -> pp_axis_index idx
+    | Embed_index idx ->
+        let idx_doc = pp_axis_index idx in
+        if PPrint.is_empty idx_doc then string "0" else idx_doc
     | Ternop (op, v1, v2, v3) ->
         let prefix = Ops.ternop_cd_syntax op in
         group
