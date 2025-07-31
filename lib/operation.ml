@@ -560,6 +560,7 @@ module TDSL = struct
   let wrap = wrap ~grad_spec:If_needed
   let wrap_padded = wrap_padded ~grad_spec:If_needed
   let rebatch = rebatch ~grad_spec:If_needed
+  let uniform = uniform ~grad_spec:Require_grad
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
@@ -592,9 +593,10 @@ module NTDSL = struct
   let wrap = wrap ~grad_spec:Prohibit_grad
   let wrap_padded = wrap_padded ~grad_spec:Prohibit_grad
   let rebatch = rebatch ~grad_spec:Prohibit_grad
-  let threefry4x32 = threefry4x32
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform
+  let threefry4x32 = threefry4x32 ~grad_spec:Prohibit_grad
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
   let embed_self_id = embed_self_id
+  let uniform = uniform ~grad_spec:Prohibit_grad
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in
