@@ -13,12 +13,13 @@ let main () =
      of dependencies. *)
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
-  let len = 200 in
+  (* Sensitive to batch size -- smaller batch sizes are better. *)
   let batch_size = 10 in
+  let len = batch_size * 40 in
   let n_batches = 2 * len / batch_size in
-  let epochs = 50 in
+  let epochs = 60 in
   let steps = epochs * 2 * len / batch_size in
-  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 5 } in
+  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 1 } in
   let moons_coordinates, moons_labels =
     Datasets.Half_moons.generate_single_prec ~config:moons_config ~len ()
   in
@@ -28,7 +29,7 @@ let main () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = 0.5 + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
+  let%op mlp x = ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in

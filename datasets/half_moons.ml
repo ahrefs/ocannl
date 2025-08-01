@@ -39,9 +39,10 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
     let c = Float.cos v and s = Float.sin v in
     let x = c +. noise () in
     let y = s +. noise () in
-    Genarray.set coordinates [| i; 0 |] x;
-    Genarray.set coordinates [| i; 1 |] y;
-    Genarray.set labels [| i; 0 |] 1.0
+    let idx = i * 2 in
+    Genarray.set coordinates [| idx; 0 |] x;
+    Genarray.set coordinates [| idx; 1 |] y;
+    Genarray.set labels [| idx; 0 |] 1.0
   done;
 
   (* Generate second moon (label = -1.0) *)
@@ -50,7 +51,7 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
     let c = Float.cos v and s = Float.sin v in
     let x = 1.0 -. c +. noise () in
     let y = 0.5 -. s +. noise () in
-    let idx = len + i in
+    let idx = i * 2 + 1 in
     Genarray.set coordinates [| idx; 0 |] x;
     Genarray.set coordinates [| idx; 1 |] y;
     Genarray.set labels [| idx; 0 |] (-1.0)

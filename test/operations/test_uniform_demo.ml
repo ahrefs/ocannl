@@ -24,7 +24,7 @@ let matrix_3x7 = matrix_uniform ~output_dims:[3; 7] ()
 (* The configurability is preserved through partial application *)
 let () =
   Stdio.printf "Created tensors with configurable shapes using the new interface!\n";
-  Stdio.printf "tensor1 shape: %s\n" (Tensor.debug_name tensor1);
-  Stdio.printf "tensor2 shape: %s\n" (Tensor.debug_name tensor2);
-  Stdio.printf "matrix_5x5 shape: %s\n" (Tensor.debug_name matrix_5x5);
-  Stdio.printf "matrix_3x7 shape: %s\n" (Tensor.debug_name matrix_3x7)
+  Stdio.printf "tensor1 shape: %s\n" (Tensor.debug_name @@ tensor1 ());
+  Stdio.printf "tensor2 shape: %s\n" (Tensor.debug_name @@ tensor2 ());
+  Stdio.printf "matrix_5x5 shape: %s\n" (Tensor.debug_name @@ matrix_5x5 ());
+  Stdio.printf "matrix_3x7 shape: %s\n" (Tensor.debug_name @@ matrix_3x7 ())

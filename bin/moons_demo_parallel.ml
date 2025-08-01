@@ -9,12 +9,12 @@ module CDSL = Train.CDSL
 let experiment ~seed ~backend_name ~config () =
   let hid_dim = 16 in
   (* let hid_dim = 4 in *)
-  let batch_size = 120 in
+  let batch_size = 20 in
   (* let batch_size = 60 in *)
   (* let batch_size = 20 in *)
   let len = batch_size * 20 in
   let init_lr = 0.1 in
-  let epochs = 10 in
+  let epochs = 100 in
   (* let epochs = 20 in *)
   (* let epochs = 1 in *)
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
