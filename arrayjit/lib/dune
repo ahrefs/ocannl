@@ -62,7 +62,7 @@
  (name cuda_backend)
  (public_name arrayjit.cuda_backend)
  (optional)
- (modules cuda_backend)
+ (modules cuda_backend builtins_cuda_large builtins_cuda_small)
  (libraries base cudajit.cuda cudajit.nvrtc utils ir)
  (preprocess
   (pps
@@ -78,7 +78,7 @@
  (name metal_backend)
  (public_name arrayjit.metal_backend)
  (optional)
- (modules metal_backend)
+ (modules metal_backend builtins_metal)
  (libraries base metal utils ir)
  (preprocess
   (pps

@@ -709,11 +709,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     if Utils.debug_log_from_routines () then
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     Buffer.add_string b "\n\n";
-    let builtins_path =
-      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_small.cu"
-    in
-    let builtins_content = Stdio.In_channel.read_all builtins_path in
-    Buffer.add_string b builtins_content;
+    Buffer.add_string b Builtins_cuda_small.source;
     (* Needs to be after the small builtins, because uses uint4x32_t. *)
     Buffer.add_string b builtins_large_header;
     Buffer.add_string b "\n\n"

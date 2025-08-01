@@ -1,3 +1,4 @@
+let source = {|
 #include <metal_stdlib>
 using namespace metal;
 
@@ -368,3 +369,4 @@ uint4 half_to_uint4x32(uint16_t x) {
 uint4 fp8_to_uint4x32(uint8_t x) {
     return uint4(uint32_t(x), 0, 0, 0);
 }
+|}

@@ -1,4 +1,4 @@
-
+let source = {|
 typedef struct {
     uint32_t v[4];
 } uint4x32_t;
@@ -182,3 +182,4 @@ __device__ uint8x16_t uint4x32_to_u8_uniform_vec(uint4x32_t x) {
   }
   return result;
 }
+|}

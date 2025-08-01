@@ -1,3 +1,4 @@
+let source = {|
 #include <cuda_runtime.h>
 #include <stdint.h>
 
@@ -108,3 +109,5 @@ __device__ uint4x32_t arrayjit_threefry4x32_impl(uint4x32_t key, uint4x32_t coun
 }
 
 __device__ uint4x32_t ( *arrayjit_threefry4x32)(uint4x32_t key, uint4x32_t counter) = arrayjit_threefry4x32_impl;
+
+|}
