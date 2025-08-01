@@ -285,6 +285,17 @@ let uint4x32_to_prec_uniform ?grad_spec =
       ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
       ~op_asn ~grad_asn ?grad_spec t1
 
+(** A wasteful variant of {!uint4x32_to_prec_uniform} that produces a single value from each 4x32
+    random bits. *)
+let uint4x32_to_prec_uniform1 ?grad_spec =
+  (* FIXME: Must use non-vectorized version of uint4x32_to_prec_uniform. *)
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
+  fun t1 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.unop ~transpose_op:Pointwise_un ~op_asn ~grad_asn ?grad_spec t1
+
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
@@ -522,6 +533,14 @@ let rebatch ~l ndarray =
 
 let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec
+    (threefry4x32 (embed_self_id ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
+(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. *)
+let uniform1 ?grad_spec () =
+  uint4x32_to_prec_uniform1 ?grad_spec
     (threefry4x32 (embed_self_id ())
        (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
           ~label:[ "range_over_offsets" ] ())
