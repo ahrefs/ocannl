@@ -19,9 +19,11 @@ let main () =
   let epochs = 50 in
   let steps = epochs * 2 * len / batch_size in
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 5 } in
-  let moons_coordinates, moons_labels = Datasets.Half_moons.generate ~config:moons_config ~len () in
-  let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_coordinates in
-  let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Double moons_labels in
+  let moons_coordinates, moons_labels =
+    Datasets.Half_moons.generate_single_prec ~config:moons_config ~len ()
+  in
+  let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates in
+  let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_labels in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in

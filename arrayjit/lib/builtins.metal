@@ -1,10 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct uint4x32_t {
-    uint4 v;
-};
-
 /* Threefry4x32 constants */
 constant uint32_t THREEFRY_C240 = 0x1BD11BDA;
 
@@ -41,9 +37,9 @@ inline void threefry_round(thread uint4 &x, uint r0, uint r1, uint r2, uint r3) 
 }
 
 /* Threefry4x32 implementation - 20 rounds */
-uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
-    uint4 x = counter.v;
-    uint4 k = key.v;
+uint4 arrayjit_threefry4x32(uint4 key, uint4 counter) {
+    uint4 x = counter;
+    uint4 k = key;
     
     /* Compute ks[4] */
     uint32_t ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
@@ -125,9 +121,7 @@ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     x += k;
     x.w += 5;
     
-    uint4x32_t result;
-    result.v = x;
-    return result;
+    return x;
 }
 
 /* Vector types for efficient extraction of multiple values */
@@ -135,6 +129,7 @@ struct float4_t { float4 v; };
 struct float2_t { float2 v; };  /* Using float2 since Metal lacks double */
 struct int32x4_t { int4 v; };
 struct int64x2_t { int64_t v[2]; };
+struct uint64x2_t { uint64_t v[2]; };
 struct int8x16_t { int8_t v[16]; };
 struct uint16x8_t { uint16_t v[8]; };
 struct uint8x16_t { uint8_t v[16]; };
@@ -149,101 +144,118 @@ inline float uint32_to_single_uniform(uint32_t x) {
 }
 
 /* Uint4x32 to float32 uniform */
-float uint4x32_to_single_uniform(uint4x32_t x) {
-    return uint32_to_single_uniform(x.v.x);
+float uint4x32_to_single_uniform(uint4 x) {
+    return uint32_to_single_uniform(x.x);
 }
 
 /* Uint4x32 to float64 uniform - Metal doesn't have native double support */
-float uint4x32_to_double_uniform(uint4x32_t x) {
+float uint4x32_to_double_uniform(uint4 x) {
     /* Fallback to float precision */
-    uint64_t combined = (uint64_t(x.v.y) << 32) | x.v.x;
+    uint64_t combined = (uint64_t(x.y) << 32) | x.x;
     return float(combined) * (1.0f / 18446744073709551616.0f);
 }
 
 /* Uint4x32 to int32 uniform */
-int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
-    return int32_t(x.v.x);
+int32_t uint4x32_to_int32_uniform(uint4 x) {
+    return int32_t(x.x);
 }
 
 /* Uint4x32 to int64 uniform */
-int64_t uint4x32_to_i64_uniform(uint4x32_t x) {
-    return int64_t((uint64_t(x.v.y) << 32) | x.v.x);
+int64_t uint4x32_to_int64_uniform(uint4 x) {
+    return int64_t((uint64_t(x.y) << 32) | x.x);
 }
 
 /* Uint4x32 to uint32 uniform */
-uint32_t uint4x32_to_u32_uniform(uint4x32_t x) {
-    return x.v.x;
+uint32_t uint4x32_to_uint32_uniform(uint4 x) {
+    return x.x;
 }
 
 /* Uint4x32 to uint64 uniform */
-uint64_t uint4x32_to_u64_uniform(uint4x32_t x) {
-    return (uint64_t(x.v.y) << 32) | x.v.x;
+uint64_t uint4x32_to_uint64_uniform(uint4 x) {
+    return (uint64_t(x.y) << 32) | x.x;
 }
 
-/* Uint4x32 to int8 uniform */
-int8_t uint4x32_to_i8_uniform(uint4x32_t x) {
-    return int8_t(x.v.x & 0xFF);
+/* Uint4x32 to byte uniform */
+int8_t uint4x32_to_byte_uniform(uint4 x) {
+    return int8_t(x.x & 0xFF);
 }
 
-/* Uint4x32 to uint8 uniform */
-uint8_t uint4x32_to_u8_uniform(uint4x32_t x) {
-    return uint8_t(x.v.x & 0xFF);
+/* Uint4x32 to uint16 uniform */
+uint16_t uint4x32_to_uint16_uniform(uint4 x) {
+    return uint16_t(x.x & 0xFFFF);
 }
 
 /* Uint4x32 to bfloat16 uniform */
-uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
-    float f = uint32_to_single_uniform(x.v.x);
+uint16_t uint4x32_to_bfloat16_uniform(uint4 x) {
+    float f = uint32_to_single_uniform(x.x);
     return uint16_t(as_type<uint32_t>(f) >> 16);
 }
 
 /* Uint4x32 to float16 uniform */
-half uint4x32_to_half_uniform(uint4x32_t x) {
-    float f = uint32_to_single_uniform(x.v.x);
+half uint4x32_to_half_uniform(uint4 x) {
+    float f = uint32_to_single_uniform(x.x);
     return half(f);
+}
+
+/* Uint4x32 to fp8 uniform */
+uint8_t uint4x32_to_fp8_uniform(uint4 x) {
+    return uint8_t(x.x & 0xFF);
 }
 
 /* Vectorized conversion functions that use all 128 bits efficiently */
 
 /* Convert uint4x32 to 4 floats in [0, 1) */
-float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+float4_t uint4x32_to_single_uniform_vec(uint4 x) {
     float4_t result;
-    result.v.x = uint32_to_single_uniform(x.v.x);
-    result.v.y = uint32_to_single_uniform(x.v.y);
-    result.v.z = uint32_to_single_uniform(x.v.z);
-    result.v.w = uint32_to_single_uniform(x.v.w);
+    result.v.x = uint32_to_single_uniform(x.x);
+    result.v.y = uint32_to_single_uniform(x.y);
+    result.v.z = uint32_to_single_uniform(x.z);
+    result.v.w = uint32_to_single_uniform(x.w);
     return result;
 }
 
 /* Convert uint4x32 to 2 floats in [0, 1) - Metal lacks double precision */
-float2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+float2_t uint4x32_to_double_uniform_vec(uint4 x) {
     float2_t result;
-    uint64_t combined1 = (uint64_t(x.v.y) << 32) | x.v.x;
-    uint64_t combined2 = (uint64_t(x.v.w) << 32) | x.v.z;
+    uint64_t combined1 = (uint64_t(x.y) << 32) | x.x;
+    uint64_t combined2 = (uint64_t(x.w) << 32) | x.z;
     result.v.x = float(combined1) * (1.0f / 18446744073709551616.0f);
     result.v.y = float(combined2) * (1.0f / 18446744073709551616.0f);
     return result;
 }
 
 /* Convert uint4x32 to 4 int32s - full range */
-int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+int32x4_t uint4x32_to_int32_uniform_vec(uint4 x) {
     int32x4_t result;
-    result.v = int4(x.v);
+    result.v = int4(x);
     return result;
 }
 
 /* Convert uint4x32 to 2 int64s - full range */
-int64x2_t uint4x32_to_i64_uniform_vec(uint4x32_t x) {
+int64x2_t uint4x32_to_int64_uniform_vec(uint4 x) {
     int64x2_t result;
-    result.v[0] = (int64_t(x.v.y) << 32) | x.v.x;
-    result.v[1] = (int64_t(x.v.w) << 32) | x.v.z;
+    result.v[0] = (int64_t(x.y) << 32) | x.x;
+    result.v[1] = (int64_t(x.w) << 32) | x.z;
     return result;
 }
 
+/* Convert uint4x32 to 4 uint32s - full range */
+uint4 uint4x32_to_uint32_uniform_vec(uint4 x) {
+    return x;
+}
+
+/* Convert uint4x32 to 2 uint64s - full range */
+uint64x2_t uint4x32_to_uint64_uniform_vec(uint4 x) {
+    uint64x2_t result;
+    result.v[0] = (uint64_t(x.y) << 32) | x.x;
+    result.v[1] = (uint64_t(x.w) << 32) | x.z;
+    return result;
+}
 
 /* Convert uint4x32 to 16 int8s - full range */
-int8x16_t uint4x32_to_i8_uniform_vec(uint4x32_t x) {
+int8x16_t uint4x32_to_byte_uniform_vec(uint4 x) {
     int8x16_t result;
-    uint4 v = x.v;
+    uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
         result.v[i*4 + 0] = int8_t(val & 0xFF);
@@ -255,9 +267,9 @@ int8x16_t uint4x32_to_i8_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 uint16s - full range */
-uint16x8_t uint4x32_to_u16_uniform_vec(uint4x32_t x) {
+uint16x8_t uint4x32_to_uint16_uniform_vec(uint4 x) {
     uint16x8_t result;
-    uint4 v = x.v;
+    uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
         result.v[i*2 + 0] = uint16_t(val & 0xFFFF);
@@ -267,9 +279,9 @@ uint16x8_t uint4x32_to_u16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 bfloat16s uniform */
-uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4 x) {
     uint16x8_t result;
-    uint4 v = x.v;
+    uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
         float f1 = float(val & 0xFFFF) * (1.0f / 65536.0f);
@@ -281,9 +293,9 @@ uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 float16s uniform */
-half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+half8_t uint4x32_to_half_uniform_vec(uint4 x) {
     half8_t result;
-    uint4 v = x.v;
+    uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
         float f1 = float(val & 0xFFFF) * (1.0f / 65536.0f);
@@ -294,10 +306,10 @@ half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     return result;
 }
 
-/* Convert uint4x32 to 16 uint8s uniform */
-uint8x16_t uint4x32_to_u8_uniform_vec(uint4x32_t x) {
+/* Convert uint4x32 to 16 fp8s uniform */
+uint8x16_t uint4x32_to_fp8_uniform_vec(uint4 x) {
     uint8x16_t result;
-    uint4 v = x.v;
+    uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
         result.v[i*4 + 0] = uint8_t(val & 0xFF);
@@ -306,4 +318,53 @@ uint8x16_t uint4x32_to_u8_uniform_vec(uint4x32_t x) {
         result.v[i*4 + 3] = uint8_t((val >> 24) & 0xFF);
     }
     return result;
+}
+
+/* Conversion functions from various precisions to uint4x32 */
+uint4 single_to_uint4x32(float x) {
+    uint32_t bits = as_type<uint32_t>(x);
+    return uint4(bits, 0, 0, 0);
+}
+
+uint4 double_to_uint4x32(float x) {
+    /* Metal doesn't have native double support, use float fallback */
+    uint32_t bits = as_type<uint32_t>(x);
+    return uint4(bits, 0, 0, 0);
+}
+
+uint4 int32_to_uint4x32(int32_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
+}
+
+uint4 int64_to_uint4x32(int64_t x) {
+    uint64_t bits = uint64_t(x);
+    return uint4(uint32_t(bits & 0xFFFFFFFF), uint32_t(bits >> 32), 0, 0);
+}
+
+uint4 uint32_to_uint4x32(uint32_t x) {
+    return uint4(x, 0, 0, 0);
+}
+
+uint4 uint64_to_uint4x32(uint64_t x) {
+    return uint4(uint32_t(x & 0xFFFFFFFF), uint32_t(x >> 32), 0, 0);
+}
+
+uint4 byte_to_uint4x32(int8_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
+}
+
+uint4 uint16_to_uint4x32(uint16_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
+}
+
+uint4 bfloat16_to_uint4x32(uint16_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
+}
+
+uint4 half_to_uint4x32(uint16_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
+}
+
+uint4 fp8_to_uint4x32(uint8_t x) {
+    return uint4(uint32_t(x), 0, 0, 0);
 }

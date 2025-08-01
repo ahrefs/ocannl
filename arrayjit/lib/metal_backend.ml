@@ -572,7 +572,23 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     (* Keep vec_unop_syntax same as in pure C syntax. *)
 
     let convert_precision ~from ~to_ =
-      if Ops.equal_prec from to_ then ("", "") else ("(" ^ typ_of_prec to_ ^ ")(", ")")
+      match (from, to_) with
+      | Ops.Double_prec _, Ops.Double_prec _
+      | Ops.Single_prec _, Ops.Single_prec _
+      | Ops.Half_prec _, Ops.Half_prec _
+      | Ops.Byte_prec _, Ops.Byte_prec _
+      | Ops.Uint16_prec _, Ops.Uint16_prec _
+      | Ops.Int32_prec _, Ops.Int32_prec _
+      | Ops.Uint4x32_prec _, Ops.Uint4x32_prec _
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
+      | Ops.Fp8_prec _, Ops.Fp8_prec _
+      | Ops.Void_prec, Ops.Void_prec ->
+          ("", "")
+      (* Uint4x32 conversions - special handling *)
+      | Ops.Uint4x32_prec _, _ -> ("uint4x32_to_" ^ Ops.prec_string to_ ^ "_uniform(", ")")
+      | _, Ops.Uint4x32_prec _ -> (Ops.prec_string from ^ "_to_uint4x32(", ")")
+      (* Default case for all other conversions *)
+      | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 
     (* If we wanted to reintroduce the log_id parameter: [Some ("const int&", "log_id")]. *)
     let kernel_log_param = None
@@ -610,7 +626,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       (* Logging is disabled by default in CompileOptions, so no need to explicitly set it to
          false *);
 
-    if Utils.with_runtime_debug () then (
+    if Utils.settings.output_debug_files_in_build_directory then (
       let metal_file = Utils.build_file (name ^ ".metal") in
       Stdio.Out_channel.write_all metal_file ~data:source;
       [%log "Wrote metal source to file:", metal_file]);
@@ -623,12 +639,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Stdio.prerr_endline error_msg;
       failwith error_msg
 
+  let prepend_builtins b =
+    let builtins_path =
+      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins.metal"
+    in
+    let builtins_content = Stdio.In_channel.read_all builtins_path in
+    Buffer.add_string b builtins_content;
+    Buffer.add_string b "\n\n"
+
   let compile ~name bindings lowered =
     let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
       let procs = [| lowered |]
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
+    prepend_builtins b;
     let declarations_doc = Syntax.print_declarations () in
     (* Add Metal address space qualifiers *)
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
