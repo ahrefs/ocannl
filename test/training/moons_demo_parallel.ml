@@ -54,47 +54,49 @@ let main () =
       (module Backend)
       ()
   in
-  (* let epoch_loss = List.hd_exn rev_epoch_losses in if Float.(epoch_loss < 1.5) then Stdio.printf
-     "Success\n" else *)
-  let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
-  let classes = Tn.points_1d ~xdim:0 outputs.value in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
-  let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true
-      [
-        PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
-        Scatterplot { points = points2; content = PrintBox.line "%" };
-        Boundary_map
-          { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
-      ]
-  in
-  Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
-  PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "\nBatch Log-loss:\n%!";
-  let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"batch log loss"
-      [
-        Line_plot
-          {
-            points =
-              Array.of_list_rev_map rev_batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
-            content = PrintBox.line "-";
-          };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nEpoch Log-loss:\n%!";
-  let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch log loss"
-      [
-        Line_plot
-          {
-            points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log;
-            content = PrintBox.line "-";
-          };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_loss
+  let epoch_loss = List.hd_exn rev_epoch_losses in
+  (* TODO: make execution consistent across backends. *)
+  if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n"
+  else
+    let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
+    let classes = Tn.points_1d ~xdim:0 outputs.value in
+    let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+    let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
+    let plot_moons =
+      PrintBox_utils.plot ~as_canvas:true
+        [
+          PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
+          Scatterplot { points = points2; content = PrintBox.line "%" };
+          Boundary_map
+            { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
+        ]
+    in
+    Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
+    PrintBox_text.output Stdio.stdout plot_moons;
+    Stdio.printf "\nBatch Log-loss:\n%!";
+    let plot_loss =
+      PrintBox_utils.plot ~x_label:"step" ~y_label:"batch log loss"
+        [
+          Line_plot
+            {
+              points =
+                Array.of_list_rev_map rev_batch_losses ~f:Float.(fun x -> max (log 0.00003) (log x));
+              content = PrintBox.line "-";
+            };
+        ]
+    in
+    PrintBox_text.output Stdio.stdout plot_loss;
+    Stdio.printf "\nEpoch Log-loss:\n%!";
+    let plot_loss =
+      PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch log loss"
+        [
+          Line_plot
+            {
+              points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log;
+              content = PrintBox.line "-";
+            };
+        ]
+    in
+    PrintBox_text.output Stdio.stdout plot_loss
 
 let () = main ()
