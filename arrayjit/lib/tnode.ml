@@ -453,6 +453,12 @@ type t_set = Set.M(Comp).t
 
 let sexp_of_t_set s = [%sexp_of: t Sequence.t] @@ Set.to_sequence s
 
+type 'a t_map = (t, 'a, comparator_witness) Base.Map.t
+
+let sexp_of_t_map sexp_of_v m =
+  Sequence.sexp_of_t (fun (k, v) -> sexp_of_list Fn.id [ sexp_of_t k; sexp_of_v v ])
+  @@ Map.to_sequence m
+
 let get_exn a =
   match a.array with
   | (lazy (Some nd)) -> nd
