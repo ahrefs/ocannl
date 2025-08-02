@@ -524,13 +524,15 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     Hashtbl.set computations_table ~key:traced.tn ~data:((!at_idcs, top_llc) :: current_computations)
   with Non_virtual i -> Tn.update_memory_mode traced.tn Never_virtual i
 
-let inline_computation ~id computations_table traced static_indices call_args =
+let%track7_sexp inline_computation ~id computations_table (traced : traced_array)
+    (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
+    t option =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  let make_subst i lhs_ind =
+  let make_subst (i : int) (lhs_ind : Indexing.axis_index) =
     if i >= Array.length call_args then
       failwith
         [%string
@@ -544,7 +546,7 @@ let inline_computation ~id computations_table traced static_indices call_args =
       | _ -> raise @@ Non_virtual 13
   in
   (* In the order of computation. *)
-  let loop_proc (def_args, def) : t option =
+  let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
     let env =
       match def_args with
       | None -> Map.empty (module Indexing.Symbol)
@@ -553,7 +555,8 @@ let inline_computation ~id computations_table traced static_indices call_args =
           @@ Array.to_list
           @@ Array.filter_mapi def_args ~f:make_subst
     in
-    let subst env = function
+    let subst env (idx : Indexing.axis_index) : Indexing.axis_index =
+      match idx with
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
       | Indexing.Affine { symbols; offset } ->
           (* We need to substitute each symbol in the affine expression. If a symbol maps to a
