@@ -428,12 +428,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   type nonrec optimize_ctx = Low_level.optimize_ctx
 
-  let empty_optimize_ctx = { Low_level.computations = Hashtbl.create (module Tnode) }
+  let empty_optimize_ctx () = { Low_level.computations = Hashtbl.create (module Tnode) }
   let get_optimize_ctx (code : code) = code.lowered.optimize_ctx
 
   let get_optimize_ctx_batch (code_batch : code_batch) =
     Array.find_map code_batch.lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.optimize_ctx))
-    |> Option.value ~default:empty_optimize_ctx
+    |> Option.value_or_thunk ~default:empty_optimize_ctx
 
   let%debug3_sexp compile optim_ctx ?name bindings (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =

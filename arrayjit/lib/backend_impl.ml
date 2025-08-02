@@ -95,7 +95,7 @@ module Device_types_ll (Device_config : Device_config_common) = struct
 
   type optimize_ctx = Low_level.optimize_ctx [@@deriving sexp_of]
 
-  let empty_optimize_ctx = { Low_level.computations = Hashtbl.create (module Tnode) }
+  let empty_optimize_ctx () = { Low_level.computations = Hashtbl.create (module Tnode) }
 
   type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
   type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
@@ -143,8 +143,8 @@ struct
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
 
-  let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?(optimize_ctx = empty_optimize_ctx)
-      stream =
+  let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?optimize_ctx stream =
+    let optimize_ctx = Option.value_or_thunk optimize_ctx ~default:empty_optimize_ctx in
     { stream; parent = None; ctx_arrays; finalized = Atomic.make false; optimize_ctx }
 
   let make_child ?ctx_arrays ?optimize_ctx parent =

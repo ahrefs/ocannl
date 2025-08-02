@@ -84,7 +84,7 @@ module type Device_config = sig
   (** The optimization context for compiling code, in particular {!Low_level.optimize_ctx} for
       low-level backends. *)
 
-  val empty_optimize_ctx : optimize_ctx
+  val empty_optimize_ctx : unit -> optimize_ctx
 end
 
 type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
@@ -226,7 +226,7 @@ module type Backend_common = sig
   type code_batch [@@deriving sexp_of]
   type optimize_ctx [@@deriving sexp_of]
 
-  val empty_optimize_ctx : optimize_ctx
+  val empty_optimize_ctx : unit -> optimize_ctx
   val get_optimize_ctx : code -> optimize_ctx
   val get_optimize_ctx_batch : code_batch -> optimize_ctx
 
