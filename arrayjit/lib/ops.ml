@@ -485,7 +485,7 @@ let binop_c_syntax prec v =
   | Or, _ -> ("(", " ||", ")")
   | And, _ -> ("(", " &&", ")")
   | Threefry4x32, _ ->
-      (* This corresponds to the pure C implementation in arrayjit_stubs.c. *)
+      (* This corresponds to the pure C implementation in builtins.c. *)
       ("arrayjit_threefry4x32(", ",", ")")
 
 let is_assign_op = function

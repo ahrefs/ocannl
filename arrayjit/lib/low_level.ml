@@ -531,11 +531,17 @@ let inline_computation ~id computations_table traced static_indices call_args =
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
   let make_subst i lhs_ind =
-    let rhs_ind = call_args.(i) in
-    match lhs_ind with
-    | Indexing.Iterator lhs_s when not (Set.mem static_indices lhs_s) -> Some (lhs_s, rhs_ind)
-    | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
-    | _ -> raise @@ Non_virtual 13
+    if i >= Array.length call_args then
+      failwith
+        [%string
+          "make_subst: call_args too short, maybe stale optimization context? Tnode: \
+           %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} i: %{i#Int}"]
+    else
+      let rhs_ind = call_args.(i) in
+      match lhs_ind with
+      | Indexing.Iterator lhs_s when not (Set.mem static_indices lhs_s) -> Some (lhs_s, rhs_ind)
+      | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
+      | _ -> raise @@ Non_virtual 13
   in
   (* In the order of computation. *)
   let loop_proc (def_args, def) : t option =

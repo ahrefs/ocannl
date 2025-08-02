@@ -448,13 +448,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Bfloat16_prec _ -> "bfloat" (* Metal supports bfloat16 natively *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
       | Ops.Single_prec _ -> "float"
-      | Ops.Double_prec _ -> "double"
+      | Ops.Double_prec _ -> raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Void_prec -> "void"
 
     let vec_typ_of_prec ~length prec =
       match (prec, length) with
       | Ops.Single_prec _, 4 -> "float4_t"
-      | Ops.Double_prec _, 2 -> "float2_t" (* Metal uses float2 since it lacks double *)
+      | Ops.Double_prec _, 2 -> raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Int32_prec _, 4 -> "int32x4_t"
       | (Ops.Byte_prec _ | Ops.Fp8_prec _), 16 -> "int8x16_t"
       | (Ops.Uint16_prec _ | Ops.Bfloat16_prec _), 8 -> "uint16x8_t"
@@ -472,7 +472,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Bfloat16_prec _ -> "bf" (* TODO: Verify actual Metal suffix for bfloat16 *)
       | Ops.Fp8_prec _ -> invalid_arg "Metal backend does not support FP8 precision"
       | Ops.Single_prec _ -> "f"
-      | Ops.Double_prec _ -> ""
+      | Ops.Double_prec _ -> raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Void_prec -> ""
 
     let ternop_syntax _prec op =
@@ -514,12 +514,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string "0.0f"))
       | Relu_gate, Ops.Double_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0"))
-                 ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                 ^^ string "0.0"))
+          raise @@ Utils.User_error "Metal backend does not support double precision"
       | Relu_gate, _ (* Byte_prec, Void_prec *) ->
           fun v1 v2 ->
             group
@@ -537,7 +532,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
-      | Threefry4x32, _ -> func "arrayjit_threefry4x32"
+      | Threefry4x32, _ ->
+          (* Threefry4x32 must output to uint4x32 precision *)
+          (match prec with
+          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32"
+          | _ -> raise @@ Utils.User_error 
+              (Printf.sprintf "Metal backend: Threefry4x32 requires target precision to be uint4x32, but got %s"
+                 (Ops.prec_string prec)))
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
     let unop_syntax prec op =
@@ -554,7 +555,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Sqrt, _ -> func_doc "sqrt"
       | Relu, Ops.Half_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0h"; v ])
       | Relu, Ops.Single_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0f"; v ])
-      | Relu, Ops.Double_prec _ -> fun v -> func_doc "max" (separate comma_sep [ string "0.0"; v ])
+      | Relu, Ops.Double_prec _ -> raise @@ Utils.User_error "Metal backend does not support double precision"
       | Relu, _ (* Byte_prec, Void_prec *) ->
           fun v -> func_doc "max" (separate comma_sep [ string "0"; v ])
       | Satur01, p ->

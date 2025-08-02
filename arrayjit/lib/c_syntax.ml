@@ -274,6 +274,12 @@ struct
 
   let binop_syntax prec op v1 v2 =
     match op with
+    | Ops.Threefry4x32 -> (
+        match prec with
+        | Ops.Uint4x32_prec _ ->
+            let open PPrint in
+            group (string "arrayjit_threefry4x32(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
+        | _ -> invalid_arg "Pure_C_config.binop_syntax: Threefry4x32 on non-uint4x32 precision")
     | Ops.Satur01_gate -> (
         match prec with
         | Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Uint4x32_prec _ ->
