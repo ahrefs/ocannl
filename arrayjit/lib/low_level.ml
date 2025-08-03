@@ -524,9 +524,10 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     Hashtbl.set computations_table ~key:traced.tn ~data:((!at_idcs, top_llc) :: current_computations)
   with Non_virtual i -> Tn.update_memory_mode traced.tn Never_virtual i
 
-let%track7_sexp inline_computation ~id computations_table (traced : traced_array)
-    (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
-    t option =
+let%track7_sexp inline_computation ~id
+    (computations_table : (Tn.t, (Indexing.axis_index array option * t) list) Hashtbl.t)
+    (traced : traced_array) (static_indices : Indexing.static_symbol list)
+    (call_args : Indexing.axis_index array) : t option =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
@@ -639,7 +640,15 @@ let%track7_sexp inline_computation ~id computations_table (traced : traced_array
     loop env def
   in
   try
-    let computations = Hashtbl.find computations_table traced.tn |> Option.value ~default:[] in
+    let computations =
+      Hashtbl.find computations_table traced.tn
+      |> Option.value_or_thunk ~default:(fun () ->
+             raise
+             @@ Utils.User_error
+                  [%string
+                    "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
+                     %{Tn.debug_name traced.tn}"])
+    in
     let body = List.rev_filter_map ~f:loop_proc computations in
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->

@@ -529,8 +529,9 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let ctx_arrays =
       Hashtbl.fold code.lowered.traced_store ~init:context.ctx_arrays ~f:(alloc_if_needed context)
     in
+    let optimize_ctx = code.lowered.optimize_ctx in
     let bindings, schedule = link context code.code ctx_arrays in
-    let context = make_child ~ctx_arrays context in
+    let context = make_child ~ctx_arrays ~optimize_ctx context in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer context.stream ~code_node:code.expected_merge_node)
@@ -553,7 +554,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       | None -> (context, None)
       | Some schedule ->
           let ctx_arrays = Option.value_exn ctx_arrays.(i) in
-          let context = make_child ~ctx_arrays context in
+          let optimize_ctx = (Option.value_exn code_batch.lowereds.(i)).Low_level.optimize_ctx in
+          let context = make_child ~ctx_arrays ~optimize_ctx context in
           let expected_merge_node = code_batch.expected_merge_nodes.(i) in
           let (inputs, outputs), merge_buffer_input =
             Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)

@@ -130,23 +130,23 @@ let () =
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
-  let ctx = Train.forward_once backend ho in
+  let hey_ctx = Train.forward_once backend ho in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
   let%op ho2 = hey ++ "b|...->o => o|...->b" in
-  ignore (Train.forward_once backend ~ctx ho2);
+  ignore (Train.forward_once backend ~ctx:hey_ctx ho2);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
 
   let hey2 =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
-  let ctx = Train.forward_once backend ho3 in
+  let hey2_ctx = Train.forward_once backend ho3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho3;
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
-  ignore (Train.forward_once backend ~ctx ho4);
+  ignore (Train.forward_once backend ~ctx:hey2_ctx ho4);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
   let%op ho5 = hey ++ "...|...->...o => o" in
-  ignore (Train.forward_once backend ho5);
+  ignore (Train.forward_once backend ~ctx:hey_ctx ho5);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho5;
   let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op ho6 = hey3 ++ "...|...->...o => o" in

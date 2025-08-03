@@ -186,7 +186,7 @@ type ('buffer_ptr, 'stream, 'optimize_ctx) context = {
   parent : ('buffer_ptr, 'stream, 'optimize_ctx) context option;
   ctx_arrays : 'buffer_ptr ctx_arrays;
       (** This map contains arrays used in this context or an ancestor context (they might be unique
-          but might also be cross-stream shared. *)
+          but might also be cross-stream shared). *)
   finalized : Utils.atomic_bool;
   optimize_ctx : 'optimize_ctx;
 }
@@ -212,8 +212,8 @@ module type Device = sig
 
   val make_child : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> context -> context
   (** Returns a context with the same {!field:Backend_intf.context.stream}, and
-      {!field:Backend_intf.context.ctx_arrays} if omitted, as the given context's, which is also the
-      {!field:Backend_intf.context.parent}. *)
+      {!field:Backend_intf.context.ctx_arrays}, {!field:Backend_intf.context.optimize_ctx} if
+      omitted, as the given context's, which is also the {!field:Backend_intf.context.parent}. *)
 
   val get_name : stream -> string
 end
