@@ -94,7 +94,7 @@ n93 sgd_delta_w3 as sgd_delta_w3: Virt/15; single prec 1x16; mem in bytes: <not-
 n94 sgd_momentum_w3 as sgd_momentum_w3: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 n95 0.0001 as n95: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n96 *. as n96: Virt/15; single prec 1x16; mem in bytes: <not-in-yet>
-n97 point as point: Host-const/37; single prec 2; mem in bytes: 8
+n97 point as point: Host-const/37; single prec 2; mem in bytes: <not-in-yet>
 n98 * as n98: Local/1046; single prec 16; mem in bytes: <not-in-yet>
 n99 grad_* as n98.grad: unknown; single prec 16; mem in bytes: <not-in-yet>
 n100 + as n100: Virt/15; single prec 16; mem in bytes: <not-in-yet>

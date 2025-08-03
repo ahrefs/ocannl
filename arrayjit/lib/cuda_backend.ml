@@ -69,9 +69,7 @@ module Alloc_buffer = struct
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
 
   let alloc_zero_init_array prec ~dims stream =
-    let size_in_bytes =
-      (if Array.length dims = 0 then 0 else Array.reduce_exn dims ~f:( * )) * Ops.prec_in_bytes prec
-    in
+    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in
     (* TODO: consider using memset_d8 to zero-initialize the memory. *)
@@ -588,13 +586,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmpeq, _ -> f "=="
       | Or, _ -> f "||"
       | And, _ -> f "&&"
-      | Threefry4x32, _ ->
+      | Threefry4x32, _ -> (
           (* Threefry4x32 must output to uint4x32 precision *)
-          (match prec with
+          match prec with
           | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32"
-          | _ -> raise @@ Utils.User_error 
-              (Printf.sprintf "CUDA backend: Threefry4x32 requires target precision to be uint4x32, but got %s"
-                 (Ops.prec_string prec)))
+          | _ ->
+              raise
+              @@ Utils.User_error
+                   (Printf.sprintf
+                      "CUDA backend: Threefry4x32 requires target precision to be uint4x32, but \
+                       got %s"
+                      (Ops.prec_string prec)))
 
     let unop_syntax prec v =
       let open PPrint in
