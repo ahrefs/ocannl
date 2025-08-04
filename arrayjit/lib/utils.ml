@@ -431,8 +431,11 @@ let _get_local_debug_runtime = get_local_debug_runtime
 
 let%diagn_sexp set_log_level level =
   settings.log_level <- level;
-  Debug_runtime.log_level := level;
-  [%log "Set log_level to", (level : int)]
+  [%log
+    "Set log_level to",
+    (Debug_runtime.log_level := level;
+     level
+      : int)]
 
 let restore_settings () =
   set_log_level original_log_level;
@@ -713,9 +716,9 @@ let header_sep =
   compile (seq [ str " "; opt any; str "="; str " " ])
 
 let%diagn_sexp log_trace_tree _logs =
-  let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
   [%log_block
     "trace tree";
+    let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
     let rec loop = function
       | [] -> []
       | line :: more when String.is_empty line -> loop more

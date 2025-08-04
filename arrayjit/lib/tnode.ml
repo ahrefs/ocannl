@@ -794,4 +794,4 @@ let%debug_sexp log_accessible_headers ?(pred = fun _ -> true) () =
     Registry.fold (fun arr acc -> if pred arr then (arr.id, header arr) :: acc else acc) registry []
   in
   List.sort results ~compare:(fun (a, _) (b, _) -> compare_int a b)
-  |> List.iter ~f:(fun (_, header) -> [%log header])
+  |> List.iter ~f:(fun (_, _header) -> [%log _header])

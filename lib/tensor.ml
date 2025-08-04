@@ -722,14 +722,14 @@ let to_printbox ?single_node ?embedded_only ?entries_per_axis ?(with_id = false)
     ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
-let log_debug_info ~from_log_level t =
-  let%diagn_sexp log_child { subtensor = _subtensor; embedded = _embedded } =
-    [%logN_block
-      from_log_level
-        ((if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name _subtensor.value);
-      Tn.log_debug_info ~from_log_level _subtensor.value]
-  in
+let%debug_sexp log_debug_info ~from_log_level t =
   [%diagn_sexp
+    let%diagn_sexp log_child { subtensor = _subtensor; embedded = _embedded } =
+      [%logN_block
+        from_log_level
+          ((if _embedded then "Embedded " else "Non-embedded ") ^ Tn.debug_name _subtensor.value);
+        Tn.log_debug_info ~from_log_level _subtensor.value]
+    in
     [%logN_block
       from_log_level ("Tensor " ^ Tn.dims_to_string t.value);
       Tn.log_debug_info ~from_log_level t.value;
