@@ -327,8 +327,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
                (vbs, { binding with pvb_expr }))
       in
       let vbs2, body = loop ?label body in
-      let all_bindings = (Map.data @@ reduce_vbss vbss1) @ bindings @ Map.data vbs2 in
-      (no_vbs, { expr with pexp_desc = Pexp_let (recflag, all_bindings, body) })
+      (reduce_vbss (vbss1 @ [ vbs2 ]), { expr with pexp_desc = Pexp_let (recflag, bindings, body) })
   | { pexp_desc = Pexp_open (decl, body); _ } ->
       let vbs, body = loop ?label body in
       (vbs, { expr with pexp_desc = Pexp_open (decl, body) })
