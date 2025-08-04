@@ -164,9 +164,9 @@ let sequence l =
            { asgns = sts; embedded_nodes = embs } { asgns = another_st; embedded_nodes = emb } ->
          { asgns = Seq (sts, another_st); embedded_nodes = Set.union embs emb })
 
-let%diagn2_sexp to_low_level code =
+let%track4_sexp to_low_level code =
   let open Indexing in
-  let get buffer idcs =
+  let get (buffer : buffer) (idcs : Indexing.axis_index array) : Low_level.scalar_t =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
     let idcs =
       match (idcs, Lazy.force tn.Tn.dims) with
@@ -174,14 +174,12 @@ let%diagn2_sexp to_low_level code =
       | [| Fixed_idx 0 |], [||] -> idcs
       | idcs, dims when Array.length idcs = Array.length dims -> idcs
       | _ ->
-          [%log
-            "get a=",
-            (tn : Tn.t),
-            ":",
-            Tn.label tn,
-            (idcs : Indexing.axis_index array),
-            (Lazy.force tn.dims : int array)];
-          assert false
+          let dims = Indexing.dims_to_string (Lazy.force tn.Tn.dims) in
+          let idcs = Sexp.to_string_hum ([%sexp_of: Indexing.axis_index array] idcs) in
+          invalid_arg
+            [%string
+              "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
+               vs. %{idcs}"]
     in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
@@ -189,7 +187,7 @@ let%diagn2_sexp to_low_level code =
         (* FIXME: NOT IMPLEMENTED YET - need to handle merge buffer access differently now *)
         Low_level.Get (tn, idcs)
   in
-  let set tn idcs llsc =
+  let set (tn : Tn.t) (idcs : Indexing.axis_index array) (llsc : Low_level.scalar_t) : Low_level.t =
     if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
       [%log
         "set",
@@ -202,8 +200,8 @@ let%diagn2_sexp to_low_level code =
     assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
-  let rec loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections =
-    let projections = Lazy.force projections in
+  let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t =
+    let projections : Indexing.projections = Lazy.force projections in
     let basecase rev_iters =
       (* Create a substitution from product iterators to loop iterators *)
       let subst_map =
@@ -222,8 +220,10 @@ let%diagn2_sexp to_low_level code =
                symbols *)
             Indexing.Affine { symbols; offset }
       in
-      let lhs_idcs = Array.map projections.project_lhs ~f:subst_index in
-      let rhses_idcs = Array.map projections.project_rhs ~f:(Array.map ~f:subst_index) in
+      let lhs_idcs : Indexing.axis_index array = Array.map projections.project_lhs ~f:subst_index in
+      let rhses_idcs : Indexing.axis_index array array =
+        Array.map projections.project_rhs ~f:(Array.map ~f:subst_index)
+      in
       let open Low_level in
       let lhs_ll = get (Node lhs) lhs_idcs in
       let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in
@@ -235,7 +235,7 @@ let%diagn2_sexp to_low_level code =
       | [] -> basecase rev_iters
       | d :: product ->
           let index = Indexing.get_symbol () in
-          For_loop
+          Low_level.For_loop
             {
               index;
               from_ = 0;
@@ -244,18 +244,13 @@ let%diagn2_sexp to_low_level code =
               trace_it = true;
             }
     in
-    let for_loops =
-      try for_loop [] (Array.to_list projections.product_space)
-      with e ->
-        [%log "projections=", (projections : projections)];
-        raise e
-    in
+    let for_loops = for_loop [] (Array.to_list projections.product_space) in
     if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
       let dims = lazy projections.lhs_dims in
       let fetch_op = Constant (Ops.neutral_elem accum) in
       Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
     else for_loops
-  and loop code =
+  and loop (code : t) : Low_level.t =
     match code with
     | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
         loop_accum ~initialize_neutral ~accum ~op:(Ops.Ternop op) ~lhs ~rhses:[| rhs1; rhs2; rhs3 |]
@@ -315,7 +310,7 @@ let%diagn2_sexp to_low_level code =
           | [] -> basecase rev_iters
           | d :: product ->
               let index = Indexing.get_symbol () in
-              For_loop
+              Low_level.For_loop
                 {
                   index;
                   from_ = 0;
@@ -330,8 +325,8 @@ let%diagn2_sexp to_low_level code =
     | Seq (c1, c2) ->
         let c1 = loop c1 in
         let c2 = loop c2 in
-        Seq (c1, c2)
-    | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Zero_out array
+        Low_level.Seq (c1, c2)
+    | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Low_level.Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
