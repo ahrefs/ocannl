@@ -356,7 +356,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
            specified as virtual by another routine. However, if the memory mode is unspecified, we
            assume this will be the first computation involving the tensor node. *)
         traced.read_only <- true;
-        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Constant) 37
+        if Tn.mode_is_unspecified tn then Tn.update_memory_mode tn (Hosted Unset_hosted) 37
         else if Tn.known_not_materialized tn then (
           if Tn.known_non_virtual tn then
             raise

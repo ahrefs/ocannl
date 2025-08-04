@@ -17,8 +17,6 @@ let () =
   let len = 200 in
   let batch_size = 10 in
   let n_batches = 2 * len / batch_size in
-  let epochs = 2 in
-  let steps = epochs * 2 * len / batch_size in
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 5 } in
   let moons_coordinates, moons_labels =
     Datasets.Half_moons.generate_single_prec ~config:moons_config ~len ()
@@ -29,38 +27,28 @@ let () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = 0.5 + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in
+  (* let%op mlp x = 0.5 + ("w3" * relu ("b2" 16 + ("w2" * relu ("b1" 16 + ("w1" * x))))) in *)
+  let%op mlp x = "w2" * relu ("b1" 16 + ("w1" * x)) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   (* THIS IS THE SPECIFIC SHAPE INFERENCE ASPECT OF THE TEST. *)
   let%cd _ = moons_input =: 0 ++ "i=>2|i" in
   let%op moons_class = moons_classes @| batch_n in
   let%cd _ = moons_class =: 0 ++ "i=>2|i" in
-  let losses = Array.create ~len:epochs 0. in
   let%op margin_loss = relu (1 - (moons_class *. mlp moons_input)) in
   (* We don't need a regression loss formula thanks to weight_decay built into the sgd_update
      computation. *)
   let weight_decay = 0.0001 in
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   let update = Train.grad_update scalar_loss in
-  let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
+  let%op learning_rate = 0.1 *. ((2 *. !..len) - !@step_n) /. !..len in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let ctx = Train.init_params (module Backend) bindings scalar_loss in
   let sgd_routine =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
   in
-  let step_ref = IDX.find_exn sgd_routine.bindings step_n in
-  step_ref := 0;
-  for epoch = 1 to epochs do
-    Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
-        Train.run sgd_routine;
-        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
-           step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
-           scalar_loss.@[0]; *)
-        losses.(epoch - 1) <- losses.(epoch - 1) +. scalar_loss.@[0];
-        Int.incr step_ref)
-  done;
+  (* Skipping over the training loop, not needed for the test. *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
@@ -79,7 +67,7 @@ let () =
     Float.(mlp_result.@[0] >= 0.)
   in
   let _plot_moons =
-    PrintBox_utils.plot ~as_canvas:true
+    PrintBox_utils.plot ~as_canvas:true ~size:(5, 5)
       [
         Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };

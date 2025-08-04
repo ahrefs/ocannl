@@ -768,6 +768,7 @@ let get_value tn =
       raise @@ Utils.User_error "Tnode.get_value: index out of bounds"
 
 let set_values tn values =
+  update_memory_mode tn (Hosted Nonconstant) 51;
   do_write tn;
   let padding = Option.map ~f:fst (Lazy.force tn.padding) in
   Nd.(set_flat_values ?padding (Option.value_exn ~here:[%here] @@ Lazy.force tn.array) values)
