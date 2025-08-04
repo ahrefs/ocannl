@@ -350,6 +350,16 @@ let args_for ~loc = function
 
 let reduce_res_vbs rs = reduce_vbss @@ List.map rs ~f:(fun r -> r.vbs)
 
+let compare_slots a b =
+  match (a, b) with
+  | Nonslot, _ -> 1
+  | _, Nonslot -> -1
+  | Undet, _ -> 1
+  | _, Undet -> -1
+  | Scalar, _ -> 1
+  | _, Scalar -> -1
+  | _ -> 0
+
 (** Helper function to handle cases (for Pexp_match, Pexp_function with cases, etc.) *)
 let handle_cases ~bad_pun_hints ~proj_in_scope transl cases =
   let fields, transformed_cases =
@@ -361,9 +371,7 @@ let handle_cases ~bad_pun_hints ~proj_in_scope transl cases =
   let vbss, typs, slots = List.unzip3 fields in
   (* TODO: make the inference of typ and slot more strict by detecting mismatches. *)
   let typ = Option.value ~default:Unknown @@ List.find typs ~f:(Fn.non is_unknown) in
-  let slot =
-    Option.value ~default:Undet @@ List.find ~f:(function Undet -> false | _ -> true) slots
-  in
+  let slot = List.hd_exn @@ List.sort slots ~compare:compare_slots in
   let loc = (List.hd_exn cases).pc_lhs.ppat_loc in
   ( transformed_cases,
     {
@@ -842,10 +850,7 @@ let translate (expr : expression) : result =
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-        let slot =
-          Option.value ~default:Undet
-          @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
-        in
+        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot ] ~compare:compare_slots in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Tensor;
@@ -1202,12 +1207,7 @@ let translate (expr : expression) : result =
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let res3 = loop ~proj_in_scope expr3 in
-        let slot =
-          Option.value ~default:Undet
-          @@ List.find
-               ~f:(function Undet -> false | _ -> true)
-               [ res1.slot; res2.slot; res3.slot ]
-        in
+        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot; res3.slot ] ~compare:compare_slots in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs; res3.vbs ];
           typ = res1.typ;
@@ -1218,10 +1218,7 @@ let translate (expr : expression) : result =
     | [%expr [%e? expr1] [%e? expr2]] ->
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
-        let slot =
-          Option.value ~default:Undet
-          @@ List.find ~f:(function Undet -> false | _ -> true) [ res1.slot; res2.slot ]
-        in
+        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot ] ~compare:compare_slots in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = res1.typ;
@@ -1327,10 +1324,7 @@ let translate (expr : expression) : result =
         let res2 = loop ~proj_in_scope expr2 in
         let res3 = loop ~proj_in_scope expr3 in
         let typ = if is_unknown res2.typ then res3.typ else res2.typ in
-        let slot =
-          Option.value ~default:Undet
-          @@ List.find ~f:(function Undet -> false | _ -> true) [ res2.slot; res3.slot ]
-        in
+        let slot = List.hd_exn @@ List.sort [ res2.slot; res3.slot ] ~compare:compare_slots in
         {
           vbs = reduce_vbss [ res2.vbs; res3.vbs ];
           typ;
