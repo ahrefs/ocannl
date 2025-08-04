@@ -188,19 +188,23 @@ let%track4_sexp to_low_level code =
         Low_level.Get (tn, idcs)
   in
   let set (tn : Tn.t) (idcs : Indexing.axis_index array) (llsc : Low_level.scalar_t) : Low_level.t =
-    if not (Array.length idcs = Array.length (Lazy.force tn.Tn.dims)) then
-      [%log
-        "set",
-        "a=",
-        (tn : Tn.t),
-        ":",
-        Tn.label tn,
-        (idcs : Indexing.axis_index array),
-        (Lazy.force tn.dims : int array)];
-    assert (Array.length idcs = Array.length (Lazy.force tn.Tn.dims));
+    let idcs =
+      match (idcs, Lazy.force tn.Tn.dims) with
+      | [||], [| 1 |] -> [| Fixed_idx 0 |]
+      | [| Fixed_idx 0 |], [||] -> idcs
+      | idcs, dims when Array.length idcs = Array.length dims -> idcs
+      | _ ->
+          let dims = Indexing.dims_to_string (Lazy.force tn.Tn.dims) in
+          let idcs = Sexp.to_string_hum ([%sexp_of: Indexing.axis_index array] idcs) in
+          invalid_arg
+            [%string
+              "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
+               vs. %{idcs}"]
+    in
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
-  let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t =
+  let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
+      =
     let projections : Indexing.projections = Lazy.force projections in
     let basecase rev_iters =
       (* Create a substitution from product iterators to loop iterators *)
