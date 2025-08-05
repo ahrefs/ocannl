@@ -538,6 +538,8 @@ let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
        and type event = event) ?(ctx : Backend.context option) ?(bindings = IDX.empty) ~f t =
   (* TODO: this will get nicer with modular explicits. *)
   if hosted then set_hosted t.Tensor.value;
+  (* Compute the update early, to ensure the shape inference is done. *)
+  let update = f ~disable_rootness_check t in
   let ctx =
     match ctx with
     | Some ctx -> ctx
@@ -548,7 +550,7 @@ let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
     else init_params (module Backend) ~ctx ~hosted ?reinit_all bindings t
   in
   let routine =
-    Backend.(link ctx @@ compile ctx.optimize_ctx bindings @@ f ~disable_rootness_check t)
+    Backend.(link ctx @@ compile ctx.optimize_ctx bindings update)
   in
   Task.run routine.schedule;
   routine.context
