@@ -125,6 +125,8 @@ type constraint_ =
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
   | Terminal_dim of dim
   | Terminal_row of t
+      (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors). *)
+  | Shape_row of t  (** A row of a shape of interest. *)
 [@@deriving compare, equal, sexp_of, variants]
 
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
@@ -133,7 +135,6 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
-val eliminate_variables : environment -> t -> constraint_ list
 
 val solve_inequalities :
   stage:stage -> constraint_ list -> environment -> constraint_ list * environment

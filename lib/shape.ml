@@ -686,22 +686,17 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
-let apply_env_update ~eliminate_variables env update_step =
-  iter_shapes update_step ~f:(apply_env_t env);
-  if eliminate_variables then
-    List.concat_map ~f:(Row.eliminate_variables env) @@ all_rows update_step
-  else []
-
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
-  assert (List.is_empty (apply_env_update ~eliminate_variables:false !state update_step));
+  iter_shapes update_step ~f:(apply_env_t !state);
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
+  let _debug_new_active_update_steps : update_step list = !active_update_steps in
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
-  assert (List.is_empty (apply_env_update ~eliminate_variables:false env update_step));
+  iter_shapes update_step ~f:(apply_env_t env);
   state := env
 
 let%debug4_sexp finish_inference (() : unit) : unit =
@@ -709,20 +704,19 @@ let%debug4_sexp finish_inference (() : unit) : unit =
      constraints. *)
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
+  let unsolved =
+    List.concat_map
+      ~f:(fun update_step -> List.map ~f:(fun r -> Row.Shape_row r) @@ all_rows update_step)
+      !active_update_steps
+    @ unsolved
+  in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
-  let _active_update_steps : update_step list = !active_update_steps in
-  let eliminated =
-    List.concat_map ~f:(apply_env_update ~eliminate_variables:true env) !active_update_steps
-  in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage7 (eliminated @ unsolved) env in
   assert (List.is_empty unsolved);
-  List.iter
-    ~f:(fun update_step ->
-      assert (List.is_empty (apply_env_update ~eliminate_variables:false env update_step)))
-    !active_update_steps;
+  let _active_update_steps : update_step list = !active_update_steps in
+  List.iter ~f:(iter_shapes ~f:(apply_env_t env)) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
   active_constraints := [];
   active_update_steps := [];
