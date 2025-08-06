@@ -11,7 +11,10 @@ type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
 type comp = Asgns.comp
 type fetch_op = Asgns.fetch_op
-type projections = Ir.Indexing.projections
+type projections = {
+  projections_debug : string;
+  projections : Ir.Indexing.projections Lazy.t;
+}
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -161,13 +164,17 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
-  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let projections_debug = Shape.logic_to_spec shape_logic in
+  let projections = {
+    projections_debug;
+    projections = lazy (Shape.derive_projections local_shape_update);
+  } in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
   let rhs2 = if rhs2_is_grad then (Option.value_exn ~here:[%here] t2.diff).grad else t2.value in
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
-  Asgns.Accum_binop { initialize_neutral; accum; lhs; op; rhs1; rhs2; projections }
+  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Binop { op; rhs1; rhs2 }; projections = projections.projections; projections_debug = projections.projections_debug }
 
 let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
     ~(rhs1_is_grad : bool) ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~(t3 : t)
@@ -176,7 +183,11 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
   let shape_logic = Shape.Broadcast_tern (logic, t1.shape, t2.shape, t3.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
-  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let projections_debug = Shape.logic_to_spec shape_logic in
+  let projections = {
+    projections_debug;
+    projections = lazy (Shape.derive_projections local_shape_update);
+  } in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
@@ -184,7 +195,7 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   let rhs3 = if rhs3_is_grad then (Option.value_exn ~here:[%here] t3.diff).grad else t3.value in
   let rhs3 = if rhs3_is_merge then Asgns.Merge_buffer rhs3 else Node rhs3 in
-  Asgns.Accum_ternop { initialize_neutral; accum; lhs; op; rhs1; rhs2; rhs3; projections }
+  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Ternop { op; rhs1; rhs2; rhs3 }; projections = projections.projections; projections_debug = projections.projections_debug }
 
 let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
     ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
@@ -192,11 +203,15 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
-  let projections = lazy (Shape.derive_projections local_shape_update) in
+  let projections_debug = Shape.logic_to_spec shape_logic in
+  let projections = {
+    projections_debug;
+    projections = lazy (Shape.derive_projections local_shape_update);
+  } in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs = if rhs_is_merge then Asgns.Merge_buffer rhs else Node rhs in
-  Asgns.Accum_unop { initialize_neutral; accum; lhs; op; rhs; projections }
+  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Unop { op; rhs }; projections = projections.projections; projections_debug = projections.projections_debug }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
@@ -264,7 +279,12 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
   in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  let projections = lazy (Shape.derive_projections @@ List.hd_exn local_shape_updates) in
+  let shape_update = List.hd_exn local_shape_updates in
+  let projections_debug = Shape.logic_to_spec shape_update.logic in
+  let projections = {
+    projections_debug;
+    projections = lazy (Shape.derive_projections shape_update);
+  } in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -402,7 +422,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?
   in
   let op_asn ~v ~projections =
     let open Asgns in
-    let dims = lazy (Lazy.force projections).Idx.lhs_dims in
+    let dims = lazy (Lazy.force projections.projections).Idx.lhs_dims in
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some

@@ -456,9 +456,9 @@ let translate (expr : expression) : result =
       let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
       let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
-      let projections =
+      let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> prjs
+        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -468,9 +468,9 @@ let translate (expr : expression) : result =
             let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
             let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
             let project_rhs3 = project_p_slot "RHS3" rhs3.pexp_loc setup_r3.slot in
-            [%expr
+            let proj_lazy = [%expr
               lazy
-                (let p = Lazy.force projections in
+                (let p = Lazy.force projections.Tensor.projections in
                  Ir.Indexing.
                    {
                      product_space = p.product_space;
@@ -488,7 +488,8 @@ let translate (expr : expression) : result =
                              Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
-                   })]
+                   })] in
+            (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* FIXME: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
          eliding the code. *)
@@ -497,16 +498,14 @@ let translate (expr : expression) : result =
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
                ~f:(fun rhs1 rhs2 rhs3 ->
-                 Ir.Assignments.Accum_ternop
+                 Ir.Assignments.Accum_op
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs = Option.value_exn [%e setup_l.array_opt];
-                     op = [%e tern_op];
-                     rhs1;
-                     rhs2;
-                     rhs3;
-                     projections = [%e projections];
+                     rhs = Ternop { op = [%e tern_op]; rhs1; rhs2; rhs3 };
+                     projections = [%e projections_lazy];
+                     projections_debug = [%e projections_debug];
                    })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
@@ -520,9 +519,9 @@ let translate (expr : expression) : result =
       let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
       let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
-      let projections =
+      let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> prjs
+        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -530,9 +529,9 @@ let translate (expr : expression) : result =
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
             let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
-            [%expr
+            let proj_lazy = [%expr
               lazy
-                (let p = Lazy.force projections in
+                (let p = Lazy.force projections.Tensor.projections in
                  Ir.Indexing.
                    {
                      product_space = p.product_space;
@@ -550,7 +549,8 @@ let translate (expr : expression) : result =
                              Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
-                   })]
+                   })] in
+            (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* TODO: might be better to treat missing [rhs1, rhs2] as zeros or errors rather than eliding
          the code. *)
@@ -559,15 +559,14 @@ let translate (expr : expression) : result =
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
                ~f:(fun lhs rhs1 rhs2 ->
-                 Ir.Assignments.Accum_binop
+                 Ir.Assignments.Accum_op
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accu_op];
                      lhs;
-                     op = [%e bin_op];
-                     rhs1;
-                     rhs2;
-                     projections = [%e projections];
+                     rhs = Binop { op = [%e bin_op]; rhs1; rhs2 };
+                     projections = [%e projections_lazy];
+                     projections_debug = [%e projections_debug];
                    })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] body
@@ -581,17 +580,17 @@ let translate (expr : expression) : result =
       let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
-      let projections =
+      let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> prjs
+        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r.slot in
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r.slot in
-            [%expr
+            let proj_lazy = [%expr
               lazy
-                (let p = Lazy.force projections in
+                (let p = Lazy.force projections.Tensor.projections in
                  Ir.Indexing.
                    {
                      product_space = p.product_space;
@@ -609,7 +608,8 @@ let translate (expr : expression) : result =
                              Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
-                   })]
+                   })] in
+            (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* TODO: might be better to treat missing [rhs] as zeros or errors rather than eliding the
          code. *)
@@ -617,14 +617,14 @@ let translate (expr : expression) : result =
         [%expr
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Ir.Assignments.Accum_unop
+                 Ir.Assignments.Accum_op
                    {
                      initialize_neutral = [%e initialize_neutral];
                      accum = [%e accum];
                      lhs;
-                     op = [%e op];
-                     rhs;
-                     projections = [%e projections];
+                     rhs = Unop { op = [%e op]; rhs };
+                     projections = [%e projections_lazy];
+                     projections_debug = [%e projections_debug];
                    })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
@@ -634,17 +634,17 @@ let translate (expr : expression) : result =
       let _, op = vec_unary_op vec_un_op in
       let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
-      let projections =
+      let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> prjs
+        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r.slot in
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r.slot in
-            [%expr
+            let proj_lazy = [%expr
               lazy
-                (let p = Lazy.force projections in
+                (let p = Lazy.force projections.Tensor.projections in
                  Ir.Indexing.
                    {
                      product_space = p.product_space;
@@ -661,14 +661,15 @@ let translate (expr : expression) : result =
                              Ir.Indexing.unique_debug_id () )
                            :: p.debug_info.trace;
                        };
-                   })]
+                   })] in
+            (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       let body =
         [%expr
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
                  Ir.Assignments.Set_vec_unop
-                   { lhs; op = [%e op]; rhs; projections = [%e projections] })]
+                   { lhs; op = [%e op]; rhs; projections = [%e projections_lazy]; projections_debug = [%e projections_debug] })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
     in

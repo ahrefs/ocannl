@@ -166,6 +166,9 @@ type update_id [@@deriving equal, compare, hash, sexp]
 
 val get_update_id : unit -> update_id
 
+val logic_to_spec : logic -> string
+(** Converts a shape logic to its string specification for debugging/display purposes. *)
+
 type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first

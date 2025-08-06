@@ -700,7 +700,10 @@ let doc_of_sexp sexp =
 let output_to_build_file ~fname =
   if settings.output_debug_files_in_build_directory then
     let f = Stdio.Out_channel.create @@ build_file fname in
-    let print doc = PPrint.ToChannel.pretty 0.7 100 f doc in
+    let print doc =
+      PPrint.ToChannel.pretty 0.7 100 f doc;
+      Stdio.Out_channel.flush f
+    in
     Some print
   else None
 

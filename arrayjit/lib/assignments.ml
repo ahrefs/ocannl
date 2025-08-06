@@ -36,42 +36,30 @@ type fetch_op =
   | Embed_self_id  (** Embeds the id of the [array] field of the [Fetch] constructor. *)
 [@@deriving sexp_of, equal]
 
-and t =
+type accum_rhs =
+  | Ternop of { op : Ops.ternop; rhs1 : buffer; rhs2 : buffer; rhs3 : buffer }
+  | Binop of { op : Ops.binop; rhs1 : buffer; rhs2 : buffer }
+  | Unop of { op : Ops.unop; rhs : buffer }
+[@@deriving sexp_of, equal]
+
+type t =
   | Noop
   | Seq of t * t
   | Block_comment of string * t  (** Same as the given code, with a comment. *)
-  | Accum_ternop of {
+  | Accum_op of {
       initialize_neutral : bool;
       accum : Ops.binop;
-      op : Ops.ternop;
       lhs : Tn.t;
-      rhs1 : buffer;
-      rhs2 : buffer;
-      rhs3 : buffer;
+      rhs : accum_rhs;
       projections : Indexing.projections Lazy.t;
-    }
-  | Accum_binop of {
-      initialize_neutral : bool;
-      accum : Ops.binop;
-      op : Ops.binop;
-      lhs : Tn.t;
-      rhs1 : buffer;
-      rhs2 : buffer;
-      projections : Indexing.projections Lazy.t;
-    }
-  | Accum_unop of {
-      initialize_neutral : bool;
-      accum : Ops.binop;
-      op : Ops.unop;
-      lhs : Tn.t;
-      rhs : buffer;
-      projections : Indexing.projections Lazy.t;
+      projections_debug : string;
     }
   | Set_vec_unop of {
       op : Ops.vec_unop;
       lhs : Tn.t;
       rhs : buffer;
       projections : Indexing.projections Lazy.t;
+      projections_debug : string;
     }
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
@@ -122,12 +110,14 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
     | Noop -> empty
     | Seq (t1, t2) -> loop t1 + loop t2
     | Block_comment (_, t) -> loop t
-    | Accum_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
+    | Accum_op { lhs; rhs; _ } ->
+        let rhses = match rhs with
+        | Unop { rhs; _ } -> [ of_node rhs ]
+        | Binop { rhs1; rhs2; _ } -> [ of_node rhs1; of_node rhs2 ]
+        | Ternop { rhs1; rhs2; rhs3; _ } -> [ of_node rhs1; of_node rhs2; of_node rhs3 ]
+        in
+        Set.union_list (module Tn) (one lhs :: rhses)
     | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
-    | Accum_binop { lhs; rhs1; rhs2; _ } ->
-        Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2 ]
-    | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
-        Set.union_list (module Tn) [ one lhs; of_node rhs1; of_node rhs2; of_node rhs3 ]
     | Fetch { array; _ } -> one array
   in
   loop asgns
@@ -145,11 +135,14 @@ let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
         let i2, o2 = loop t2 in
         (i1 + i2, o1 + o2 - (i1 + i2))
     | Block_comment (_, t) -> loop t
-    | Accum_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
+    | Accum_op { lhs; rhs; _ } ->
+        let inputs = match rhs with
+        | Unop { rhs; _ } -> of_node rhs
+        | Binop { rhs1; rhs2; _ } -> of_node rhs1 + of_node rhs2
+        | Ternop { rhs1; rhs2; rhs3; _ } -> of_node rhs1 + of_node rhs2 + of_node rhs3
+        in
+        (inputs, one lhs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
-    | Accum_binop { lhs; rhs1; rhs2; _ } -> (of_node rhs1 + of_node rhs2, one lhs)
-    | Accum_ternop { lhs; rhs1; rhs2; rhs3; _ } ->
-        (of_node rhs1 + of_node rhs2 + of_node rhs3, one lhs)
     | Fetch { array; _ } -> (empty, one array)
   in
   snd @@ loop asgns
@@ -256,15 +249,14 @@ let%track4_sexp to_low_level code =
     else for_loops
   and loop (code : t) : Low_level.t =
     match code with
-    | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
-        loop_accum ~initialize_neutral ~accum ~op:(Ops.Ternop op) ~lhs ~rhses:[| rhs1; rhs2; rhs3 |]
-          projections
-    | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
-        loop_accum ~initialize_neutral ~accum ~op:(Ops.Binop op) ~lhs ~rhses:[| rhs1; rhs2 |]
-          projections
-    | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
-        loop_accum ~initialize_neutral ~accum ~op:(Ops.Unop op) ~lhs ~rhses:[| rhs |] projections
-    | Set_vec_unop { op; lhs; rhs; projections } ->
+    | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } ->
+        let op, rhses = match rhs with
+        | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
+        | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
+        | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
+        in
+        loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections
+    | Set_vec_unop { op; lhs; rhs; projections; _ } ->
         (* Handle vector unary operations *)
         let projections = Lazy.force projections in
         let basecase rev_iters =
@@ -370,7 +362,7 @@ let flatten c =
     | Noop -> []
     | Seq (c1, c2) -> loop c1 @ loop c2
     | Block_comment (s, c) -> Block_comment (s, Noop) :: loop c
-    | (Accum_ternop _ | Accum_binop _ | Accum_unop _ | Set_vec_unop _ | Fetch _) as c -> [ c ]
+    | (Accum_op _ | Set_vec_unop _ | Fetch _) as c -> [ c ]
   in
   loop c
 
@@ -397,14 +389,14 @@ let get_ident_within_code ?no_dots c =
         loop c1;
         loop c2
     | Block_comment (_, c) -> loop c
-    | Accum_ternop
-        { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; rhs3; projections = _ } ->
-        List.iter ~f:visit [ lhs; tn rhs1; tn rhs2; tn rhs3 ]
-    | Accum_binop { initialize_neutral = _; accum = _; op = _; lhs; rhs1; rhs2; projections = _ } ->
-        List.iter ~f:visit [ lhs; tn rhs1; tn rhs2 ]
-    | Accum_unop { initialize_neutral = _; accum = _; op = _; lhs; rhs; projections = _ } ->
-        List.iter ~f:visit [ lhs; tn rhs ]
-    | Set_vec_unop { op = _; lhs; rhs; projections = _ } -> List.iter ~f:visit [ lhs; tn rhs ]
+    | Accum_op { lhs; rhs; _ } ->
+        let rhses = match rhs with
+        | Unop { rhs; _ } -> [ tn rhs ]
+        | Binop { rhs1; rhs2; _ } -> [ tn rhs1; tn rhs2 ]
+        | Ternop { rhs1; rhs2; rhs3; _ } -> [ tn rhs1; tn rhs2; tn rhs3 ]
+        in
+        List.iter ~f:visit (lhs :: rhses)
+    | Set_vec_unop { op = _; lhs; rhs; projections = _; projections_debug = _ } -> List.iter ~f:visit [ lhs; tn rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
   loop c;
@@ -445,66 +437,55 @@ let to_doc ?name ?static_indices () c =
     | Seq (c1, c2) -> doc_of_code c1 ^^ doc_of_code c2
     | Block_comment (s, Noop) -> string ("# \"" ^ s ^ "\";") ^^ break 1
     | Block_comment (s, c) -> string ("# \"" ^ s ^ "\";") ^^ break 1 ^^ doc_of_code c
-    | Accum_ternop { initialize_neutral; accum; op; lhs; rhs1; rhs2; rhs3; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        (* Uncurried syntax for ternary operations. *)
-        string (ident lhs)
-        ^^ space
-        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
-        ^^ space
-        ^^ string (Ops.ternop_cd_syntax op)
-        ^^ string "("
-        ^^ string (buffer_ident rhs1)
-        ^^ string ", "
-        ^^ string (buffer_ident rhs2)
-        ^^ string ", "
-        ^^ string (buffer_ident rhs3)
-        ^^ string ")"
-        ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
-            else empty)
-        ^^ string ";" ^^ break 1
-    | Accum_binop { initialize_neutral; accum; op; lhs; rhs1; rhs2; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        string (ident lhs)
-        ^^ space
-        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
-        ^^ space
-        ^^ string (buffer_ident rhs1)
-        ^^ space
-        ^^ string (Ops.binop_cd_syntax op)
-        ^^ space
-        ^^ string (buffer_ident rhs2)
-        ^^ (if
-              (not (String.equal proj_spec "."))
-              || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op
-            then string (" ~logic:\"" ^ proj_spec ^ "\"")
-            else empty)
-        ^^ string ";" ^^ break 1
-    | Accum_unop { initialize_neutral; accum; op; lhs; rhs; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
-        in
-        string (ident lhs)
-        ^^ space
-        ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
-        ^^ space
-        ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
-            else empty)
-        ^^ string (buffer_ident rhs)
-        ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
-            else empty)
-        ^^ string ";" ^^ break 1
-    | Set_vec_unop { op; lhs; rhs; projections } ->
-        let proj_spec =
-          if Lazy.is_val projections then (Lazy.force projections).debug_info.spec
-          else "<not-in-yet>"
+    | Accum_op { initialize_neutral; accum; lhs; rhs; projections_debug; _ } ->
+        let proj_spec = projections_debug in
+        (match rhs with
+        | Ternop { op; rhs1; rhs2; rhs3 } ->
+            (* Uncurried syntax for ternary operations. *)
+            string (ident lhs)
+            ^^ space
+            ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+            ^^ space
+            ^^ string (Ops.ternop_cd_syntax op)
+            ^^ string "("
+            ^^ string (buffer_ident rhs1)
+            ^^ string ", "
+            ^^ string (buffer_ident rhs2)
+            ^^ string ", "
+            ^^ string (buffer_ident rhs3)
+            ^^ string ")"
+            ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+                else empty)
+            ^^ string ";" ^^ break 1
+        | Binop { op; rhs1; rhs2 } ->
+            string (ident lhs)
+            ^^ space
+            ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+            ^^ space
+            ^^ string (buffer_ident rhs1)
+            ^^ space
+            ^^ string (Ops.binop_cd_syntax op)
+            ^^ space
+            ^^ string (buffer_ident rhs2)
+            ^^ (if
+                  (not (String.equal proj_spec "."))
+                  || List.mem ~equal:Ops.equal_binop Ops.[ Mul; Div ] op
+                then string (" ~logic:\"" ^ proj_spec ^ "\"")
+                else empty)
+            ^^ string ";" ^^ break 1
+        | Unop { op; rhs } ->
+            string (ident lhs)
+            ^^ space
+            ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+            ^^ space
+            ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
+                else empty)
+            ^^ string (buffer_ident rhs)
+            ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+                else empty)
+            ^^ string ";" ^^ break 1)
+    | Set_vec_unop { op; lhs; rhs; projections = _; projections_debug } ->
+        let proj_spec = projections_debug
         in
         string (ident lhs)
         ^^ space
@@ -535,9 +516,8 @@ let to_doc ?name ?static_indices () c =
 
 let%track6_sexp lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices
     (proc : t) : Low_level.optimized =
-  let llc : Low_level.t = to_low_level proc in
-  (* Generate the low-level code before outputting the assignments, to force projections. *)
   (match cd_source with
   | None -> ()
   | Some callback -> callback (to_doc ~name ~static_indices () proc));
+  let llc : Low_level.t = to_low_level proc in
   Low_level.optimize optim_ctx ~unoptim_ll_source ~ll_source ~name static_indices llc

@@ -409,7 +409,7 @@ let slice (batch_idx : Idx.static_symbol) =
          {
            array = v;
            fetch_op = Slice { batch_idx; sliced = t1.Tensor.value };
-           dims = lazy (Lazy.force projections).Idx.lhs_dims;
+           dims = lazy (Lazy.force projections.Tensor.projections).Idx.lhs_dims;
          }
   in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in

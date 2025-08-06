@@ -8,7 +8,10 @@ type tn_set = Set.M(Ir.Tnode).t
 type asgns = Ir.Assignments.t
 type comp = Ir.Assignments.comp
 type fetch_op = Ir.Assignments.fetch_op
-type projections = Ir.Indexing.projections
+type projections = {
+  projections_debug : string;
+  projections : Ir.Indexing.projections Lazy.t;
+}
 
 type diff = {
   grad : tn;
@@ -139,8 +142,8 @@ type op_fun =
 
 val binop :
   ?compose_op:Shape.compose_type ->
-  op_asn:(v:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections Lazy.t -> comp) ->
+  op_asn:(v:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->
@@ -151,8 +154,8 @@ val binop :
 
 val unop :
   ?transpose_op:Shape.transpose_type ->
-  op_asn:(v:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(t:t -> g:tn -> t1:t -> projections:projections Lazy.t -> comp) ->
+  op_asn:(v:tn -> t1:t -> projections:projections -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   op_fun
@@ -160,8 +163,8 @@ val unop :
 
 val ternop :
   ?ternary_op:Shape.ternary_type ->
-  op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
-  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections Lazy.t -> comp) ->
+  op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
+  grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
   t ->
