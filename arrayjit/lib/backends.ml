@@ -321,7 +321,7 @@ struct
   }
   [@@deriving sexp_of]
 
-  let compile ~name bindings lowered : code =
+  let compile ~(name : string) bindings lowered : code =
     let proc = compile ~name bindings lowered in
     { lowered; proc }
 
@@ -329,7 +329,7 @@ struct
     let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
 
-  let link context (code : code) ctx_arrays =
+  let link context (code : code) ctx_arrays : Indexing.lowered_bindings * Task.t =
     let runner_label = get_name context.stream in
     let merge_buffer = context.stream.merge_buffer in
     let bindings, to_schedule = link_compiled ~merge_buffer ~runner_label ctx_arrays code.proc in

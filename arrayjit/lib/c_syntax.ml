@@ -930,6 +930,7 @@ module C_syntax (B : C_syntax_config) = struct
        in
        body := !body ^^ debug_init_doc ^^ hardline);
 
+    let heap_allocated = ref [] in
     let local_decls =
       string "/* Local declarations and initialization. */"
       ^^ hardline
@@ -938,9 +939,24 @@ module C_syntax (B : C_syntax_config) = struct
              if not (Tn.is_virtual_force tn 333 || Tn.is_materialized_force tn 336) then
                let typ_doc = string (B.typ_of_prec @@ Lazy.force tn.prec) in
                let ident_doc = string (get_ident tn) in
-               let size_doc = OCaml.int (Tn.num_elems tn) in
-               let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
-               typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
+               let num_elems = Tn.num_elems tn in
+               let size_doc = OCaml.int num_elems in
+               (* Use heap allocation for arrays larger than 16KB to avoid stack overflow in Domain threads *)
+               let stack_threshold = 16384 / (Ops.prec_in_bytes @@ Lazy.force tn.prec) in
+               if num_elems > stack_threshold then (
+                 (* Heap allocation for large arrays *)
+                 heap_allocated := get_ident tn :: !heap_allocated;
+                 let alloc_expr = 
+                   if node.Low_level.zero_initialized then
+                     string "calloc" ^^ parens (OCaml.int num_elems ^^ comma ^^ space ^^ string "sizeof" ^^ parens typ_doc)
+                   else  
+                     string "malloc" ^^ parens (OCaml.int num_elems ^^ space ^^ string "*" ^^ space ^^ string "sizeof" ^^ parens typ_doc)
+                 in
+                 typ_doc ^^ space ^^ string "*" ^^ ident_doc ^^ space ^^ equals ^^ space ^^ parens (typ_doc ^^ string "*") ^^ alloc_expr ^^ semi ^^ hardline)
+               else
+                 (* Stack allocation for small arrays *)
+                 let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
+                 typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
              else empty)
            (Hashtbl.to_alist traced_store)
     in
@@ -948,6 +964,16 @@ module C_syntax (B : C_syntax_config) = struct
 
     let main_logic = string "/* Main logic. */" ^^ hardline ^^ compile_main llc in
     body := !body ^^ main_logic;
+
+    (* Free heap-allocated arrays *)
+    if not (List.is_empty !heap_allocated) then
+      body :=
+        !body ^^ hardline
+        ^^ string "/* Cleanup heap-allocated arrays. */" ^^ hardline
+        ^^ separate_map hardline
+             (fun ident -> string "free" ^^ parens (string ident) ^^ semi)
+             !heap_allocated
+        ^^ hardline;
 
     if Utils.debug_log_from_routines () && B.log_involves_file_management then
       body :=
