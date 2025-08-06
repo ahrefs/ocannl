@@ -1014,7 +1014,7 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
         Bounds_row
           { cur; subr; lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_); constr } )
 
-let%debug6_sexp subst_row (env : environment) ({ dims; bcast; id } : t) : t =
+let subst_row (env : environment) ({ dims; bcast; id } : t) : t =
   let s_dims = List.map ~f:(subst_dim env) in
   let dims = s_dims dims in
   let bcast =

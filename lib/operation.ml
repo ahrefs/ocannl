@@ -424,6 +424,26 @@ let embed_self_id ?(label = []) () : Tensor.t =
   Tensor.term ~fetch_op:Embed_self_id ~grad_spec:Prohibit_grad ~label:("!@self_id" :: label)
     ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
+(* FIXME: this should work, but it's a shape mismatch error *)
+(* let uniform_plus_one ?grad_spec () ?label = add ?label (Tensor.number ~grad_spec:Prohibit_grad 1.)
+   (uint4x32_to_prec_uniform ?grad_spec (threefry4x32 (embed_self_id ()) (Tensor.term
+   ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad ~label:[ "range_over_offsets" ] ()) ())
+   ()) *)
+let uniform ?grad_spec () =
+  uint4x32_to_prec_uniform ?grad_spec
+    (threefry4x32 (embed_self_id ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
+(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. *)
+let uniform1 ?grad_spec () =
+  uint4x32_to_prec_uniform1 ?grad_spec
+    (threefry4x32 (embed_self_id ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
 module DO = struct
   let ( * ) ?label t1 t2 = matmul ~grad_spec:If_needed ?label t1 t2 ()
   let ( *. ) ?label t1 t2 = pointmul ~grad_spec:If_needed ?label t1 t2 ()
@@ -466,6 +486,8 @@ module DO = struct
   let einsum ?label spec t1 t2 = einsum ?label spec t1 t2 ~grad_spec:If_needed ()
   let einsum1 ?label spec t1 = einsum1 ?label spec t1 ~grad_spec:If_needed ()
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
+  let uniform ?label () = uniform ~grad_spec:Require_grad () ?label ()
+  let uniform1 ?label () = uniform1 ~grad_spec:Require_grad () ?label ()
 end
 
 module NDO = struct
@@ -530,21 +552,6 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
   Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ~output_dims
-
-let uniform ?grad_spec () =
-  uint4x32_to_prec_uniform ?grad_spec
-    (threefry4x32 (embed_self_id ())
-       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
-          ~label:[ "range_over_offsets" ] ())
-       ())
-
-(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. *)
-let uniform1 ?grad_spec () =
-  uint4x32_to_prec_uniform1 ?grad_spec
-    (threefry4x32 (embed_self_id ())
-       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
-          ~label:[ "range_over_offsets" ] ())
-       ())
 
 module TDSL = struct
   module O = DO
