@@ -1,6 +1,7 @@
 (lang dune 3.18)
 
 (using ctypes 0.3)
+(using dune_site 0.1)
 
 (using directory-targets 0.1)
 
@@ -83,10 +84,12 @@
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax")
  (description
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
+ (sites (share data))
  (depends
   (ocaml
    (>= 5.3.0))
   dune
+  dune-site
   (base
    (>= v0.17.0))
   ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
