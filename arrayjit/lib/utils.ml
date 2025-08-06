@@ -485,15 +485,20 @@ let unique_keep_first ~equal l =
   in
   loop [] l
 
+(** Returns the multiset difference of [l1] and [l2], where [l1] and [l2] must be sorted in
+    increasing order. *)
 let sorted_diff ~compare l1 l2 =
   let rec loop acc l1 l2 =
     match (l1, l2) with
-    | [], _ -> []
+    | [], _ -> List.rev acc
     | l1, [] -> List.rev_append acc l1
     | h1 :: t1, h2 :: t2 -> (
         match compare h1 h2 with
         | c when c < 0 -> loop (h1 :: acc) t1 l2
-        | 0 -> loop acc t1 l2
+        | 0 ->
+            (* Depending on this line this can be either a set diff or a multiset: currently it's
+               multiset diff. *)
+            loop acc t1 t2
         | _ -> loop acc l1 t2)
   in
   (loop [] l1 l2 [@nontail])
