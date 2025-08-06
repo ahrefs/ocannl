@@ -917,8 +917,9 @@ let print ?here ?(force = false) ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
-  PPrint.ToChannel.pretty 0.7 100 Stdio.stdout
-    (to_doc ~force ~with_grad ~with_code ~with_low_level style t)
+  let doc = to_doc ~force ~with_grad ~with_code ~with_low_level style t in
+  PPrint.ToChannel.pretty 0.7 100 Stdio.stdout doc;
+  Stdio.Out_channel.flush Stdio.stdout
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
   List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->

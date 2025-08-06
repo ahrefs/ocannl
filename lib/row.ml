@@ -1527,9 +1527,10 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
       | Ok eqs ->
           List.fold ~init:([], env) ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2 })) eqs)
 
-let%debug5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env : environment) :
+let%track5_sexp solve_dim_ineq ~(stage : stage) ~(cur : dim) ~(subr : dim) (env : environment) :
     constraint_ list * environment =
-  let nonredundant ?(more = []) v vs =
+  let nonredundant ?(more = []) (v : dim_var) (vs : dim_var list) : dim_var list =
+    let _more : dim_var list = more in
     Utils.sorted_diff ~compare:compare_dim_var
       (List.dedup_and_sort ~compare:compare_dim_var (v :: vs))
       more

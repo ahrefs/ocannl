@@ -103,10 +103,3 @@
  (libraries ocannl)
  (preprocess
   (pps ppx_here ppx_ocannl)))
-
-(executable
- (name bigram)
- (modules bigram)
- (libraries ocannl datasets)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
