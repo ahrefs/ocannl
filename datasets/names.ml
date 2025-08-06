@@ -6,13 +6,30 @@ let read_names () =
   let data_locations : string list = Dataset_sites.Sites.data in
   let names_file = "names.txt" in
   let rec find_file = function
-    | [] -> failwith (Printf.sprintf "Could not find %s in any data location" names_file)
+    | [] -> None
     | dir :: rest ->
         let filepath = Stdlib.Filename.concat dir names_file in
-        if Stdlib.Sys.file_exists filepath then filepath
+        if Stdlib.Sys.file_exists filepath then Some filepath
         else find_file rest
   in
-  let filepath = find_file data_locations in
+  let filepath = match find_file data_locations with
+    | Some path -> path
+    | None ->
+        (* Fallback for testing: try to find the file in common locations *)
+        let fallback_paths = [
+          names_file;  (* current directory *)
+          "../../datasets/names.txt";  (* from test/training/ *)
+          "../datasets/names.txt";     (* from test/ *)
+          "datasets/names.txt";        (* from project root *)
+        ] in
+        let rec try_fallbacks = function
+          | [] -> failwith (Printf.sprintf "Could not find %s in any location (sites: %s)" names_file (String.concat ~sep:"; " data_locations))
+          | path :: rest ->
+              if Stdlib.Sys.file_exists path then path
+              else try_fallbacks rest
+        in
+        try_fallbacks fallback_paths
+  in
   In_channel.read_lines filepath
 
 let bigrams s =
