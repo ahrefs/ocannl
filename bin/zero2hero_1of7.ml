@@ -149,15 +149,6 @@ let _suspended () =
     {|
       Now we updated the params, but after the forward and backward passes:
       only params values will change, compared to the above.|};
-  Train.printf_tree ~with_grad:true ~depth:9 l;
-  (* We could reuse the jitted code if we did not use `update_once`. [disable_rootness_check:true]
-     because it's not once, it's twice. *)
-  ignore (Train.update_once ~disable_rootness_check:true (module Backend) l);
-  Stdio.print_endline
-    {|
-      Now again we did not update the params, they will remain as above, but both param
-      gradients and the values and gradients of other nodes will change thanks to the forward and
-      backward passes.|};
   Train.printf_tree ~with_grad:true ~depth:9 l
 
 let () =

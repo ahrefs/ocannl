@@ -73,8 +73,8 @@ let set_hosted (a : Tn.t) =
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
     label-derived comment. *)
-let forward ?(disable_rootness_check = false) t =
-  let fwd = if disable_rootness_check then t.Tensor.forward else Tensor.consume_forward_code t in
+let forward t =
+  let fwd = Tensor.consume_forward_code t in
   set_hosted t.Tensor.value;
   let label = Tn.debug_name t.value in
   { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
@@ -101,22 +101,16 @@ let grad_update_nochecks loss =
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
     comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
     default), sets the parameters and their gradients as "non-local" (on-device). *)
-let grad_update ?(disable_rootness_check = false) ?(setup_for_parallel = false) loss =
+let grad_update ?(setup_for_parallel = false) loss =
   set_hosted loss.Tensor.value;
   if setup_for_parallel then
     Set.iter loss.Tensor.params ~f:(fun p ->
         set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
-  let fwd =
-    if disable_rootness_check then loss.Tensor.forward else Tensor.consume_forward_code loss
-  in
-  let diff = diff_or_error loss "Train.grad_update" in
-  let zero_grads, bprop =
-    if disable_rootness_check then (diff.zero_grads, diff.backprop)
-    else Tensor.consume_backprop_code loss
-  in
+  let fwd = Tensor.consume_forward_code loss in
+  let zero_grads, bprop = Tensor.consume_backprop_code loss in
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
   [%cd
-    ~~(loss "gradient update";
+    ~~(loss "gradient update for" loss;
        ~~(loss "fwd";
           fwd);
        ~~(loss "zero grads";
@@ -391,9 +385,9 @@ type example_train_result = {
   used_memory : int;
 }
 
-let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init_lr ?lr_schedule
-    ?(copy_to_merge = false) ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn
-    ~weight_decay ?per_batch_callback ?per_epoch_callback ?(per_epoch_debug_streams = false)
+let example_train_loop ~seed ~batch_size ~init_lr ?lr_schedule ?(copy_to_merge = false)
+    ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay
+    ?per_batch_callback ?per_epoch_callback ?(per_epoch_debug_streams = false)
     (module Backend : Backend) () =
   let module TDSL = Operation.TDSL in
   let module NTDSL = Operation.NTDSL in
@@ -421,7 +415,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   let learning_rates = ref [] in
   let%op loss_tensor = loss_fn ~output:(model input) ~expectation in
   let%op scalar_loss = (loss_tensor ++ "...|... => 0") /. !..batch_size in
-  let update = grad_update ~disable_rootness_check ~setup_for_parallel:true scalar_loss in
+  let update = grad_update ~setup_for_parallel:true scalar_loss in
   (* Define learning_rate after scalar_loss is compiled, to not trigger rootness sanitizer. *)
   let%op learning_rate =
     match lr_schedule with
@@ -487,11 +481,8 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
   done;
   (* Using %cd instead of %op to avoid being asked to initialize [infer]. *)
   let%cd model_result = model "infer_input" in
-  let infer_fwd =
-    if disable_rootness_check then model_result.Tensor.forward
-    else Tensor.consume_forward_code model_result
-  in
-  if not disable_rootness_check then Tensor.remove_bprop_root model_result;
+  let infer_fwd = Tensor.consume_forward_code model_result in
+  Tensor.remove_bprop_root model_result;
   set_on_host model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
   let routine =
@@ -529,7 +520,7 @@ let example_train_loop ?(disable_rootness_check = false) ~seed ~batch_size ~init
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
     parameters that are not in [ctx.ctx_arrays] are initialized. *)
 let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
-    ?(disable_rootness_check = false) (type buffer_ptr dev runner event optimize_ctx)
+    (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
@@ -539,7 +530,7 @@ let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
   (* TODO: this will get nicer with modular explicits. *)
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
-  let update = f ~disable_rootness_check t in
+  let update = f t in
   let ctx =
     match ctx with
     | Some ctx -> ctx
@@ -549,45 +540,33 @@ let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
     if skip_init || Set.is_empty t.params then ctx
     else init_params (module Backend) ~ctx ~hosted ?reinit_all bindings t
   in
-  let routine =
-    Backend.(link ctx @@ compile ctx.optimize_ctx bindings update)
-  in
+  let routine = Backend.(link ctx @@ compile ctx.optimize_ctx bindings update) in
   Task.run routine.schedule;
   routine.context
 
 (** [forward_once] is a wrapper around {!run_once} that runs the forward code of [t]. *)
-let forward_once ?hosted ?skip_init ?reinit_all ?(disable_rootness_check = false)
-    (type buffer_ptr dev runner event optimize_ctx)
+let forward_once ?hosted ?skip_init ?reinit_all (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
        and type optimize_ctx = optimize_ctx
        and type event = event) ?ctx ?bindings t =
-  let ctx =
-    run_once ?hosted ?skip_init ?reinit_all
-      (module Backend)
-      ~f:(fun ~disable_rootness_check t -> forward ~disable_rootness_check t)
-      ~disable_rootness_check ?ctx ?bindings t
-  in
+  let ctx = run_once ?hosted ?skip_init ?reinit_all (module Backend) ~f:forward ?ctx ?bindings t in
   (* FIXME: this is going away soon. *)
-  if not disable_rootness_check then Tensor.remove_bprop_root t;
+  Tensor.remove_bprop_root t;
   ctx
 
 (** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
     forward and backprop. *)
-let update_once ?hosted ?skip_init ?reinit_all ?(disable_rootness_check = false)
-    (type buffer_ptr dev runner event optimize_ctx)
+let update_once ?hosted ?skip_init ?reinit_all (type buffer_ptr dev runner event optimize_ctx)
     (module Backend : Backend
       with type buffer_ptr = buffer_ptr
        and type dev = dev
        and type runner = runner
        and type optimize_ctx = optimize_ctx
        and type event = event) ?ctx ?bindings t =
-  run_once ?hosted ?skip_init ?reinit_all
-    (module Backend)
-    ~f:(fun ~disable_rootness_check t -> grad_update ~disable_rootness_check t)
-    ~disable_rootness_check ?ctx ?bindings t
+  run_once ?hosted ?skip_init ?reinit_all (module Backend) ~f:grad_update ?ctx ?bindings t
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
