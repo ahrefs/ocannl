@@ -148,23 +148,24 @@ let project_p_dims debug loc slot =
            "ppx_ocannl %%cd: insufficient slot filler information at %s %s" debug
            "(incorporate one of: v, v1, v2, g, g1, g2, lhs, rhs, rhs1, rhs2)"
 
-let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
+let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   let loc = filler.pexp_loc in
   let hint = [%expr [%e filler].Ir.Tnode.label] in
-  match (filler_typ, filler) with
-  | Code, _ -> None
-  | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } when Set.mem bad_pun_hints name ->
+  match (filler_typ, filler, no_filler_label) with
+  | Code, _, _ -> None
+  | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _ when Set.mem bad_pun_hints name ->
       None
-  | Array, _ -> Some (hint, false)
-  | (Tensor | Unknown), { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
+  | Array, _, false -> Some (hint, false)
+  | (Tensor | Unknown), { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _
     when Hashtbl.mem punned name ->
       Hashtbl.find punned name
-  | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ } -> Some (hint, true)
-  | (Tensor | Unknown), _ -> Some (hint, false)
+  | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ }, _ -> Some (hint, true)
+  | (Tensor | Unknown), _, false -> Some (hint, false)
   | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_grad { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } ),
+      _,
       _ )
     when Set.mem bad_pun_hints name ->
       None
@@ -172,13 +173,15 @@ let guess_pun_hint ~punned ~bad_pun_hints filler_typ filler =
       | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_grad { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } ),
+      _,
       _ )
     when Hashtbl.mem punned name ->
       Hashtbl.find punned name
-  | (Value_of_tensor t | Grad_of_tensor t | Merge_value t | Merge_grad t), _ -> (
+  | (Value_of_tensor t | Grad_of_tensor t | Merge_value t | Merge_grad t), _, false -> (
       let hint = [%expr [%e t].Tensor.value.Ir.Tnode.label] in
       match t with { pexp_desc = Pexp_ident _; _ } -> Some (hint, true) | _ -> Some (hint, false))
-  | No_grad_tensor_intro { name; _ }, _ -> Hashtbl.find punned name
+  | No_grad_tensor_intro { name; _ }, _, _ -> Hashtbl.find punned name
+  | _, _, true -> None
 
 let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
 let empty_comp ~loc = [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
@@ -192,8 +195,10 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
   let buffer opt_tn =
     if is_lhs then opt_tn else [%expr Option.map [%e opt_tn] ~f:(fun tn -> Ir.Assignments.Node tn)]
   in
-  let pun_hint_tnode = guess_pun_hint ~punned ~bad_pun_hints filler_typ filler in
-  let default_setup =
+  let pun_hint_tnode no_filler_label =
+    guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler
+  in
+  let default_setup no_filler_label =
     {
       vb = None;
       fwd_code_or_noop = None;
@@ -201,13 +206,13 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       slot;
       array_opt = opt_buffer [%expr [%e filler].Tensor.value];
       tensor = None;
-      pun_hint_tnode;
+      pun_hint_tnode = pun_hint_tnode no_filler_label;
     }
   in
   match (Map.is_empty vbs, filler_typ) with
   | (false, _ | _, No_grad_tensor_intro _) when not is_lhs ->
       {
-        default_setup with
+        (default_setup false) with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc
@@ -225,7 +230,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
               [%e t].Tensor.forward)
             else [%e empty_comp ~loc]]
       in
-      { default_setup with fwd_code_or_noop; tensor = Some t }
+      { (default_setup false) with fwd_code_or_noop; tensor = Some t }
   | _, Value_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
       let fwd_code_or_noop =
         Some
@@ -236,14 +241,14 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             else [%e empty_comp ~loc]]
       in
       {
-        default_setup with
+        (default_setup false) with
         fwd_code_or_noop;
         array_opt = opt_buffer [%expr [%e t].Tensor.value];
         tensor = Some t;
       }
   | _, Value_of_tensor t ->
       {
-        default_setup with
+        (default_setup false) with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc
@@ -272,7 +277,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
             else [%e empty_comp ~loc]]
       in
       {
-        default_setup with
+        (default_setup true) with
         vb;
         fwd_code_or_noop;
         array_opt = opt_buffer [%expr [%e t].Tensor.value];
@@ -290,10 +295,10 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
                 embedded_nodes = Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value;
               }]
       in
-      { default_setup with fwd_code_or_noop; tensor = Some filler }
+      { (default_setup false) with fwd_code_or_noop; tensor = Some filler }
   | _, Code when Option.is_none array_opt_of_code ->
       {
-        default_setup with
+        (default_setup false) with
         fwd_code_or_noop = Some filler;
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
@@ -302,16 +307,16 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       }
   | _, Code ->
       {
-        default_setup with
+        (default_setup false) with
         fwd_code_or_noop = Some filler;
         array_opt = buffer (Option.value_exn array_opt_of_code);
       }
-  | _, Array -> { default_setup with array_opt = opt_buffer filler }
+  | _, Array -> { (default_setup false) with array_opt = opt_buffer filler }
   | _, Grad_of_tensor ({ pexp_desc = Pexp_ident _; _ } as t) ->
-      { default_setup with array_opt = buffer filler; tensor = Some t }
+      { (default_setup false) with array_opt = buffer filler; tensor = Some t }
   | _, Grad_of_tensor t ->
       {
-        default_setup with
+        (default_setup false) with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc
@@ -321,16 +326,16 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       }
   | _, (Merge_value _ | Merge_grad _) when is_lhs ->
       {
-        default_setup with
+        (default_setup false) with
         array_opt =
           Ast_builder.Default.pexp_extension ~loc
           @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: merge buffers cannot be assigned to";
       }
   | _, Merge_value t ->
-      { default_setup with array_opt = [%expr Some (Merge_buffer [%e filler])]; tensor = Some t }
+      { (default_setup false) with array_opt = [%expr Some (Merge_buffer [%e filler])]; tensor = Some t }
   | _, Merge_grad t ->
       {
-        default_setup with
+        (default_setup false) with
         array_opt = [%expr Option.map [%e filler] ~f:(fun tn -> Ir.Assignments.Merge_buffer tn)];
         tensor = Some t;
       }
@@ -458,7 +463,8 @@ let translate (expr : expression) : result =
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
+        | Some prjs ->
+            ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -468,27 +474,29 @@ let translate (expr : expression) : result =
             let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
             let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
             let project_rhs3 = project_p_slot "RHS3" rhs3.pexp_loc setup_r3.slot in
-            let proj_lazy = [%expr
-              lazy
-                (let p = Lazy.force projections.Tensor.projections in
-                 Ir.Indexing.
-                   {
-                     product_space = p.product_space;
-                     product_iterators = p.product_iterators;
-                     lhs_dims = [%e lhs_dims];
-                     rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims]; [%e rhs3_dims] |];
-                     project_lhs = [%e project_lhs];
-                     project_rhs = [| [%e project_rhs1]; [%e project_rhs2]; [%e project_rhs3] |];
-                     debug_info =
-                       {
-                         p.debug_info with
-                         trace =
-                           ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
-                             ^ [%e expr2string_or_empty tern_op],
-                             Ir.Indexing.unique_debug_id () )
-                           :: p.debug_info.trace;
-                       };
-                   })] in
+            let proj_lazy =
+              [%expr
+                lazy
+                  (let p = Lazy.force projections.Tensor.projections in
+                   Ir.Indexing.
+                     {
+                       product_space = p.product_space;
+                       product_iterators = p.product_iterators;
+                       lhs_dims = [%e lhs_dims];
+                       rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims]; [%e rhs3_dims] |];
+                       project_lhs = [%e project_lhs];
+                       project_rhs = [| [%e project_rhs1]; [%e project_rhs2]; [%e project_rhs3] |];
+                       debug_info =
+                         {
+                           p.debug_info with
+                           trace =
+                             ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
+                               ^ [%e expr2string_or_empty tern_op],
+                               Ir.Indexing.unique_debug_id () )
+                             :: p.debug_info.trace;
+                         };
+                     })]
+            in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* FIXME: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
@@ -521,7 +529,8 @@ let translate (expr : expression) : result =
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
+        | Some prjs ->
+            ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r1.slot in
@@ -529,27 +538,29 @@ let translate (expr : expression) : result =
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs1.pexp_loc setup_r1.slot in
             let project_rhs2 = project_p_slot "RHS2" rhs2.pexp_loc setup_r2.slot in
-            let proj_lazy = [%expr
-              lazy
-                (let p = Lazy.force projections.Tensor.projections in
-                 Ir.Indexing.
-                   {
-                     product_space = p.product_space;
-                     product_iterators = p.product_iterators;
-                     lhs_dims = [%e lhs_dims];
-                     rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims] |];
-                     project_lhs = [%e project_lhs];
-                     project_rhs = [| [%e project_rhs1]; [%e project_rhs2] |];
-                     debug_info =
-                       {
-                         p.debug_info with
-                         trace =
-                           ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
-                             ^ [%e expr2string_or_empty bin_op],
-                             Ir.Indexing.unique_debug_id () )
-                           :: p.debug_info.trace;
-                       };
-                   })] in
+            let proj_lazy =
+              [%expr
+                lazy
+                  (let p = Lazy.force projections.Tensor.projections in
+                   Ir.Indexing.
+                     {
+                       product_space = p.product_space;
+                       product_iterators = p.product_iterators;
+                       lhs_dims = [%e lhs_dims];
+                       rhs_dims = [| [%e rhs1_dims]; [%e rhs2_dims] |];
+                       project_lhs = [%e project_lhs];
+                       project_rhs = [| [%e project_rhs1]; [%e project_rhs2] |];
+                       debug_info =
+                         {
+                           p.debug_info with
+                           trace =
+                             ( "ppx_cd " ^ [%e expr2string_or_empty accu_op] ^ " "
+                               ^ [%e expr2string_or_empty bin_op],
+                               Ir.Indexing.unique_debug_id () )
+                             :: p.debug_info.trace;
+                         };
+                     })]
+            in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* TODO: might be better to treat missing [rhs1, rhs2] as zeros or errors rather than eliding
@@ -582,33 +593,36 @@ let translate (expr : expression) : result =
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
+        | Some prjs ->
+            ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r.slot in
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r.slot in
-            let proj_lazy = [%expr
-              lazy
-                (let p = Lazy.force projections.Tensor.projections in
-                 Ir.Indexing.
-                   {
-                     product_space = p.product_space;
-                     product_iterators = p.product_iterators;
-                     lhs_dims = [%e lhs_dims];
-                     rhs_dims = [| [%e rhs1_dims] |];
-                     project_lhs = [%e project_lhs];
-                     project_rhs = [| [%e project_rhs1] |];
-                     debug_info =
-                       {
-                         p.debug_info with
-                         trace =
-                           ( "ppx_cd " ^ [%e string_expr ~loc accu_op] ^ " "
-                             ^ [%e string_expr ~loc un_op],
-                             Ir.Indexing.unique_debug_id () )
-                           :: p.debug_info.trace;
-                       };
-                   })] in
+            let proj_lazy =
+              [%expr
+                lazy
+                  (let p = Lazy.force projections.Tensor.projections in
+                   Ir.Indexing.
+                     {
+                       product_space = p.product_space;
+                       product_iterators = p.product_iterators;
+                       lhs_dims = [%e lhs_dims];
+                       rhs_dims = [| [%e rhs1_dims] |];
+                       project_lhs = [%e project_lhs];
+                       project_rhs = [| [%e project_rhs1] |];
+                       debug_info =
+                         {
+                           p.debug_info with
+                           trace =
+                             ( "ppx_cd " ^ [%e string_expr ~loc accu_op] ^ " "
+                               ^ [%e string_expr ~loc un_op],
+                               Ir.Indexing.unique_debug_id () )
+                             :: p.debug_info.trace;
+                         };
+                     })]
+            in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* TODO: might be better to treat missing [rhs] as zeros or errors rather than eliding the
@@ -636,32 +650,35 @@ let translate (expr : expression) : result =
       let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
       let projections_lazy, projections_debug =
         match projections with
-        | Some prjs -> ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
+        | Some prjs ->
+            ([%expr [%e prjs].Tensor.projections], [%expr [%e prjs].Tensor.projections_debug])
         | None ->
             let lhs_dims = project_p_dims "LHS" lhs.pexp_loc setup_l.slot in
             let rhs1_dims = project_p_dims "RHS1" lhs.pexp_loc setup_r.slot in
             let project_lhs = project_p_slot "LHS" lhs.pexp_loc setup_l.slot in
             let project_rhs1 = project_p_slot "RHS1" rhs.pexp_loc setup_r.slot in
-            let proj_lazy = [%expr
-              lazy
-                (let p = Lazy.force projections.Tensor.projections in
-                 Ir.Indexing.
-                   {
-                     product_space = p.product_space;
-                     product_iterators = p.product_iterators;
-                     lhs_dims = [%e lhs_dims];
-                     rhs_dims = [| [%e rhs1_dims] |];
-                     project_lhs = [%e project_lhs];
-                     project_rhs = [| [%e project_rhs1] |];
-                     debug_info =
-                       {
-                         p.debug_info with
-                         trace =
-                           ( "ppx_cd vec " ^ [%e string_expr ~loc vec_un_op],
-                             Ir.Indexing.unique_debug_id () )
-                           :: p.debug_info.trace;
-                       };
-                   })] in
+            let proj_lazy =
+              [%expr
+                lazy
+                  (let p = Lazy.force projections.Tensor.projections in
+                   Ir.Indexing.
+                     {
+                       product_space = p.product_space;
+                       product_iterators = p.product_iterators;
+                       lhs_dims = [%e lhs_dims];
+                       rhs_dims = [| [%e rhs1_dims] |];
+                       project_lhs = [%e project_lhs];
+                       project_rhs = [| [%e project_rhs1] |];
+                       debug_info =
+                         {
+                           p.debug_info with
+                           trace =
+                             ( "ppx_cd vec " ^ [%e string_expr ~loc vec_un_op],
+                               Ir.Indexing.unique_debug_id () )
+                             :: p.debug_info.trace;
+                         };
+                     })]
+            in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       let body =
@@ -669,7 +686,13 @@ let translate (expr : expression) : result =
           Option.value ~default:Ir.Assignments.Noop
           @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
                  Ir.Assignments.Set_vec_unop
-                   { lhs; op = [%e op]; rhs; projections = [%e projections_lazy]; projections_debug = [%e projections_debug] })]
+                   {
+                     lhs;
+                     op = [%e op];
+                     rhs;
+                     projections = [%e projections_lazy];
+                     projections_debug = [%e projections_debug];
+                   })]
       in
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
     in
@@ -1208,7 +1231,9 @@ let translate (expr : expression) : result =
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let res3 = loop ~proj_in_scope expr3 in
-        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot; res3.slot ] ~compare:compare_slots in
+        let slot =
+          List.hd_exn @@ List.sort [ res1.slot; res2.slot; res3.slot ] ~compare:compare_slots
+        in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs; res3.vbs ];
           typ = res1.typ;
