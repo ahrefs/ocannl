@@ -285,17 +285,6 @@ let uint4x32_to_prec_uniform ?grad_spec =
       ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
       ~op_asn ~grad_asn ?grad_spec t1
 
-(** A wasteful variant of {!uint4x32_to_prec_uniform} that produces a single value from each 4x32
-    random bits. *)
-let uint4x32_to_prec_uniform1 ?grad_spec =
-  (* FIXME: Must use non-vectorized version of uint4x32_to_prec_uniform. *)
-  let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
-  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
-  fun t1 ->
-    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
-    Tensor.unop ~transpose_op:Pointwise_un ~op_asn ~grad_asn ?grad_spec t1
-
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
@@ -424,11 +413,6 @@ let embed_self_id ?(label = []) () : Tensor.t =
   Tensor.term ~fetch_op:Embed_self_id ~grad_spec:Prohibit_grad ~label:("!@self_id" :: label)
     ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
-(* FIXME: this should work, but it's a shape mismatch error *)
-(* let uniform_plus_one ?grad_spec () ?label = add ?label (Tensor.number ~grad_spec:Prohibit_grad 1.)
-   (uint4x32_to_prec_uniform ?grad_spec (threefry4x32 (embed_self_id ()) (Tensor.term
-   ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad ~label:[ "range_over_offsets" ] ()) ())
-   ()) *)
 let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec
     (threefry4x32 (embed_self_id ())
@@ -436,10 +420,12 @@ let uniform ?grad_spec () =
           ~label:[ "range_over_offsets" ] ())
        ())
 
-(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. *)
-let uniform1 ?grad_spec () =
-  uint4x32_to_prec_uniform1 ?grad_spec
-    (threefry4x32 (embed_self_id ())
+(** Generates a single uniform random number using a counter symbol for PRNG state. This is useful
+    for sequential sampling in recurrent contexts. *)
+let uniform_at ?grad_spec counter =
+  uint4x32_to_prec_uniform ?grad_spec
+    (threefry4x32
+       (threefry4x32 (embed_self_id ()) counter ())
        (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
           ~label:[ "range_over_offsets" ] ())
        ())
@@ -487,7 +473,7 @@ module DO = struct
   let einsum1 ?label spec t1 = einsum1 ?label spec t1 ~grad_spec:If_needed ()
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
   let uniform ?label () = uniform ~grad_spec:Require_grad () ?label ()
-  let uniform1 ?label () = uniform1 ~grad_spec:Require_grad () ?label ()
+  let uniform_at ?label counter = uniform_at ~grad_spec:Require_grad ?label counter
 end
 
 module NDO = struct
@@ -523,6 +509,8 @@ module NDO = struct
   let einsum ?label spec t1 t2 = einsum spec t1 t2 ~grad_spec:Prohibit_grad ?label ()
   let einsum1 ?label spec t1 = einsum1 spec t1 ~grad_spec:Prohibit_grad ?label ()
   let ndarray = Tensor.ndarray ~grad_spec:Prohibit_grad
+  let uniform ?label () = uniform ~grad_spec:Prohibit_grad () ?label ()
+  let uniform_at ?label counter = uniform_at ~grad_spec:Prohibit_grad ?label counter
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
@@ -623,6 +611,7 @@ module NTDSL = struct
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
   let embed_self_id = embed_self_id
   let uniform = uniform ~grad_spec:Prohibit_grad
+  let uniform_at = uniform_at ~grad_spec:Prohibit_grad
 
   let counter ?(label = []) =
     let module NTDSL = Initial_NTDSL in
