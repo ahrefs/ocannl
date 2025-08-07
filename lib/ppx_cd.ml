@@ -14,6 +14,7 @@ type expr_type =
   | Merge_value of expression
   | Merge_grad of expression
   | No_grad_tensor_intro of { name : string; name_expr : expression }
+  | Function
 
 let is_unknown = function Unknown -> true | _ -> false
 
@@ -62,6 +63,8 @@ let make_vb ~loc ~name ~name_expr ~hint_label =
   in
   let vb = A.Vb.mk ~loc pat v in
   vb
+(* let make_code ~loc ~name ~name_expr ~hint_label code_expr = [%expr { asgns = [%e code_expr];
+   embedded_nodes = Base.Set.empty (module Ir.Tnode) }] *)
 
 let reduce_embs_arr ~loc (rs : array_setup list) =
   List.filter_map rs ~f:(fun hs -> hs.fwd_code_or_noop)
@@ -152,7 +155,7 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   let loc = filler.pexp_loc in
   let hint = [%expr [%e filler].Ir.Tnode.label] in
   match (filler_typ, filler, no_filler_label) with
-  | Code, _, _ -> None
+  | (Code | Function), _, _ -> None
   | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _ when Set.mem bad_pun_hints name ->
       None
   | Array, _, false -> Some (hint, false)
@@ -296,6 +299,15 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
               }]
       in
       { (default_setup false) with fwd_code_or_noop; tensor = Some filler }
+  | _, Function ->
+      {
+        (default_setup false) with
+        fwd_code_or_noop = Some filler;
+        array_opt =
+          Ast_builder.Default.pexp_extension ~loc
+          @@ Location.error_extensionf ~loc
+               "ppx_ocannl %%cd: a syntactic function in place of an array is not supported";
+      }
   | _, Code when Option.is_none array_opt_of_code ->
       {
         (default_setup false) with
@@ -332,7 +344,11 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
           @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: merge buffers cannot be assigned to";
       }
   | _, Merge_value t ->
-      { (default_setup false) with array_opt = [%expr Some (Merge_buffer [%e filler])]; tensor = Some t }
+      {
+        (default_setup false) with
+        array_opt = [%expr Some (Merge_buffer [%e filler])];
+        tensor = Some t;
+      }
   | _, Merge_grad t ->
       {
         (default_setup false) with
@@ -388,7 +404,7 @@ let handle_cases ~bad_pun_hints ~proj_in_scope transl cases =
       array_opt_of_code = None;
     } )
 
-let translate (expr : expression) : result =
+let translate ?ident_label (expr : expression) : result =
   let punned = Hashtbl.create (module String) in
   let rec transl ~bad_pun_hints ~proj_in_scope (expr : expression) : result =
     let loc = expr.pexp_loc in
@@ -778,9 +794,10 @@ let translate (expr : expression) : result =
           slot = Scalar;
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
-        (* TODO: consider passing toplevel binding name as a hint label *)
         let vbs =
-          Map.singleton (module String) name @@ make_vb ~loc ~name ~name_expr:expr ~hint_label:None
+          Map.singleton (module String) name
+          @@ make_vb ~loc ~name ~name_expr:expr
+               ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
         in
         {
           vbs;
@@ -906,7 +923,7 @@ let translate (expr : expression) : result =
                 @@ Location.error_extensionf ~loc
                      "ppx_ocannl %%cd: write .grad.merge instead of .merge.grad";
             }
-        | Code | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
+        | Function | Code | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
             {
               res1 with
               typ = Array;
@@ -924,7 +941,7 @@ let translate (expr : expression) : result =
               typ = Value_of_tensor res1.expr;
               expr = [%expr [%e res1.expr].Tensor.value];
             }
-        | Code ->
+        | Function | Code ->
             {
               res1 with
               typ = Array;
@@ -942,7 +959,7 @@ let translate (expr : expression) : result =
             { res1 with typ = Merge_value res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
         | Value_of_tensor t ->
             { res1 with typ = Merge_value t; expr = [%expr [%e res1.expr].Tensor.value] }
-        | Array | Code ->
+        | Function | Array | Code ->
             {
               res1 with
               typ = Array;
@@ -1275,6 +1292,7 @@ let translate (expr : expression) : result =
               let res = transl ~bad_pun_hints ~proj_in_scope body in
               {
                 res with
+                typ = Function;
                 expr =
                   { expr with pexp_desc = Pexp_function (args, constr, Pfunction_body res.expr) };
               }
@@ -1286,6 +1304,7 @@ let translate (expr : expression) : result =
               in
               {
                 cases_result with
+                typ = Function;
                 expr =
                   {
                     expr with
@@ -1396,7 +1415,7 @@ let translate (expr : expression) : result =
   transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr
 
 let translate ?ident_label expr =
-  let res = translate expr in
+  let res = translate ?ident_label:(Option.map ~f:pat2string ident_label) expr in
   let loc = res.expr.pexp_loc in
   let expr = res.expr in
   ( res.vbs,

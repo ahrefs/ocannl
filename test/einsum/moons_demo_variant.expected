@@ -64,15 +64,15 @@ n66 sgd_delta_w2 as sgd_delta_w2: Virt/15; single prec 1x16; mem in bytes: <not-
 n67 sgd_momentum_w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 n68 0.0001 as n68: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n69 *. as n69: Virt/15; single prec 1x16; mem in bytes: <not-in-yet>
-n70 point as point: Host&shared/38039; single prec 2; mem in bytes: <not-in-yet>
+n70 point_mlp_result as point_mlp_result: Host&shared/38039; single prec 2; mem in bytes: <not-in-yet>
 n71 * as n71: Local/1046; single prec 16; mem in bytes: <not-in-yet>
 n72 grad_* as n71.grad: unknown; single prec 16; mem in bytes: <not-in-yet>
 n73 + as n73: Virt/15; single prec 16; mem in bytes: <not-in-yet>
 n74 grad_+ as n73.grad: unknown; single prec 16; mem in bytes: <not-in-yet>
 n75 relu as relu: Virt/15; single prec 16; mem in bytes: <not-in-yet>
 n76 grad_relu as relu.grad: unknown; single prec 16; mem in bytes: <not-in-yet>
-n77 *_mlp_point as mlp_point: Host&stream/412410; single prec 1; mem in bytes: <not-in-yet>
-n78 grad_*_mlp_point as mlp_point.grad: unknown; single prec 1; mem in bytes: <not-in-yet>
+n77 *_mlp_point_mlp_result as mlp_point_mlp_result: Host&stream/412410; single prec 1; mem in bytes: <not-in-yet>
+n78 grad_*_mlp_point_mlp_result as mlp_point_mlp_result.grad: unknown; single prec 1; mem in bytes: <not-in-yet>
 Tnode: Finished printing headers.
-mlp_result's name: mlp_point
+mlp_result's name: mlp_point_mlp_result
 (mlp moons_input) name: mlp_moons_input
