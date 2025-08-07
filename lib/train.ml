@@ -89,13 +89,11 @@ let grad_update ?(setup_for_parallel = false) loss =
         set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
   [%cd
-    ~~(loss "gradient update";
-       ~~(loss "fwd";
-          loss.forward);
-       ~~(loss "zero grads";
-          loss.zero_grads);
-       loss.grad =: 1;
-       ~~(loss "bprop";
+    ~~(loss "forward and gradient update";
+       loss.forward;
+       ~~(loss "zero grads and backprop";
+          loss.zero_grads;
+          loss.grad =: 1;
           loss.backprop))]
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)

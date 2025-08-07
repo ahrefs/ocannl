@@ -63,12 +63,6 @@ let make_vb ~loc ~name ~name_expr ~hint_label =
   in
   let vb = A.Vb.mk ~loc pat v in
   vb
-(* let make_code ~loc ~name ~name_expr ~hint_label code_expr = [%expr { asgns = [%e code_expr];
-   embedded_nodes = Base.Set.empty (module Ir.Tnode) }] *)
-
-let reduce_embs_arr ~loc (rs : array_setup list) =
-  List.filter_map rs ~f:(fun hs -> hs.fwd_code_or_noop)
-  |> List.reduce ~f:(fun embs comp -> [%expr Base.Set.union [%e embs] [%e comp].embedded_nodes])
 
 (** The expression argument is of type: [Assignments.t]. *)
 let assignment ~punned ~lhs ~rhses body =
@@ -106,7 +100,9 @@ let assignment ~punned ~lhs ~rhses body =
     else body
   in
   let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
-  let body = [%expr { asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }] in
+  let body =
+    [%expr { Ir.Assignments.asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }]
+  in
   let comps =
     List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
         [%expr [%e x] :: [%e xs]])
@@ -193,7 +189,9 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   | _, _, true -> None
 
 let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
-let empty_comp ~loc = [%expr { asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
+
+let empty_comp ~loc =
+  [%expr { Ir.Assignments.asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
 
 let setup_array ~punned ~bad_pun_hints ~is_lhs
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
@@ -298,11 +296,10 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
       let fwd_code_or_noop =
         Some
           [%expr
-            Ir.Assignments.
-              {
-                asgns = Noop;
-                embedded_nodes = Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value;
-              }]
+            {
+              Ir.Assignments.asgns = Ir.Assignments.Noop;
+              embedded_nodes = Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value;
+            }]
       in
       { (default_setup false) with fwd_code_or_noop; tensor = Some filler }
   | _, Function ->
@@ -986,47 +983,60 @@ let translate ?ident_label (expr : expression) : result =
         let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
-            { res1 with typ = Code { is_commented = false }; expr = [%expr Tensor.consume_forward_code [%e res1.expr]] }
+            {
+              res1 with
+              typ = Code { is_commented = false };
+              expr = [%expr Tensor.consume_forward_code [%e res1.expr]];
+            }
         | _ ->
             {
               res1 with
               expr =
                 Ast_builder.Default.pexp_extension ~loc
-                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .forward can only be applied to tensors";
-            }
-    )
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: .forward can only be applied to tensors";
+            })
     | [%expr [%e? expr1].backprop] -> (
         let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
-            { res1 with typ = Code { is_commented = false }; expr = [%expr Tensor.consume_backprop_code [%e res1.expr]] }
+            {
+              res1 with
+              typ = Code { is_commented = false };
+              expr = [%expr Tensor.consume_backprop_code [%e res1.expr]];
+            }
         | _ ->
             {
               res1 with
               expr =
                 Ast_builder.Default.pexp_extension ~loc
-                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .backprop can only be applied to tensors";
-            }
-    )
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: .backprop can only be applied to tensors";
+            })
     | [%expr [%e? expr1].zero_grads] -> (
         let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with
         | Unknown | Tensor | No_grad_tensor_intro _ ->
-            { res1 with typ = Code { is_commented = false }; 
-              expr = [%expr 
-                match [%e res1.expr].diff with
-                | None -> 
-                    raise (Invalid_argument "ppx_ocannl %cd: .zero_grads requires a differentiable tensor")
-                | Some diff -> Ir.Assignments.to_comp diff.zero_grads
-              ] }
+            {
+              res1 with
+              typ = Code { is_commented = false };
+              expr =
+                [%expr
+                  match [%e res1.expr].diff with
+                  | None ->
+                      raise
+                        (Invalid_argument
+                           "ppx_ocannl %cd: .zero_grads requires a differentiable tensor")
+                  | Some diff -> Ir.Assignments.to_comp diff.zero_grads];
+            }
         | _ ->
             {
               res1 with
               expr =
                 Ast_builder.Default.pexp_extension ~loc
-                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .zero_grads can only be applied to tensors";
-            }
-    )
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: .zero_grads can only be applied to tensors";
+            })
     | [%expr
         ~~([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as comment];
            [%e? expr2])] ->
@@ -1481,23 +1491,45 @@ let translate ?ident_label (expr : expression) : result =
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
     | _ -> { default_result with typ = Unknown }
   in
-  transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr
+  let res = transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr in
+  match (res.typ, ident_label) with
+  | Code { is_commented = false }, Some string_expr ->
+      let loc = res.expr.pexp_loc in
+      {
+        res with
+        expr =
+          [%expr
+            let uncommented_comp = [%e res.expr] in
+            {
+              Ir.Assignments.embedded_nodes = uncommented_comp.Ir.Assignments.embedded_nodes;
+              asgns =
+                Ir.Assignments.Block_comment
+                  ([%e string_expr], uncommented_comp.Ir.Assignments.asgns);
+            }];
+        typ = Code { is_commented = true };
+      }
+  | _ -> res
 
 let translate ?ident_label expr =
-  let res = translate ?ident_label:(Option.map ~f:pat2string ident_label) expr in
+  let ident_label, is_ignore =
+    match ident_label with
+    | Some [%pat? _] -> (None, true)
+    | Some label -> (Some (pat2string label), false)
+    | None -> (None, false)
+  in
+  let res = translate ?ident_label expr in
   let loc = res.expr.pexp_loc in
   let expr = res.expr in
   ( res.vbs,
-    match ident_label with
-    | Some [%pat? _] ->
-        [%expr
-          Tensor.with_unchanged_roots ~f:(fun () ->
-              let open! NTDSL.O in
-              [%e expr])]
-    | _ ->
-        [%expr
-          let open! NTDSL.O in
-          [%e expr]] )
+    if is_ignore then
+      [%expr
+        Tensor.with_unchanged_roots ~f:(fun () ->
+            let open! NTDSL.O in
+            [%e expr])]
+    else
+      [%expr
+        let open! NTDSL.O in
+        [%e expr]] )
 
 let expr_expander ~loc ~path = expr_expander_with_punning translate ~loc ~path
 let str_expander ~loc ~path = str_expander_with_punning translate ~loc ~path
