@@ -87,19 +87,16 @@ let grad_update ?(setup_for_parallel = false) loss =
   if setup_for_parallel then
     Set.iter loss.Tensor.params ~f:(fun p ->
         set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
-  let fwd = Tensor.consume_forward_code loss in
-  let bprop = Tensor.consume_backprop_code loss in
-  let zero_grads = (Option.value_exn ~here:[%here] loss.diff).zero_grads in
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
   [%cd
-    ~~(loss "gradient update for" loss;
+    ~~(loss "gradient update";
        ~~(loss "fwd";
-          fwd);
+          loss.forward);
        ~~(loss "zero grads";
-          Asgns.to_comp zero_grads);
+          loss.zero_grads);
        loss.grad =: 1;
        ~~(loss "bprop";
-          bprop))]
+          loss.backprop))]
 
 (** See: https://github.com/tinygrad/tinygrad/blob/master/tinygrad/nn/optim.py *)
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
@@ -114,14 +111,9 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        p =- learning_rate * sgd_delta ~logic:".")]
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss =
-  let code =
-    loss.Tensor.params |> Set.to_list
-    |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
-    |> Asgns.sequence
-  in
-  [%cd
-    ~~(loss "sgd update";
-       code)]
+  loss.Tensor.params |> Set.to_list
+  |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
+  |> Asgns.sequence
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
@@ -463,7 +455,6 @@ let example_train_loop ~seed ~batch_size ~init_lr ?lr_schedule ?(copy_to_merge =
   done;
   (* Using %cd instead of %op to avoid being asked to initialize [infer]. *)
   let%cd model_result = model "infer_input" in
-  let infer_fwd = Tensor.consume_forward_code model_result in
   Tensor.remove_bprop_root model_result;
   set_on_host model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)
@@ -473,7 +464,7 @@ let example_train_loop ~seed ~batch_size ~init_lr ?lr_schedule ?(copy_to_merge =
       @@ compile sgd_update.context.optimize_ctx IDX.empty
            [%cd
              ~~("infer " model_result;
-                infer_fwd)])
+                model_result.forward)])
   in
   let infer_callback values =
     Tn.set_values infer_input.value values;

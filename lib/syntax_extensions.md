@@ -33,6 +33,7 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 
 - `%cd` assumes that any extension point will be in the scope of a module `NTDSL` that provides at least the functionality of `Operation.NTDSL`.
 - `%op` assumes that any extension point will be in the scope of a module `TDSL` that provides at least the functionality of `Operation.TDSL`.
+- Both extensions assume `Tensor` (from the `Ocannl` wrapper) is in scope.
 
 Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`.
 
@@ -369,9 +370,12 @@ The `%cd` syntax uses record-style notation to point to:
 
 - the value tensor node of a tensor `<tensor>.value`,
 - the gradient tensor node of a tensor `<tensor>.grad`,
-- the merge buffer of a tensor node `<tensor-node>.merge`; `<tensor>.merge` is a shorthand for `<tensor>.value.merge`.
+- the merge buffer of a tensor node `<tensor-node>.merge`; `<tensor>.merge` is a shorthand for `<tensor>.value.merge`,
+- the forward code of a tensor `<tensor>.forward`,
+- the backprop code of a tensor `<tensor>.backprop`,
+- the zeroing gradients code of a tensor `<tensor>.zero_grads`.
 
-The accessor `.value` can (almost?) always be dropped: by default, tensors in the `%cd` syntax refer to their value nodes.
+The accessor `.value` can (almost?) always be dropped: by default, tensors in the `%cd` syntax refer to their value nodes. The forward and backprop code accesses manage roots (via the `Tensor.consume_forward_code` and `Tensor.consume_backprop_code` functions).
 
 For example, in a data-parallel computation, gradients of the same param `p` can be merged across devices using the code `p.grad =+ p.grad.merge`, combined with an explicit device-to-device transfer.
 
@@ -387,6 +391,8 @@ type Assignments.t =
 ```
 
  Schematic example: `~~("space" "separated" "comment" "tensor p debug_name:" p; <scope of the comment>)`. The content of the comment uses application syntax, must be composed of strings, `<tensor>`, `<tensor>.value` (equivalent to `<tensor>`), `<tensor>.grad` components, where `<tensor>` is any tensor expression or tensor identifier.
+
+This syntax used to be very important, because comments in assignments are used to derive file names for generated code. Now, the `%cd` syntax automatically introduces block comments for code at let-binding points, using the identifier. However, currently the comment does not yet incorporate any tensor node labels -- and for that reason we are not yet adding comments around function bodies if a function is annotated with `%cd` -- so the `~~` syntax is still helpful when the comment needs to be more precise for debugging or naming purposes, or when `%cd` is not used with a let binding. If an explicit comment is provided at the let-binding level, the automatic one is omitted.
 
 ## Further features of the syntax extension %op
 

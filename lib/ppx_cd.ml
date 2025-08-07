@@ -5,7 +5,7 @@ open Ppx_shared
 module A = Ppxlib_ast.Ast_helper
 
 type expr_type =
-  | Code
+  | Code of { is_commented : bool }
   | Array
   | Value_of_tensor of expression
   | Grad_of_tensor of expression
@@ -115,7 +115,13 @@ let assignment ~punned ~lhs ~rhses body =
   let expr =
     if List.is_empty tensor_vbs then expr else A.Exp.let_ ~loc Nonrecursive tensor_vbs expr
   in
-  { vbs; typ = Code; slot = Nonslot; expr; array_opt_of_code = Some lhs.array_opt }
+  {
+    vbs;
+    typ = Code { is_commented = false };
+    slot = Nonslot;
+    expr;
+    array_opt_of_code = Some lhs.array_opt;
+  }
 
 let project_p_slot debug loc slot =
   match slot with
@@ -155,7 +161,7 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   let loc = filler.pexp_loc in
   let hint = [%expr [%e filler].Ir.Tnode.label] in
   match (filler_typ, filler, no_filler_label) with
-  | (Code | Function), _, _ -> None
+  | (Code _ | Function), _, _ -> None
   | _, { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _ when Set.mem bad_pun_hints name ->
       None
   | Array, _, false -> Some (hint, false)
@@ -308,7 +314,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
           @@ Location.error_extensionf ~loc
                "ppx_ocannl %%cd: a syntactic function in place of an array is not supported";
       }
-  | _, Code when Option.is_none array_opt_of_code ->
+  | _, Code _ when Option.is_none array_opt_of_code ->
       {
         (default_setup false) with
         fwd_code_or_noop = Some filler;
@@ -317,7 +323,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
           @@ Location.error_extensionf ~loc
                "ppx_ocannl %%cd: could not determine a lead array of provided code";
       }
-  | _, Code ->
+  | _, Code _ ->
       {
         (default_setup false) with
         fwd_code_or_noop = Some filler;
@@ -923,7 +929,7 @@ let translate ?ident_label (expr : expression) : result =
                 @@ Location.error_extensionf ~loc
                      "ppx_ocannl %%cd: write .grad.merge instead of .merge.grad";
             }
-        | Function | Code | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
+        | Function | Code _ | Array | Value_of_tensor _ | Grad_of_tensor _ | Merge_grad _ ->
             {
               res1 with
               typ = Array;
@@ -941,7 +947,7 @@ let translate ?ident_label (expr : expression) : result =
               typ = Value_of_tensor res1.expr;
               expr = [%expr [%e res1.expr].Tensor.value];
             }
-        | Function | Code ->
+        | Function | Code _ ->
             {
               res1 with
               typ = Array;
@@ -959,7 +965,7 @@ let translate ?ident_label (expr : expression) : result =
             { res1 with typ = Merge_value res1.expr; expr = [%expr [%e res1.expr].Tensor.value] }
         | Value_of_tensor t ->
             { res1 with typ = Merge_value t; expr = [%expr [%e res1.expr].Tensor.value] }
-        | Function | Array | Code ->
+        | Function | Array | Code _ ->
             {
               res1 with
               typ = Array;
@@ -976,15 +982,69 @@ let translate ?ident_label (expr : expression) : result =
                 Ast_builder.Default.pexp_extension ~loc
                 @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: repeated .merge not allowed";
             })
+    | [%expr [%e? expr1].forward] -> (
+        let res1 = loop ~proj_in_scope expr1 in
+        match res1.typ with
+        | Unknown | Tensor | No_grad_tensor_intro _ ->
+            { res1 with typ = Code { is_commented = false }; expr = [%expr Tensor.consume_forward_code [%e res1.expr]] }
+        | _ ->
+            {
+              res1 with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .forward can only be applied to tensors";
+            }
+    )
+    | [%expr [%e? expr1].backprop] -> (
+        let res1 = loop ~proj_in_scope expr1 in
+        match res1.typ with
+        | Unknown | Tensor | No_grad_tensor_intro _ ->
+            { res1 with typ = Code { is_commented = false }; expr = [%expr Tensor.consume_backprop_code [%e res1.expr]] }
+        | _ ->
+            {
+              res1 with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .backprop can only be applied to tensors";
+            }
+    )
+    | [%expr [%e? expr1].zero_grads] -> (
+        let res1 = loop ~proj_in_scope expr1 in
+        match res1.typ with
+        | Unknown | Tensor | No_grad_tensor_intro _ ->
+            { res1 with typ = Code { is_commented = false }; 
+              expr = [%expr 
+                match [%e res1.expr].diff with
+                | None -> 
+                    raise (Invalid_argument "ppx_ocannl %cd: .zero_grads requires a differentiable tensor")
+                | Some diff -> Ir.Assignments.to_comp diff.zero_grads
+              ] }
+        | _ ->
+            {
+              res1 with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc "ppx_ocannl %%cd: .zero_grads can only be applied to tensors";
+            }
+    )
     | [%expr
         ~~([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as comment];
            [%e? expr2])] ->
         let res2 = loop ~proj_in_scope expr2 in
+        let block =
+          match res2.typ with
+          | Code _ -> res2.expr
+          | _ ->
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%cd: only code can be commented, e.g. assignments or t.forward, \
+                    t.backprop, t.zero_grads"
+        in
         {
           res2 with
           expr =
             [%expr
-              let __comment_block = [%e res2.expr] in
+              let __comment_block = [%e block] in
               {
                 Ir.Assignments.asgns =
                   Ir.Assignments.Block_comment ([%e comment], __comment_block.Ir.Assignments.asgns);
@@ -1003,11 +1063,20 @@ let translate ?ident_label (expr : expression) : result =
                | t -> [%expr Ir.Tnode.debug_name [%e t].value])
         in
         let res2 = loop ~proj_in_scope expr2 in
+        let block =
+          match res2.typ with
+          | Code _ -> res2.expr
+          | _ ->
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%cd: only code can be commented, e.g. assignments or t.forward, \
+                    t.backprop, t.zero_grads"
+        in
         {
           res2 with
           expr =
             [%expr
-              let __comment_block = [%e res2.expr] in
+              let __comment_block = [%e block] in
               {
                 Ir.Assignments.asgns =
                   Ir.Assignments.Block_comment
@@ -1320,7 +1389,7 @@ let translate ?ident_label (expr : expression) : result =
         done] ->
         {
           default_result with
-          typ = Code;
+          typ = Code { is_commented = false };
           slot = Nonslot;
           expr =
             Ast_builder.Default.pexp_extension ~loc
@@ -1333,7 +1402,7 @@ let translate ?ident_label (expr : expression) : result =
         done] ->
         {
           default_result with
-          typ = Code;
+          typ = Code { is_commented = false };
           slot = Nonslot;
           expr =
             Ast_builder.Default.pexp_extension ~loc
@@ -1346,7 +1415,7 @@ let translate ?ident_label (expr : expression) : result =
         done] ->
         {
           default_result with
-          typ = Code;
+          typ = Code { is_commented = false };
           slot = Nonslot;
           expr =
             Ast_builder.Default.pexp_extension ~loc
@@ -1360,7 +1429,7 @@ let translate ?ident_label (expr : expression) : result =
         let res2 = loop ~proj_in_scope expr2 in
         {
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
-          typ = Code;
+          typ = Code { is_commented = false };
           slot = Nonslot;
           expr = [%expr Ir.Assignments.sequence [ [%e res1.expr]; [%e res2.expr] ]];
           array_opt_of_code = res2.array_opt_of_code;
@@ -1381,7 +1450,7 @@ let translate ?ident_label (expr : expression) : result =
         let res2 = loop ~proj_in_scope expr2 in
         {
           vbs = res2.vbs;
-          typ = Code;
+          typ = Code { is_commented = false };
           slot = Nonslot;
           expr = [%expr if [%e expr1] then [%e res2.expr] else Ir.Assignments.empty_comp];
           array_opt_of_code = res2.array_opt_of_code;
