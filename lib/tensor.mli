@@ -8,15 +8,11 @@ type tn_set = Set.M(Ir.Tnode).t
 type asgns = Ir.Assignments.t
 type comp = Ir.Assignments.comp
 type fetch_op = Ir.Assignments.fetch_op
-type projections = {
-  projections_debug : string;
-  projections : Ir.Indexing.projections Lazy.t;
-}
+type projections = { projections_debug : string; projections : Ir.Indexing.projections Lazy.t }
 
 type diff = {
   grad : tn;
-  zero_grads : asgns;
-      (** Prepares for backpropagation. Always compile as: [Seq (zero_grads, backprop)]. *)
+  zero_grads : asgns;  (** Prepares for backpropagation. Beware of the "missing zero_grads" bug. *)
   backprop : comp;
       (** Backpropagates for the tensor and its descendants; which typically means adding partial
           gradients to the gradient tensor of the subtensors, then for sub-subtensors etc. *)
@@ -215,11 +211,12 @@ val consume_forward_code : t -> comp
     [consume_forward_code t] ensures [t] is a forward root, removes it from forward roots, and
     checks that there are no other forward roots for tensors with children. *)
 
-val consume_backprop_code : t -> asgns * comp
+val consume_backprop_code : t -> comp
 (** A backprop root is a tensor with a gradient that is not (currently) receiving gradients from
     another tensor. I.e. it is not currently used to compute a tensor with a gradient.
     [consume_backprop_code t] ensures [t] is a backprop root, removes it from backprop roots, and
-    checks that there are no other backprop roots for tensors with children. *)
+    checks that there are no other backprop roots for tensors with children. It returns the backprop
+    code -- note this does not include the zero_grads code. *)
 
 val iter_embedded : f:(tn -> unit) -> t -> unit
 (** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are members of

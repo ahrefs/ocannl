@@ -577,7 +577,7 @@ let consume_backprop_code t =
 found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
            Some t );
   remove_bprop_root t;
-  (diff.zero_grads, diff.backprop)
+  diff.backprop
 
 let random_seed = ref None
 

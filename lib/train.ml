@@ -79,25 +79,6 @@ let forward t =
   let label = Tn.debug_name t.value in
   { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
 
-let diff_or_error t provenance =
-  Option.value_or_thunk t.Tensor.diff ~default:(fun () ->
-      raise @@ Tensor.Session_error (provenance ^ ": tensor is not differentiable", Some t))
-
-let grad_update_nochecks loss =
-  let diff = diff_or_error loss "Train.grad_update_nochecks" in
-  let fwd_bprop =
-    [%cd
-      ~~(loss "gradient update";
-         ~~(loss "fwd";
-            loss.forward);
-         ~~(loss "zero grads";
-            Asgns.to_comp diff.zero_grads);
-         loss.grad =: 1;
-         ~~(loss "bprop";
-            diff.backprop))]
-  in
-  fwd_bprop
-
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
     comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
     default), sets the parameters and their gradients as "non-local" (on-device). *)
@@ -107,7 +88,8 @@ let grad_update ?(setup_for_parallel = false) loss =
     Set.iter loss.Tensor.params ~f:(fun p ->
         set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
   let fwd = Tensor.consume_forward_code loss in
-  let zero_grads, bprop = Tensor.consume_backprop_code loss in
+  let bprop = Tensor.consume_backprop_code loss in
+  let zero_grads = (Option.value_exn ~here:[%here] loss.diff).zero_grads in
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
   [%cd
     ~~(loss "gradient update for" loss;
