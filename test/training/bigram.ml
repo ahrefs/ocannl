@@ -56,6 +56,9 @@ let () =
   let%op loss = neg (log output_probs) in
   let%op batch_loss = (loss ++ "...|... => 0") /. !..batch_size in
 
+  (* When using as a tutorial, try both with the following source line included and commented out.
+     Run with the option --ocannl_output_debug_files_in_build_directory=true and check the
+     build_files/ directory for the generated code. *)
   Train.every_non_literal_on_host batch_loss;
 
   let update = Train.grad_update batch_loss in
@@ -69,7 +72,7 @@ let () =
 
   let open Operation.At in
   let batch_ref = IDX.find_exn sgd_step.bindings batch_n in
-  for epoch = 0 to 100 do
+  for epoch = 0 to 0 do
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
       Train.run sgd_step
@@ -78,22 +81,25 @@ let () =
   done;
   Train.printf_tree batch_loss;
 
+  let counter_n, bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_probs = mlp "cha" in
+  let%cd infer_step = infer_probs.forward; "dice" =: uniform_at !@counter_n in
   Train.set_on_host infer_probs.value;
-  let infer_probs_routine =
-    Train.to_routine (module Backend) sgd_step.context IDX.empty infer_probs.forward
-  in
+  let infer_step = Train.to_routine (module Backend) sgd_step.context bindings infer_step in
+  let counter_ref = IDX.find_exn infer_step.bindings counter_n in
+  counter_ref := 0;
+
   let infer c =
     let c_one_hot = Datasets.Names.char_to_one_hot c in
     Tn.set_values cha.value c_one_hot;
-    Train.run infer_probs_routine;
-
-    let dice = Random.float 1. in
+    Int.incr counter_ref;
+    Train.run infer_step;
+    let dice_value = dice.@[0] in
 
     let rec aux i sum =
       let prob = infer_probs.@{[| i |]} in
       let new_sum = sum +. prob in
-      if Float.compare new_sum dice > 0 then List.nth_exn Datasets.Names.letters_with_dot i
+      if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
       else aux (i + 1) new_sum
     in
 
