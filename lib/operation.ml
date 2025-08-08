@@ -415,7 +415,8 @@ let embed_self_id ?(label = []) () : Tensor.t =
 
 let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec
-    (threefry4x32 (embed_self_id ())
+    (threefry4x32
+       (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ())
        (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
           ~label:[ "range_over_offsets" ] ())
        ())
@@ -425,7 +426,7 @@ let uniform ?grad_spec () =
 let uniform_at ?grad_spec counter =
   uint4x32_to_prec_uniform ?grad_spec
     (threefry4x32
-       (threefry4x32 (embed_self_id ()) counter ())
+       (threefry4x32 (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ()) counter ())
        (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
           ~label:[ "range_over_offsets" ] ())
        ())
@@ -473,7 +474,7 @@ module DO = struct
   let einsum1 ?label spec t1 = einsum1 ?label spec t1 ~grad_spec:If_needed ()
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
   let uniform ?label () = uniform ~grad_spec:Require_grad () ?label ()
-  let uniform_at ?label counter = uniform_at ~grad_spec:Require_grad ?label counter
+  let uniform_at ?label counter = uniform_at ~grad_spec:Require_grad ?label counter ()
 end
 
 module NDO = struct
@@ -510,7 +511,7 @@ module NDO = struct
   let einsum1 ?label spec t1 = einsum1 spec t1 ~grad_spec:Prohibit_grad ?label ()
   let ndarray = Tensor.ndarray ~grad_spec:Prohibit_grad
   let uniform ?label () = uniform ~grad_spec:Prohibit_grad () ?label ()
-  let uniform_at ?label counter = uniform_at ~grad_spec:Prohibit_grad ?label counter
+  let uniform_at ?label counter = uniform_at ~grad_spec:Prohibit_grad ?label counter ()
 end
 
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
