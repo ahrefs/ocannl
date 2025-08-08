@@ -66,6 +66,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(rule
+ (alias runtest)
+ (target
+  (dir build_files))
+ (action
+  (run
+   %{dep:threefry4x32_demo.exe}
+   "--ocannl_output_prec_in_ll_files=true"
+   "--ocannl_output_debug_files_in_build_directory=true")))
+
+(rule
+ (deps "build_files/n3_fwd.ll")
+ (target "n3_fwd_with_prec.ll.actual")
+ (action
+  (copy "build_files/n3_fwd.ll" "n3_fwd_with_prec.ll.actual")))
+
+(rule
+ (alias runtest)
+ (action
+  (diff
+   "n3_fwd_with_prec.ll.expected"
+   "n3_fwd_with_prec.ll.actual")))
+
 (test
  (name test_vec_simple)
  (modules test_vec_simple)

@@ -1152,7 +1152,12 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
 let to_doc_cstyle ?name ?static_indices () llc =
   let ident_label = get_ident_within_code [| llc |] in
   let open PPrint in
-  let doc_ident la = string (ident_label la) in
+  let doc_ident la = 
+    let base = string (ident_label la) in
+    if Utils.get_global_flag ~default:false ~arg_name:"output_prec_in_ll_files" then
+      let prec_str = Ops.prec_string (Lazy.force la.prec) in
+      base ^^ string ("<" ^ prec_str ^ ">")
+    else base in
   let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
 
   let rec doc_of_code c =
@@ -1244,7 +1249,12 @@ let to_doc_cstyle ?name ?static_indices () llc =
 let to_doc ?name ?static_indices () llc =
   let ident_label = get_ident_within_code [| llc |] in
   let open PPrint in
-  let doc_ident la = string (ident_label la) in
+  let doc_ident la = 
+    let base = string (ident_label la) in
+    if Utils.get_global_flag ~default:false ~arg_name:"output_prec_in_ll_files" then
+      let prec_str = Ops.prec_string (Lazy.force la.prec) in
+      base ^^ string ("<" ^ prec_str ^ ">")
+    else base in
   let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
 
   let rec doc_of_code c =

@@ -11,8 +11,7 @@ float *a_grad &[1] = 0xNNNN
 float *b &[1] = 0xNNNN
 float *b_grad &[1] = 0xNNNN
 float *g &[1] = 0xNNNN
-COMMENT: g gradient update
-COMMENT: g fwd
+COMMENT: g forward and gradient update
 # n4_c[0] := (a[0] + b[0]);
 n4_c[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (a[0]{=-4000e-3} + b[0]{=2000e-3})
 # n19_c[0] := ((n4_c[0] + n4_c[0]) + 1);
@@ -31,8 +30,7 @@ e[0]{=MAYBE UNINITIALIZED} = -7000e-3 = (fmaf((float)(-1), a[0]{=-4000e-3}, ((n1
 f[0]{=MAYBE UNINITIALIZED} = 49000e-3 = (e[0]{=-7000e-3} * e[0]{=-7000e-3})
 # g[0] := ((f[0] / 2) + (10 / f[0]));
 g[0]{=MAYBE UNINITIALIZED} = 24704e-3 = ((f[0]{=49000e-3} / (float)(2)) + ((float)(10) / f[0]{=49000e-3}))
-COMMENT: end
-COMMENT: g zero grads
+COMMENT: g zero grads and backprop
 # a_grad := 0
 a_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # b_grad := 0
@@ -47,8 +45,6 @@ n14_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 n40_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # f_grad := 0
 f_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-COMMENT: end
-COMMENT: g bprop
 # f.grad[0] := fma(1, (-10 / (f[0] * f[0])), f.grad[0]);
 f_grad[0]{=MAYBE UNINITIALIZED} = -4e-3 = fmaf((float)(1), ((float)(-10) / (f[0]{=49000e-3} * f[0]{=49000e-3})), f_grad[0]{=0e-3})
 # f.grad[0] := (f.grad[0] + 0.5);

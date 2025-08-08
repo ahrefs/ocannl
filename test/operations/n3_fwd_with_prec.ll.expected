@@ -1,0 +1,8 @@
+
+n3_fwd (): /* n3 fwd */
+  for i6 = 0 to 10 {
+    n3<single>[4*i6]<4> := uint4x32_to_prec_uniform((v2_random_seed<single> {
+      v2_random_seed<single> := 42;
+    } ^^^^ v1_n1<single> { v1_n1<single> := i6; }), <4>);
+  }
+  /* end */

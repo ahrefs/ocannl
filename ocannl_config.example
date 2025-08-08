@@ -30,6 +30,11 @@ debug_log_from_routines=false
 # contain debug symbols for debugging with `gdb`, `cuda-gdb` etc.
 output_debug_files_in_build_directory=false
 
+# If true, when printing Low_level.t values in human-readable syntax (.ll files),
+# tensor node names will include their precision annotations (e.g., `n3<single>` instead of `n3`).
+# This is useful for debugging precision-related issues in generated code.
+output_prec_in_ll_files=false
+
 # If given, the integer seed to initialize the randomness library with.
 fixed_state_for_init=
 
