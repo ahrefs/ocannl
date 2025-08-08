@@ -1280,6 +1280,28 @@ and apply_row_constraint ~depth stage (r : row) (constr : row_constraint) env : 
           :: List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 -> Dim_eq { d1; d2 })
           @ extras,
           env )
+    | ( { bcast = Row_var { v; _ }; _ },
+        Total_elems { numerator = Strided_var { coeff; var = _; denom }; divided_by = [] } )
+      when is_stage2_up stage -> (
+        (* Check if we have a LUB and if it meets our conditions *)
+        match Map.find env.row_env v with
+        | Some (Bounds_row { lub = Some ({ dims = lub_dims; bcast = Broadcastable; _ } as lub); _ })
+          when Utils.is_safe_val coeff && Utils.safe_force coeff > denom -> (
+            (* Check if all LUB dimensions are known *)
+            match collect_factors lub_dims with
+            | Some (_known_product, []) ->
+                (* Check if LUB has at most one dimension greater than 1 *)
+                let greater_than_one =
+                  List.filter lub_dims ~f:(function Dim { d; _ } -> d > 1 | _ -> false)
+                in
+                if List.length greater_than_one <= 1 then
+                  (Row_eq { r1 = row_of_var v r.id; r2 = lub } :: extras, env)
+                else if stored then (extras, env)
+                else (Rows_constr { r = [ r ]; constr } :: extras, env)
+            | _ ->
+                if stored then (extras, env) else (Rows_constr { r = [ r ]; constr } :: extras, env)
+            )
+        | _ -> if stored then (extras, env) else (Rows_constr { r = [ r ]; constr } :: extras, env))
     | { bcast = Row_var _; _ }, _ | _, Total_elems { numerator = _; divided_by = _ } ->
         if stored then (extras, env)
         else (Rows_constr { r = [ r ]; constr } :: extras, env (* Wait for more shape inference. *))
@@ -2004,26 +2026,43 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list
               | _, { Row_id.kind = `Output; _ } -> true
               | _ -> false) )
         with
-        | Total_elems _, Some (idx, (v, id)) when is_stage5_up stage ->
-            let other_vars = List.filteri rev_row_vars ~f:(fun i _ -> i <> idx) in
-            let other_vars = List.map other_vars ~f:(fun (v, id) -> row_of_var v id) in
-            let other_eqs =
-              List.map other_vars ~f:(fun r ->
-                  Row_eq { r1 = r; r2 = { dims = []; bcast = Broadcastable; id } })
+        | Total_elems _, Some (idx, (v, _id)) when is_stage4_up stage ->
+            (* TODO: in stage 4, consider restricting to a strided dimension variable case. *)
+            let other_vars : (row_var * Row_id.t) list =
+              List.filteri rev_row_vars ~f:(fun i _ -> i <> idx)
             in
-            let rows =
-              List.map rows ~f:(function
-                | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
-                | r -> { r with dims = r_dims r; bcast = Broadcastable })
+            let other_eqs : constraint_ list =
+              List.concat_map other_vars ~f:(fun (v, id) ->
+                  if
+                    is_stage5_up stage
+                    ||
+                    match Map.find env.row_env v with
+                    | None
+                    | Some
+                        (Bounds_row { lub = None | Some { dims = []; bcast = Broadcastable; _ }; _ })
+                      ->
+                        true
+                    | _ -> false
+                  then
+                    let r1 = row_of_var v id in
+                    [ Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } } ]
+                  else [])
             in
-            let ineqs, env =
-              eliminate_rows_constraint ~depth:(depth + 1) stage ~lub rows constr env
-            in
-            (other_eqs @ ineqs, env)
+            if is_stage5_up stage then
+              let rows =
+                List.map rows ~f:(function
+                  | { bcast = Row_var { v = v'; _ }; _ } as r when equal_row_var v' v -> r
+                  | r -> { r with dims = r_dims r; bcast = Broadcastable })
+              in
+              let ineqs, env =
+                eliminate_rows_constraint ~depth:(depth + 1) stage ~lub rows constr env
+              in
+              (other_eqs @ ineqs, env)
+            else (other_eqs @ [ Rows_constr { r = rows; constr } ], env)
         | _ -> ([ Rows_constr { r = rows; constr } ], env))
 
-and eliminate_row_constraint ~depth stage ~terminal ~lub (r : row) (constr : row_constraint) env :
-    constraint_ list * environment =
+and eliminate_row_constraint ~depth stage ~terminal ~(lub : row option) (r : row)
+    (constr : row_constraint) env : constraint_ list * environment =
   let keep_constr () =
     let ineqs, env = apply_row_constraint ~depth stage r constr env in
     List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
@@ -2043,6 +2082,7 @@ and eliminate_row_constraint ~depth stage ~terminal ~lub (r : row) (constr : row
       (* Note: the reduced constraint applies to just the row variable. *)
       match reduce_row_constraint constr ~beg_dims ~dims with
       | Total_elems { numerator; divided_by } -> (
+          let _divided_by : dim_var list = divided_by in
           match (numerator, divided_by, lub) with
           | Num_elems 1, vs, _ when is_stage5_up stage ->
               ( no_further_axes
@@ -2100,6 +2140,25 @@ and eliminate_row_constraint ~depth stage ~terminal ~lub (r : row) (constr : row
                   Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } };
                 ],
                 env )
+          | ( Strided_var { coeff; var = _; denom },
+              [],
+              Some ({ dims = lub_dims; bcast = _; id = lub_id } as lub) )
+            when is_stage5_up stage && Utils.safe_force coeff > denom -> (
+              (* Check if coeff > denom * product of known dimensions of the LUB *)
+              match collect_factors lub_dims with
+              | Some (known_product, []) ->
+                  let coeff_val = Utils.safe_force coeff in
+                  if coeff_val > denom * known_product then ([ Row_eq { r1; r2 = lub } ], env)
+                  else
+                    (* Equate the row variable to the dimensions of the LUB *)
+                    ( [ Row_eq { r1; r2 = { dims = lub_dims; bcast = Broadcastable; id = lub_id } } ],
+                      env )
+              | _ -> keep_constr ())
+          | Strided_var { coeff; var; denom }, _, _ when is_stage5_up stage ->
+              let _var : dim_var = var in
+              let _coeff : int = Utils.safe_force coeff in
+              let _denom : int = denom in
+              keep_constr ()
           | _ -> keep_constr ())
       | Exact dims -> ([ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id } } ], env)
       | Unconstrained -> ([], env))
