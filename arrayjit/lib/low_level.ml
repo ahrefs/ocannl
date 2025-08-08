@@ -369,9 +369,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       (* We allow sharing virtual nodes across routines. *)
       if Hashtbl.exists traced.accesses ~f:is_recurrent && not (Tn.known_virtual tn) then (
         traced.read_before_write <- true;
-        if Tn.mode_is_unspecified tn then
-          Tn.update_memory_mode tn (Hosted (Changed_on_devices Unset)) 38
-        else Tn.update_memory_mode tn Materialized 36))
+        (* Note: originally we would set the memory mode to Hosted if the tensor was unspecified,
+           with provenance 38. *)
+        Tn.update_memory_mode tn Materialized 36))
 
 let%diagn2_sexp check_and_store_virtual computations_table traced static_indices top_llc =
   let exception Non_virtual of int in

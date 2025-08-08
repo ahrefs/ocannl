@@ -1119,17 +1119,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:1118:21
-    ┌───────────────────────────┐
-    │[1]: =>_ti shape 0:4,1:3   │
-    │┌──────┬──────────────────┐│
-    ││      │axis 1            ││
-    │├──────┼──────────────────┤│
-    ││axis 0│ 0.00  0.00  0.00 ││
-    ││      │ 1.00  0.00  0.00 ││
-    ││      │ 2.00  0.00  0.00 ││
-    ││      │ 3.00  0.00  0.00 ││
-    │└──────┴──────────────────┘│
-    └───────────────────────────┘
+    [1]: =>_ti shape 0:4,1:3  <not-hosted>
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false tk;
   [%expect
