@@ -136,7 +136,9 @@ type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.
 
 ### Non-tensor-like constraints
 
-The above mechanisms (excluding `dim_constraint` and `row_constraint`) are sufficient to express tensor applications such as inner and outer products, axis permutations. They cannot directly express: size constraints, fixed position indexing (except for the special case of position 0), axis concatenation and "reverse concatenation" / splitting, strides, convolutions. At present, we implement size constraints and fixed position indexing.
+The above mechanisms (excluding `dim_constraint` and `row_constraint`) are sufficient to express tensor applications such as inner and outer products, axis permutations. They cannot directly express: size constraints, fixed position indexing (except for the special case of position 0), axis concatenation and "reverse concatenation" / splitting, strides, convolutions. At present, we implement size constraints including against a stride -- a multiple of another dimension, and fixed position indexing.
+
+TODO: the above comment is a bit outdated, as we now support convolutions.
 
 ```ocaml
 type dim_constraint = Unconstrained_dim | At_least_dim of int
@@ -158,7 +160,9 @@ During the solution process, the constraints are incorporated, or propagated, in
 
 ## Solving the constraints
 
-The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in stages.
+The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. The inequalities are like in type systems combining parametric polymorphism with structural and nominal subtyping, where the nominal subtyping relation states that dimension-1 axis is smaller than all axes, and axes of other dimensions are incomparable. For rows, the subtyping is suffix-wise (shorter is smaller) and axis-wise.
+
+Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in stages. Currently there are 8 stages, with a fractional stage coming from splitting an earlier design.
 
 * Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
 * Stage 2, when solving the constraints, substitutes dim variables in terminal shapes that do not have a LUB or other constraints, by dimension-1. (This is generalized at stage 6 to all variables.) (FIXME: reconsider this, see the algo for row variables: a new LUB can still be inferred.) Forces coefficients coming from precision byte sizes.

@@ -1909,7 +1909,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
                      ~data:
                        (Bounds_row { cur = cur2; subr = subr2; lub = Some r_cur; constr = constr2 });
             } )
-      | Some (Bounds_row { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2 }) ->
+      | Some (Bounds_row { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2 }) -> (
           let len1 = List.length r_cur.dims and len2 = List.length lub2.dims in
           let lub_len = min len1 len2 in
           let lub_is_cur = len1 < len2 || (len1 = len2 && is_broadcastable cur.bcast) in
@@ -1948,15 +1948,15 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) ~(cur : t) ~(subr : t) (env : en
                 | _ -> d1)
           in
           let lub = { dims = lub_dims; bcast = lub_bcast; id = lub_id } in
-          ( ineqs,
-            {
-              env with
-              row_env =
-                env.row_env
-                |> Map.set ~key:subr_v
-                     ~data:
-                       (Bounds_row { cur = cur2; subr = subr2; lub = Some lub; constr = constr2 });
-            } )
+          let row_env =
+            env.row_env
+            |> Map.set ~key:subr_v
+                 ~data:(Bounds_row { cur = cur2; subr = subr2; lub = Some lub; constr = constr2 })
+          in
+          match lub with
+          | { dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; id = _ } ->
+              (Row_eq { r1 = row_of_var subr_v subr.id; r2 = lub } :: ineqs, { env with row_env })
+          | _ -> (ineqs, { env with row_env }))
       | Some (Solved_row _) -> assert false)
   | _ when cur_beg_dims_l > beg_dims_l && not (is_stage7 stage) ->
       (Row_ineq { cur; subr } :: ineqs, env)
@@ -2186,6 +2186,15 @@ let%track5_sexp process_shape_row ~(stage : stage) (env : environment)
           (Shape_row r :: dim_eqs, env)
       | Some (Bounds_row { constr = Unconstrained; _ }) when final ->
           (Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; id } } :: dim_eqs, env)
+      | Some
+          (Bounds_row
+             {
+               lub =
+                 Some ({ dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; id = _ } as lub);
+               _;
+             }) ->
+          (* That's a minimal / bottom value for a row. *)
+          (Row_eq { r1; r2 = lub } :: dim_eqs, env)
       | Some (Bounds_row { lub; constr; _ }) ->
           let ineqs, env =
             try eliminate_row_constraint ~depth:0 stage r1 ~terminal:false ~lub constr env
