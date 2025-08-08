@@ -73,7 +73,7 @@ module Multicore (Backend : For_add_scheduler) :
   let is_dev_queue_empty state = Queue.size state.queue = 0
   let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
 
-  let%track3_sexp await stream =
+  let await stream =
     assert (Domain.is_main_domain ());
     let d = stream.runner.state in
     if (not @@ is_idle stream) && d.keep_spinning then (
@@ -86,9 +86,9 @@ module Multicore (Backend : For_add_scheduler) :
       Mut.unlock d.mut;
       Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream))
 
-  let%track3_sexp schedule_task stream task =
+  let schedule_task stream task =
     assert (Domain.is_main_domain ());
-    [%log_result "schedule_task", Ir.Task.describe task, get_name stream];
+    (* [%log_result "schedule_task", Ir.Task.describe task, get_name stream]; *)
     let d = stream.runner.state in
     Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream);
     if not d.keep_spinning then invalid_arg "Multicore_scheduler: stream not available";
@@ -129,7 +129,7 @@ module Multicore (Backend : For_add_scheduler) :
     schedule_task stream @@ Task { context_lifetime = (); description = "clock tick"; work };
     { stream_state; is_done }
 
-  let%track3_sexp spinup_stream () : stream =
+  let spinup_stream () : stream =
     let create stream_id =
       Int.incr global_run_no;
       let state =
@@ -146,7 +146,7 @@ module Multicore (Backend : For_add_scheduler) :
           stream_id;
         }
       in
-      let%track3_sexp worker (() : unit) : unit =
+      let worker (() : unit) : unit =
         assert (not @@ Domain.is_main_domain ());
         try
           while state.keep_spinning do
@@ -165,7 +165,7 @@ module Multicore (Backend : For_add_scheduler) :
         with e ->
           state.stream_error <- Some e;
           state.keep_spinning <- false;
-          [%log1 "stream", (stream_id : int), "exception", Exn.to_string e];
+          (* [%log1 "stream", (stream_id : int), "exception", Exn.to_string e]; *)
           (* TODO: we risk raising this error multiple times because await and schedule_task raise
              stream_error. But this is fine if we assume all exceptions are fatal. *)
           raise e

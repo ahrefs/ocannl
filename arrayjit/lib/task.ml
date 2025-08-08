@@ -12,8 +12,8 @@ type t =
 
 let describe (Task task) = task.description
 
-let%debug3_sexp run (Task task) : unit =
-  [%log_result "run", task.description];
+let run (Task task) : unit =
+  (* [%log_result "run", task.description]; *)
   task.work ()
 
 let prepend ~work (Task task) =
@@ -36,9 +36,9 @@ let append ~work (Task task) =
           work ());
     }
 
-let%track3_sexp enschedule ~schedule_task ~get_stream_name stream (Task { description; _ } as task)
+let enschedule ~schedule_task ~get_stream_name stream (Task { description; _ } as task)
     =
-  [%log_result "enschedule", description, "on", get_stream_name stream];
+  (* [%log_result "enschedule", description, "on", get_stream_name stream]; *)
   let work () = schedule_task stream task in
   Task
     {
