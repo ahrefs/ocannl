@@ -1124,7 +1124,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false tk;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1134:21
+    HERE: test/einsum/einsum_trivia.ml:1124:21
     ┌───────────────────────────┐
     │[7]: =>_tk shape 0:6,1:3   │
     │┌──────┬──────────────────┐│
@@ -1162,7 +1162,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1172:21
+    HERE: test/einsum/einsum_trivia.ml:1162:21
     ┌─────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4,2:2                                     │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -1196,7 +1196,7 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1206:21
+    HERE: test/einsum/einsum_trivia.ml:1196:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 2:4->0:3,1:2                                                                                          │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│
