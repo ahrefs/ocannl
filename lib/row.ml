@@ -2029,8 +2029,8 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage ~lub (rows : row list
               | _, { Row_id.kind = `Output; _ } -> true
               | _ -> false) )
         with
-        | Total_elems _, Some (idx, (v, _id)) when is_stage4_up stage ->
-            (* TODO: in stage 4, consider restricting to a strided dimension variable case. *)
+        | Total_elems _, Some (idx, (v, _id)) when is_stage3_up stage ->
+            (* TODO: in stage 3, consider restricting to a strided dimension variable case. *)
             let other_vars : (row_var * Row_id.t) list =
               List.filteri rev_row_vars ~f:(fun i _ -> i <> idx)
             in
@@ -2314,7 +2314,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
           reapply_rows_constr := false;
           let substituted_rows = List.map rows ~f:(subst_row env) in
           let (more_ineqs : constraint_ list), env =
-            if is_stage5_up stage then
+            if is_stage3_up stage then
               eliminate_rows_constraint ~depth:0 stage ~lub:None substituted_rows constr env
             else apply_rows_constraint ~depth:0 ~stage substituted_rows constr env
           in
