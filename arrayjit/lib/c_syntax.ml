@@ -683,12 +683,16 @@ module C_syntax (B : C_syntax_config) = struct
     match vcomp with
     | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
         let num_typ = string (B.typ_of_prec @@ Lazy.force scope_prec) in
-        let decl =
-          num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ string " = 0" ^^ semi
+        let scope_prec = Lazy.force scope_prec in
+        let init_zero =
+          (* TODO(#340): only do this in the rare cases where the computation is accumulating *)
+          let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+          string " = " ^^ string prefix ^^ string "0" ^^ string postfix
         in
+        let decl = num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ init_zero ^^ semi in
         let body_doc = pp_ll body in
         let defs = decl ^^ hardline ^^ body_doc in
-        let prefix, postfix = B.convert_precision ~from:(Lazy.force scope_prec) ~to_:prec in
+        let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ string ("v" ^ Int.to_string scope_id) ^^ string postfix in
         (defs, expr)
     | Get_local id ->
@@ -941,21 +945,32 @@ module C_syntax (B : C_syntax_config) = struct
                let ident_doc = string (get_ident tn) in
                let num_elems = Tn.num_elems tn in
                let size_doc = OCaml.int num_elems in
-               (* Use heap allocation for arrays larger than 16KB to avoid stack overflow in Domain threads *)
+               (* Use heap allocation for arrays larger than 16KB to avoid stack overflow in Domain
+                  threads *)
                let stack_threshold = 16384 / (Ops.prec_in_bytes @@ Lazy.force tn.prec) in
                if num_elems > stack_threshold then (
                  (* Heap allocation for large arrays *)
                  heap_allocated := get_ident tn :: !heap_allocated;
-                 let alloc_expr = 
+                 let alloc_expr =
                    if node.Low_level.zero_initialized then
-                     string "calloc" ^^ parens (OCaml.int num_elems ^^ comma ^^ space ^^ string "sizeof" ^^ parens typ_doc)
-                   else  
-                     string "malloc" ^^ parens (OCaml.int num_elems ^^ space ^^ string "*" ^^ space ^^ string "sizeof" ^^ parens typ_doc)
+                     string "calloc"
+                     ^^ parens
+                          (OCaml.int num_elems ^^ comma ^^ space ^^ string "sizeof"
+                         ^^ parens typ_doc)
+                   else
+                     string "malloc"
+                     ^^ parens
+                          (OCaml.int num_elems ^^ space ^^ string "*" ^^ space ^^ string "sizeof"
+                         ^^ parens typ_doc)
                  in
-                 typ_doc ^^ space ^^ string "*" ^^ ident_doc ^^ space ^^ equals ^^ space ^^ parens (typ_doc ^^ string "*") ^^ alloc_expr ^^ semi ^^ hardline)
+                 typ_doc ^^ space ^^ string "*" ^^ ident_doc ^^ space ^^ equals ^^ space
+                 ^^ parens (typ_doc ^^ string "*")
+                 ^^ alloc_expr ^^ semi ^^ hardline)
                else
                  (* Stack allocation for small arrays *)
-                 let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
+                 let init_doc =
+                   if node.Low_level.zero_initialized then string " = {0}" else empty
+                 in
                  typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
              else empty)
            (Hashtbl.to_alist traced_store)
@@ -969,7 +984,8 @@ module C_syntax (B : C_syntax_config) = struct
     if not (List.is_empty !heap_allocated) then
       body :=
         !body ^^ hardline
-        ^^ string "/* Cleanup heap-allocated arrays. */" ^^ hardline
+        ^^ string "/* Cleanup heap-allocated arrays. */"
+        ^^ hardline
         ^^ separate_map hardline
              (fun ident -> string "free" ^^ parens (string ident) ^^ semi)
              !heap_allocated
