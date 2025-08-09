@@ -1,6 +1,10 @@
 # Bidirectional precision inference
 
-OCANNL features a rudimentary bidirectional precision inference. It is much much less powerful than the constraints-based shape and projections inference. It is somewhat prominent because it contributes the `top_down_prec` flag to the central `Tensor.t` type. The core algorithm is just a couple dozen lines in the `Tensor.op` function, first the bottom-up pass:
+OCANNL features a rudimentary bidirectional precision inference. It is much less powerful than the constraints-based shape and projections inference. It is somewhat prominent because it contributes the `top_down_prec` flag to the central `Tensor.t` type.
+
+Tensors that choose `top_down_prec=true` "detach" themselves from their defining tensor expression as far as precision goes. By default tensors are `top_down_prec=false`, except for all the parameter tensors (created via `Tensor.param`), and results of the operation `uint4x32_to_prec_uniform`. When a tensor precision is set by the user via `Tnode.update_prec`, this setting takes precedence over any inferences. When a `top_down_prec=true` tensor has its precision set by the user, it contributes this precision in the bottom up inference (together with all `top_down_prec=false` subtensors).
+
+The core algorithm is just a couple dozen lines in the `Tensor.op` function, first the bottom-up pass:
 
 ```ocaml
   let default_prec_for default get =
@@ -34,4 +38,3 @@ and later the top-down pass, here from the value node `v`:
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti.value v.Tn.prec);
 ```
 
-Tensors that choose `top_down_prec=true` "detach" themselves from their defining tensor expression as far as precision goes. By default tensors are `top_down_prec=false`, except for all the parameter tensors (created via `Tensor.param`), and results of the operation `uint4x32_to_prec_uniform`.

@@ -83,7 +83,7 @@
     %{dep:threefry4x32_demo.exe}
     "--ocannl_output_prec_in_ll_files=true"
     "--ocannl_output_debug_files_in_build_directory=true"
-    "--ocannl_clean_up_artifacts_on_startup=false")
+    "--ocannl_clean_up_artifacts_on_startup=true")
    (run
     %{dep:top_down_prec.exe}
     "--ocannl_output_prec_in_ll_files=true"

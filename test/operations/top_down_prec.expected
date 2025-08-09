@@ -1,11 +1,14 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-┌────────────────────┐
-│[8]: *._d shape 0:1 │
-│┌┬──────┐           │
-│││axis 0│           │
-│├┼──────┤           │
-│││ 8.00 │           │
-│└┴──────┘           │
-└────────────────────┘
-grad_*._d <not-hosted>
+                      #8 *._d
+                       8.00
+                      #9 grad_*._d Virt/30
+                      <void>
+             #6 + Virt/152                 │#4 c non-emb
+             <void>                        │ 2.00
+             #7 grad_+ Virt/30             │#5 grad_c Local/26030
+             <void>                        │<void>
+#0 a non-emb         │#2 b non-emb         │
+ 2.00                │ 2.00                │
+#1 grad_a Local/26030│#3 grad_b Local/26030│
+<void>               │<void>               │

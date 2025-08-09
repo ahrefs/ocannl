@@ -255,10 +255,10 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   (* Split subtensors by whether they use top-down precision inference *)
   let top_down_ts = List.filter ordered_ts ~f:(fun t -> t.top_down_prec) in
-  let default_prec_for default get =
+  let delayed_prec_for default get =
     if top_down_prec then
       (* For top-down precision, don't promote from inputs *)
-      lazy default
+      Tn.Default default
     else
       (* For bottom-up precision, only promote from non-top-down subtensors *)
       let lazy_v_precs =
@@ -267,12 +267,13 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
                 if ti.top_down_prec then lazy (Tn.get_specified_prec v)
                 else lazy (Some (Lazy.force v.prec))))
       in
-      lazy
-        (List.filter_map lazy_v_precs ~f:Lazy.force
-        |> List.reduce ~f:Ir.Ops.promote_prec
-        |> Option.value ~default)
+      Tn.Inferred
+        (lazy
+          (List.filter_map lazy_v_precs ~f:Lazy.force
+          |> List.reduce ~f:Ir.Ops.promote_prec
+          |> Option.value ~default))
   in
-  let default_prec = default_prec_for !default_value_prec (fun t -> Some t.value) in
+  let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
     match terminal_op with
@@ -291,7 +292,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
         let padding = Some (padding_spec, padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
-    | Some (Shape.Fetch _) | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
+    | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~dims ~padding ()
   in
   let update_infer_prec tn prec =
     (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
@@ -363,11 +364,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     t)
   else
     let get ti = Option.map ti.diff ~f:(fun d -> d.grad) in
-    let default_prec = default_prec_for !default_grad_prec get in
+    let delayed_prec = delayed_prec_for !default_grad_prec get in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
-      Tn.create ~default_prec ~id:grad_id ~label:("grad" :: label) ~dims
+      Tn.create delayed_prec ~id:grad_id ~label:("grad" :: label) ~dims
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in

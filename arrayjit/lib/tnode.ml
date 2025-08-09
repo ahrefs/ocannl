@@ -62,7 +62,7 @@ type memory_mode =
           optional [array] of {!t}). *)
 [@@deriving sexp, compare, equal]
 
-type delayed_prec = Not_specified | Default_spec of Ops.prec Lazy.t | Specified of Ops.prec
+type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
 
 type prepare = { is_done : unit -> bool; sync : unit -> unit; transfer : unit -> unit }
@@ -378,7 +378,8 @@ let update_prec ?only_if tn prec =
     | Some cond -> (
         match tn.delayed_prec_unsafe with
         | Specified old_prec -> cond old_prec
-        | Default_spec old_prec when Lazy.is_val old_prec -> cond @@ Lazy.force old_prec
+        | Default old_prec -> cond old_prec
+        | Inferred old_prec when Lazy.is_val old_prec -> cond @@ Lazy.force old_prec
         | _ -> true)
   in
   if do_update then
@@ -409,12 +410,14 @@ let update_prec ?only_if tn prec =
                     ", but the precision is already set to ";
                     Ops.prec_string (Lazy.force tn.prec);
                   ])
-      | Default_spec old_prec, Some cond when not @@ Lazy.is_val old_prec ->
+      | Inferred old_prec, Some cond ->
           tn.delayed_prec_unsafe <-
-            Default_spec
+            Inferred
               (lazy
                 (let old = Lazy.force old_prec in
                  if cond old then prec else old))
+      | Default old_prec, Some cond ->
+          tn.delayed_prec_unsafe <- (if cond old_prec then Specified prec else Default old_prec)
       | _ -> tn.delayed_prec_unsafe <- Specified prec
 
 let update_infer_prec tn delayed_prec =
@@ -430,11 +433,11 @@ let update_infer_prec tn delayed_prec =
   else
     match tn.delayed_prec_unsafe with
     | Specified _ -> () (* User-specified precision has higher priority *)
-    | Not_specified -> tn.delayed_prec_unsafe <- Default_spec delayed_prec
-    | Default_spec old_prec ->
-        (* Combine with existing default precision via promotion *)
+    | Default _ -> tn.delayed_prec_unsafe <- Inferred delayed_prec
+    | Inferred old_prec ->
+        (* Combine with existing inferred precision via promotion *)
         tn.delayed_prec_unsafe <-
-          Default_spec (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
+          Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
 
 let get_specified_prec tn =
   match tn.delayed_prec_unsafe with Specified prec -> Some prec | _ -> None
@@ -450,9 +453,8 @@ let exceeds_fp16_cutoff tn c =
         if Lazy.is_val tn.prec then Lazy.force tn.prec
         else
           match tn.delayed_prec_unsafe with
-          | Specified prec -> prec
-          | Default_spec prec -> Lazy.force prec
-          | Not_specified -> Lazy.force tn.prec
+          | Specified prec | Default prec -> prec
+          | Inferred prec -> Lazy.force prec
       in
       Ops.is_up_to_fp16 prec
 
@@ -582,7 +584,7 @@ end)
 
 let registry = Registry.create 16
 
-let create ?default_prec ~id ~label ~dims ~padding () =
+let create delayed_prec ~id ~label ~dims ~padding () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
@@ -594,17 +596,12 @@ let create ?default_prec ~id ~label ~dims ~padding () =
   and prec =
     lazy
       (match tn.delayed_prec_unsafe with
-      | Specified prec | Default_spec (lazy prec) -> prec
-      | Not_specified ->
-          raise @@ Utils.User_error "Tnode.update_prec: precision is not specified yet")
+      | Default prec | Specified prec | Inferred (lazy prec) -> prec)
   and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
-    let delayed_prec_unsafe =
-      match default_prec with None -> Not_specified | Some prec -> Default_spec prec
-    in
     {
       array;
-      delayed_prec_unsafe;
+      delayed_prec_unsafe = delayed_prec;
       prec;
       dims;
       padding;
