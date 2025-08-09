@@ -241,9 +241,8 @@ let c_vec_typ_of_prec ~length prec =
   | (Byte_prec _ | Fp8_prec _), 16 -> "int8x16_t"
   | (Uint16_prec _ | Bfloat16_prec _), 8 -> "uint16x8_t"
   | Half_prec _, 8 -> "half8_t"
-  | _ ->
-      (* Fallback for other combinations *)
-      c_typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+  | _, 1 -> c_typ_of_prec prec
+  | _ -> invalid_arg "Ops.c_vec_typ_of_prec: invalid combination"
 
 let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
@@ -587,8 +586,10 @@ let unop_c_syntax prec op =
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 let vec_unop_c_syntax prec op =
-  match op with
-  | Uint4x32_to_prec_uniform -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
+  match op, prec with
+  | Uint4x32_to_prec_uniform, Uint4x32_prec _ ->
+      invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform not supported for Uint4x32"
+  | Uint4x32_to_prec_uniform, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

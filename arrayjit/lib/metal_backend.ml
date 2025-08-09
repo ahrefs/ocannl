@@ -459,9 +459,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | (Ops.Byte_prec _ | Ops.Fp8_prec _), 16 -> "int8x16_t"
       | (Ops.Uint16_prec _ | Ops.Bfloat16_prec _), 8 -> "uint16x8_t"
       | Ops.Half_prec _, 8 -> "half8_t"
-      | _ ->
-          (* Fallback for other combinations *)
-          typ_of_prec prec ^ "[" ^ Int.to_string length ^ "]"
+      | _, 1 -> typ_of_prec prec
+      | _ -> invalid_arg "Metal_backend.vec_typ_of_prec: invalid combination"
 
     let metal_prec_suffix_float = function
       | Ops.Byte_prec _ -> ""
