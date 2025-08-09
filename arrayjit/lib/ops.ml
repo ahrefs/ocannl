@@ -211,15 +211,27 @@ let apply_prec ?default { f } = function
   | Void_prec ->
       Option.value_or_thunk default ~default:(fun () -> invalid_arg "apply_prec: Void_prec")
   | Byte_prec Byte -> f Byte
+  | Byte_prec Fp8 -> invalid_arg "apply_prec: Fp8 is not a valid Byte precision"
+  | Byte_prec _ -> .
   | Uint16_prec Uint16 -> f Uint16
+  | Uint16_prec Bfloat16 -> invalid_arg "apply_prec: Bfloat16 is not a valid Uint16 precision"
+  | Uint16_prec _ -> .
   | Int32_prec Int32 -> f Int32
+  | Int32_prec _ -> .
   | Half_prec Half -> f Half
+  | Half_prec _ -> .
   | Bfloat16_prec Bfloat16 -> f Bfloat16
+  | Bfloat16_prec Uint16 -> invalid_arg "apply_prec: Uint16 is not a valid Bfloat16 precision"
+  | Bfloat16_prec _ -> .
   | Fp8_prec Fp8 -> f Fp8
+  | Fp8_prec Byte -> invalid_arg "apply_prec: Byte is not a valid Fp8 precision"
+  | Fp8_prec _ -> .
   | Single_prec Single -> f Single
+  | Single_prec _ -> .
   | Double_prec Double -> f Double
-  (* FIXME: this is a hack to get the code to compile. *)
-  | _ -> invalid_arg "apply_prec: unknown precision"
+  | Double_prec _ -> .
+  | Uint4x32_prec Uint4x32 -> f Uint4x32
+  | Uint4x32_prec _ -> .
 
 let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
