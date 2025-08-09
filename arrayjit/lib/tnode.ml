@@ -110,7 +110,9 @@ let dims_without_padding tn =
 let get_padding tn = Lazy.force tn.padding
 let id { id; _ } = "n" ^ Int.to_string id
 let label a = String.concat ~sep:"_" a.label
-let is_alphanum_ = String.for_all ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
+
+let is_alphanum_ s =
+  (not (String.is_empty s)) && String.for_all s ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
 
 let get_debug_name ?code_name ~id ~label () =
   match code_name with
@@ -432,9 +434,7 @@ let update_infer_prec tn delayed_prec =
     | Default_spec old_prec ->
         (* Combine with existing default precision via promotion *)
         tn.delayed_prec_unsafe <-
-          Default_spec
-            (lazy
-               (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
+          Default_spec (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
 
 let exceeds_fp16_cutoff tn c =
   match Utils.settings.check_half_prec_constants_cutoff with
@@ -497,11 +497,17 @@ let dims_to_string ?(with_axis_numbers = false) arr =
   Ops.prec_string (Lazy.force arr.prec) ^ " prec " ^ dims_s
 
 let no_grad_ident_label tn =
-  match List.filter tn.label ~f:(fun i -> is_alphanum_ i) with
-  | [] -> (false, None)
-  | [ "grad" ] -> (true, None)
-  | "grad" :: components -> (true, Some (String.concat ~sep:"_" components))
-  | components -> (false, Some (String.concat ~sep:"_" components))
+  let components = List.filter tn.label ~f:(fun i -> is_alphanum_ i) in
+  let digits, components = List.partition_tf components ~f:(fun i -> Char.is_digit i.[0]) in
+  let has_grad, result =
+    match components @ digits with
+    | [] -> (false, None)
+    | [ "grad" ] -> (true, None)
+    | "grad" :: components -> (true, Some (String.concat ~sep:"_" components))
+    | components -> (false, Some (String.concat ~sep:"_" components))
+  in
+  ( has_grad,
+    Option.find_map result ~f:(fun s -> if Char.is_digit s.[0] then Some ("_" ^ s) else Some s) )
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = id arr in

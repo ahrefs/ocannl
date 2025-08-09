@@ -279,15 +279,14 @@ let uint4x32_to_prec_uniform ?grad_spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
-  fun t1 ?(label = []) ?top_down_prec ->
+  fun t1 ?label ?top_down_prec ->
     (* Ignore what the caller says, since we must learn the precision from the outside. *)
     ignore (top_down_prec : bool option);
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
       ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
-      ~op_asn ~grad_asn ?grad_spec
-      ~label:("uint4x32_to_prec_uniform" :: label)
-      ~top_down_prec:true t1
+      ~op_asn ~grad_asn ?grad_spec (* Modifying the label would cause identifier pollution. *)
+      ?label ~top_down_prec:true t1
 
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
