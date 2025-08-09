@@ -559,9 +559,13 @@ module TDSL = struct
     let t =
       match (value, values) with
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
-      | Some value, None -> Tensor.param_init [| value |]
-      | None, Some values -> Tensor.param_init values
-      | None, None -> !default_param_init () ~batch_dims:[] ?batch_axes:None
+      | Some value, None -> 
+          fun ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () ->
+            Tensor.term_init ~grad_spec:Require_grad [| value |] ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+      | None, Some values -> 
+          fun ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () ->
+            Tensor.term_init ~grad_spec:Require_grad values ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+      | None, None -> !default_param_init ()
     in
     Tensor.param ~t
 
@@ -579,17 +583,17 @@ module TDSL = struct
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
-    let t =
-      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
-        ~init_data:(Reshape ndarray) ?fetch_op:None
+    let t ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+      Tensor.term ~grad_spec:Require_grad ~init_data:(Reshape ndarray) ?fetch_op:None
+        ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l
 
   (** See {!wrap}. *)
   let wrap_param ~l ?i ?o ndarray =
-    let t =
-      Tensor.term ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None
-        ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
+    let t ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+      Tensor.term ~grad_spec:Require_grad ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
+        ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l
 end

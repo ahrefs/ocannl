@@ -134,7 +134,7 @@ type param_op_fun =
   t
 
 type op_fun =
-  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> param_op_fun
+  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> ?top_down_prec:bool -> param_op_fun
 
 val binop :
   ?compose_op:Shape.compose_type ->
@@ -191,11 +191,8 @@ val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val param_init : float array -> ?label:string list -> param_op_fun
-(** Helper for {!param} wrappers. *)
-
 val param :
-  t:(?label:string list -> param_op_fun) -> string -> ?more_label:string list -> param_op_fun
+  t:op_fun -> string -> ?more_label:string list -> param_op_fun
 (** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
     should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
     string, appended by [more_label] if any, other parameters are forwarded to [t]. This function

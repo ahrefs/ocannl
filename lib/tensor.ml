@@ -11,10 +11,7 @@ type tn_set = Set.M(Tn).t
 type asgns = Asgns.t
 type comp = Asgns.comp
 type fetch_op = Asgns.fetch_op
-type projections = {
-  projections_debug : string;
-  projections : Ir.Indexing.projections Lazy.t;
-}
+type projections = { projections_debug : string; projections : Ir.Indexing.projections Lazy.t }
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -165,16 +162,23 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
-  let projections = {
-    projections_debug;
-    projections = lazy (Shape.derive_projections local_shape_update);
-  } in
+  let projections =
+    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+  in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
   let rhs2 = if rhs2_is_grad then (Option.value_exn ~here:[%here] t2.diff).grad else t2.value in
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
-  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Binop { op; rhs1; rhs2 }; projections = projections.projections; projections_debug = projections.projections_debug }
+  Asgns.Accum_op
+    {
+      initialize_neutral;
+      accum;
+      lhs;
+      rhs = Binop { op; rhs1; rhs2 };
+      projections = projections.projections;
+      projections_debug = projections.projections_debug;
+    }
 
 let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
     ~(rhs1_is_grad : bool) ~(rhs1_is_merge : bool) ~(t2 : t) ~rhs2_is_grad ~rhs2_is_merge ~(t3 : t)
@@ -184,10 +188,9 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
-  let projections = {
-    projections_debug;
-    projections = lazy (Shape.derive_projections local_shape_update);
-  } in
+  let projections =
+    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+  in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs1 = if rhs1_is_merge then Asgns.Merge_buffer rhs1 else Node rhs1 in
@@ -195,7 +198,15 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
   let rhs2 = if rhs2_is_merge then Asgns.Merge_buffer rhs2 else Node rhs2 in
   let rhs3 = if rhs3_is_grad then (Option.value_exn ~here:[%here] t3.diff).grad else t3.value in
   let rhs3 = if rhs3_is_merge then Asgns.Merge_buffer rhs3 else Node rhs3 in
-  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Ternop { op; rhs1; rhs2; rhs3 }; projections = projections.projections; projections_debug = projections.projections_debug }
+  Asgns.Accum_op
+    {
+      initialize_neutral;
+      accum;
+      lhs;
+      rhs = Ternop { op; rhs1; rhs2; rhs3 };
+      projections = projections.projections;
+      projections_debug = projections.projections_debug;
+    }
 
 let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 : t)
     ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
@@ -204,20 +215,30 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
   let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
-  let projections = {
-    projections_debug;
-    projections = lazy (Shape.derive_projections local_shape_update);
-  } in
+  let projections =
+    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+  in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
   let rhs = if rhs_is_merge then Asgns.Merge_buffer rhs else Node rhs in
-  Asgns.Accum_op { initialize_neutral; accum; lhs; rhs = Unop { op; rhs }; projections = projections.projections; projections_debug = projections.projections_debug }
+  Asgns.Accum_op
+    {
+      initialize_neutral;
+      accum;
+      lhs;
+      rhs = Unop { op; rhs };
+      projections = projections.projections;
+      projections_debug = projections.projections_debug;
+    }
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
+let is_param t = Set.mem t.params t
+let is_top_down_prec t = is_param t
+
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
-    ~grad_asn ?(grad_spec = If_needed) make_shape (orig_ts : t list) : t =
+    ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape (orig_ts : t list) : t =
   List.iter orig_ts ~f:(fun t ->
       if t.id >= session_state.next_id then
         raise
@@ -233,13 +254,20 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   session_state.next_id <- session_state.next_id + 1;
   let _session_state_next_id : int = session_state.next_id in
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
+  (* Split subtensors by whether they use top-down precision inference *)
+  let top_down_ts, bottom_up_ts = List.partition_tf ordered_ts ~f:is_top_down_prec in
   let default_prec =
-    let lazy_v_precs = List.map orig_ts ~f:(fun ti -> ti.value.prec) in
-    let default = !default_value_prec in
-    lazy
-      (List.map lazy_v_precs ~f:Lazy.force
-      |> List.reduce ~f:Ir.Ops.promote_prec
-      |> Option.value ~default)
+    if top_down_prec then
+      (* For top-down precision, don't promote from inputs *)
+      lazy !default_value_prec
+    else
+      (* For bottom-up precision, only promote from non-top-down subtensors *)
+      let lazy_v_precs = List.map bottom_up_ts ~f:(fun ti -> ti.value.prec) in
+      let default = !default_value_prec in
+      lazy
+        (List.map lazy_v_precs ~f:Lazy.force
+        |> List.reduce ~f:Ir.Ops.promote_prec
+        |> Option.value ~default)
   in
   let terminal_logic () =
     let open Shape in
@@ -261,6 +289,12 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
     | Some (Shape.Fetch _) | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
   in
+  let update_infer_prec tn prec =
+    (* Instead of just checking prec, we cross-check with the array, to catch prec forcing bugs. *)
+    if not (Lazy.is_val tn.Tn.array) then Tn.update_infer_prec tn prec
+  in
+  (* Apply delayed top-down precision updates to parameter subtensors *)
+  List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti.value v.Tn.prec);
   let transpose_op =
     match transpose_op with
     | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.prec
@@ -281,10 +315,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let shape_update = List.hd_exn local_shape_updates in
   let projections_debug = Shape.logic_to_spec shape_update.logic in
-  let projections = {
-    projections_debug;
-    projections = lazy (Shape.derive_projections shape_update);
-  } in
+  let projections =
+    { projections_debug; projections = lazy (Shape.derive_projections shape_update) }
+  in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -314,13 +347,18 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     t)
   else
     let default_prec =
-      let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
-      let lazy_g_precs = List.filter_map orig_ts ~f in
-      let default = !default_grad_prec in
-      lazy
-        (List.map lazy_g_precs ~f:Lazy.force
-        |> List.reduce ~f:Ir.Ops.promote_prec
-        |> Option.value ~default)
+      if top_down_prec then
+        (* For top-down precision, don't promote from inputs *)
+        lazy !default_grad_prec
+      else
+        (* For bottom-up precision, only promote from non-top-down subtensors *)
+        let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
+        let lazy_g_precs = List.filter_map bottom_up_ts ~f in
+        let default = !default_grad_prec in
+        lazy
+          (List.map lazy_g_precs ~f:Lazy.force
+          |> List.reduce ~f:Ir.Ops.promote_prec
+          |> Option.value ~default)
     in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
@@ -329,6 +367,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in
+    (* Apply delayed top-down precision updates to parameter gradient subtensors *)
+    List.iter top_down_ts ~f:(fun ti ->
+        Option.iter ti.diff ~f:(fun d -> update_infer_prec d.grad g.Tn.prec));
     let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
     let zero_grads =
       let zero_g ti =
@@ -382,37 +423,44 @@ type param_op_fun =
   t
 
 type op_fun =
-  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> param_op_fun
+  ?label:string list ->
+  ?batch_dims:int list ->
+  ?batch_axes:(string * int) list ->
+  ?top_down_prec:bool ->
+  param_op_fun
 
 let%track7_sexp binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_dims
-    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
+    () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
-  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec
+  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec ~top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2 ]
 
 let%track7_sexp ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batch_dims
-    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
+    () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
-  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec
+  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec ~top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2; t3 ]
 
 let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims
-    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
+    () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
-  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec
+  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ~top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1 ]
 
 let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+    ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -436,8 +484,8 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?
   in
   let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec make_shape
-    []
+  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
+    ~top_down_prec make_shape []
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
@@ -473,8 +521,8 @@ let constant_fill ~debug values =
       Nd.set_flat_values nd values;
       (Some (Asgns.Reshape nd), None)
 
-let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch_axes ?input_dims
-    ?output_dims ?input_axes ?output_axes ?deduced () =
+let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch_axes
+    ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let num_label =
     String.concat ~sep:"," @@ List.map ~f:float_to_label @@ Fn.flip List.take 5
     @@ Array.to_list values
@@ -489,8 +537,8 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch
   let init_data, fetch_op = constant_fill ~debug:"Tensor.ndarray" values in
   (* Ideally, while the shape is known, the deduced argument will be used for verification. *)
   let t =
-    term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ?input_dims ?output_dims
-      ?input_axes ?output_axes ?deduced ()
+    term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ~top_down_prec ?input_dims
+      ?output_dims ?input_axes ?output_axes ?deduced ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
@@ -499,23 +547,19 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let param_init values ?label ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
-  let init_data, fetch_op = constant_fill ~debug:"Tensor.param_init" values in
-  term ?init_data ?fetch_op ~grad_spec:Require_grad ~batch_dims:[] ?batch_axes:None ?label
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
-
-let term_init ?grad_spec values ?(label = []) ?batch_dims ?batch_axes ?input_dims ?output_dims
-    ?input_axes ?output_axes ?deduced () =
+let term_init ?grad_spec values ?(label = []) ?batch_dims ?batch_axes ?(top_down_prec = false)
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let init_data, fetch_op = constant_fill ~debug:"Tensor.term_init" values in
-  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?input_dims ?output_dims
-    ?input_axes ?output_axes ?deduced ()
+  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ~top_down_prec ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced ()
 
 let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_dims ?input_axes
     ?output_axes ?deduced () : t =
   let t =
     t
       ?label:(Some (name :: more_label))
-      ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+      ?batch_dims:(Some []) ?batch_axes:None ?top_down_prec:(Some true) ?input_dims ?output_dims
+      ?input_axes ?output_axes ?deduced ()
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)

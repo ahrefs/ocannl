@@ -415,6 +415,27 @@ let update_prec ?only_if tn prec =
                  if cond old then prec else old))
       | _ -> tn.delayed_prec_unsafe <- Specified prec
 
+let update_infer_prec tn delayed_prec =
+  if Lazy.is_val tn.prec then
+    raise
+    @@ Utils.User_error
+         (String.concat
+            [
+              "Tnode.update_infer_prec: cannot update precision for ";
+              debug_name tn;
+              " because it has already been forced";
+            ])
+  else
+    match tn.delayed_prec_unsafe with
+    | Specified _ -> () (* User-specified precision has higher priority *)
+    | Not_specified -> tn.delayed_prec_unsafe <- Default_spec delayed_prec
+    | Default_spec old_prec ->
+        (* Combine with existing default precision via promotion *)
+        tn.delayed_prec_unsafe <-
+          Default_spec
+            (lazy
+               (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
+
 let exceeds_fp16_cutoff tn c =
   match Utils.settings.check_half_prec_constants_cutoff with
   | None -> false
