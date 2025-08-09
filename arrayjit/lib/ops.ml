@@ -17,8 +17,8 @@ type ('ocaml, 'impl) precision =
   | Uint16 : (int, uint16_elt) precision
   | Int32 : (int32, int32_elt) precision
   | Uint4x32 : (Stdlib.Complex.t, Bigarray.complex64_elt) precision
-      (** A 128-bit value that corresponds to CUDA's uint4 type. Luckily, the OCaml Bigarray library
-          supports complex64_elt which is a 128-bit value, so we avoid dims conversions. *)
+      (** A 128-bit value that corresponds to e.g. CUDA's uint4 type. Luckily, the OCaml Bigarray
+          library supports complex64_elt which is a 128-bit value, so we avoid dims conversions. *)
   | Half : (float, float16_elt) precision
   | Bfloat16 : (int, uint16_elt) precision  (** Using uint16 representation for now *)
   | Fp8 : (char, uint8_elt) precision  (** Using uint8 representation for now *)
@@ -225,7 +225,7 @@ let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
   | Uint16_prec _ -> "unsigned short"
   | Int32_prec _ -> "int"
-  | Uint4x32_prec _ -> "uint4" (* CUDA's uint4 type - 128-bit *)
+  | Uint4x32_prec _ -> "uint4x32_t" (* Note that both CUDA and Metal usa a native type uint4 here *)
   | Half_prec _ -> "_Float16"
   | Bfloat16_prec _ -> "unsigned short" (* Bfloat16 represented as uint16 *)
   | Fp8_prec _ -> "unsigned char" (* FP8 represented as uint8 *)
