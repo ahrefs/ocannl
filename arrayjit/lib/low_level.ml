@@ -269,6 +269,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         (* Mark all positions that will be written to *)
         for i = 0 to length - 1 do
           let pos_idcs = Array.copy idcs in
+          (* Robustness against empty axes shapes *)
+          let pos_idcs = if Array.is_empty pos_idcs then [| Indexing.Fixed_idx 0 |] else pos_idcs in
           (match pos_idcs.(Array.length pos_idcs - 1) with
           | Fixed_idx idx -> pos_idcs.(Array.length pos_idcs - 1) <- Fixed_idx (idx + i)
           | _ ->

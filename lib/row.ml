@@ -894,9 +894,6 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
   match constr with
   | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
     when is_stage2_up stage && Option.is_some (get_dim_val var) ->
-      if Utils.settings.debug_log_from_routines then
-        Stdio.printf "Line 895 case: stage=%s, is_stage2_up=%b\n"
-          (Sexp.to_string @@ sexp_of_stage stage) (is_stage2_up stage);
       let dim = Option.value_exn (get_dim_val var) in
       let tot = Utils.safe_force coeff * dim in
       reapply_rows_constr := true;
@@ -914,7 +911,7 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
       match subst_in_dim (Var var) with
       | Dim { d; _ } as value when is_stage2_up stage ->
           (* Stage 2+: Replace (coeff * v / denom) with (coeff * d / denom) *)
-         let new_num = Utils.safe_force coeff * d in
+          let new_num = Utils.safe_force coeff * d in
           if new_num % denom = 0 then
             Total_elems { numerator = Num_elems (new_num / denom); divided_by }
           else
@@ -2523,7 +2520,11 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
               | Second _ -> assert false
               | Either.First { dims; _ } -> (
                   match List.rev dims with
-                  | [] -> assert false
+                  | [] ->
+                      [
+                        (let output = subst_dim env (Var var) in
+                         Iterated (to_proj output));
+                      ]
                   | inner :: other_dims ->
                       let output = subst_dim env (Var var) in
                       let input = to_proj inner in
