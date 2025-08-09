@@ -27,6 +27,7 @@ type t = {
   diff : diff option;
   id : int;  (** Same as [value.id]. *)
   value : tn;
+  top_down_prec : bool;  (** Whether to propagate precision bottom-up (the default) or top-down. *)
   shape : Shape.t;
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
@@ -134,7 +135,11 @@ type param_op_fun =
   t
 
 type op_fun =
-  ?label:string list -> ?batch_dims:int list -> ?batch_axes:(string * int) list -> ?top_down_prec:bool -> param_op_fun
+  ?label:string list ->
+  ?top_down_prec:bool ->
+  ?batch_dims:int list ->
+  ?batch_axes:(string * int) list ->
+  param_op_fun
 
 val binop :
   ?compose_op:Shape.compose_type ->
@@ -191,8 +196,7 @@ val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val param :
-  t:op_fun -> string -> ?more_label:string list -> param_op_fun
+val param : t:op_fun -> string -> ?more_label:string list -> param_op_fun
 (** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
     should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
     string, appended by [more_label] if any, other parameters are forwarded to [t]. This function
@@ -200,8 +204,8 @@ val param :
     result, and it also updates the memory modes. *)
 
 val term_init : ?grad_spec:grad_spec -> float array -> op_fun
-(** A {!term} wrapper that generalizes {!param_init} to tensors with batch axes and {!ndarray} to
-    tensors with inferred shapes. *)
+(** A {!term} wrapper that sets up the value node initialization (it generalizes {!ndarray} to
+    tensors with inferred shapes). *)
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor.

@@ -279,11 +279,15 @@ let uint4x32_to_prec_uniform ?grad_spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
-  fun t1 ->
+  fun t1 ?(label = []) ?top_down_prec ->
+    (* Ignore what the caller says, since we must learn the precision from the outside. *)
+    ignore (top_down_prec : bool option);
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
       ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
-      ~op_asn ~grad_asn ?grad_spec t1
+      ~op_asn ~grad_asn ?grad_spec
+      ~label:("uint4x32_to_prec_uniform" :: label)
+      ~top_down_prec:true t1
 
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
@@ -522,7 +526,8 @@ let reshape ~l ?b ?(i = []) ?o ndarray =
     ?output_dims:o
 
 (** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
-    be inferred (or provided). Assumes no padding. See also: {!reshape} and {!TDSL.wrap_param}. *)
+    be inferred (or provided). Assumes no padding. Input axes are not inferred (empty if omitted).
+    See also: {!reshape} and {!TDSL.wrap_param}. *)
 let wrap ~l ?b ?(i = []) ?o ndarray =
   Tensor.term ~init_data:(Asgns.Keep_shape_no_padding ndarray) ?batch_dims:b ~label:[ l ]
     ~input_dims:i ?output_dims:o
@@ -559,12 +564,8 @@ module TDSL = struct
     let t =
       match (value, values) with
       | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
-      | Some value, None -> 
-          fun ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () ->
-            Tensor.term_init ~grad_spec:Require_grad [| value |] ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
-      | None, Some values -> 
-          fun ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () ->
-            Tensor.term_init ~grad_spec:Require_grad values ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+      | Some value, None -> Tensor.term_init ~grad_spec:Require_grad [| value |]
+      | None, Some values -> Tensor.term_init ~grad_spec:Require_grad values
       | None, None -> !default_param_init ()
     in
     Tensor.param ~t
@@ -583,17 +584,13 @@ module TDSL = struct
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
-    let t ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
-      Tensor.term ~grad_spec:Require_grad ~init_data:(Reshape ndarray) ?fetch_op:None
-        ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
-    in
-    Tensor.param ?input_dims:i ?output_dims:o ~t l
+    let t = Tensor.term ~grad_spec:Require_grad ~init_data:(Reshape ndarray) ?fetch_op:None in
+    Tensor.param ~t ?input_dims:i ?output_dims:o l
 
   (** See {!wrap}. *)
   let wrap_param ~l ?i ?o ndarray =
-    let t ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+    let t =
       Tensor.term ~grad_spec:Require_grad ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
-        ?label ?batch_dims ?batch_axes ?top_down_prec ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l
 end

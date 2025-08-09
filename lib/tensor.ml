@@ -28,6 +28,7 @@ module rec Self : sig
     diff : diff option;
     id : int;
     value : tn;
+    top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
   }
@@ -43,6 +44,7 @@ end = struct
     diff : diff option;
     id : int;
     value : tn;
+    top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
   }
@@ -233,9 +235,6 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
-let is_param t = Set.mem t.params t
-let is_top_down_prec t = is_param t
-
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
     ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape (orig_ts : t list) : t =
@@ -255,7 +254,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let _session_state_next_id : int = session_state.next_id in
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   (* Split subtensors by whether they use top-down precision inference *)
-  let top_down_ts, bottom_up_ts = List.partition_tf ordered_ts ~f:is_top_down_prec in
+  let top_down_ts, bottom_up_ts = List.partition_tf ordered_ts ~f:(fun t -> t.top_down_prec) in
   let default_prec =
     if top_down_prec then
       (* For top-down precision, don't promote from inputs *)
@@ -337,7 +336,18 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
-  let t = { params = Set.empty (module T); forward; diff = None; id; value = v; shape; children } in
+  let t =
+    {
+      params = Set.empty (module T);
+      forward;
+      diff = None;
+      id;
+      value = v;
+      top_down_prec;
+      shape;
+      children;
+    }
+  in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
@@ -408,7 +418,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
     let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
-    let tensor = { params; forward; diff; id; value = v; shape; children } in
+    let tensor = { params; forward; diff; id; value = v; top_down_prec; shape; children } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -424,43 +434,41 @@ type param_op_fun =
 
 type op_fun =
   ?label:string list ->
+  ?top_down_prec:bool ->
   ?batch_dims:int list ->
   ?batch_axes:(string * int) list ->
-  ?top_down_prec:bool ->
   param_op_fun
 
-let%track7_sexp binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?batch_dims
-    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-    () : t =
+let%track7_sexp binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?top_down_prec
+    ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
-  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec ~top_down_prec
+  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2 ]
 
-let%track7_sexp ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = []) ?batch_dims
-    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-    () : t =
+let%track7_sexp ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = [])
+    ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
+    ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
-  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec ~top_down_prec
+  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2; t3 ]
 
-let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?batch_dims
-    ?batch_axes ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced
-    () : t =
+let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?top_down_prec
+    ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
-  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ~top_down_prec
+  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1 ]
 
-let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?batch_axes
-    ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?top_down_prec ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -485,7 +493,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?batch_dims ?
   let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
   op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
-    ~top_down_prec make_shape []
+    ?top_down_prec make_shape []
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
@@ -493,7 +501,10 @@ let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c 
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
-  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
+  (* It's tempting to set top_down_prec to true for all terminal tensors including numbers. But it
+     would require complicating the precision inference mechanism, and would make it harder for
+     user-provided precisions to propagate. *)
+  let t = term ~label ~grad_spec ~top_down_prec:false ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
     | None -> t ~output_dims:[ 1 ] ()
@@ -521,8 +532,8 @@ let constant_fill ~debug values =
       Nd.set_flat_values nd values;
       (Some (Asgns.Reshape nd), None)
 
-let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch_axes
-    ?(top_down_prec = false) ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
+    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let num_label =
     String.concat ~sep:"," @@ List.map ~f:float_to_label @@ Fn.flip List.take 5
     @@ Array.to_list values
@@ -537,7 +548,7 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch
   let init_data, fetch_op = constant_fill ~debug:"Tensor.ndarray" values in
   (* Ideally, while the shape is known, the deduced argument will be used for verification. *)
   let t =
-    term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ~top_down_prec ?input_dims
+    term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
       ?output_dims ?input_axes ?output_axes ?deduced ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -547,10 +558,10 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?batch_dims ?batch
       Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
   t
 
-let term_init ?grad_spec values ?(label = []) ?batch_dims ?batch_axes ?(top_down_prec = false)
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () =
   let init_data, fetch_op = constant_fill ~debug:"Tensor.term_init" values in
-  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ~top_down_prec ?input_dims
+  term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
     ?output_dims ?input_axes ?output_axes ?deduced ()
 
 let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_dims ?input_axes
@@ -558,7 +569,7 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
   let t =
     t
       ?label:(Some (name :: more_label))
-      ?batch_dims:(Some []) ?batch_axes:None ?top_down_prec:(Some true) ?input_dims ?output_dims
+      ?top_down_prec:(Some true) ?batch_dims:(Some []) ?batch_axes:None ?input_dims ?output_dims
       ?input_axes ?output_axes ?deduced ()
   in
   let v = t.value in
