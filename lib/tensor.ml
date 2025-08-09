@@ -289,8 +289,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Shape.Fetch _) | None -> Tn.create ~default_prec ~id ~label ~dims ~padding ()
   in
   let update_infer_prec tn prec =
-    (* Instead of just checking prec, we cross-check with the array, to catch prec forcing bugs. *)
-    if not (Lazy.is_val tn.Tn.array) then Tn.update_infer_prec tn prec
+    (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
+       catch prec forcing bugs. *)
+    if not (Lazy.is_val tn.Tn.dims) then Tn.update_infer_prec tn prec
   in
   (* Apply delayed top-down precision updates to parameter subtensors *)
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti.value v.Tn.prec);
