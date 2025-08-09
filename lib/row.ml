@@ -894,6 +894,9 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
   match constr with
   | Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
     when is_stage2_up stage && Option.is_some (get_dim_val var) ->
+      if Utils.settings.debug_log_from_routines then
+        Stdio.printf "Line 895 case: stage=%s, is_stage2_up=%b\n"
+          (Sexp.to_string @@ sexp_of_stage stage) (is_stage2_up stage);
       let dim = Option.value_exn (get_dim_val var) in
       let tot = Utils.safe_force coeff * dim in
       reapply_rows_constr := true;
@@ -909,9 +912,9 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
     when not (equal_dim (Var var) (subst_in_dim (Var var))) -> (
       reapply_rows_constr := true;
       match subst_in_dim (Var var) with
-      | Dim { d; _ } as value ->
-          (* Replace (coeff * v / denom) with (coeff * d / denom) *)
-          let new_num = Utils.safe_force coeff * d in
+      | Dim { d; _ } as value when is_stage2_up stage ->
+          (* Stage 2+: Replace (coeff * v / denom) with (coeff * d / denom) *)
+         let new_num = Utils.safe_force coeff * d in
           if new_num % denom = 0 then
             Total_elems { numerator = Num_elems (new_num / denom); divided_by }
           else
@@ -920,6 +923,9 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
                  ( "s_dim_one_in_row_constr: Total_elems constraint failed: dimension is not \
                     divisible",
                    [ Dim_mismatch [ value ] ] )
+      | Dim _ ->
+          (* Stage 1: Don't force coeff yet, keep the constraint as-is *)
+          Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
       | Var v' -> Total_elems { numerator = Strided_var { coeff; var = v'; denom }; divided_by }
       | Conv_input _ ->
           (* FIXME: NOT IMPLEMENTED YET *)
