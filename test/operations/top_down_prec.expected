@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+┌────────────────────┐
+│[8]: *._d shape 0:1 │
+│┌┬──────┐           │
+│││axis 0│           │
+│├┼──────┤           │
+│││ 8.00 │           │
+│└┴──────┘           │
+└────────────────────┘
+grad_*._d <not-hosted>

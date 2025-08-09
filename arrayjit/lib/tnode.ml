@@ -436,6 +436,9 @@ let update_infer_prec tn delayed_prec =
         tn.delayed_prec_unsafe <-
           Default_spec (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
 
+let get_specified_prec tn =
+  match tn.delayed_prec_unsafe with Specified prec -> Some prec | _ -> None
+
 let exceeds_fp16_cutoff tn c =
   match Utils.settings.check_half_prec_constants_cutoff with
   | None -> false

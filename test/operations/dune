@@ -66,28 +66,59 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name top_down_prec)
+ (modules top_down_prec)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (rule
  (alias runtest)
  (target
   (dir build_files))
  (action
-  (run
-   %{dep:threefry4x32_demo.exe}
-   "--ocannl_output_prec_in_ll_files=true"
-   "--ocannl_output_debug_files_in_build_directory=true")))
+  (progn
+   (run
+    %{dep:threefry4x32_demo.exe}
+    "--ocannl_output_prec_in_ll_files=true"
+    "--ocannl_output_debug_files_in_build_directory=true"
+    "--ocannl_clean_up_artifacts_on_startup=false")
+   (run
+    %{dep:top_down_prec.exe}
+    "--ocannl_output_prec_in_ll_files=true"
+    "--ocannl_output_debug_files_in_build_directory=true"
+    "--ocannl_clean_up_artifacts_on_startup=false"))))
 
 (rule
- (deps "build_files/n3_fwd.ll")
- (target "n3_fwd_with_prec.ll.actual")
+ (deps "build_files/n3_fwd-unoptimized.ll")
+ (target "n3_fwd_with_prec-unoptimized.ll.actual")
  (action
-  (copy "build_files/n3_fwd.ll" "n3_fwd_with_prec.ll.actual")))
+  (copy
+   "build_files/n3_fwd-unoptimized.ll"
+   "n3_fwd_with_prec-unoptimized.ll.actual")))
 
 (rule
  (alias runtest)
  (action
   (diff
-   "n3_fwd_with_prec.ll.expected"
-   "n3_fwd_with_prec.ll.actual")))
+   "n3_fwd_with_prec-unoptimized.ll.expected"
+   "n3_fwd_with_prec-unoptimized.ll.actual")))
+
+(rule
+ (deps "build_files/d_fwd-unoptimized.ll")
+ (target "top_down_prec-unoptimized.ll.actual")
+ (action
+  (copy
+   "build_files/d_fwd-unoptimized.ll"
+   "top_down_prec-unoptimized.ll.actual")))
+
+(rule
+ (alias runtest)
+ (action
+  (diff
+   "top_down_prec-unoptimized.ll.expected"
+   "top_down_prec-unoptimized.ll.actual")))
 
 (test
  (name test_vec_simple)

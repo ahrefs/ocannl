@@ -254,20 +254,25 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let _session_state_next_id : int = session_state.next_id in
   let shape = make_shape ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id in
   (* Split subtensors by whether they use top-down precision inference *)
-  let top_down_ts, bottom_up_ts = List.partition_tf ordered_ts ~f:(fun t -> t.top_down_prec) in
-  let default_prec =
+  let top_down_ts = List.filter ordered_ts ~f:(fun t -> t.top_down_prec) in
+  let default_prec_for default get =
     if top_down_prec then
       (* For top-down precision, don't promote from inputs *)
-      lazy !default_value_prec
+      lazy default
     else
       (* For bottom-up precision, only promote from non-top-down subtensors *)
-      let lazy_v_precs = List.map bottom_up_ts ~f:(fun ti -> ti.value.prec) in
-      let default = !default_value_prec in
+      let lazy_v_precs =
+        List.filter_map ordered_ts ~f:(fun ti ->
+            Option.map (get ti) ~f:(fun v ->
+                if ti.top_down_prec then lazy (Tn.get_specified_prec v)
+                else lazy (Some (Lazy.force v.prec))))
+      in
       lazy
-        (List.map lazy_v_precs ~f:Lazy.force
+        (List.filter_map lazy_v_precs ~f:Lazy.force
         |> List.reduce ~f:Ir.Ops.promote_prec
         |> Option.value ~default)
   in
+  let default_prec = default_prec_for !default_value_prec (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
     match terminal_op with
@@ -357,20 +362,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
     t)
   else
-    let default_prec =
-      if top_down_prec then
-        (* For top-down precision, don't promote from inputs *)
-        lazy !default_grad_prec
-      else
-        (* For bottom-up precision, only promote from non-top-down subtensors *)
-        let f ti = Option.map ti.diff ~f:(fun d -> d.grad.Tn.prec) in
-        let lazy_g_precs = List.filter_map bottom_up_ts ~f in
-        let default = !default_grad_prec in
-        lazy
-          (List.map lazy_g_precs ~f:Lazy.force
-          |> List.reduce ~f:Ir.Ops.promote_prec
-          |> Option.value ~default)
-    in
+    let get ti = Option.map ti.diff ~f:(fun d -> d.grad) in
+    let default_prec = default_prec_for !default_grad_prec get in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
