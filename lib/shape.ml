@@ -704,12 +704,12 @@ let%debug4_sexp finish_inference (() : unit) : unit =
      constraints. *)
   let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
-  let unsolved =
-    List.concat_map
-      ~f:(fun update_step -> List.map ~f:(fun r -> Row.Shape_row r) @@ all_rows update_step)
-      !active_update_steps
-    @ unsolved
+  let all_update_rows =
+    List.concat_map ~f:all_rows !active_update_steps
+    |> List.map ~f:(Row.subst_row env)
+    |> List.dedup_and_sort ~compare:Row.compare
   in
+  let unsolved = List.map ~f:(fun r -> Row.Shape_row r) all_update_rows @ unsolved in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
