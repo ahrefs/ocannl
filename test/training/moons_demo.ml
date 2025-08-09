@@ -8,6 +8,7 @@ module Asgns = Ir.Assignments
 
 let main () =
   (* Micrograd half-moons example, single device/stream. *)
+  Utils.settings.fixed_state_for_init <- Some 11;
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
