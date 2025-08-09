@@ -203,7 +203,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   type r = Backend.context routine [@@deriving sexp_of]
 
-  let%track2_sexp sync_routine (r : r) : r =
+  let sync_routine (r : r) : r =
     let s = r.context.stream in
     let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
     let pre () =
