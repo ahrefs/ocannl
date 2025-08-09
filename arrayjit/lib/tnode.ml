@@ -372,7 +372,7 @@ let update_memory_sharing tn sharing provenance =
 let update_prec ?only_if tn prec =
   let do_update =
     match only_if with
-    | None -> false
+    | None -> true
     | Some cond -> (
         match tn.delayed_prec_unsafe with
         | Specified old_prec -> cond old_prec

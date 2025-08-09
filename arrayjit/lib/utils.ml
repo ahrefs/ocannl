@@ -966,10 +966,11 @@ type 'a safe_lazy = {
   mutable value : [ `Callback of unit -> 'a | `Value of 'a ];
   unique_id : string;
 }
+[@@deriving sexp_of]
 
 let safe_lazy unique_id f = { value = `Callback f; unique_id }
 
-let safe_force gated =
+let%track9_sexp safe_force gated =
   match gated.value with
   | `Value v -> v
   | `Callback f ->
