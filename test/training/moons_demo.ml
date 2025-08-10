@@ -8,7 +8,8 @@ module Asgns = Ir.Assignments
 
 let main () =
   (* Micrograd half-moons example, single device/stream. *)
-  Utils.settings.fixed_state_for_init <- Some 11;
+  let seed = 18 in
+  Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
@@ -18,9 +19,9 @@ let main () =
   let batch_size = 10 in
   let len = batch_size * 40 in
   let n_batches = 2 * len / batch_size in
-  let epochs = 60 in
+  let epochs = 80 in
   let steps = epochs * 2 * len / batch_size in
-  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 1 } in
+  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels =
     Datasets.Half_moons.generate_single_prec ~config:moons_config ~len ()
   in
