@@ -111,10 +111,11 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
     | Seq (t1, t2) -> loop t1 + loop t2
     | Block_comment (_, t) -> loop t
     | Accum_op { lhs; rhs; _ } ->
-        let rhses = match rhs with
-        | Unop { rhs; _ } -> [ of_node rhs ]
-        | Binop { rhs1; rhs2; _ } -> [ of_node rhs1; of_node rhs2 ]
-        | Ternop { rhs1; rhs2; rhs3; _ } -> [ of_node rhs1; of_node rhs2; of_node rhs3 ]
+        let rhses =
+          match rhs with
+          | Unop { rhs; _ } -> [ of_node rhs ]
+          | Binop { rhs1; rhs2; _ } -> [ of_node rhs1; of_node rhs2 ]
+          | Ternop { rhs1; rhs2; rhs3; _ } -> [ of_node rhs1; of_node rhs2; of_node rhs3 ]
         in
         Set.union_list (module Tn) (one lhs :: rhses)
     | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
@@ -136,10 +137,11 @@ let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
         (i1 + i2, o1 + o2 - (i1 + i2))
     | Block_comment (_, t) -> loop t
     | Accum_op { lhs; rhs; _ } ->
-        let inputs = match rhs with
-        | Unop { rhs; _ } -> of_node rhs
-        | Binop { rhs1; rhs2; _ } -> of_node rhs1 + of_node rhs2
-        | Ternop { rhs1; rhs2; rhs3; _ } -> of_node rhs1 + of_node rhs2 + of_node rhs3
+        let inputs =
+          match rhs with
+          | Unop { rhs; _ } -> of_node rhs
+          | Binop { rhs1; rhs2; _ } -> of_node rhs1 + of_node rhs2
+          | Ternop { rhs1; rhs2; rhs3; _ } -> of_node rhs1 + of_node rhs2 + of_node rhs3
         in
         (inputs, one lhs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
@@ -176,9 +178,7 @@ let%track4_sexp to_low_level code =
     in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
-    | Merge_buffer tn ->
-        (* FIXME: NOT IMPLEMENTED YET - need to handle merge buffer access differently now *)
-        Low_level.Get (tn, idcs)
+    | Merge_buffer tn -> Low_level.Get_merge_buffer (tn, idcs)
   in
   let set (tn : Tn.t) (idcs : Indexing.axis_index array) (llsc : Low_level.scalar_t) : Low_level.t =
     let idcs =
@@ -250,10 +250,11 @@ let%track4_sexp to_low_level code =
   and loop (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } ->
-        let op, rhses = match rhs with
-        | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
-        | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
-        | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
+        let op, rhses =
+          match rhs with
+          | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
+          | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
+          | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
         in
         loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections
     | Set_vec_unop { op; lhs; rhs; projections; _ } ->
@@ -390,13 +391,15 @@ let get_ident_within_code ?no_dots c =
         loop c2
     | Block_comment (_, c) -> loop c
     | Accum_op { lhs; rhs; _ } ->
-        let rhses = match rhs with
-        | Unop { rhs; _ } -> [ tn rhs ]
-        | Binop { rhs1; rhs2; _ } -> [ tn rhs1; tn rhs2 ]
-        | Ternop { rhs1; rhs2; rhs3; _ } -> [ tn rhs1; tn rhs2; tn rhs3 ]
+        let rhses =
+          match rhs with
+          | Unop { rhs; _ } -> [ tn rhs ]
+          | Binop { rhs1; rhs2; _ } -> [ tn rhs1; tn rhs2 ]
+          | Ternop { rhs1; rhs2; rhs3; _ } -> [ tn rhs1; tn rhs2; tn rhs3 ]
         in
         List.iter ~f:visit (lhs :: rhses)
-    | Set_vec_unop { op = _; lhs; rhs; projections = _; projections_debug = _ } -> List.iter ~f:visit [ lhs; tn rhs ]
+    | Set_vec_unop { op = _; lhs; rhs; projections = _; projections_debug = _ } ->
+        List.iter ~f:visit [ lhs; tn rhs ]
     | Fetch { array; fetch_op = _; dims = _ } -> visit array
   in
   loop c;
@@ -437,9 +440,9 @@ let to_doc ?name ?static_indices () c =
     | Seq (c1, c2) -> doc_of_code c1 ^^ doc_of_code c2
     | Block_comment (s, Noop) -> string ("# \"" ^ s ^ "\";") ^^ break 1
     | Block_comment (s, c) -> string ("# \"" ^ s ^ "\";") ^^ break 1 ^^ doc_of_code c
-    | Accum_op { initialize_neutral; accum; lhs; rhs; projections_debug; _ } ->
+    | Accum_op { initialize_neutral; accum; lhs; rhs; projections_debug; _ } -> (
         let proj_spec = projections_debug in
-        (match rhs with
+        match rhs with
         | Ternop { op; rhs1; rhs2; rhs3 } ->
             (* Uncurried syntax for ternary operations. *)
             string (ident lhs)
@@ -485,8 +488,7 @@ let to_doc ?name ?static_indices () c =
                 else empty)
             ^^ string ";" ^^ break 1)
     | Set_vec_unop { op; lhs; rhs; projections = _; projections_debug } ->
-        let proj_spec = projections_debug
-        in
+        let proj_spec = projections_debug in
         string (ident lhs)
         ^^ space
         ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral:false Arg2)
