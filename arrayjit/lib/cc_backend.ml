@@ -103,13 +103,21 @@ let get_global_run_id =
     if !next_id < 0 then next_id := 0;
     !next_id
 
-let%track7_sexp c_compile_and_load ~f_name =
-  let base_name : string = Stdlib.Filename.chop_extension f_name in
+let%track7_sexp c_compile_and_load ~f_path =
+  let base_name : string = Stdlib.Filename.chop_extension f_path in
   (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
      is not required to unload the library, although ideally it should. *)
   let run_id = Int.to_string @@ get_global_run_id () in
   let log_fname = base_name ^ "_run_id_" ^ run_id ^ ".log" in
-  let libname = base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so" in
+  let libname = 
+    let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
+    if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then
+      (* Use only the path from f_path for the linked library libname *)
+      base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so"
+    else
+      (* Use temp_file without the run_id component *)
+      Stdlib.Filename.temp_file file_stem (if Sys.win32 then ".dll" else ".so")
+  in
   (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags =
@@ -122,7 +130,7 @@ let%track7_sexp c_compile_and_load ~f_name =
     | _ -> "-shared -fPIC"
   in
   let cmdline : string =
-    Printf.sprintf "%s %s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_name
+    Printf.sprintf "%s %s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path
       (optimization_level ()) libname kernel_link_flags log_fname
   in
   let rc : int = Stdlib.Sys.command cmdline in
@@ -201,7 +209,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   build_file.finalize ();
 
   (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
-  let result_library = c_compile_and_load ~f_name:build_file.f_name in
+  let result_library = c_compile_and_load ~f_path:build_file.f_path in
   { result = result_library; params; bindings; name }
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) :
@@ -228,7 +236,7 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
   let final_doc = PPrint.(header_doc ^^ declarations_doc ^^ separate hardline all_proc_docs) in
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
-  let result_library = c_compile_and_load ~f_name:build_file.f_name in
+  let result_library = c_compile_and_load ~f_path:build_file.f_path in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
   Array.mapi params_and_docs ~f:(fun i opt_params_and_doc ->
       Option.bind opt_params_and_doc ~f:(fun (params, _doc) ->

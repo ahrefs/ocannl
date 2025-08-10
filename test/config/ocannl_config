@@ -7,3 +7,5 @@ print_decimals_precision=2
 prefer_backend_uniformity=true
 default_prec=single
 fixed_state_for_init=42
+# Don't delete files as they might be needed by follow-up rules.
+clean_up_artifacts_on_startup=false

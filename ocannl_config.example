@@ -82,6 +82,11 @@ cc_backend_optimization_level=3
 # By default, `ocamlc -config` field `c_compiler` is used.
 cc_backend_compiler_command=
 
+# If true, compiled dynamic libraries (.dll/.so files) for the CC backend are placed 
+# in the build_files directory using the source file path. If false, temporary files
+# are used for the dynamic libraries (default behavior).
+output_dlls_in_build_directory=false
+
 
 # Only tensor nodes with up to this many visits per array cell (in a dedicated interpreter)
 # can be inlined. Values worth considering: 0 (disables inlining) to 3.

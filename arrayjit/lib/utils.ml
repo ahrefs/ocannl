@@ -775,20 +775,20 @@ let tl_exn = function
   | Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn")
   | Cons { tl; _ } -> tl
 
-type build_file_channel = { f_name : string; oc : Stdlib.out_channel; finalize : unit -> unit }
+type build_file_channel = { f_path : string; oc : Stdlib.out_channel; finalize : unit -> unit }
 
 let open_build_file ~base_name ~extension : build_file_channel =
-  let f_name =
+  let f_path =
     if settings.output_debug_files_in_build_directory then build_file @@ base_name ^ extension
     else Stdlib.Filename.temp_file (base_name ^ "_") extension
   in
-  (* (try Stdlib.Sys.remove f_name with _ -> ()); *)
-  let oc = Out_channel.open_text f_name in
+  (* (try Stdlib.Sys.remove f_path with _ -> ()); *)
+  let oc = Out_channel.open_text f_path in
   let finalize () =
     Stdio.Out_channel.flush oc;
     Stdio.Out_channel.close oc
   in
-  { f_name; oc; finalize }
+  { f_path; oc; finalize }
 
 let captured_log_prefix = ref "!@#"
 
