@@ -12,6 +12,8 @@ module Config = struct
   let default = { noise_range = 0.1; seed = None }
 end
 
+module Random = Rand.Random_for_tests
+
 (** Internal helper function to generate half moons with specified precision.
 
     @param kind The bigarray kind (float32 or float64)
@@ -26,7 +28,7 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
   (* Initialize random seed if specified *)
   (match config.seed with Some seed -> Random.init seed | None -> ());
 
-  let noise () = Random.float (2.0 *. config.noise_range) -. config.noise_range in
+  let noise () = Random.float_range ~-.(config.noise_range) config.noise_range in
   let total_samples = len * 2 in
 
   (* Create bigarrays with batch axis first, then output axis *)
@@ -51,7 +53,7 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
     let c = Float.cos v and s = Float.sin v in
     let x = 1.0 -. c +. noise () in
     let y = 0.5 -. s +. noise () in
-    let idx = i * 2 + 1 in
+    let idx = (i * 2) + 1 in
     Genarray.set coordinates [| idx; 0 |] x;
     Genarray.set coordinates [| idx; 1 |] y;
     Genarray.set labels [| idx; 0 |] (-1.0)
@@ -90,7 +92,7 @@ let generate_single_prec ?(config = Config.default) ~len () =
     @param noise_range Range of noise to add
     @return A tuple of (coordinates_array, labels_array) as flat arrays *)
 let generate_arrays ?(noise_range = 0.1) ~len () =
-  let noise () = Random.float (2.0 *. noise_range) -. noise_range in
+  let noise () = Random.float_range ~-.noise_range noise_range in
   let coordinates =
     Array.concat
       (Array.to_list
