@@ -57,7 +57,8 @@ let main () =
       (module Backend)
       ()
   in
-  (* let epoch_loss = List.hd_exn rev_epoch_losses in *)
+  let epoch_loss = List.hd_exn rev_epoch_losses in
+  Stdio.printf "Epoch loss: %f\n%!" epoch_loss;
   (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n"
   else *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in

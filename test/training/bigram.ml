@@ -25,8 +25,8 @@ let tensor_of_int_list lst =
   TDSL.rebatch ~l:"tensor" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
 
 let () =
-  let seed = 13 in
-  Utils.settings.fixed_state_for_init <- Some seed;
+  Utils.settings.fixed_state_for_init <- Some 13;
+  Tensor.unsafe_reinitialize ();
 
   let bigrams = Datasets.Names.get_all_bigrams () |> Datasets.Names.bigrams_to_indices in
   Stdio.printf "bigrams: %d\n%!" (List.length bigrams);
