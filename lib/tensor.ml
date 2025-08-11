@@ -462,8 +462,8 @@ let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
        ())
     [ t1 ]
 
-let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?top_down_prec ?batch_dims
-    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_prec = true)
+    ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =
     match (init_data, fetch_op) with
     | Some _, Some _ -> invalid_arg "Tensor.term: both init_data and fetch_op are provided"
@@ -488,7 +488,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?top_down_pre
   let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
   op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
-    ?top_down_prec make_shape []
+    ~top_down_prec make_shape []
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
@@ -496,10 +496,7 @@ let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c 
   (* Note: no axis label so that we do not conflict with user labels. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
-  (* It's tempting to set top_down_prec to true for all terminal tensors including numbers. But it
-     would require complicating the precision inference mechanism, and would make it harder for
-     user-provided precisions to propagate. *)
-  let t = term ~label ~grad_spec ~top_down_prec:false ~batch_dims:[] ~input_dims:[] ~fetch_op in
+  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_label with
     | None -> t ~output_dims:[ 1 ] ()
