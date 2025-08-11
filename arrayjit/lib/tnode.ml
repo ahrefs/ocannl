@@ -584,25 +584,27 @@ end)
 
 let registry = Registry.create 16
 
+let prec_of_dalayed tn =
+  match tn.delayed_prec_unsafe with Default prec | Specified prec | Inferred (lazy prec) -> prec
+
 let create delayed_prec ~id ~label ~dims ~padding () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let rec array =
     lazy
       (if is_hosted_force tn 30 then
          Some
-           (Nd.create_array ~debug (Lazy.force prec) ~dims:(Lazy.force dims)
+           (Nd.create_array ~debug (Lazy.force tn.prec) ~dims:(Lazy.force dims)
               ~padding:(Lazy.force padding))
        else None)
-  and prec =
+  and size_in_bytes =
     lazy
-      (match tn.delayed_prec_unsafe with
-      | Default prec | Specified prec | Inferred (lazy prec) -> prec)
-  and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
+      (let n = num_elems tn in
+       n * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
     {
       array;
       delayed_prec_unsafe = delayed_prec;
-      prec;
+      prec = lazy (prec_of_dalayed tn);
       dims;
       padding;
       size_in_bytes;
@@ -626,11 +628,11 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
   let dims_val = Nd.dims ndarray in
   let prec_val = Nd.get_prec ndarray in
   let size_in_bytes = lazy (Nd.size_in_bytes ndarray) in
-  let tn =
+  let rec tn =
     {
       array = lazy (Some ndarray);
       delayed_prec_unsafe = Specified prec_val;
-      prec = lazy prec_val;
+      prec = lazy (prec_of_dalayed tn);
       dims = lazy dims_val;
       padding = lazy padding;
       size_in_bytes;
@@ -694,13 +696,15 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
            let source = Nd.reshape base_ndarray data_dims in
            Nd.copy_with_padding ~source ~target ~padding;
            Some target)
-  and prec = lazy prec_val
-  and size_in_bytes = lazy (num_elems tn * Ops.prec_in_bytes (Lazy.force tn.prec))
+  and size_in_bytes =
+    lazy
+      (let n = num_elems tn in
+       n * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
     {
       array;
       delayed_prec_unsafe = Specified prec_val;
-      prec;
+      prec = lazy (prec_of_dalayed tn);
       dims;
       padding;
       size_in_bytes;

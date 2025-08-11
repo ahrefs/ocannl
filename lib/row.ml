@@ -293,9 +293,12 @@ let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
 let total_elems_to_string = function
   | Num_elems n -> Int.to_string n
   | Strided_var { coeff; var; denom } ->
+      let coeff_string =
+        if Utils.is_safe_val coeff then Int.to_string (Utils.safe_force coeff) else coeff.unique_id
+      in
       let var_str = match var.label with Some l -> l | None -> "$" ^ Int.to_string var.id in
-      if denom = 1 then [%string "%{Utils.safe_force coeff#Int}*%{var_str}"]
-      else [%string "(%{Utils.safe_force coeff#Int}*%{var_str})/%{denom#Int}"]
+      if denom = 1 then [%string "%{coeff_string}*%{var_str}"]
+      else [%string "(%{coeff_string}*%{var_str})/%{denom#Int}"]
 
 let total_elems_divide t d =
   if d <= 0 then raise @@ Shape_error ([%string "Division by non-positive number: %{d#Int}"], [])
@@ -440,7 +443,7 @@ let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
           None)
   | ( Total_elems { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 },
       constr2 )
-    when List.mem vars1 v1 ~equal:equal_dim_var ->
+    when List.mem vars1 v1 ~equal:equal_dim_var && late ->
       (* Variable appears in both numerator and denominator, they cancel out *)
       (* (c1 * v1 / d1) / (... * v1 * ...) = c1 / (d1 * ... * ...) *)
       let vars1' = remove_var v1 vars1 in
@@ -450,7 +453,7 @@ let rec row_conjunction ?(id = phantom_row_id) stage constr1 constr2 =
   | ( constr2,
       Total_elems
         { numerator = Strided_var { coeff = c1; var = v1; denom = _ }; divided_by = vars1 } )
-    when List.mem vars1 v1 ~equal:equal_dim_var ->
+    when List.mem vars1 v1 ~equal:equal_dim_var && late ->
       let vars1' = remove_var v1 vars1 in
       row_conjunction ~id stage
         (Total_elems { numerator = Num_elems (Utils.safe_force c1); divided_by = vars1' })

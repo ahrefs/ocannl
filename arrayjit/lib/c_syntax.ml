@@ -682,8 +682,8 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     match vcomp with
     | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
-        let num_typ = string (B.typ_of_prec @@ Lazy.force scope_prec) in
         let scope_prec = Lazy.force scope_prec in
+        let num_typ = string (B.typ_of_prec scope_prec) in
         let init_zero =
           (* TODO(#340): only do this in the rare cases where the computation is accumulating *)
           let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
@@ -702,18 +702,20 @@ module C_syntax (B : C_syntax_config) = struct
         (empty, expr)
     | Get_merge_buffer (source, idcs) ->
         let tn = source in
+        let dims = Lazy.force tn.dims in
         let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let offset_doc = pp_array_offset (idcs, dims) in
         let expr =
           string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
         in
         (empty, expr)
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
+        let dims = Lazy.force tn.dims in
         let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let offset_doc = pp_array_offset (idcs, Lazy.force tn.dims) in
+        let offset_doc = pp_array_offset (idcs, dims) in
         let expr = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
         (empty, expr)
     | Constant c ->
@@ -776,8 +778,8 @@ module C_syntax (B : C_syntax_config) = struct
         (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
     | Get_merge_buffer (source, idcs) ->
         let tn = source in
-        let from_prec = Lazy.force tn.prec in
         let dims = Lazy.force tn.dims in
+        let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
         let access_doc =
@@ -792,8 +794,8 @@ module C_syntax (B : C_syntax_config) = struct
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
-        let from_prec = Lazy.force tn.prec in
         let dims = Lazy.force tn.dims in
+        let from_prec = Lazy.force tn.prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
         let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in

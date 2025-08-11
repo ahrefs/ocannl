@@ -289,8 +289,8 @@ let%track4_sexp to_low_level code =
           let length =
             match op with
             | Ops.Uint4x32_to_prec_uniform -> (
-                (* Calculate length based on precision - how many values we can extract from 128
-                   bits *)
+                (* Prevent over-eager guard against forcing precision. *)
+                ignore (Lazy.force lhs.dims);
                 let target_prec = Lazy.force lhs.prec in
                 match target_prec with
                 | Ops.Byte_prec _ | Ops.Fp8_prec _ -> 16 (* 8-bit values *)

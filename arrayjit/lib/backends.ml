@@ -101,8 +101,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
   let%track2_sexp init_from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, None ->
+        let dims = Lazy.force tn.dims in
         let dst =
-          Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims:(Lazy.force tn.dims) ctx.stream
+          Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims ctx.stream
         in
         wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
@@ -190,9 +191,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   ^ " already in output context " ^ Backend.get_name dst.stream ^ ", for stream "
                   ^ Backend.get_name src.stream)
           | None ->
+              let dims = Lazy.force tn.dims in
               let d_arr =
-                Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims:(Lazy.force tn.dims)
-                  dst.stream
+                Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims dst.stream
               in
               Backend.(
                 device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
@@ -472,9 +473,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       [%log Tn.debug_name key];
       [%log (key : Tnode.t)];
       let default () =
-        let dst_ptr =
-          alloc_zero_init_array (Lazy.force key.prec) ~dims:(Lazy.force key.dims) stream
-        in
+        let dims = Lazy.force key.dims in
+        let dst_ptr = alloc_zero_init_array (Lazy.force key.prec) ~dims stream in
         (if Utils.settings.automatic_host_transfers && Tn.known_constant key then
            match key.array with
            | (lazy (Some hosted)) ->
