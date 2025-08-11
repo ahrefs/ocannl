@@ -13,14 +13,14 @@ module type Backend = Ir.Backend_intf.Backend
 
 let tensor_of_int_list lst =
   let len = List.length lst in
-  let arr = lst |> List.map ~f:Float.of_int |> Array.of_list in
+  let arr = lst |> Array.of_list in
   (* Metal backend doesn't support double precision. *)
   let genarray =
     Genarray.create Bigarray.Float32 Bigarray.c_layout [| len; Datasets.Names.dict_size |]
   in
   (* convert to one-hot vectors *)
   for i = 0 to len - 1 do
-    Genarray.set genarray [| i; Int.of_float arr.(i) |] 1.
+    Genarray.set genarray [| i; arr.(i) |] 1.
   done;
   TDSL.rebatch ~l:"tensor" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
 
