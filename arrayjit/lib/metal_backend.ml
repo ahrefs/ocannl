@@ -628,7 +628,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_2;
       Me.CompileOptions.set_enable_logging options true)
     else
-      Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_0
+      Me.CompileOptions.set_language_version options Me.CompileOptions.LanguageVersion.version_3_1
+      (* Version 3.1 is required for the `bfloat` type (bfloat16 precision). *)
       (* Logging is disabled by default in CompileOptions, so no need to explicitly set it to
          false *);
 
