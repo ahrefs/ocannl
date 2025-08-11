@@ -508,7 +508,7 @@ let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c 
   Tn.update_memory_mode t.value Effectively_constant 24;
   (* FIXME: make this always pick a matching precision. *)
   Ir.Ops.(
-    if Tn.exceeds_fp16_cutoff t.value c then Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
+    if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
   t
 
 let constant_fill ~debug values =
@@ -549,8 +549,8 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
   Tn.update_memory_mode t.value Effectively_constant 24;
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
   Ir.Ops.(
-    if Tn.exceeds_fp16_cutoff t.value max_abs then
-      Tn.update_prec ~only_if:is_up_to_fp16 t.value single);
+    if exceeds_fp16_cutoff max_abs then
+      Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
   t
 
 let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims

@@ -420,43 +420,46 @@ let update_prec ?only_if tn prec =
           tn.delayed_prec_unsafe <- (if cond old_prec then Specified prec else Default old_prec)
       | _ -> tn.delayed_prec_unsafe <- Specified prec
 
-let update_infer_prec tn delayed_prec =
-  if Lazy.is_val tn.prec then
-    raise
-    @@ Utils.User_error
-         (String.concat
-            [
-              "Tnode.update_infer_prec: cannot update precision for ";
-              debug_name tn;
-              " because it has already been forced";
-            ])
-  else
-    match tn.delayed_prec_unsafe with
-    | Specified _ -> () (* User-specified precision has higher priority *)
-    | Default _ -> tn.delayed_prec_unsafe <- Inferred delayed_prec
-    | Inferred old_prec ->
-        (* Combine with existing inferred precision via promotion *)
-        tn.delayed_prec_unsafe <-
-          Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
+let update_infer_prec ?only_if tn delayed_prec =
+  let do_update =
+    match only_if with
+    | None -> true
+    | Some cond -> (
+        match tn.delayed_prec_unsafe with
+        | Specified old_prec -> cond old_prec
+        | Default old_prec -> cond old_prec
+        | Inferred old_prec when Lazy.is_val old_prec -> cond @@ Lazy.force old_prec
+        | _ -> true)
+  in
+  if do_update then
+    if Lazy.is_val tn.prec then
+      raise
+      @@ Utils.User_error
+           (String.concat
+              [
+                "Tnode.update_infer_prec: cannot update precision for ";
+                debug_name tn;
+                " because it has already been forced";
+              ])
+    else
+      match (tn.delayed_prec_unsafe, only_if) with
+      | Specified _, _ -> () (* User-specified precision has higher priority *)
+      | Default old_prec, Some cond ->
+          tn.delayed_prec_unsafe <-
+            (if cond old_prec then Inferred delayed_prec else Default old_prec)
+      | Default _, None -> tn.delayed_prec_unsafe <- Inferred delayed_prec
+      | Inferred old_prec, Some cond ->
+          tn.delayed_prec_unsafe <-
+            Inferred
+              (lazy
+                (let old = Lazy.force old_prec in
+                 if cond old then Ops.promote_prec old (Lazy.force delayed_prec) else old))
+      | Inferred old_prec, None ->
+          tn.delayed_prec_unsafe <-
+            Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec)))
 
 let get_specified_prec tn =
   match tn.delayed_prec_unsafe with Specified prec -> Some prec | _ -> None
-
-let exceeds_fp16_cutoff tn c =
-  match Utils.settings.check_half_prec_constants_cutoff with
-  | None -> false
-  | Some cutoff ->
-      (* Only force if needed. *)
-      Float.(abs c >= cutoff)
-      &&
-      let prec =
-        if Lazy.is_val tn.prec then Lazy.force tn.prec
-        else
-          match tn.delayed_prec_unsafe with
-          | Specified prec | Default prec -> prec
-          | Inferred prec -> Lazy.force prec
-      in
-      Ops.is_up_to_fp16 prec
 
 include Comparator.Make (struct
   type nonrec t = t

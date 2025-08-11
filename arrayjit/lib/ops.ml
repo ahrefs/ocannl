@@ -49,8 +49,13 @@ let single = Single_prec Single
 let double = Double_prec Double
 
 let is_up_to_fp16 = function
-  | Half_prec _ | Byte_prec _ | Bfloat16_prec _ | Fp8_prec _ -> true
-  | _ -> false
+  | Half_prec _ | Byte_prec _ | Fp8_prec _ -> true
+  | _ (* includes Bfloat16_prec *) -> false
+
+let exceeds_fp16_cutoff c =
+  match Utils.settings.check_half_prec_constants_cutoff with
+  | None -> false
+  | Some cutoff -> Float.(abs c >= cutoff)
 
 let sexp_of_prec = function
   | Void_prec -> Sexp.Atom "Void_prec"
@@ -598,7 +603,7 @@ let unop_c_syntax prec op =
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
 
 let vec_unop_c_syntax prec op =
-  match op, prec with
+  match (op, prec) with
   | Uint4x32_to_prec_uniform, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform not supported for Uint4x32"
   | Uint4x32_to_prec_uniform, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
