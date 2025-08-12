@@ -347,11 +347,9 @@ let fma ?(label = []) ~grad_spec t1 t2 t3 =
 let where ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
   let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
-  (* Just to illustrate that both [0] and [!..0] are handled. *)
-  let zero_cst = 0 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
     g2 =+ where v1 g 0;
-    g3 =+ where v1 !..zero_cst g
+    g3 =+ where v1 0 g
   in
   Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3

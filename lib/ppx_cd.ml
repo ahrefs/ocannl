@@ -65,8 +65,16 @@ let make_vb ~loc ~name ~name_expr ~hint_label =
   vb
 
 (** The expression argument is of type: [Assignments.t]. *)
-let assignment ~punned ~lhs ~rhses body =
+let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   let setups = lhs :: rhses in
+  let body, is_for_lhs =
+    match (body_for_lhs, raw_body) with
+    | Some body_for_lhs, None ->
+        let loc = body_for_lhs.pexp_loc in
+        ([%expr Option.value ~default:Ir.Assignments.Noop [%e body_for_lhs]], true)
+    | None, Some raw_body -> (raw_body, false)
+    | _ -> assert false
+  in
   let loc = body.pexp_loc in
   let forward_args = List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop) in
   let vbs, body =
@@ -107,9 +115,18 @@ let assignment ~punned ~lhs ~rhses body =
     List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
         [%expr [%e x] :: [%e xs]])
   in
-  let expr = [%expr Ir.Assignments.sequence [%e comps]] in
+  let body = [%expr Ir.Assignments.sequence [%e comps]] in
+  let body =
+    if List.is_empty tensor_vbs then body else A.Exp.let_ ~loc Nonrecursive tensor_vbs body
+  in
   let expr =
-    if List.is_empty tensor_vbs then expr else A.Exp.let_ ~loc Nonrecursive tensor_vbs expr
+    if is_for_lhs then
+      [%expr
+        Option.value
+          ~default:
+            Ir.Assignments.{ asgns = Noop; embedded_nodes = Base.Set.empty (module Ir.Tnode) }
+        @@ Option.map [%e lhs.array_opt] ~f:(fun lhs -> [%e body])]
+    else body
   in
   {
     vbs;
@@ -519,23 +536,22 @@ let translate ?ident_label (expr : expression) : result =
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
       (* FIXME: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
-         eliding the code. *)
-      let body =
+         eliding the code, only lhs should decide whether to elide the code. *)
+      let body_for_lhs =
         [%expr
-          Option.value ~default:Ir.Assignments.Noop
-          @@ Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
-               ~f:(fun rhs1 rhs2 rhs3 ->
-                 Ir.Assignments.Accum_op
-                   {
-                     initialize_neutral = [%e initialize_neutral];
-                     accum = [%e accu_op];
-                     lhs = Option.value_exn [%e setup_l.array_opt];
-                     rhs = Ternop { op = [%e tern_op]; rhs1; rhs2; rhs3 };
-                     projections = [%e projections_lazy];
-                     projections_debug = [%e projections_debug];
-                   })]
+          Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
+            ~f:(fun rhs1 rhs2 rhs3 ->
+              Ir.Assignments.Accum_op
+                {
+                  initialize_neutral = [%e initialize_neutral];
+                  accum = [%e accu_op];
+                  lhs;
+                  rhs = Ternop { op = [%e tern_op]; rhs1; rhs2; rhs3 };
+                  projections = [%e projections_lazy];
+                  projections_debug = [%e projections_debug];
+                })]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] ~body_for_lhs ()
     in
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
@@ -582,24 +598,22 @@ let translate ?ident_label (expr : expression) : result =
             in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
-      (* TODO: might be better to treat missing [rhs1, rhs2] as zeros or errors rather than eliding
-         the code. *)
-      let body =
+      (* FIXME: might be better to treat missing [rhs1, rhs2] as zeros or errors rather than eliding
+         the code, only lhs should decide whether to elide the code. *)
+      let body_for_lhs =
         [%expr
-          Option.value ~default:Ir.Assignments.Noop
-          @@ Option.map3 [%e setup_l.array_opt] [%e setup_r1.array_opt] [%e setup_r2.array_opt]
-               ~f:(fun lhs rhs1 rhs2 ->
-                 Ir.Assignments.Accum_op
-                   {
-                     initialize_neutral = [%e initialize_neutral];
-                     accum = [%e accu_op];
-                     lhs;
-                     rhs = Binop { op = [%e bin_op]; rhs1; rhs2 };
-                     projections = [%e projections_lazy];
-                     projections_debug = [%e projections_debug];
-                   })]
+          Option.map2 [%e setup_r1.array_opt] [%e setup_r2.array_opt] ~f:(fun rhs1 rhs2 ->
+              Ir.Assignments.Accum_op
+                {
+                  initialize_neutral = [%e initialize_neutral];
+                  accum = [%e accu_op];
+                  lhs;
+                  rhs = Binop { op = [%e bin_op]; rhs1; rhs2 };
+                  projections = [%e projections_lazy];
+                  projections_debug = [%e projections_debug];
+                })]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] ~body_for_lhs ()
     in
     let process_assign_unop ~accu_op ~lhs ~un_op ~rhs ?projections ~proj_in_scope () =
       let initialize_neutral, accum = assignment_op accu_op in
@@ -644,23 +658,22 @@ let translate ?ident_label (expr : expression) : result =
             in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
-      (* TODO: might be better to treat missing [rhs] as zeros or errors rather than eliding the
-         code. *)
-      let body =
+      (* FIXME: might be better to treat missing [rhs] as zeros or errors rather than eliding the
+         code, only lhs should decide whether to elide the code. *)
+      let body_for_lhs =
         [%expr
-          Option.value ~default:Ir.Assignments.Noop
-          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Ir.Assignments.Accum_op
-                   {
-                     initialize_neutral = [%e initialize_neutral];
-                     accum = [%e accum];
-                     lhs;
-                     rhs = Unop { op = [%e op]; rhs };
-                     projections = [%e projections_lazy];
-                     projections_debug = [%e projections_debug];
-                   })]
+          Option.map [%e setup_r.array_opt] ~f:(fun rhs ->
+              Ir.Assignments.Accum_op
+                {
+                  initialize_neutral = [%e initialize_neutral];
+                  accum = [%e accum];
+                  lhs;
+                  rhs = Unop { op = [%e op]; rhs };
+                  projections = [%e projections_lazy];
+                  projections_debug = [%e projections_debug];
+                })]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] ~body_for_lhs ()
     in
     let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
       (* Vector unary operations do not have accumulation, they directly set values *)
@@ -700,20 +713,19 @@ let translate ?ident_label (expr : expression) : result =
             in
             (proj_lazy, [%expr projections.Tensor.projections_debug])
       in
-      let body =
+      let body_for_lhs =
         [%expr
-          Option.value ~default:Ir.Assignments.Noop
-          @@ Option.map2 [%e setup_l.array_opt] [%e setup_r.array_opt] ~f:(fun lhs rhs ->
-                 Ir.Assignments.Set_vec_unop
-                   {
-                     lhs;
-                     op = [%e op];
-                     rhs;
-                     projections = [%e projections_lazy];
-                     projections_debug = [%e projections_debug];
-                   })]
+          Option.map [%e setup_r.array_opt] ~f:(fun rhs ->
+              Ir.Assignments.Set_vec_unop
+                {
+                  lhs;
+                  op = [%e op];
+                  rhs;
+                  projections = [%e projections_lazy];
+                  projections_debug = [%e projections_debug];
+                })]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] ~body_for_lhs ()
     in
     let process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
@@ -726,7 +738,7 @@ let translate ?ident_label (expr : expression) : result =
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
       let t2_expr, rhs2_is_grad, rhs2_is_merge = args_for ~loc setup_r2 in
       let t3_expr, rhs3_is_grad, rhs3_is_merge = args_for ~loc setup_r3 in
-      let body =
+      let raw_body =
         [%expr
           Tensor.raw_ternop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op]
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e tern_op] ~t1:[%e t1_expr]
@@ -734,7 +746,7 @@ let translate ?ident_label (expr : expression) : result =
             ~rhs2_is_grad:[%e rhs2_is_grad] ~rhs2_is_merge:[%e rhs2_is_merge] ~t3:[%e t3_expr]
             ~rhs3_is_grad:[%e rhs3_is_grad] ~rhs3_is_merge:[%e rhs3_is_merge] ~logic:[%e logic]]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2; setup_r3 ] ~raw_body ()
     in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
@@ -745,14 +757,14 @@ let translate ?ident_label (expr : expression) : result =
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
       let t2_expr, rhs2_is_grad, rhs2_is_merge = args_for ~loc setup_r2 in
-      let body =
+      let raw_body =
         [%expr
           Tensor.raw_binop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op]
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e bin_op] ~t1:[%e t1_expr]
             ~rhs1_is_grad:[%e rhs1_is_grad] ~rhs1_is_merge:[%e rhs1_is_merge] ~t2:[%e t2_expr]
             ~rhs2_is_grad:[%e rhs2_is_grad] ~rhs2_is_merge:[%e rhs2_is_merge] ~logic:[%e logic]]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r1; setup_r2 ] ~raw_body ()
     in
     let process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
@@ -761,13 +773,13 @@ let translate ?ident_label (expr : expression) : result =
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
-      let body =
+      let raw_body =
         [%expr
           Tensor.raw_unop ~initialize_neutral:[%e initialize_neutral] ~accum:[%e accu_op]
             ~t:[%e t_expr] ~lhs_is_grad:[%e lhs_is_grad] ~op:[%e un_op] ~t1:[%e t1_expr]
             ~rhs_is_grad:[%e rhs_is_grad] ~rhs_is_merge:[%e rhs_is_merge] ~logic:[%e logic]]
       in
-      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] body
+      assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] ~raw_body ()
     in
     match expr with
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
