@@ -105,6 +105,11 @@ inline_scalar_constexprs=true
 # scalar constant expressions, regardless of accesses, it will be inlined.
 inline_simple_computations=true
 
+# If true, virtualize_max_visits only counts accesses that are not used for assignment of
+# the same cell (typically accumulation). Otherwise, all accesses are counted, so computations
+# that reduce an axis will rarely be inlined.
+inline_complex_computations=true
+
 # The random number library. Options: `stdlib` -- `Base.Random`;
 # `for_tests` -- simplistic randomness with 32 bit seed, focused on reproducibility.
 randomness_lib=stdlib

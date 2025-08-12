@@ -220,6 +220,9 @@ let is_complex_comp traced_store llsc =
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
+  let inline_complex_computations =
+    Utils.get_global_flag ~default:true ~arg_name:"inline_complex_computations"
+  in
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   (* FIXME: migrate hashtable to use offsets instead of indices *)
   let lookup env indices =
@@ -256,7 +259,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
     | Set { tn; idcs; llsc; debug = _ } ->
-        loop_scalar env llsc;
+        loop_scalar env (Some (lookup env idcs)) llsc;
         let traced : traced_array = get_node traced_store tn in
         if
           Hash_set.is_empty traced.assignments
@@ -280,7 +283,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
                   let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
                   assert (Tn.equal old_tn tn)))
     | Set_from_vec { tn; idcs; length; vec_unop = _; arg; debug = _ } ->
-        loop_scalar env arg;
+        loop_scalar env (Some (lookup env idcs)) arg;
         let traced : traced_array = get_node traced_store tn in
         (* Vector operations cannot be scalar constexpr *)
         traced.is_scalar_constexpr <- false;
@@ -323,18 +326,23 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               List.iter symbols ~f:(fun (_, s) ->
                   let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
                   assert (Tn.equal old_tn tn)))
-    | Set_local (_, llsc) -> loop_scalar env llsc
+    | Set_local (_, llsc) -> loop_scalar env None llsc
     | Comment _ -> ()
     | Staged_compilation _ -> ()
-  and loop_scalar env llsc =
-    let loop = loop_scalar env in
+  and loop_scalar env (access_pos : int array option) llsc =
+    let loop = loop_scalar env access_pos in
     match llsc with
     | Constant _ -> ()
     | Get (ptr, indices) ->
         let traced : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
-        Hashtbl.update traced.accesses at_pos
-          ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
+        if
+          (not inline_complex_computations)
+          || Option.value_map access_pos ~default:true ~f:(fun pos ->
+                 not ([%equal: int array] pos at_pos))
+        then
+          Hashtbl.update traced.accesses at_pos
+            ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
     | Local_scope { body; _ } -> loop_proc ~first_visit:true env body
     | Get_local _ -> ()
     | Get_merge_buffer (source, _) ->
