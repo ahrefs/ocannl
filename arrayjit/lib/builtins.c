@@ -806,18 +806,28 @@ CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value 
   {
     caml_failwith("Padding array length mismatch");
   }
-  // FIXME: this is a memory leak
   intnat *left = malloc(ndim * sizeof(intnat));
-  intnat *right = malloc(ndim * sizeof(intnat));
-  if (left == NULL || right == NULL)
+  if (left == NULL)
+  {
     caml_failwith("Malloc failed");
+  }
+  intnat *right = malloc(ndim * sizeof(intnat));
+  if (right == NULL)
+  {
+    free(left);
+    caml_failwith("Malloc failed");
+  }
   for (int d = 0; d < ndim; d++)
   {
     value pad = Field(v_padding, d);
     left[d] = Long_val(Field(pad, 0));
     right[d] = Long_val(Field(pad, 1));
     if (left[d] < 0 || right[d] < 0)
+    {
+      free(left);
+      free(right);
       caml_failwith("Negative padding");
+    }
   }
 
   // Verify target dimensions match source + padding
@@ -825,6 +835,8 @@ CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value 
   {
     if (target_ba->dim[d] != source_shape[d] + left[d] + right[d])
     {
+      free(left);
+      free(right);
       caml_failwith("Target dimensions do not match source + padding");
     }
   }
@@ -832,7 +844,11 @@ CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value 
   // Multi-dimensional index loop
   intnat *indices = calloc(ndim, sizeof(intnat));
   if (indices == NULL)
+  {
+    free(left);
+    free(right);
     caml_failwith("Calloc failed");
+  }
 
   while (1)
   {
