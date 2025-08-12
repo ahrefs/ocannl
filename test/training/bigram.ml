@@ -59,9 +59,8 @@ let () =
   (* When using as a tutorial, try both with the following source line included and commented out.
      Run with the option --ocannl_output_debug_files_in_build_directory=true and check the
      build_files/ directory for the generated code. *)
-  (* FIXME(#344): This exceeds the number of buffer arguments supported by the Metal backend. *)
-  Train.every_non_literal_on_host batch_loss;
-
+  (* FIXME(#344): When uncommented, this exceeds the number of buffer arguments supported by the Metal backend. *)
+  (* Train.every_non_literal_on_host batch_loss; *)
   let update = Train.grad_update batch_loss in
   let%op learning_rate = 1 in
   let sgd = Train.sgd_update ~learning_rate batch_loss in
@@ -84,7 +83,10 @@ let () =
 
   let counter_n, bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_probs = mlp "cha" in
-  let%cd infer_step = infer_probs.forward; "dice" =: uniform_at !@counter_n in
+  let%cd infer_step =
+    infer_probs.forward;
+    "dice" =: uniform_at !@counter_n
+  in
   Train.set_on_host infer_probs.value;
   let infer_step = Train.to_routine (module Backend) sgd_step.context bindings infer_step in
   let counter_ref = IDX.find_exn infer_step.bindings counter_n in

@@ -22,8 +22,8 @@ n17 threefry4x32 as threefry4x32: Virt/15; uint4x32 prec 4; mem in bytes: <not-i
 n18 threefry4x32 as threefry4x32: Virt/15; uint4x32 prec 4; mem in bytes: <not-in-yet>
 n19 w2 as w2: Host&stream/412410; single prec 1x16; mem in bytes: <not-in-yet>
 n20 grad_w2 as w2.grad: Local/26046; single prec 1x16; mem in bytes: <not-in-yet>
-n21 @|_moons_input as moons_input: Local/1046; single prec 10x2; mem in bytes: <not-in-yet>
-n24 @|_moons_class as moons_class: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
+n21 @|_moons_input as moons_input: Virt/15; single prec 10x2; mem in bytes: <not-in-yet>
+n24 @|_moons_class as moons_class: Virt/15; single prec 10x1; mem in bytes: <not-in-yet>
 n27 * as n27: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
 n28 grad_* as n27.grad: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
 n29 + as n29: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>

@@ -119,6 +119,7 @@ type traced_array = {
   mutable read_before_write : bool;
   mutable read_only : bool;
   mutable is_scalar_constexpr : bool;
+  mutable is_accessing : bool;
   mutable is_complex : bool;
 }
 [@@deriving sexp_of]
@@ -149,6 +150,7 @@ let get_node store tn =
         read_before_write = false;
         read_only = false;
         is_scalar_constexpr = false;
+        is_accessing = false;
         is_complex = false;
       })
 
@@ -180,18 +182,19 @@ let is_constexpr_comp traced_store llsc =
   in
   loop llsc
 
-let is_complex_comp traced_store llsc =
+let is_accessing_comp traced_store llsc =
   let rec loop llsc =
     match llsc with
     | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
         let traced = get_node traced_store tn in
-        traced.is_complex
+        traced.is_accessing
     | Get (tn, _) ->
         let traced = get_node traced_store tn in
         not traced.is_scalar_constexpr
     | Get_merge_buffer (tn, _) ->
         let traced = get_node traced_store tn in
-        not traced.is_scalar_constexpr
+        traced.is_accessing <- true;
+        true
     | Ternop (_, v1, v2, v3) -> loop v1 || loop v2 || loop v3
     | Binop (_, v1, v2) -> loop v1 || loop v2
     | Unop (_, v) -> loop v
@@ -199,6 +202,20 @@ let is_complex_comp traced_store llsc =
     | Embed_index _ -> false
   in
   loop llsc
+
+let is_complex_comp traced_store llsc =
+  let accessing = is_accessing_comp traced_store in
+  match llsc with
+  | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } ->
+      let traced = get_node traced_store tn in
+      traced.is_complex
+  | Get _ -> false
+  | Get_merge_buffer _ -> false
+  | Ternop (_, v1, v2, v3) -> accessing v1 || accessing v2 || accessing v3
+  | Binop (_, v1, v2) -> accessing v1 || accessing v2
+  | Unop (_, v) -> accessing v
+  | Constant _ -> false
+  | Embed_index _ -> false
 
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
@@ -234,6 +251,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         let traced : traced_array = get_node traced_store tn in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then (
           traced.zero_initialized <- true;
+          traced.is_accessing <- false;
           traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
@@ -246,8 +264,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         then traced.is_scalar_constexpr <- is_constexpr_comp traced_store llsc
           (* Note: this prevents detection if the same constant is assigned inside a loop. *)
         else if not @@ Hash_set.is_empty traced.assignments then traced.is_scalar_constexpr <- false;
-        if first_visit then
-          traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc;
+        if first_visit then (
+          traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
+          traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
@@ -265,7 +284,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         let traced : traced_array = get_node traced_store tn in
         (* Vector operations cannot be scalar constexpr *)
         traced.is_scalar_constexpr <- false;
-        if first_visit then traced.is_complex <- false;
+        if first_visit then (
+          traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store arg;
+          traced.is_complex <- traced.is_complex || not (is_constexpr_comp traced_store arg));
         (* Mark all positions that will be written to *)
         for i = 0 to length - 1 do
           let pos_idcs = Array.copy idcs in

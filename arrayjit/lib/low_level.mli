@@ -90,9 +90,12 @@ type traced_array = {
       (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
           before accessed, is assigned at most once, and from an expression involving only constants
           or tensor nodes that were at the time is_scalar_constexpr. *)
-  mutable is_complex : bool;
+  mutable is_accessing : bool;
       (** False only if the tensor node is built from index embeddings and scalar constant
           expressions. *)
+  mutable is_complex : bool;
+      (** True only if the tensor node is built acciessing computations that are not a single
+          getter. *)
 }
 [@@deriving sexp_of]
 
