@@ -733,7 +733,8 @@ module C_syntax (B : C_syntax_config) = struct
     (* Returns (local definitions, value expression) *)
     let open PPrint in
     match vcomp with
-    | Local_scope { id = { tn = { prec = scope_prec; _ }; scope_id } as id; body; orig_indices = _ } ->
+    | Local_scope { id = { tn = { prec = scope_prec; _ }; scope_id } as id; body; orig_indices = _ }
+      ->
         let scope_prec = Lazy.force scope_prec in
         let num_typ = string (B.typ_of_prec scope_prec) in
         let init_zero =
@@ -820,7 +821,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Get_local id ->
         let scope_prec = Lazy.force id.tn.prec in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
-        let v_doc = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
+        let v_doc = string prefix ^^ pp_scope_id id ^^ string postfix in
         (v_doc ^^ braces (string ("=" ^ B.float_log_style)), [ `Value v_doc ])
     | Get_merge_buffer (source, idcs) ->
         let tn = source in

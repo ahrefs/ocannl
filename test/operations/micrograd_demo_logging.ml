@@ -27,6 +27,8 @@ let () =
   let%op g = g + (10. /. f) in
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   Utils.capture_stdout_logs @@ fun () ->
+  (* FIXME(#351): nothing to change here, but this generates horrible code without common expression
+     elimination, with default optimization settings. *)
   ignore (Train.update_once (module Backend) g);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false g;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true a;
