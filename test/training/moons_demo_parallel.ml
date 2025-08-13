@@ -59,8 +59,7 @@ let main () =
   in
   let epoch_loss = List.hd_exn rev_epoch_losses in
   Stdio.printf "Epoch loss: %f\n%!" epoch_loss;
-  (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n"
-  else *)
+  (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n" else *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
   let classes = Tn.points_1d ~xdim:0 outputs.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in

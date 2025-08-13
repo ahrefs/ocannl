@@ -769,28 +769,29 @@ let%expect_test "Very big tensor" =
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}]
 
-    let%expect_test "Embed self id" =
-    Tensor.unsafe_reinitialize ();
-    let module Backend = (val Backends.fresh_backend ()) in
-    let backend =
-      (module Backend : Backend
-        with type buffer_ptr = Backend.buffer_ptr
-         and type dev = Backend.dev
-         and type runner = Backend.runner
-         and type event = Backend.event
-         and type optimize_ctx = Backend.optimize_ctx)
-    in
-    let%op hey = embed_self_id () in
-    let%op hoo = embed_self_id () in
-    let%op bar = hoo + hey + embed_self_id () in
-    Train.set_hosted hey.value;
-    Train.set_hosted hoo.value;
-    Train.set_hosted bar.value;
-    ignore (Train.forward_once backend bar);
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
-    [%expect {|
+let%expect_test "Embed self id" =
+  Tensor.unsafe_reinitialize ();
+  let module Backend = (val Backends.fresh_backend ()) in
+  let backend =
+    (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
+  in
+  let%op hey = embed_self_id () in
+  let%op hoo = embed_self_id () in
+  let%op bar = hoo + hey + embed_self_id () in
+  Train.set_hosted hey.value;
+  Train.set_hosted hoo.value;
+  Train.set_hosted bar.value;
+  ignore (Train.forward_once backend bar);
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
+  [%expect
+    {|
       HERE: test/operations/hello_world_op.ml:790:23
       ┌─────────────────────────┐
       │[0]: !@self_id shape 0:1 │
@@ -819,8 +820,9 @@ let%expect_test "Very big tensor" =
       │└┴──────┘            │
       └─────────────────────┘
       |}];
-      Train.printf_tree ~here:[%here] bar;
-      [%expect {|
+  Train.printf_tree ~here:[%here] bar;
+  [%expect
+    {|
         HERE: test/operations/hello_world_op.ml:822:30
                            #4 +_bar
                             3.00
@@ -829,4 +831,3 @@ let%expect_test "Very big tensor" =
         #1 !@self_id│#0 !@self_id│
          1.00       │ 0.00       │
         |}]
-    

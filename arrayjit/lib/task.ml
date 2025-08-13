@@ -36,8 +36,7 @@ let append ~work (Task task) =
           work ());
     }
 
-let enschedule ~schedule_task ~get_stream_name stream (Task { description; _ } as task)
-    =
+let enschedule ~schedule_task ~get_stream_name stream (Task { description; _ } as task) =
   (* [%log_result "enschedule", description, "on", get_stream_name stream]; *)
   let work () = schedule_task stream task in
   Task

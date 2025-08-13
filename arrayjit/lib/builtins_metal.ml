@@ -1,4 +1,5 @@
-let source = {|
+let source =
+  {|
 #include <metal_stdlib>
 using namespace metal;
 

@@ -7,19 +7,19 @@ open Operation
 (* let t1 = uniform ~label:["t1"] ~grad_spec:If_needed ~batch_dims:[10] ~output_dims:[5; 3] () *)
 
 (* New interface allows partial application and configuration *)
-let uniform_generator = uniform ~label:["my_uniform"]
+let uniform_generator = uniform ~label:[ "my_uniform" ]
 
 (* Can configure grad_spec and batch dimensions, then reuse *)
-let uniform_with_grad = uniform_generator ~grad_spec:Tensor.Require_grad ~batch_dims:[10]
+let uniform_with_grad = uniform_generator ~grad_spec:Tensor.Require_grad ~batch_dims:[ 10 ]
 
 (* Can create multiple tensors with same configuration but different output shapes *)
-let tensor1 = uniform_with_grad ~output_dims:[5; 3] ()
-let tensor2 = uniform_with_grad ~output_dims:[7; 4] ()
+let tensor1 = uniform_with_grad ~output_dims:[ 5; 3 ] ()
+let tensor2 = uniform_with_grad ~output_dims:[ 7; 4 ] ()
 
 (* Can also create specialized generators *)
 let matrix_uniform = uniform_generator ~grad_spec:Tensor.If_needed ~batch_dims:[]
-let matrix_5x5 = matrix_uniform ~output_dims:[5; 5] ()
-let matrix_3x7 = matrix_uniform ~output_dims:[3; 7] ()
+let matrix_5x5 = matrix_uniform ~output_dims:[ 5; 5 ] ()
+let matrix_3x7 = matrix_uniform ~output_dims:[ 3; 7 ] ()
 
 (* The configurability is preserved through partial application *)
 let () =

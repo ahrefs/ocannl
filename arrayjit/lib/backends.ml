@@ -102,9 +102,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, None ->
         let dims = Lazy.force tn.dims in
-        let dst =
-          Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims ctx.stream
-        in
+        let dst = Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims ctx.stream in
         wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
@@ -192,9 +190,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   ^ Backend.get_name src.stream)
           | None ->
               let dims = Lazy.force tn.dims in
-              let d_arr =
-                Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims dst.stream
-              in
+              let d_arr = Backend.alloc_zero_init_array (Lazy.force tn.prec) ~dims dst.stream in
               Backend.(
                 device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                   ~src);

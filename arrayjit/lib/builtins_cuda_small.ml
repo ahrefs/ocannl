@@ -1,4 +1,5 @@
-let source = {|
+let source =
+  {|
 typedef struct {
     uint32_t v[4];
 } uint4x32_t;

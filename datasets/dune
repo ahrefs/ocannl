@@ -7,8 +7,11 @@
 
 (install
  (package neural_nets_lib)
- (section (site (neural_nets_lib data)))
- (files (names.txt as names.txt)))
+ (section
+  (site
+   (neural_nets_lib data)))
+ (files
+  (names.txt as names.txt)))
 
 (generate_sites_module
  (module dataset_sites)

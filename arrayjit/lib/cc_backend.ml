@@ -109,7 +109,7 @@ let%track7_sexp c_compile_and_load ~f_path =
      is not required to unload the library, although ideally it should. *)
   let run_id = Int.to_string @@ get_global_run_id () in
   let log_fname = base_name ^ "_run_id_" ^ run_id ^ ".log" in
-  let libname = 
+  let libname =
     let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
     if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then
       (* Use only the path from f_path for the linked library libname *)
