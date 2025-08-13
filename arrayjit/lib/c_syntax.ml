@@ -529,6 +529,15 @@ module C_syntax (B : C_syntax_config) = struct
     let extras = separate hardline (List.map B.extra_declarations ~f:string) in
     includes ^^ hardline ^^ extras ^^ hardline
 
+  let pp_local_defs (local_defs : (int * PPrint.document) list) =
+    let open PPrint in
+    List.dedup_and_sort local_defs ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+    |> List.map ~f:snd |> separate hardline
+
+  let pp_scope_id Low_level.{ scope_id; tn } =
+    let open PPrint in
+    string ("v" ^ Int.to_string scope_id ^ "_" ^ get_ident tn)
+
   let rec pp_ll (c : Low_level.t) : PPrint.document =
     let open PPrint in
     match c with
@@ -564,6 +573,7 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let prec = Lazy.force tn.prec in
         let local_defs, val_doc = pp_scalar prec llsc in
+        let local_defs = pp_local_defs local_defs in
         let offset_doc = pp_array_offset (idcs, dims) in
         let assignment =
           group
@@ -630,6 +640,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prec = Lazy.force tn.prec in
         let arg_prec = Ops.uint4x32 in
         let local_defs, arg_doc = pp_scalar arg_prec arg in
+        let local_defs = pp_local_defs local_defs in
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
         (* Generate assignments for each output element *)
@@ -704,18 +715,18 @@ module C_syntax (B : C_syntax_config) = struct
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
         else if PPrint.is_empty local_defs then assignments
         else local_defs ^^ hardline ^^ assignments
-    | Set_local ({ scope_id; tn = { prec; _ } }, value) ->
+    | Set_local (({ tn = { prec; _ }; _ } as id), value) ->
         let local_defs, value_doc = pp_scalar (Lazy.force prec) value in
-        let assignment =
-          string ("v" ^ Int.to_string scope_id) ^^ string " = " ^^ value_doc ^^ semi
-        in
+        let local_defs = pp_local_defs local_defs in
+        let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
         if PPrint.is_empty local_defs then assignment else local_defs ^^ hardline ^^ assignment
 
-  and pp_scalar (prec : Ops.prec) (vcomp : Low_level.scalar_t) : PPrint.document * PPrint.document =
+  and pp_scalar (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+      (int * PPrint.document) list * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in
     match vcomp with
-    | Local_scope { id = { scope_id; tn = { prec = scope_prec; _ } }; body; orig_indices = _ } ->
+    | Local_scope { id = { tn = { prec = scope_prec; _ }; scope_id } as id; body; orig_indices = _ } ->
         let scope_prec = Lazy.force scope_prec in
         let num_typ = string (B.typ_of_prec scope_prec) in
         let init_zero =
@@ -723,17 +734,17 @@ module C_syntax (B : C_syntax_config) = struct
           let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
           string " = " ^^ string prefix ^^ string "0" ^^ string postfix
         in
-        let decl = num_typ ^^ space ^^ string ("v" ^ Int.to_string scope_id) ^^ init_zero ^^ semi in
+        let decl = num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi in
         let body_doc = pp_ll body in
-        let defs = decl ^^ hardline ^^ body_doc in
+        let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
-        let expr = string prefix ^^ string ("v" ^ Int.to_string scope_id) ^^ string postfix in
-        (defs, expr)
+        let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
+        ([ (scope_id, def_doc) ], expr)
     | Get_local id ->
         let scope_prec = Lazy.force id.tn.prec in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
-        let expr = string prefix ^^ string ("v" ^ Int.to_string id.scope_id) ^^ string postfix in
-        (empty, expr)
+        let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
+        ([], expr)
     | Get_merge_buffer (source, idcs) ->
         let tn = source in
         let dims = Lazy.force tn.dims in
@@ -743,7 +754,7 @@ module C_syntax (B : C_syntax_config) = struct
         let expr =
           string prefix ^^ string "merge_buffer" ^^ brackets offset_doc ^^ string postfix
         in
-        (empty, expr)
+        ([], expr)
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
@@ -751,7 +762,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let offset_doc = pp_array_offset (idcs, dims) in
         let expr = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
-        (empty, expr)
+        ([], expr)
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
@@ -761,33 +772,27 @@ module C_syntax (B : C_syntax_config) = struct
             string "(" ^^ string c_str ^^ string ")" ^^ string postfix
           else string prefix ^^ string c_str ^^ string postfix
         in
-        (empty, expr)
+        ([], expr)
     | Embed_index idx ->
         let from_prec = Ops.int32 in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let idx_doc = pp_axis_index idx in
         let idx_doc = if PPrint.is_empty idx_doc then string "0" else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
-        (empty, expr)
+        ([], expr)
     | Binop (Arg1, v1, _v2) -> pp_scalar prec v1
     | Binop (Arg2, _v1, v2) -> pp_scalar prec v2
     | Ternop (op, v1, v2, v3) ->
         let d1, e1 = pp_scalar prec v1 in
         let d2, e2 = pp_scalar prec v2 in
         let d3, e3 = pp_scalar prec v3 in
-        let defs =
-          List.filter_map [ d1; d2; d3 ] ~f:(fun d -> if PPrint.is_empty d then None else Some d)
-          |> separate hardline
-        in
+        let defs = List.concat [ d1; d2; d3 ] in
         let expr = group (B.ternop_syntax prec op e1 e2 e3) in
         (defs, expr)
     | Binop (op, v1, v2) ->
         let d1, e1 = pp_scalar prec v1 in
         let d2, e2 = pp_scalar prec v2 in
-        let defs =
-          List.filter_map [ d1; d2 ] ~f:(fun d -> if PPrint.is_empty d then None else Some d)
-          |> separate hardline
-        in
+        let defs = List.concat [ d1; d2 ] in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
     | Unop (op, v) ->
