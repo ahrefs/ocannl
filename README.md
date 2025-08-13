@@ -36,7 +36,7 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 ## Usage
 
-Starting from OCANNL 0.5.2, the CUDA backend requires at least CUDA version 12.8.
+Starting from OCANNL 0.5.2, the CUDA backend requires at least CUDA version 12.8. The Metal backend requires at least MSL version 3.1.
 
 [API documentation entry point](https://ahrefs.github.io/ocannl/dev/).
 
@@ -64,30 +64,33 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* 0.6: more precisions, initialization, counter-based randomness, convolution, block tensors, improvements to dimension labels.
-  * DONE: BF16, FP8.
-  * DONE: Extended expressivity of projections and the generalized einsum notation to cover strided iteration and convolution.
-  * DONE: Parameter initialization on devices.
-  * TODO: New syntax for inline parameter definitions; record-based syntax instead of string-based.
-  * TODO: counter-based randomness via threefry.
-* 0.6.1:
+* **0.6.1: convolution NNs, transformers.**
+  * Counter-based randomness via threefry, second pass (pointwise and weak-but-efficient variants); normal distribution operation.
+  * Padding inference during shape inference.
+  * New syntax for inline parameter definitions; record-based syntax instead of string-based.
   * Add convnet building blocks and corresponding examples starting with MNIST.
   * Add transformer building blocks.
-  * Integrate with huggingface-tokenizers
+  * Integrate with huggingface-tokenizers.
   * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c).
-* 0.6.2:
-  * Verify or rethink usefulness of dimension labels, and whether to introduce axis labels.
+* **0.6.2: shape understanding and manipulation enhancements.**
+  * Verify or rethink usefulness of dimension labels aka. dimension units, and whether to introduce axis labels.
   * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
-* 0.7: Optimize performance -- low hanging fruit.
+* **0.7: CPU-style performance and memory efficiency.**
+  * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
+* **0.7.1: HIP backend (AMD hardware).**
+* **0.8: GPU-style performance -- low hanging fruit.**
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
-* 0.8: Optimize performance: program search.
+  * Milestone phrasing: GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now.
+* **0.8.1: WebGPU backend.**
+* **0.9: Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
-* 1.0: Few documentation gaps, some degree of feature completeness, ergonomics, safety.
+  * Milestone phrasing: Program search with execution-based per-backend or aggregate-of-backends cost functions. Starting with augmenting the tiling and layout mechanisms from v0.8 with cost functions, progressing to a broader range of code graph rewriting rules.
+* **1.0: Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
   * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   * Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
@@ -96,7 +99,14 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.6: more precisions, initialization, counter-based randomness, strided iteration.**
+  * BF16, FP8.
+  * Extended expressivity of projections and the generalized einsum notation to cover strided iteration and convolution.
+  * Parameter initialization on devices.
+  * Counter-based randomness via threefry, first pass (vectorized and cryptographic strength).
+  * Better precision inference, including top-down propagation.
 * **0.5.3: Apple Metal backend.**
+  * Also, CUDA backend works on native Windows.
 * **0.5.2: More primitive operations.**
   * Supports a lot of primitive operations (including ternary ops), and ternary tensor operations.
   * `%cd` and `%op` support both curried and uncurried operator application syntax.
@@ -152,4 +162,4 @@ The dependency on `cudajit` and `metal` is optional, so you have to install them
 
 ## Development
 
-NOTE TO POTENTIAL CONTRIBUTORS: while I am slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this should be happening less for unit tests. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases.
+NOTE TO POTENTIAL CONTRIBUTORS: while I am slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this would hopefully be happening less. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases with the backend `sync_cc` and must have the behavior excpected of a backend with all other backends. We try to minimize discrepancy across backends but prefer more stringent tests even if some backends only pass them "in spirit" rather than with exact expectations of the `sync_cc` backend.
