@@ -87,6 +87,9 @@ cc_backend_compiler_command=
 # are used for the dynamic libraries (default behavior).
 output_dlls_in_build_directory=false
 
+# Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.
+# Decrease it if you see crashes like `bus error`. Values smaller-or-equal 0 mean "no limits".
+stack_threshold_in_bytes=16384
 
 # Only tensor nodes with up to this many visits per array cell (in a dedicated interpreter)
 # can be inlined. Values worth considering: 0 (disables inlining) to 3.

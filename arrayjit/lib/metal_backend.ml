@@ -620,6 +620,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma ^^ space
         ^^ separate (comma ^^ space) args_docs
         ^^ rparen ^^ semi
+
+    let local_heap_alloc = None
+    let local_heap_dealloc = None
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =
@@ -700,8 +703,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       traced_stores;
     }
 
-  let%diagn2_sexp link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays
-      =
+  let%debug4_sexp link_proc ~prior_context ~library ~func_name
+      ~(params : (string * param_source) list) ~lowered_bindings ~(ctx_arrays : buffer_ptr Tn.t_map)
+      : Task.t =
     let stream = prior_context.stream in
     let device = stream.device.dev in
     let queue = stream.runner.queue in
