@@ -625,7 +625,9 @@ module C_syntax (B : C_syntax_config) = struct
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
         else if PPrint.is_empty local_defs then assignment
-        else local_defs ^^ hardline ^^ assignment
+        else
+          let block_content = local_defs ^^ hardline ^^ assignment in
+          lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Comment message ->
         if Utils.debug_log_from_routines () then
           let base_message = "COMMENT: " ^ message ^ "\n" in
@@ -714,12 +716,17 @@ module C_syntax (B : C_syntax_config) = struct
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
         else if PPrint.is_empty local_defs then assignments
-        else local_defs ^^ hardline ^^ assignments
+        else
+          let block_content = local_defs ^^ hardline ^^ assignments in
+          lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Set_local (({ tn = { prec; _ }; _ } as id), value) ->
         let local_defs, value_doc = pp_scalar (Lazy.force prec) value in
         let local_defs = pp_local_defs local_defs in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
-        if PPrint.is_empty local_defs then assignment else local_defs ^^ hardline ^^ assignment
+        if PPrint.is_empty local_defs then assignment
+        else
+          let block_content = local_defs ^^ hardline ^^ assignment in
+          lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
 
   and pp_scalar (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       (int * PPrint.document) list * PPrint.document =
