@@ -11,83 +11,32 @@ float *a_grad &[1] = 0xNNNN
 float *b &[1] = 0xNNNN
 float *b_grad &[1] = 0xNNNN
 float *g &[1] = 0xNNNN
-COMMENT: g gradient update
-COMMENT: g fwd
-# n4_c[0] := (a[0] + b[0]);
-n4_c[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (a[0]{=-4000e-3} + b[0]{=2000e-3})
-# n19_c[0] := ((n4_c[0] + n4_c[0]) + 1);
-n19_c[0]{=MAYBE UNINITIALIZED} = -3000e-3 = ((n4_c[0]{=-2000e-3} + n4_c[0]{=-2000e-3}) + (float)(1))
-# n42[0] := (b[0] - a[0]);
-n42[0]{=MAYBE UNINITIALIZED} = 6000e-3 = (b[0]{=2000e-3} - a[0]{=-4000e-3})
-# n31[0] := (b[0] + a[0]);
-n31[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (b[0]{=2000e-3} + a[0]{=-4000e-3})
-# n14_d[0] := fma(a[0], b[0], (b[0] * (b[0] * b[0])));
-n14_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))
-# n40_d[0] := (fma(n14_d[0], 2, n14_d[0]) + relu(n31[0]));
-n40_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (fma(n14_d[0]{=0e-3}, (float)(2), n14_d[0]{=0e-3}) + max(0.0f, n31[0]{=-2000e-3}))
-# e[0] := (fma(-1, a[0], ((n19_c[0] + 1) + n19_c[0])) - (fma(3, n40_d[0], n40_d[0]) + relu(n42[0])));
-e[0]{=MAYBE UNINITIALIZED} = -7000e-3 = (fma((float)(-1), a[0]{=-4000e-3}, ((n19_c[0]{=-3000e-3} + (float)(1)) + n19_c[0]{=-3000e-3})) - (fma((float)(3), n40_d[0]{=0e-3}, n40_d[0]{=0e-3}) + max(0.0f, n42[0]{=6000e-3})))
-# f[0] := (e[0] * e[0]);
-f[0]{=MAYBE UNINITIALIZED} = 49000e-3 = (e[0]{=-7000e-3} * e[0]{=-7000e-3})
-# g[0] := ((f[0] / 2) + (10 / f[0]));
-g[0]{=MAYBE UNINITIALIZED} = 24704e-3 = ((f[0]{=49000e-3} / (float)(2)) + ((float)(10) / f[0]{=49000e-3}))
-COMMENT: end
-COMMENT: g zero grads
+COMMENT: g forward and gradient update
+# g[0] := ((((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) / 2) + (10 / ((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0],
+COMMENT: g zero grads and backprop
 # a_grad := 0
 a_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # b_grad := 0
 b_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n4_c_grad := 0
-n4_c_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n19_c_grad := 0
-n19_c_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n14_d_grad := 0
-n14_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n40_d_grad := 0
-n40_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# f_grad := 0
-f_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-COMMENT: end
-COMMENT: g bprop
-# f.grad[0] := fma(1, (-10 / (f[0] * f[0])), f.grad[0]);
-f_grad[0]{=MAYBE UNINITIALIZED} = -4e-3 = fma((float)(1), ((float)(-10) / (f[0]{=49000e-3} * f[0]{=49000e-3})), f_grad[0]{=0e-3})
-# f.grad[0] := (f.grad[0] + 0.5);
-f_grad[0]{=MAYBE UNINITIALIZED} = 495e-3 = (f_grad[0]{=-4e-3} + (float)(0.5))
-# n40_d.grad[0] := fma(-1, ((2 * e[0]) * f.grad[0]), n40_d.grad[0]);
-n40_d_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = fma((float)(-1), (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}), n40_d_grad[0]{=0e-3})
-# n40_d.grad[0] := fma(3, (-1 * ((2 * e[0]) * f.grad[0])), n40_d.grad[0]);
-n40_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = fma((float)(3), ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})), n40_d_grad[0]{=6941e-3})
-# n14_d.grad[0] := (n14_d.grad[0] + n40_d.grad[0]);
-n14_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n14_d_grad[0]{=0e-3} + n40_d_grad[0]{=27766e-3})
-# n14_d.grad[0] := fma(n40_d.grad[0], 2, n14_d.grad[0]);
-n14_d_grad[0]{=MAYBE UNINITIALIZED} = 83300e-3 = fma(n40_d_grad[0]{=27766e-3}, (float)(2), n14_d_grad[0]{=27766e-3})
-# a.grad[0] := fma(n14_d.grad[0], b[0], a.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = fma(n14_d_grad[0]{=83300e-3}, b[0]{=2000e-3}, a_grad[0]{=0e-3})
-# b.grad[0] := fma(a[0], n14_d.grad[0], b.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = -333201e-3 = fma(a[0]{=-4000e-3}, n14_d_grad[0]{=83300e-3}, b_grad[0]{=0e-3})
-# b.grad[0] := fma((3 * (b[0] * b[0])), n14_d.grad[0], b.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = fma(((float)(3) * (b[0]{=2000e-3} * b[0]{=2000e-3})), n14_d_grad[0]{=83300e-3}, b_grad[0]{=-333201e-3})
-# b.grad[0] := (b.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
-b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = (b_grad[0]{=666402e-3} + ((n31[0]{=-2000e-3} > 0.0f) ? n40_d_grad[0]{=27766e-3} : 0.0f))
-# a.grad[0] := (a.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
-a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = (a_grad[0]{=166600e-3} + ((n31[0]{=-2000e-3} > 0.0f) ? n40_d_grad[0]{=27766e-3} : 0.0f))
-# b.grad[0] := (b.grad[0] + relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
-b_grad[0]{=MAYBE UNINITIALIZED} = 673344e-3 = (b_grad[0]{=666402e-3} + ((n42[0]{=6000e-3} > 0.0f) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0f))
-# a.grad[0] := (a.grad[0] - relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
-a_grad[0]{=MAYBE UNINITIALIZED} = 159658e-3 = (a_grad[0]{=166600e-3} - ((n42[0]{=6000e-3} > 0.0f) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0f))
-# n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
-n19_c_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = fma(((float)(2) * e[0]{=-7000e-3}), f_grad[0]{=495e-3}, n19_c_grad[0]{=0e-3})
-# n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
-n19_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = fma(((float)(2) * e[0]{=-7000e-3}), f_grad[0]{=495e-3}, n19_c_grad[0]{=-6941e-3})
-# n4_c.grad[0] := (n4_c.grad[0] + n19_c.grad[0]);
-n4_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n4_c_grad[0]{=0e-3} + n19_c_grad[0]{=-13883e-3})
-# n4_c.grad[0] := (n4_c.grad[0] + n19_c.grad[0]);
-n4_c_grad[0]{=MAYBE UNINITIALIZED} = -27766e-3 = (n4_c_grad[0]{=-13883e-3} + n19_c_grad[0]{=-13883e-3})
-# a.grad[0] := (a.grad[0] + n4_c.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 131892e-3 = (a_grad[0]{=159658e-3} + n4_c_grad[0]{=-27766e-3})
-# b.grad[0] := (b.grad[0] + n4_c.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = 645577e-3 = (b_grad[0]{=673344e-3} + n4_c_grad[0]{=-27766e-3})
-# a.grad[0] := fma(-1, ((2 * e[0]) * f.grad[0]), a.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 138833e-3 = fma((float)(-1), (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}), a_grad[0]{=131892e-3})
+# a.grad[0] := fma(v70_n14_d.grad {$  v70_n14_d.grad := 0;$  v70_n14_d.grad := (v70_n14_d.grad + v64_n40_d.grad {$    v64_n40_d.grad := 0;$    v64_n40_d.grad := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$      v54_f.grad := 0;$      v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + 
+a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = fma(v70_n14_d_grad{=83300e-3}, b[0]{=2000e-3}, a_grad[0]{=0e-3})
+# b.grad[0] := fma(a[0], v70_n14_d.grad {$  v70_n14_d.grad := 0;$  v70_n14_d.grad := (v70_n14_d.grad + v64_n40_d.grad {$    v64_n40_d.grad := 0;$    v64_n40_d.grad := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$      v54_f.grad := 0;$      v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]
+b_grad[0]{=MAYBE UNINITIALIZED} = -333201e-3 = fma(a[0]{=-4000e-3}, v70_n14_d_grad{=83300e-3}, b_grad[0]{=0e-3})
+# b.grad[0] := fma((3 * (b[0] * b[0])), v71_n14_d.grad {$  v71_n14_d.grad := 0;$  v71_n14_d.grad := (v71_n14_d.grad + v64_n40_d.grad {$    v64_n40_d.grad := 0;$    v64_n40_d.grad := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$      v54_f.grad := 0;$      v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0])
+b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = fma(((float)(3) * (b[0]{=2000e-3} * b[0]{=2000e-3})), v71_n14_d_grad{=83300e-3}, b_grad[0]{=-333201e-3})
+# b.grad[0] := (b.grad[0] + relu_gate((b[0] + a[0]), v65_n40_d.grad {$  v65_n40_d.grad := 0;$  v65_n40_d.grad := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$    v54_f.grad := 0;$    v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (f
+b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = (b_grad[0]{=666402e-3} + (((b[0]{=2000e-3} + a[0]{=-4000e-3}) > 0.0f) ? v65_n40_d_grad{=27766e-3} : 0.0f))
+# a.grad[0] := (a.grad[0] + relu_gate((b[0] + a[0]), v65_n40_d.grad {$  v65_n40_d.grad := 0;$  v65_n40_d.grad := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$    v54_f.grad := 0;$    v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (f
+a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = (a_grad[0]{=166600e-3} + (((b[0]{=2000e-3} + a[0]{=-4000e-3}) > 0.0f) ? v65_n40_d_grad{=27766e-3} : 0.0f))
+# b.grad[0] := (b.grad[0] + relu_gate((b[0] - a[0]), (-1 * ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$  v54_f.grad := 0;$  v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[
+b_grad[0]{=MAYBE UNINITIALIZED} = 673344e-3 = (b_grad[0]{=666402e-3} + (((b[0]{=2000e-3} - a[0]{=-4000e-3}) > 0.0f) ? ((float)(-1) * (((float)(2) * (fma((float)(-1), a[0]{=-4000e-3}, (((float)(2) + ((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3}))) + (((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3})) + (float)(1)))) - (fma((float)(3), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3}))), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3})))) + max(0.0f, (b[0]{=2000e-3} - a[0]{=-4000e-3}))))) * v54_f_grad{=495e-3})) : 0.0f))
+# a.grad[0] := (a.grad[0] - relu_gate((b[0] - a[0]), (-1 * ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$  v54_f.grad := 0;$  v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[
+a_grad[0]{=MAYBE UNINITIALIZED} = 159658e-3 = (a_grad[0]{=166600e-3} - (((b[0]{=2000e-3} - a[0]{=-4000e-3}) > 0.0f) ? ((float)(-1) * (((float)(2) * (fma((float)(-1), a[0]{=-4000e-3}, (((float)(2) + ((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3}))) + (((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3})) + (float)(1)))) - (fma((float)(3), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3}))), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3})))) + max(0.0f, (b[0]{=2000e-3} - a[0]{=-4000e-3}))))) * v54_f_grad{=495e-3})) : 0.0f))
+# a.grad[0] := (a.grad[0] + v95_n4_c.grad {$  v95_n4_c.grad := 0;$  v95_n4_c.grad := (v95_n4_c.grad + v92_n19_c.grad {$    v92_n19_c.grad := 0;$    v92_n19_c.grad := fma((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))), v54_f.grad {$      v54_f.grad := 0;$      v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (
+a_grad[0]{=MAYBE UNINITIALIZED} = 131892e-3 = (a_grad[0]{=159658e-3} + v95_n4_c_grad{=-27766e-3})
+# b.grad[0] := (b.grad[0] + v96_n4_c.grad {$  v96_n4_c.grad := 0;$  v96_n4_c.grad := (v96_n4_c.grad + v92_n19_c.grad {$    v92_n19_c.grad := 0;$    v92_n19_c.grad := fma((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))), v54_f.grad {$      v54_f.grad := 0;$      v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (
+b_grad[0]{=MAYBE UNINITIALIZED} = 645577e-3 = (b_grad[0]{=673344e-3} + v96_n4_c_grad{=-27766e-3})
+# a.grad[0] := fma(-1, ((2 * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0]))))) * v54_f.grad {$  v54_f.grad := 0;$  v54_f.grad := fma(1, (-10 / (((fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0]))), (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] + a[0])))) + relu((b[0] - a[0])))) * (fma(-1, a[0], ((2 + ((a[0] + b[0]) + (a[0] + b[0]))) + (((a[0] + b[0]) + (a[0] + b[0])) + 1))) - (fma(3, (fma(fma(a[0], b[0], (b[0] * (b[0] * b[0]))), 2, fma(a[0], b[0], (b[0] * (b[0] * b[0])))) + relu((b[0] +
+a_grad[0]{=MAYBE UNINITIALIZED} = 138833e-3 = fma((float)(-1), (((float)(2) * (fma((float)(-1), a[0]{=-4000e-3}, (((float)(2) + ((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3}))) + (((a[0]{=-4000e-3} + b[0]{=2000e-3}) + (a[0]{=-4000e-3} + b[0]{=2000e-3})) + (float)(1)))) - (fma((float)(3), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3}))), (fma(fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))), (float)(2), fma(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))) + max(0.0f, (b[0]{=2000e-3} + a[0]{=-4000e-3})))) + max(0.0f, (b[0]{=2000e-3} - a[0]{=-4000e-3}))))) * v54_f_grad{=495e-3}), a_grad[0]{=131892e-3})
 COMMENT: end
 COMMENT: end
