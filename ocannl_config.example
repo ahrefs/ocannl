@@ -185,6 +185,10 @@ debug_entry_id_pairs=
 # regardless of the value of `log_main_domain_to_stdout`.
 log_file_stem=debug
 
+# For ppx_minidebug: If given a number, sets the `truncate_children` parameter: only this number
+# of the most recent children of each log entry are held.`
+debug_log_truncate_children=
+
 # It is useful for testing to have outputs more uniform across backends even if that criples
 # some backends. Currently, this setting only affects logging from routines to accomodate Metal's
 # shortcoming.

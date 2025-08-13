@@ -398,6 +398,10 @@ let get_local_debug_runtime =
                      (Int.of_string (String.strip id1), Int.of_string (String.strip id2)))
              | _ -> None)
   in
+  let truncate_children =
+    let arg = get_global_arg ~default:"" ~arg_name:"debug_log_truncate_children" in
+    if String.is_empty arg then None else Some (Int.of_string arg)
+  in
   let name = get_global_arg ~default:"debug" ~arg_name:"log_file_stem" in
   match (flushing, filename) with
   | true, None ->
@@ -410,14 +414,14 @@ let get_local_debug_runtime =
   | false, None ->
       Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format
         ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_entry
-        ~toc_specific_hyperlink:"" ~highlight_terms
+        ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
         ~log_level:original_log_level ?snapshot_every_sec ()
   | false, Some filename ->
       Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
-        ~toc_specific_hyperlink:"" ~highlight_terms
+        ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
         ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
         ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
