@@ -792,42 +792,42 @@ let%expect_test "Embed self id" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
   [%expect
     {|
-      HERE: test/operations/hello_world_op.ml:790:23
-      ┌─────────────────────────┐
-      │[0]: !@self_id shape 0:1 │
-      │┌┬──────┐                │
-      │││axis 0│                │
-      │├┼──────┤                │
-      │││ 0.00 │                │
-      │└┴──────┘                │
-      └─────────────────────────┘
-      HERE: test/operations/hello_world_op.ml:791:23
-      ┌─────────────────────────┐
-      │[1]: !@self_id shape 0:1 │
-      │┌┬──────┐                │
-      │││axis 0│                │
-      │├┼──────┤                │
-      │││ 1.00 │                │
-      │└┴──────┘                │
-      └─────────────────────────┘
-      HERE: test/operations/hello_world_op.ml:792:23
-      ┌─────────────────────┐
-      │[4]: +_bar shape 0:1 │
-      │┌┬──────┐            │
-      │││axis 0│            │
-      │├┼──────┤            │
-      │││ 3.00 │            │
-      │└┴──────┘            │
-      └─────────────────────┘
-      |}];
+    HERE: test/operations/hello_world_op.ml:790:21
+    ┌─────────────────────────┐
+    │[0]: !@self_id shape 0:1 │
+    │┌┬──────┐                │
+    │││axis 0│                │
+    │├┼──────┤                │
+    │││ 0.00 │                │
+    │└┴──────┘                │
+    └─────────────────────────┘
+    HERE: test/operations/hello_world_op.ml:791:21
+    ┌─────────────────────────┐
+    │[1]: !@self_id shape 0:1 │
+    │┌┬──────┐                │
+    │││axis 0│                │
+    │├┼──────┤                │
+    │││ 1.00 │                │
+    │└┴──────┘                │
+    └─────────────────────────┘
+    HERE: test/operations/hello_world_op.ml:792:21
+    ┌─────────────────────┐
+    │[4]: +_bar shape 0:1 │
+    │┌┬──────┐            │
+    │││axis 0│            │
+    │├┼──────┤            │
+    │││ 3.00 │            │
+    │└┴──────┘            │
+    └─────────────────────┘
+    |}];
   Train.printf_tree ~here:[%here] bar;
   [%expect
     {|
-        HERE: test/operations/hello_world_op.ml:822:30
-                           #4 +_bar
-                            3.00
-              #3 + Virt/40       │#2 !@self_id Virt/40
-              <void>             │<void>
-        #1 !@self_id│#0 !@self_id│
-         1.00       │ 0.00       │
-        |}]
+    HERE: test/operations/hello_world_op.ml:823:26
+                       #4 +_bar
+                        3.00
+          #3 + Virt/40       │#2 !@self_id Virt/40
+          <void>             │<void>
+    #1 !@self_id│#0 !@self_id│
+     1.00       │ 0.00       │
+    |}]

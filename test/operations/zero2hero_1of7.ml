@@ -406,13 +406,13 @@ let%expect_test "Simple gradients virtual" =
                     0.00
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Local/1046            │#10 f non-emb
+             #8 +_d Virt/152              │#10 f non-emb
              <void>                       │ -2.00
-             #9 grad_+_d Virt/40          │#11 grad_f
+             #9 grad_+_d Virt/151         │#11 grad_f
              <void>                       │ 0.00
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.00e+1    │
-      #5 grad_*._e Virt/40   │#7 grad_c   │
+      #5 grad_*._e Virt/151  │#7 grad_c   │
       <void>                 │ 0.00       │
     #0 a non-emb│#2 b non-emb│            │
      2.00       │ -3.00      │            │
@@ -429,13 +429,13 @@ let%expect_test "Simple gradients virtual" =
                     -8.00
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Local/1046            │#10 f non-emb
+             #8 +_d Virt/152              │#10 f non-emb
              <void>                       │ -2.00
-             #9 grad_+_d Virt/40          │#11 grad_f
+             #9 grad_+_d Virt/151         │#11 grad_f
              <void>                       │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.00e+1    │
-      #5 grad_*._e Virt/40   │#7 grad_c   │
+      #5 grad_*._e Virt/151  │#7 grad_c   │
       <void>                 │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      2.00       │ -3.00      │            │
@@ -455,13 +455,13 @@ let%expect_test "Simple gradients virtual" =
                     -8.00
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Local/1046            │#10 f non-emb
+             #8 +_d Virt/152              │#10 f non-emb
              <void>                       │ -2.40
-             #9 grad_+_d Virt/40          │#11 grad_f
+             #9 grad_+_d Virt/151         │#11 grad_f
              <void>                       │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
-      #5 grad_*._e Virt/40   │#7 grad_c   │
+      #5 grad_*._e Virt/151  │#7 grad_c   │
       <void>                 │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
@@ -478,13 +478,13 @@ let%expect_test "Simple gradients virtual" =
                     -1.57e+1
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Local/1046            │#10 f non-emb
+             #8 +_d Virt/152              │#10 f non-emb
              <void>                       │ -2.40
-             #9 grad_+_d Virt/40          │#11 grad_f
+             #9 grad_+_d Virt/151         │#11 grad_f
              <void>                       │ 6.56
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
-      #5 grad_*._e Virt/40   │#7 grad_c   │
+      #5 grad_*._e Virt/151  │#7 grad_c   │
       <void>                 │ -2.40      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
@@ -538,7 +538,7 @@ let%expect_test "2D neuron virtual" =
                7.00e-1
               #9 grad_+_v Virt/40
               <void>
-         #6 * Local/1046       │#0 b non-emb
+         #6 * Local/9046       │#0 b non-emb
          <void>                │ 6.70
          #7 grad_* Virt/40     │#1 grad_b
          <void>                │ 1.00
