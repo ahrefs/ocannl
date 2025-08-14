@@ -72,19 +72,18 @@ This is very tentative.
   * Add transformer building blocks.
   * Integrate with huggingface-tokenizers.
   * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c).
-* **0.6.2: shape understanding and manipulation enhancements.**
-  * Verify or rethink usefulness of dimension labels aka. dimension units, and whether to introduce axis labels.
-  * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
 * **0.7: CPU-style performance and memory efficiency.**
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
-* **0.7.1: HIP backend (AMD hardware).**
+* **0.7.1: HIP backend (AMD hardware) and WebGPU backend.**
 * **0.8: GPU-style performance -- low hanging fruit.**
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
   * Milestone phrasing: GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now.
-* **0.8.1: WebGPU backend.**
+* **0.8.1: shape understanding and manipulation enhancements.**
+  * Verify or rethink usefulness of dimension labels aka. dimension units, and whether to introduce axis labels.
+  * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
 * **0.9: Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing.
