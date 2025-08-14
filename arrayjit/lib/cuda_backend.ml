@@ -72,9 +72,9 @@ module Alloc_buffer = struct
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in
-    (* TODO: consider using memset_d8 to zero-initialize the memory. *)
-    (* if size_in_bytes > 0 then
-      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes stream.runner; *)
+    (* Zero-initialize the memory *)
+    if size_in_bytes > 0 then
+      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes stream.runner;
     ptr
 
   let free_buffer = Some (fun _stream ptr -> Cu.Deviceptr.mem_free ptr)

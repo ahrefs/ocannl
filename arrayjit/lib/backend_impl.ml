@@ -51,7 +51,15 @@ module No_device_buffer_and_copying () :
   let%track7_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
       buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    alloc_impl ~size_in_bytes
+    (* FIXME(#344, #355): This is not efficient, but it won't be used for long. *)
+    let ptr = alloc_impl ~size_in_bytes in
+    (* Zero-initialize the allocated memory *)
+    if size_in_bytes > 0 then (
+      let arr = Ctypes.from_voidp Ctypes.uint8_t ptr in
+      for i = 0 to size_in_bytes - 1 do
+        Ctypes.(arr +@ i <-@ Unsigned.UInt8.zero)
+      done);
+    ptr
 
   let%track7_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)
       ~(size_in_bytes : int) (() : unit) : buffer =
