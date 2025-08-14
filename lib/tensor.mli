@@ -190,6 +190,11 @@ val number : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec ->
 (** A number: a tensor with a single axis of one dimension, initialized to the given value.
     [grad_spec] is by default [Prohibit_grad]. *)
 
+val bits : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec -> int64 -> t
+(** A number with exact bit representation: a tensor with a single axis of one dimension,
+    initialized to the given int64 value. Useful for initializing uint4x32 tensors where exact bit
+    patterns matter. [grad_spec] is by default [Prohibit_grad]. *)
+
 val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
 (** A tensor with an explicit shape, initialized to the given values. Omitted shape rows default to
     no axes. [grad_spec] is by default [Prohibit_grad]. If [strict] is [true] (the default), the

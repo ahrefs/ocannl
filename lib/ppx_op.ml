@@ -72,6 +72,8 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] [%e expr]])
+  | { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } ->
+      (no_vbs, [%expr TDSL.bits [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
       (no_vbs, [%expr TDSL.number (Float.of_int [%e expr])])
   | [%expr
@@ -81,6 +83,16 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
         Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
       in
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] ~axis_label:[%e axis] [%e f]])
+  | [%expr
+      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
+        [%e? { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i]] ->
+      let axis =
+        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
+      in
+      ( no_vbs,
+        [%expr
+          TDSL.bits ?label:[%e opt_expr ~loc label] ~axis_label:[%e axis] [%e i]]
+      )
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
         [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->

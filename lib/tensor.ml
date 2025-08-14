@@ -477,7 +477,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some
-        (( Constant _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets
+        (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets
          | Constant_fill _ ) as fetch_op) ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
@@ -506,6 +506,19 @@ let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c 
   (* FIXME: make this always pick a matching precision. *)
   Ir.Ops.(
     if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
+  t
+
+let%track7_sexp bits ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) i : t =
+  (* Use Constant_bits for exact bit representation, primarily for uint4x32 *)
+  let label = Int64.to_string i :: label in
+  let fetch_op = Ir.Assignments.Constant_bits i in
+  let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
+  let t =
+    match axis_label with
+    | None -> t ~output_dims:[ 1 ] ()
+    | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
+  in
+  Tn.update_memory_mode t.value Effectively_constant 24;
   t
 
 let constant_fill ~debug values =
@@ -632,7 +645,7 @@ let set_random_seed ?seed () =
   let seed =
     Option.value ~default:42 @@ Option.first_some seed Utils.settings.fixed_state_for_init
   in
-  let res = number ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int.to_float seed) in
+  let res = bits ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int64.of_int seed) in
   Tn.update_prec res.value Ir.Ops.uint4x32;
   random_seed := Some res
 

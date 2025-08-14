@@ -56,6 +56,7 @@ and scalar_t =
   | Binop of Ops.binop * scalar_t * scalar_t
   | Unop of Ops.unop * scalar_t
   | Constant of float
+  | Constant_bits of int64  (** Direct bit representation, primarily for uint4x32 *)
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
@@ -177,7 +178,7 @@ let is_constexpr_comp traced_store llsc =
     | Ternop (_, v1, v2, v3) -> loop v1 && loop v2 && loop v3
     | Binop (_, v1, v2) -> loop v1 && loop v2
     | Unop (_, v) -> loop v
-    | Constant _ -> true
+    | Constant _ | Constant_bits _ -> true
     | Embed_index _ -> false
   in
   loop llsc
@@ -198,7 +199,7 @@ let is_accessing_comp traced_store llsc =
     | Ternop (_, v1, v2, v3) -> loop v1 || loop v2 || loop v3
     | Binop (_, v1, v2) -> loop v1 || loop v2
     | Unop (_, v) -> loop v
-    | Constant _ -> false
+    | Constant _ | Constant_bits _ -> false
     | Embed_index _ -> false
   in
   loop llsc
@@ -214,7 +215,7 @@ let is_complex_comp traced_store llsc =
   | Ternop (_, v1, v2, v3) -> accessing v1 || accessing v2 || accessing v3
   | Binop (_, v1, v2) -> accessing v1 || accessing v2
   | Unop (_, v) -> accessing v
-  | Constant _ -> false
+  | Constant _ | Constant_bits _ -> false
   | Embed_index _ -> false
 
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
@@ -332,7 +333,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   and loop_scalar env (access_pos : int array option) llsc =
     let loop = loop_scalar env access_pos in
     match llsc with
-    | Constant _ -> ()
+    | Constant _ | Constant_bits _ -> ()
     | Get (ptr, indices) ->
         let traced : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
@@ -491,7 +492,7 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     | Staged_compilation _ -> raise @@ Non_virtual 8
   and loop_scalar ~env_dom llsc =
     match llsc with
-    | Constant _ -> ()
+    | Constant _ | Constant_bits _ -> ()
     | Get (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs idcs
         else
@@ -648,7 +649,7 @@ let%track7_sexp inline_computation ~id
       | Staged_compilation _ -> Some llc
     and loop_scalar env llsc : scalar_t =
       match llsc with
-      | Constant _ -> llsc
+      | Constant _ | Constant_bits _ -> llsc
       | Get (tn, indices) when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
@@ -740,6 +741,7 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
   and loop_scalar ~process_for (llsc : scalar_t) : scalar_t =
     match llsc with
     | Constant _ -> llsc
+    | Constant_bits _ -> llsc
     | Get (tn, _) when Set.mem process_for tn ->
         (* [Get_local] will replace this [Get] during [inline_computation] if [tn] remains
            virtual. *)
@@ -829,6 +831,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     let loop = loop_scalar ~balanced ~env_dom in
     match llsc with
     | Constant _ -> llsc
+    | Constant_bits _ -> llsc
     | Get (a, indices) ->
         (* TODO(#296): this should probably already be Never_virtual, we could assert it. *)
         Tn.update_memory_mode a Never_virtual 17;
@@ -874,6 +877,7 @@ let rec substitute_float ~var ~value llsc =
   else
     match llsc with
     | Constant _ -> llsc
+    | Constant_bits _ -> llsc
     | Get (_ptr, _indices) -> llsc
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llsc
@@ -937,6 +941,7 @@ let simplify_llc llc =
     in
     match llsc' with
     | Constant _ -> llsc
+    | Constant_bits _ -> llsc
     | Get (_ptr, _indices) -> llsc
     | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 -> loop_scalar v
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
@@ -1048,6 +1053,7 @@ let simplify_llc llc =
     let loop = check_float tn in
     match llsc with
     | Constant c -> check_constant tn c
+    | Constant_bits _ -> () (* No check needed for bit constants *)
     | Local_scope { body; _ } -> check_proc body
     | Ternop (_, v1, v2, v3) ->
         loop v1;
@@ -1170,7 +1176,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
         loop_scalar f2
     | Unop (_, f) -> loop_scalar f
     | Get_local { tn; _ } -> visit tn
-    | Constant _ | Embed_index _ -> ()
+    | Constant _ | Constant_bits _ | Embed_index _ -> ()
   in
   Array.iter ~f:loop llcs;
   let repeating_nograd_idents =
@@ -1260,6 +1266,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
+    | Constant_bits i -> string (Printf.sprintf "0x%LX" i)
     | Embed_index idx ->
         let idx_doc = pp_axis_index idx in
         if PPrint.is_empty idx_doc then string "0" else idx_doc
@@ -1351,6 +1358,7 @@ let to_doc ?name ?static_indices () llc =
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Constant c -> string (Printf.sprintf "%.16g" c)
+    | Constant_bits i -> string (Printf.sprintf "0x%LX" i)
     | Embed_index idx ->
         let idx_doc = pp_axis_index idx in
         if PPrint.is_empty idx_doc then string "0" else idx_doc

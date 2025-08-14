@@ -38,11 +38,11 @@ let%expect_test "threefry4x32 basic test" =
   [%expect
     {|
     First 5 uniform random values:
-      [0]: 0.237546
-      [1]: 0.120910
-      [2]: 0.485426
-      [3]: 0.235820
-      [4]: 0.007262
+      [0]: 0.188068
+      [1]: 0.073963
+      [2]: 0.494024
+      [3]: 0.102271
+      [4]: 0.635470
     All values in [0, 1) range: true
     |}]
 
@@ -76,8 +76,8 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
 
   [%expect
     {|
-    Single precision - first value: 0.237546, second value: 0.120910
+    Single precision - first value: 0.188068, second value: 0.073963
     All values in [0, 1) range: true
-    Half precision - first value: 0.831543, second value: 0.237549
+    Half precision - first value: 0.205322, second value: 0.188110
     All values in [0, 1) range: true
     |}]

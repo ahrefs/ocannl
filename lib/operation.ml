@@ -121,6 +121,7 @@ module NDO_before_pow = struct
   let ( + ) t1 t2 = add ~grad_spec:Prohibit_grad t1 t2 ()
   let ( !. ) f = Tensor.number ~grad_spec:Prohibit_grad f
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:Prohibit_grad @@ Float.of_int i
+  let ( !% ) ?label i = Tensor.bits ?label ~grad_spec:Prohibit_grad i
   let ( - ) t1 t2 = sub ~grad_spec:Prohibit_grad t1 t2 ()
 
   let ( ~- ) ?label t =
@@ -447,6 +448,7 @@ module DO = struct
   let fma ?label t1 t2 t3 = fma ~grad_spec:If_needed ?label t1 t2 t3 ()
   let ( !. ) f = Tensor.number ~grad_spec:If_needed f
   let ( !.. ) ?label i = Tensor.number ?label ~grad_spec:If_needed @@ Float.of_int i
+  let ( !% ) ?label i = Tensor.bits ?label ~grad_spec:If_needed i
   let ( !@ ) = embed_symbol
   let ( - ) ?label t1 t2 = sub ~grad_spec:If_needed ?label t1 t2 ()
 
@@ -549,6 +551,7 @@ module TDSL = struct
 
   let term = Tensor.term ~grad_spec:If_needed
   let number = Tensor.number ~grad_spec:If_needed
+  let bits = Tensor.bits ~grad_spec:If_needed
   let ndarray = Tensor.ndarray ~grad_spec:If_needed
   let threefry4x32 = threefry4x32 ~grad_spec:If_needed
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:If_needed
@@ -606,6 +609,7 @@ module NTDSL = struct
   let wrap = wrap ~grad_spec:Prohibit_grad
   let wrap_padded = wrap_padded ~grad_spec:Prohibit_grad
   let rebatch = rebatch ~grad_spec:Prohibit_grad
+  let bits = Tensor.bits ~grad_spec:Prohibit_grad
   let threefry4x32 = threefry4x32 ~grad_spec:Prohibit_grad
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Prohibit_grad
   let embed_self_id = embed_self_id

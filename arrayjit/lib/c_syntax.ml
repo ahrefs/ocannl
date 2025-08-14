@@ -782,6 +782,11 @@ module C_syntax (B : C_syntax_config) = struct
           else string prefix ^^ string c_str ^^ string postfix
         in
         ([], expr)
+    | Constant_bits i ->
+        let from_prec = Ops.int64 in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let expr = string prefix ^^ string (Printf.sprintf "%LdLL" i) ^^ string postfix in
+        ([], expr)
     | Embed_index idx ->
         let from_prec = Ops.int32 in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
@@ -859,6 +864,11 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let c_str = Printf.sprintf "%.16g" c in
         (string prefix ^^ string c_str ^^ string postfix, [])
+    | Constant_bits i ->
+        let from_prec = Ops.int64 in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let expr = string prefix ^^ string (Printf.sprintf "%LdLL" i) ^^ string postfix in
+        (expr, [])
     | Embed_index idx ->
         let idx_doc = pp_axis_index idx in
         ((if PPrint.is_empty idx_doc then string "0" else idx_doc), [])

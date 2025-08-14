@@ -784,6 +784,8 @@ let translate ?ident_label (expr : expression) : result =
     match expr with
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
         { default_result with expr = [%expr NTDSL.number [%e expr]]; slot = Scalar }
+    | { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } ->
+        { default_result with expr = [%expr NTDSL.bits [%e expr]]; slot = Scalar }
     | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
         { default_result with expr = [%expr NTDSL.number (Float.of_int [%e expr])]; slot = Scalar }
     | [%expr
@@ -795,6 +797,17 @@ let translate ?ident_label (expr : expression) : result =
         {
           default_result with
           expr = [%expr NTDSL.number ~axis_label:[%e axis] [%e f]];
+          slot = Scalar;
+        }
+    | [%expr
+        [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
+          [%e? { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i]] ->
+        let axis =
+          Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
+        in
+        {
+          default_result with
+          expr = [%expr NTDSL.bits ~axis_label:[%e axis] [%e i]];
           slot = Scalar;
         }
     | [%expr

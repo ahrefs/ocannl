@@ -21,6 +21,7 @@ type buffer = Node of Tn.t | Merge_buffer of Tn.t [@@deriving sexp_of, equal]
 (** Resets a array by performing the specified computation or data fetching. *)
 type fetch_op =
   | Constant of float
+  | Constant_bits of int64  (** Direct bit representation, primarily for uint4x32 *)
   | Constant_fill of float array
       (** Fills in the numbers where the rightmost axis is contiguous. Primes shape inference to
           require the assigned tensor to have the same number of elements as the array, but in case
@@ -326,6 +327,8 @@ let%track4_sexp to_low_level code =
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Low_level.Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
+    | Fetch { array; fetch_op = Constant_bits i; dims } ->
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
@@ -335,7 +338,7 @@ let%track4_sexp to_low_level code =
             set array idcs @@ Embed_index (Iterator s.static_symbol))
     | Fetch { array; fetch_op = Embed_self_id; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            set array idcs @@ Constant (Float.of_int array.id))
+            set array idcs @@ Constant_bits (Int64.of_int array.id))
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
         Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
@@ -422,6 +425,7 @@ let to_doc ?name ?static_indices () c =
   let doc_of_fetch_op (op : fetch_op) =
     match op with
     | Constant f -> string (Float.to_string f)
+    | Constant_bits i -> string (Printf.sprintf "bits(%LdLL)" i)
     | Constant_fill values ->
         let values_str =
           String.concat ~sep:", " (Array.to_list (Array.map values ~f:Float.to_string))

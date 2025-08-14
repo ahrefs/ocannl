@@ -50,6 +50,7 @@ and scalar_t =
   | Binop of Ops.binop * scalar_t * scalar_t
   | Unop of Ops.unop * scalar_t
   | Constant of float
+  | Constant_bits of int64  (** Direct bit representation, primarily for uint4x32 *)
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 

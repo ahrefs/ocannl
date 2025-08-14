@@ -410,6 +410,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   match logic with
   | Terminal (Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Fetch (Constant_bits _)) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Data (Reshape nd)) ->
       ( dim_map_empty,
         Rows_constr
