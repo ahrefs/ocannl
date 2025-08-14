@@ -11,11 +11,13 @@ type int32_elt = Bigarray.int32_elt
 type float16_elt = Bigarray.float16_elt
 type float32_elt = Bigarray.float32_elt
 type float64_elt = Bigarray.float64_elt
+type int64_elt = Bigarray.int64_elt
 
 type ('ocaml, 'impl) precision =
   | Byte : (char, uint8_elt) precision
   | Uint16 : (int, uint16_elt) precision
   | Int32 : (int32, int32_elt) precision
+  | Int64 : (int64, int64_elt) precision
   | Uint4x32 : (Stdlib.Complex.t, Bigarray.complex64_elt) precision
       (** A 128-bit value that corresponds to e.g. CUDA's uint4 type. Luckily, the OCaml Bigarray
           library supports complex64_elt which is a 128-bit value, so we avoid dims conversions. *)
@@ -31,6 +33,7 @@ type prec =
   | Byte_prec of (char, uint8_elt) precision
   | Uint16_prec of (int, uint16_elt) precision
   | Int32_prec of (int32, int32_elt) precision
+  | Int64_prec of (int64, int64_elt) precision
   | Uint4x32_prec of (Stdlib.Complex.t, Bigarray.complex64_elt) precision
   | Half_prec of (float, float16_elt) precision
   | Bfloat16_prec of (int, uint16_elt) precision
@@ -41,6 +44,7 @@ type prec =
 let byte = Byte_prec Byte
 let uint16 = Uint16_prec Uint16
 let int32 = Int32_prec Int32
+let int64 = Int64_prec Int64
 let uint4x32 = Uint4x32_prec Uint4x32
 let half = Half_prec Half
 let bfloat16 = Bfloat16_prec Bfloat16
@@ -62,6 +66,7 @@ let sexp_of_prec = function
   | Byte_prec _ -> Sexp.Atom "Byte_prec"
   | Uint16_prec _ -> Sexp.Atom "Uint16_prec"
   | Int32_prec _ -> Sexp.Atom "Int32_prec"
+  | Int64_prec _ -> Sexp.Atom "Int64_prec"
   | Uint4x32_prec _ -> Sexp.Atom "Uint4x32_prec"
   | Half_prec _ -> Sexp.Atom "Half_prec"
   | Bfloat16_prec _ -> Sexp.Atom "Bfloat16_prec"
@@ -74,6 +79,7 @@ let prec_of_sexp = function
   | Sexp.Atom "Byte_prec" -> byte
   | Sexp.Atom "Uint16_prec" -> uint16
   | Sexp.Atom "Int32_prec" -> int32
+  | Sexp.Atom "Int64_prec" -> int64
   | Sexp.Atom "Uint4x32_prec" -> uint4x32
   | Sexp.Atom "Half_prec" -> half
   | Sexp.Atom "Bfloat16_prec" -> bfloat16
@@ -88,6 +94,7 @@ let precision_to_string (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   | Byte -> "byte"
   | Uint16 -> "uint16"
   | Int32 -> "int32"
+  | Int64 -> "int64"
   | Uint4x32 -> "uint4x32"
   | Half -> "half"
   | Bfloat16 -> "bfloat16"
@@ -100,6 +107,7 @@ let prec_string = function
   | Byte_prec _ -> "byte"
   | Uint16_prec _ -> "uint16"
   | Int32_prec _ -> "int32"
+  | Int64_prec _ -> "int64"
   | Uint4x32_prec _ -> "uint4x32"
   | Half_prec _ -> "half"
   | Bfloat16_prec _ -> "bfloat16"
@@ -115,6 +123,7 @@ let equal_prec p1 p2 =
   | Byte_prec _, Byte_prec _ -> true
   | Uint16_prec _, Uint16_prec _ -> true
   | Int32_prec _, Int32_prec _ -> true
+  | Int64_prec _, Int64_prec _ -> true
   | Uint4x32_prec _, Uint4x32_prec _ -> true
   | Half_prec _, Half_prec _ -> true
   | Bfloat16_prec _, Bfloat16_prec _ -> true
@@ -125,6 +134,7 @@ let equal_prec p1 p2 =
   | Byte_prec _, _
   | Uint16_prec _, _
   | Int32_prec _, _
+  | Int64_prec _, _
   | Uint4x32_prec _, _
   | Half_prec _, _
   | Bfloat16_prec _, _
@@ -139,6 +149,7 @@ let compare_prec p1 p2 =
   | Byte_prec _, Byte_prec _ -> 0
   | Uint16_prec _, Uint16_prec _ -> 0
   | Int32_prec _, Int32_prec _ -> 0
+  | Int64_prec _, Int64_prec _ -> 0
   | Uint4x32_prec _, Uint4x32_prec _ -> 0
   | Half_prec _, Half_prec _ -> 0
   | Bfloat16_prec _, Bfloat16_prec _ -> 0
@@ -153,6 +164,8 @@ let compare_prec p1 p2 =
   | _, Uint16_prec _ -> 1
   | Int32_prec _, _ -> -1
   | _, Int32_prec _ -> 1
+  | Int64_prec _, _ -> -1
+  | _, Int64_prec _ -> 1
   | Uint4x32_prec _, _ -> -1
   | _, Uint4x32_prec _ -> 1
   | Half_prec _, _ -> -1
@@ -169,6 +182,7 @@ let prec_in_bytes = function
   | Byte_prec _ -> 1
   | Uint16_prec _ -> 2
   | Int32_prec _ -> 4
+  | Int64_prec _ -> 8
   | Uint4x32_prec _ -> 16
   | Half_prec _ -> 2
   | Bfloat16_prec _ -> 2
@@ -176,6 +190,10 @@ let prec_in_bytes = function
   | Single_prec _ -> 4
   | Double_prec _ -> 8
 
+(** Prefer precision which is more likely to remain functional in the resulting computations.
+    uint4x32 always dominates, because operations that work on uint4x32 do not support other
+    precisions. Otherwise, fractional number precisions dominate; within them, larger dynamic range
+    precisions dominate. *)
 let promote_prec p1 p2 =
   match (p1, p2) with
   | Uint4x32_prec _, _ -> p1
@@ -184,18 +202,20 @@ let promote_prec p1 p2 =
   | _, Double_prec _ -> p2
   | Single_prec _, _ -> p1
   | _, Single_prec _ -> p2
-  | Int32_prec _, _ -> p1
-  | _, Int32_prec _ -> p2
-  | Half_prec _, _ -> p1
-  | _, Half_prec _ -> p2
   | Bfloat16_prec _, _ -> p1
   | _, Bfloat16_prec _ -> p2
+  | Half_prec _, _ -> p1
+  | _, Half_prec _ -> p2
+  | Fp8_prec _, _ -> p1
+  | _, Fp8_prec _ -> p2
+  | Int64_prec _, _ -> p1
+  | _, Int64_prec _ -> p2
+  | Int32_prec _, _ -> p1
+  | _, Int32_prec _ -> p2
   | Uint16_prec _, _ -> p1
   | _, Uint16_prec _ -> p2
   | Byte_prec _, _ -> p1
   | _, Byte_prec _ -> p2
-  | Fp8_prec _, _ -> p1
-  | _, Fp8_prec _ -> p2
   | Void_prec, Void_prec -> Void_prec
 
 let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
@@ -203,6 +223,7 @@ let pack_prec (type ocaml elt_t) (prec : (ocaml, elt_t) precision) =
   | Byte -> byte
   | Uint16 -> uint16
   | Int32 -> int32
+  | Int64 -> int64
   | Uint4x32 -> uint4x32
   | Half -> half
   | Bfloat16 -> bfloat16
@@ -223,6 +244,8 @@ let apply_prec ?default { f } = function
   | Uint16_prec _ -> .
   | Int32_prec Int32 -> f Int32
   | Int32_prec _ -> .
+  | Int64_prec Int64 -> f Int64
+  | Int64_prec _ -> .
   | Half_prec Half -> f Half
   | Half_prec _ -> .
   | Bfloat16_prec Bfloat16 -> f Bfloat16
@@ -242,6 +265,7 @@ let c_typ_of_prec = function
   | Byte_prec _ -> "unsigned char"
   | Uint16_prec _ -> "unsigned short"
   | Int32_prec _ -> "int"
+  | Int64_prec _ -> "long long"
   | Uint4x32_prec _ -> "uint4x32_t" (* Note that both CUDA and Metal usa a native type uint4 here *)
   | Half_prec _ -> "_Float16"
   | Bfloat16_prec _ -> "unsigned short" (* Bfloat16 represented as uint16 *)
@@ -255,6 +279,7 @@ let c_vec_typ_of_prec ~length prec =
   | Single_prec _, 4 -> "float4_t"
   | Double_prec _, 2 -> "double2_t"
   | Int32_prec _, 4 -> "int32x4_t"
+  | Int64_prec _, 2 -> "int64x2_t"
   | (Byte_prec _ | Fp8_prec _), 16 -> "int8x16_t"
   | (Uint16_prec _ | Bfloat16_prec _), 8 -> "uint16x8_t"
   | Half_prec _, 8 -> "half8_t"
@@ -265,6 +290,7 @@ let hum_typ_of_prec = function
   | Byte_prec _ -> "byte"
   | Uint16_prec _ -> "uint16"
   | Int32_prec _ -> "int32"
+  | Int64_prec _ -> "int64"
   | Uint4x32_prec _ -> "uint4x32"
   | Half_prec _ -> "half"
   | Bfloat16_prec _ -> "bfloat16"
@@ -653,9 +679,10 @@ let c_convert_precision ~from ~to_ =
   (* Conversions involving FP8 and other types *)
   | Fp8_prec _, Half_prec _ -> ("(_Float16)fp8_to_single(", ")")
   | Half_prec _, Fp8_prec _ -> ("single_to_fp8((float)", ")")
-  | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) ->
+  | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _) ->
       ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_single(", ")")
-  | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Fp8_prec _ -> ("single_to_fp8((float)", ")")
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _), Fp8_prec _ ->
+      ("single_to_fp8((float)", ")")
   (* BFloat16 <-> FP8 conversions *)
   | Bfloat16_prec _, Fp8_prec _ -> ("single_to_fp8(bfloat16_to_single(", "))")
   | Fp8_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(fp8_to_single(", "))")

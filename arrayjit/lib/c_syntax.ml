@@ -292,7 +292,8 @@ struct
         | _ -> invalid_arg "Pure_C_config.binop_syntax: Threefry4x32 on non-uint4x32 precision")
     | Ops.Satur01_gate -> (
         match prec with
-        | Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Uint4x32_prec _ ->
+        | Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Int64_prec _
+        | Ops.Uint4x32_prec _ ->
             let open PPrint in
             group
               (parens

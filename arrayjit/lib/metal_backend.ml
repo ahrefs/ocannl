@@ -448,6 +448,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Single_prec _ -> "float"
       | Ops.Double_prec _ ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
+      | Ops.Int64_prec _ -> "long"
       | Ops.Void_prec -> "void"
 
     let vec_typ_of_prec ~length prec =
@@ -473,6 +474,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Single_prec _ -> "f"
       | Ops.Double_prec _ ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
+      | Ops.Int64_prec _ -> "l"
       | Ops.Void_prec -> ""
 
     let ternop_syntax _prec op =
