@@ -150,18 +150,80 @@ let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
 let is_bijective proj =
-  let lhs_symbols =
-    Set.of_array (module Symbol)
-    @@ Array.concat_map proj.project_lhs ~f:(function
-         | Iterator s -> [| s |]
-         | Fixed_idx _ -> [||]
-         | Affine { symbols; _ } ->
-             (* For affine indices, we consider all symbols with coefficient 1 *)
-             List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
-             |> Array.of_list
-         | Sub_axis -> [||])
+  (* For bijection, we need the assignment to be both injective and surjective.
+     We check surjectivity (all target positions are written) and that each source 
+     position maps to exactly one target position. *)
+  
+  (* Check if there are any fixed indices (except Fixed_idx 0 when dim is 1) *)
+  let has_non_trivial_fixed =
+    Array.exists2_exn proj.project_lhs proj.lhs_dims ~f:(fun idx dim ->
+        match idx with
+        | Fixed_idx i -> not (i = 0 && dim <= 1)  (* Fixed_idx 0 is OK only when dim is 0 or 1 *)
+        | _ -> false)
   in
-  Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
+  if has_non_trivial_fixed then false
+  else
+    (* Collect symbols used in LHS with their properties *)
+    let lhs_symbols, has_affine, has_sub_axis = 
+      Array.fold proj.project_lhs ~init:([], false, false) 
+        ~f:(fun (syms, has_aff, has_sub) idx ->
+          match idx with
+          | Iterator s -> (s :: syms, has_aff, has_sub)
+          | Fixed_idx _ -> (syms, has_aff, has_sub)
+          | Affine { symbols; _ } ->
+              let coeff1_syms = 
+                List.filter_map symbols ~f:(fun (coeff, s) -> 
+                  if coeff = 1 then Some s else None) 
+              in
+              (coeff1_syms @ syms, true, has_sub)
+          | Sub_axis -> (syms, has_aff, true))
+    in
+    let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
+    let product_symbol_set = Set.of_array (module Symbol) proj.product_iterators in
+    
+    (* Basic check: All lhs symbols must be from product iterators (no bound symbols) *)
+    if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
+    else if has_sub_axis then 
+      (* Conservative: Sub_axis case is complex, so assume non-bijective.
+         This is pessimistic but safe - Sub_axis would require comparing
+         lhs_dims and product_space dimensions carefully. *)
+      false
+    else if has_affine then
+      (* For Affine indices: check that coefficient=1 symbols don't have
+         dimensions smaller than any stride coefficients used *)
+      let symbol_dims = 
+        Array.filter_mapi proj.product_iterators ~f:(fun i sym ->
+          if Set.mem lhs_symbol_set sym then Some (sym, proj.product_space.(i))
+          else None)
+        |> Array.to_list
+        |> Map.of_alist_exn (module Symbol)
+      in
+      let check_affine_valid =
+        Array.for_all proj.project_lhs ~f:(function
+          | Affine { symbols; _ } ->
+              (* Find max dimension of coeff=1 symbols *)
+              let max_coeff1_dim = 
+                List.filter_map symbols ~f:(fun (coeff, s) ->
+                  if coeff = 1 then Map.find symbol_dims s else None)
+                |> List.max_elt ~compare:Int.compare
+                |> Option.value ~default:Int.max_value
+              in
+              (* Check that it's not smaller than any stride coefficient *)
+              List.for_all symbols ~f:(fun (coeff, _) ->
+                coeff = 1 || max_coeff1_dim >= coeff)
+          | _ -> true)
+      in
+      if not check_affine_valid then false
+      else
+        (* Final check: number of unique symbols must equal number of LHS dims 
+           AND the symbols must equal product iterators *)
+        Set.length lhs_symbol_set = Array.length proj.project_lhs
+        && Set.equal lhs_symbol_set product_symbol_set
+    else
+      (* Simple case: only Iterator and Fixed_idx *)
+      (* Need all dimensions covered and symbols to match exactly *)
+      Set.length lhs_symbol_set = Array.length proj.project_lhs
+      && Set.equal lhs_symbol_set product_symbol_set
 
 (** Projections for a pointwise unary operator. Provide only one of [debug_info] or [derived_for].
 *)
