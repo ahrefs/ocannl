@@ -230,7 +230,7 @@ let%track4_sexp to_low_level code =
       let lhs_ll = get (Node lhs) lhs_idcs in
       let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in
       let rhs2 = apply_op op rhses_ll in
-      if can_skip_accumulation ~projections then set lhs lhs_idcs rhs2
+      if initialize_neutral && can_skip_accumulation ~projections then set lhs lhs_idcs rhs2
       else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
     in
     let rec for_loop rev_iters = function
