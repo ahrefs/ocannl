@@ -160,20 +160,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Cu.Module.[ GENERATE_DEBUG_INFO true; GENERATE_LINE_INFO true ]
     else []
 
-  let set_ptr_in_kernel kernel_module src name =
-    let dst, _ = Cuda.Module.get_global kernel_module ~name in
-    (* Copy the helper function address to the kernel's function pointer variable *)
-    Cuda.Deviceptr.memcpy_D_to_D ~dst ~src ~size_in_bytes:8 (* pointer size *) ()
-
+  (* No longer need runtime linking since Threefry is included directly in each kernel *)
   let set_builtins_for_device =
     assert !initialized;
-    let cu_src = Builtins_cuda_large.source in
-    let code = cuda_to_ptx ~name:"builtins_large" cu_src in
-    fun ~primary_context ->
-      set_ctx primary_context;
-      let run_module = Cu.Module.load_data_ex code (run_options ()) in
-      let threefry4x32_ptr, _ = Cu.Module.get_global run_module ~name:"arrayjit_threefry4x32" in
-      fun kernel_module -> set_ptr_in_kernel kernel_module threefry4x32_ptr "arrayjit_threefry4x32"
+    fun ~primary_context:_ -> fun _kernel_module -> ()
 
   let%track3_sexp get_device ~(ordinal : int) : device =
     if num_devices () <= ordinal then
@@ -724,11 +714,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let local_heap_dealloc = None
   end
 
-  let builtins_large_header =
-    {|
-  __device__ uint4x32_t ( *arrayjit_threefry4x32)(uint4x32_t key, uint4x32_t counter) = nullptr;
-  |}
-
   let prepend_builtins b =
     (* Add includes first *)
     Buffer.add_string b "#include <cuda_fp16.h>\n";
@@ -738,8 +723,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     Buffer.add_string b "\n\n";
     Buffer.add_string b Builtins_cuda_small.source;
-    (* Needs to be after the small builtins, because uses uint4x32_t. *)
-    Buffer.add_string b builtins_large_header;
+    (* Include the full Threefry implementation directly in each kernel *)
+    Buffer.add_string b Builtins_cuda_large.source;
     Buffer.add_string b "\n\n"
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =

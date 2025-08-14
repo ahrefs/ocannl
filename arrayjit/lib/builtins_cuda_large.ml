@@ -1,11 +1,8 @@
 let source =
   {|
 #include <cuda_runtime.h>
-#include <stdint.h>
-
-typedef struct {
-    unsigned int v[4];
-} uint4x32_t;
+/* FIXME(#353): uint3x32_t might be needed again. */
+/* uint4x32_t is already defined in builtins_cuda_small.ml */
 
 /* Threefry4x32 constants */
 __device__ __constant__ unsigned int THREEFRY_C240 = 0x1BD11BDA;
