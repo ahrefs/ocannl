@@ -299,6 +299,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> "unsigned char"
       | Ops.Uint16_prec _ -> "unsigned short"
       | Ops.Int32_prec _ -> "int"
+      | Ops.Int64_prec _ -> "long long"
       | Ops.Uint4x32_prec _ -> "uint4x32_t"
       | Ops.Half_prec _ -> "__half"
       | Ops.Bfloat16_prec _ -> "__nv_bfloat16" (* CUDA bfloat16 type *)
@@ -312,6 +313,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Single_prec _, 4 -> "float4_t"
       | Ops.Double_prec _, 2 -> "double2_t"
       | Ops.Int32_prec _, 4 -> "int32x4_t"
+      | Ops.Int64_prec _, 2 -> "int64x2_t"
       | (Ops.Byte_prec _ | Ops.Fp8_prec _), 16 -> "int8x16_t"
       | (Ops.Uint16_prec _ | Ops.Bfloat16_prec _), 8 -> "uint16x8_t"
       | Ops.Half_prec _, 8 -> "half8_t"
@@ -349,14 +351,14 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string ")")
-      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _ | Uint4x32_prec _) ->
+      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Fp8_prec _ | Uint4x32_prec _) ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
       | ToPowOf, Bfloat16_prec _ ->
           fun v1 v2 ->
             group
               (string "__float2bfloat16(powf(__bfloat162float("
               ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
-      | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Fp8_prec _) ->
+      | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Fp8_prec _) ->
           fun v1 v2 ->
             group
               (parens
@@ -502,6 +504,20 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                         ^^ string "0"))))
+      | Satur01_gate, Int64_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group
+                    (parens
+                       (string "(double)" ^^ v1 ^^ string " > 0.0 && (double)" ^^ v1
+                      ^^ string " < 1.0"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0LL")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0LL"))))
       | Satur01_gate, Uint4x32_prec _ ->
           fun v1 v2 ->
             group
@@ -551,6 +567,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Max, Single_prec _ -> func "fmaxf"
       | Max, Uint16_prec _ -> func "max"
       | Max, Int32_prec _ -> func "max"
+      | Max, Int64_prec _ -> func "max"
       | Max, Uint4x32_prec _ -> func "max"
       | Max, Bfloat16_prec _ ->
           (* FIXME: This might be wrong, definitely verify and maybe fix, here and elsewhere *)
@@ -562,6 +579,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Min, Single_prec _ -> func "fminf"
       | Min, Uint16_prec _ -> func "min"
       | Min, Int32_prec _ -> func "min"
+      | Min, Int64_prec _ -> func "min"
       | Min, Uint4x32_prec _ -> func "min"
       | Min, Bfloat16_prec _ -> func "__hmin"
       | Min, Fp8_prec _ -> func "min"
@@ -670,6 +688,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Byte_prec _, Byte_prec _
       | Uint16_prec _, Uint16_prec _
       | Int32_prec _, Int32_prec _
+      | Int64_prec _, Int64_prec _
       | Uint4x32_prec _, Uint4x32_prec _
       | Bfloat16_prec _, Bfloat16_prec _
       | Fp8_prec _, Fp8_prec _
@@ -681,6 +700,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Double_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | Single_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")  
       | Int32_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
+      | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
       | Uint4x32_prec _, _ -> ("", ".v[0]")
       | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")

@@ -183,4 +183,11 @@ __device__ uint8x16_t uint4x32_to_u8_uniform_vec(uint4x32_t x) {
   }
   return result;
 }
+
+/* Convert int64 to uint4x32 */
+__device__ uint4x32_t int64_to_uint4x32(long long x) {
+  unsigned long long bits = (unsigned long long)x;
+  uint4x32_t result = {{(unsigned int)(bits & 0xFFFFFFFF), (unsigned int)(bits >> 32), 0, 0}};
+  return result;
+}
 |}
