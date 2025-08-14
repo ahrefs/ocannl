@@ -167,10 +167,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
   let set_builtins_for_device =
     assert !initialized;
-    let builtins_path =
-      Stdlib.Filename.concat (Stdlib.Filename.dirname Stdlib.__FILE__) "builtins_large.cu"
-    in
-    let cu_src = Stdio.In_channel.read_all builtins_path in
+    let cu_src = Builtins_cuda_large.source in
     let code = cuda_to_ptx ~name:"builtins_large" cu_src in
     fun ~primary_context ->
       set_ctx primary_context;
@@ -306,7 +303,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let kernel_prep_line =
       "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
 
-    let includes = [ "<cuda_fp16.h>" ]
+    let includes = [ "<cuda_fp16.h>"; "<cuda_bf16.h>" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"
@@ -657,7 +654,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
-      | Uint4x32_to_prec_uniform, _ -> func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
+
+    let vec_unop_syntax prec op v =
+      let open PPrint in
+      match (op, prec) with
+      | Ops.Uint4x32_to_prec_uniform, _ -> 
+          group (string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform_vec(") ^^ v ^^ rparen)
 
     let ternop_syntax prec v =
       let open PPrint in
@@ -668,17 +670,29 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | FMA, Ops.Single_prec _ -> func "fmaf"
       | FMA, _ -> func "fma"
 
+    let extra_declarations = []
+
     let convert_precision ~from ~to_ =
       match (from, to_) with
       | Ops.Double_prec _, Ops.Double_prec _
       | Single_prec _, Single_prec _
       | Half_prec _, Half_prec _
       | Byte_prec _, Byte_prec _
+      | Uint16_prec _, Uint16_prec _
+      | Int32_prec _, Int32_prec _
+      | Uint4x32_prec _, Uint4x32_prec _
+      | Bfloat16_prec _, Bfloat16_prec _
+      | Fp8_prec _, Fp8_prec _
       | Void_prec, Void_prec ->
           ("", "")
       | Double_prec _, Half_prec _ -> ("__double2half(", ")")
       | Single_prec _, Half_prec _ -> ("__float2half(", ")")
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
+      | Double_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
+      | Single_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")  
+      | Int32_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
+      | Uint4x32_prec _, _ -> ("", ".v[0]")
+      | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 
     let kernel_log_param = Some ("int", "log_id")
@@ -716,6 +730,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   |}
 
   let prepend_builtins b =
+    (* Add includes first *)
+    Buffer.add_string b "#include <cuda_fp16.h>\n";
+    Buffer.add_string b "#include <cuda_bf16.h>\n";
+    Buffer.add_string b "\n";
     if Utils.debug_log_from_routines () then
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     Buffer.add_string b "\n\n";
@@ -732,11 +750,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    prepend_builtins b;
     let declarations_doc = Syntax.print_declarations () in
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let final_doc = PPrint.(declarations_doc ^^ proc_doc) in
     PPrint.ToBuffer.pretty 1.0 110 b final_doc;
+    (* Prepend builtins after syntax generation to preserve include order *)
+    let full_source = Buffer.contents b in
+    Buffer.clear b;
+    prepend_builtins b;
+    Buffer.add_string b full_source;
     let ptx = cuda_to_ptx ~name (Buffer.contents b) in
     { traced_store; ptx; params; bindings; name }
 
@@ -746,7 +768,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let b = Buffer.create 4096 in
-    prepend_builtins b;
     let declarations_doc = Syntax.print_declarations () in
     let params_and_docs =
       Array.map2_exn names lowereds
@@ -758,6 +779,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(declarations_doc ^^ separate hardline all_proc_docs) in
     PPrint.ToBuffer.pretty 1.0 110 b final_doc;
+    (* Prepend builtins after syntax generation to preserve include order *)
+    let full_source = Buffer.contents b in
+    Buffer.clear b;
+    prepend_builtins b;
+    Buffer.add_string b full_source;
 
     let name : string =
       String.(

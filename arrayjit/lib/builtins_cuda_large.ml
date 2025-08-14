@@ -4,11 +4,11 @@ let source =
 #include <stdint.h>
 
 typedef struct {
-    uint32_t v[4];
+    unsigned int v[4];
 } uint4x32_t;
 
 /* Threefry4x32 constants */
-__device__ __constant__ uint32_t THREEFRY_C240 = 0x1BD11BDA;
+__device__ __constant__ unsigned int THREEFRY_C240 = 0x1BD11BDA;
 
 /* Rotation constants for Threefry4x32 */
 __device__ __constant__ unsigned int THREEFRY_ROTATION[8][4] = {
@@ -23,7 +23,7 @@ __device__ __constant__ unsigned int THREEFRY_ROTATION[8][4] = {
 };
 
 /* CUDA intrinsic-based rotate left */
-__device__ __forceinline__ uint32_t rotl32(uint32_t x, unsigned int n) {
+__device__ __forceinline__ unsigned int rotl32(unsigned int x, unsigned int n) {
     return __funnelshift_l(x, x, n);
 }
 
@@ -32,7 +32,7 @@ __device__ __forceinline__ void threefry_round(uint4 &x, unsigned int r0, unsign
     x.x += x.y; x.y = rotl32(x.y, r0); x.y ^= x.x;
     x.z += x.w; x.w = rotl32(x.w, r1); x.w ^= x.z;
     
-    uint32_t tmp = x.y;
+    unsigned int tmp = x.y;
     x.y = x.w;
     x.w = tmp;
     
@@ -50,7 +50,7 @@ __device__ uint4x32_t arrayjit_threefry4x32_impl(uint4x32_t key, uint4x32_t coun
     uint4 k = make_uint4(key.v[0], key.v[1], key.v[2], key.v[3]);
     
     /* Compute ks[4] */
-    uint32_t ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
+    unsigned int ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
     
     /* Initial key injection */
     x.x += k.x;
@@ -71,7 +71,7 @@ __device__ uint4x32_t arrayjit_threefry4x32_impl(uint4x32_t key, uint4x32_t coun
                           THREEFRY_ROTATION[1][2], THREEFRY_ROTATION[1][3]);
         
         /* Key injection */
-        uint32_t inj_round = (round / 4) + 1;
+        unsigned int inj_round = (round / 4) + 1;
         if (inj_round == 1) {
             x.x += k.y;
             x.y += k.z;
