@@ -150,50 +150,46 @@ let opt_symbol d = if iterated d then Some (get_symbol ()) else None
 let opt_iterator = function None -> Fixed_idx 0 | Some sym -> Iterator sym
 
 let is_surjective proj =
-  (* For surjectivity, we check if all target (LHS) positions will be written to.
-     This is used to determine if we need to zero-initialize before assignment. *)
-  
+  (* For surjectivity, we check if all target (LHS) positions will be written to. This is used to
+     determine if we need to zero-initialize before assignment. *)
+
   (* Check if there are any fixed indices (except Fixed_idx 0 when dim is 1) *)
   let has_non_trivial_fixed =
     Array.exists2_exn proj.project_lhs proj.lhs_dims ~f:(fun idx dim ->
         match idx with
-        | Fixed_idx i -> not (i = 0 && dim <= 1)  (* Fixed_idx 0 is OK only when dim is 0 or 1 *)
+        | Fixed_idx i -> not (i = 0 && dim <= 1) (* Fixed_idx 0 is OK only when dim is 0 or 1 *)
         | _ -> false)
   in
   if has_non_trivial_fixed then false
   else
     (* Collect symbols used in LHS *)
-    let lhs_symbols, has_affine, has_sub_axis = 
-      Array.fold proj.project_lhs ~init:([], false, false) 
-        ~f:(fun (syms, has_aff, has_sub) idx ->
+    let lhs_symbols, has_affine, has_sub_axis =
+      Array.fold proj.project_lhs ~init:([], false, false) ~f:(fun (syms, has_aff, has_sub) idx ->
           match idx with
           | Iterator s -> (s :: syms, has_aff, has_sub)
           | Fixed_idx _ -> (syms, has_aff, has_sub)
           | Affine { symbols; _ } ->
-              let coeff1_syms = 
-                List.filter_map symbols ~f:(fun (coeff, s) -> 
-                  if coeff = 1 then Some s else None) 
+              let coeff1_syms =
+                List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
               in
               (coeff1_syms @ syms, true, has_sub)
           | Sub_axis -> (syms, has_aff, true))
     in
     let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
     let product_symbol_set = Set.of_array (module Symbol) proj.product_iterators in
-    
+
     (* All lhs symbols must be from product iterators (no bound symbols) *)
     if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
-    else if has_sub_axis then 
-      (* Conservative: Sub_axis case is complex, so assume non-surjective.
-         This is pessimistic but safe - Sub_axis would require comparing
-         lhs_dims and product_space dimensions carefully. *)
+    else if has_sub_axis then
+      (* Conservative: Sub_axis case is complex, so assume non-surjective. This is pessimistic but
+         safe - Sub_axis would require comparing lhs_dims and product_space dimensions carefully. *)
       false
     else if has_affine then
-      (* For Affine indices with strides: check coefficient compatibility.
-         A strided access pattern may skip elements. *)
-      let symbol_dims = 
+      (* For Affine indices with strides: check coefficient compatibility. A strided access pattern
+         may skip elements. *)
+      let symbol_dims =
         Array.filter_mapi proj.product_iterators ~f:(fun i sym ->
-          if Set.mem lhs_symbol_set sym then Some (sym, proj.product_space.(i))
-          else None)
+            if Set.mem lhs_symbol_set sym then Some (sym, proj.product_space.(i)) else None)
         |> Array.to_list
         |> Map.of_alist_exn (module Symbol)
       in
@@ -201,15 +197,14 @@ let is_surjective proj =
         Array.for_all proj.project_lhs ~f:(function
           | Affine { symbols; _ } ->
               (* Find max dimension of coeff=1 symbols *)
-              let max_coeff1_dim = 
+              let max_coeff1_dim =
                 List.filter_map symbols ~f:(fun (coeff, s) ->
-                  if coeff = 1 then Map.find symbol_dims s else None)
+                    if coeff = 1 then Map.find symbol_dims s else None)
                 |> List.max_elt ~compare:Int.compare
                 |> Option.value ~default:Int.max_value
               in
               (* Check that coeff=1 dimension is not smaller than any stride *)
-              List.for_all symbols ~f:(fun (coeff, _) ->
-                coeff = 1 || max_coeff1_dim >= coeff)
+              List.for_all symbols ~f:(fun (coeff, _) -> coeff = 1 || max_coeff1_dim >= coeff)
           | _ -> true)
       in
       if not check_affine_surjective then false
@@ -220,24 +215,38 @@ let is_surjective proj =
       (* Simple case: only Iterator and Fixed_idx *)
       (* Need enough unique symbols to cover all dimensions *)
       Set.length lhs_symbol_set >= Array.length proj.project_lhs
-      
-(* For backwards compatibility, keep is_bijective as an alias that checks 
-   both surjectivity and injectivity (stricter than just surjectivity) *)
-let is_bijective proj =
-  is_surjective proj && 
-  let lhs_symbols = 
-    Array.concat_map proj.project_lhs ~f:(function
-      | Iterator s -> [| s |]
-      | Fixed_idx _ -> [||]
-      | Affine { symbols; _ } ->
-          List.filter_map symbols ~f:(fun (coeff, s) -> 
-            if coeff = 1 then Some s else None)
-          |> Array.of_list
-      | Sub_axis -> [||])
-    |> Set.of_array (module Symbol)
+
+let is_injective proj =
+  let product_iterator_set = Set.of_array (module Symbol) proj.product_iterators in
+  
+  (* Check each LHS index for injectivity *)
+  let lhs_symbols, is_injective_mapping =
+    Array.fold proj.project_lhs ~init:([], true) ~f:(fun (syms, still_injective) idx ->
+        if not still_injective then (syms, false)
+        else
+          match idx with
+          | Iterator s -> (s :: syms, true)
+          | Fixed_idx _ -> (syms, true)
+          | Affine { symbols; _ } ->
+              (* Filter for symbols that are product iterators *)
+              let product_symbols = 
+                List.filter symbols ~f:(fun (_coeff, s) -> 
+                  Set.mem product_iterator_set s)
+              in
+              (* If more than one product iterator in this Affine index, not injective *)
+              if List.length product_symbols > 1 then 
+                (syms, false)
+              else
+                (* (coefficients don't matter for injectivity) *)
+                (List.map product_symbols ~f:snd @ syms, true)
+          | Sub_axis -> (syms, true))
   in
-  (* For bijectivity, also need exact match of symbols *)
-  Set.equal lhs_symbols (Set.of_array (module Symbol) proj.product_iterators)
+  
+  if not is_injective_mapping then false
+  else
+    let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
+    (* For injectivity, each product iterator must map to at most one position *)
+    Set.is_subset (Set.of_array (module Symbol) proj.product_iterators) ~of_:lhs_symbol_set
 
 (** Projections for a pointwise unary operator. Provide only one of [debug_info] or [derived_for].
 *)

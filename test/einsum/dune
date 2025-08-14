@@ -41,6 +41,14 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name test_accumulation_semantics)
+ (deps ocannl_config)
+ (modules test_accumulation_semantics)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name einsum_tutorials)
  (package neural_nets_lib)

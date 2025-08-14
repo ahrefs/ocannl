@@ -1,0 +1,101 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+
+=== Testing einsum reduction (surjective but not injective) ===
+Input tensor (shape: batch=2, input=3, output=4):
+HERE: test/einsum/test_accumulation_semantics.ml:32:21
+┌─────────────────────────────────────────────────────────────┐
+│[0]: r2x4x3 shape 0:2|2:3->1:4                               │
+│┌──────┬────────────────────────┬───────────────────────────┐│
+││      │0 @ 0                   │1 @ 0                      ││
+││      │axis 2                  │axis 2                     ││
+│├──────┼────────────────────────┼───────────────────────────┤│
+││axis 1│ 0.00  1.00     2.00    │ 1.20e+1  1.30e+1  1.40e+1 ││
+││      │ 3.00  4.00     5.00    │ 1.50e+1  1.60e+1  1.70e+1 ││
+││      │ 6.00  7.00     8.00    │ 1.80e+1  1.90e+1  2.00e+1 ││
+││      │ 9.00  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
+│└──────┴────────────────────────┴───────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+
+Result after reduction 'b|i->o => b|i' (should sum over output dimension):
+HERE: test/einsum/test_accumulation_semantics.ml:35:21
+┌────────────────────────────────────┐
+│[1]: =>_result shape 0:2|1:3        │
+│┌──────┬───────────────────────────┐│
+││      │axis 1                     ││
+│├──────┼───────────────────────────┤│
+││axis 0│ 1.80e+1  2.20e+1  2.60e+1 ││
+││      │ 6.60e+1  7.00e+1  7.40e+1 ││
+│└──────┴───────────────────────────┘│
+└────────────────────────────────────┘
+
+Expected values (summing over output dimension):
+  Batch 0: [0+3+6+9=18, 1+4+7+10=22, 2+5+8+11=26]
+  Batch 1: [12+15+18+21=66, 13+16+19+22=70, 14+17+20+23=74]
+
+=== Testing diagonal tensor (not surjective) ===
+Input (1D tensor of size 5):
+HERE: test/einsum/test_accumulation_semantics.ml:59:21
+[0]: 0...5 shape 0:6  <not-hosted>
+
+Diagonal tensor 'i=>ii' (5x5 with zeros off-diagonal):
+HERE: test/einsum/test_accumulation_semantics.ml:62:21
+┌──────────────────────────────────────┐
+│[1]: =>_diagonal shape 0:6,1:6        │
+│┌──────┬─────────────────────────────┐│
+││      │axis 1                       ││
+│├──────┼─────────────────────────────┤│
+││axis 0│ 0.00  0.00  ...  0.00  0.00 ││
+││      │ 0.00  1.00  ...  0.00  0.00 ││
+││      │ ...   ...   ...  ...   ...  ││
+││      │ 0.00  0.00  ...  4.00  0.00 ││
+││      │ 0.00  0.00  ...  0.00  5.00 ││
+│└──────┴─────────────────────────────┘│
+└──────────────────────────────────────┘
+
+Note: Off-diagonal elements should be zero (initialized by Zero_out)
+
+=== Testing fixed index projection (not surjective) ===
+Input (1D tensor of size 4):
+HERE: test/einsum/test_accumulation_semantics.ml:84:21
+[0]: 0...4 shape 0:5  <not-hosted>
+
+Sparse tensor 'i=>i0' (only first column populated):
+HERE: test/einsum/test_accumulation_semantics.ml:87:21
+┌─────────────────────────────┐
+│[1]: =>_sparse shape 0:5,1:3 │
+│┌──────┬──────────────────┐  │
+││      │axis 1            │  │
+│├──────┼──────────────────┤  │
+││axis 0│ 0.00  0.00  0.00 │  │
+││      │ 1.00  0.00  0.00 │  │
+││      │ 2.00  0.00  0.00 │  │
+││      │ 3.00  0.00  0.00 │  │
+││      │ 4.00  0.00  0.00 │  │
+│└──────┴──────────────────┘  │
+└─────────────────────────────┘
+
+Note: Only column 0 should have values, others should be zero
+
+=== Testing bijective transpose (optimization case) ===
+Input (3x4 matrix):
+HERE: test/einsum/test_accumulation_semantics.ml:109:21
+[0]: r3x4 shape 0:3,1:4  <not-hosted>
+
+Transposed 'ij=>ji' (4x3 matrix):
+HERE: test/einsum/test_accumulation_semantics.ml:112:21
+┌─────────────────────────────────┐
+│[1]: =>_transposed shape 0:4,1:3 │
+│┌──────┬─────────────────────┐   │
+││      │axis 1               │   │
+│├──────┼─────────────────────┤   │
+││axis 0│ 0.00  4.00  8.00    │   │
+││      │ 1.00  5.00  9.00    │   │
+││      │ 2.00  6.00  1.00e+1 │   │
+││      │ 3.00  7.00  1.10e+1 │   │
+│└──────┴─────────────────────┘   │
+└─────────────────────────────────┘
+
+Note: Simple bijective mapping - no initialization or accumulation needed
+
+=== All accumulation semantics tests completed ===

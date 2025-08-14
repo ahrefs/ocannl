@@ -98,6 +98,10 @@ let get_name_exn asgns =
 let is_total ~initialize_neutral ~projections =
   initialize_neutral && Indexing.is_surjective projections
 
+let can_skip_accumulation ~projections =
+  (* We can skip accumulation (use = instead of +=) only if the projection is injective *)
+  Indexing.is_injective projections
+
 (** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it must be called
     after compilation; otherwise, it will disrupt memory mode inference. *)
 let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_set =
@@ -226,7 +230,7 @@ let%track4_sexp to_low_level code =
       let lhs_ll = get (Node lhs) lhs_idcs in
       let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in
       let rhs2 = apply_op op rhses_ll in
-      if is_total ~initialize_neutral ~projections then set lhs lhs_idcs rhs2
+      if can_skip_accumulation ~projections then set lhs lhs_idcs rhs2
       else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
     in
     let rec for_loop rev_iters = function
@@ -243,7 +247,16 @@ let%track4_sexp to_low_level code =
             }
     in
     let for_loops = for_loop [] (Array.to_list projections.product_space) in
-    if initialize_neutral && not (is_total ~initialize_neutral ~projections) then
+    (* Need initialization if:
+       - initialize_neutral is true AND
+       - (not surjective OR not injective)
+       Not surjective: some positions never written (need init to avoid garbage)
+       Not injective: accumulation needed (need init for first += operation) *)
+    let needs_init = 
+      initialize_neutral && 
+      not (Indexing.is_surjective projections && Indexing.is_injective projections)
+    in
+    if needs_init then
       let dims = lazy projections.lhs_dims in
       let fetch_op = Constant (Ops.neutral_elem accum) in
       Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
