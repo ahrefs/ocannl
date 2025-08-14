@@ -33,13 +33,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name test_surjectivity)
+ (deps ocannl_config)
+ (modules test_surjectivity)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name einsum_tutorials)
  (package neural_nets_lib)
  (inline_tests
   (deps ocannl_config))
  (libraries base dynlink ocannl)
- (modules einsum_trivia)
+ (modules einsum_trivia surjectivity)
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))

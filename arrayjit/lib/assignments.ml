@@ -96,7 +96,7 @@ let get_name_exn asgns =
   if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
 
 let is_total ~initialize_neutral ~projections =
-  initialize_neutral && Indexing.is_bijective projections
+  initialize_neutral && Indexing.is_surjective projections
 
 (** Returns materialized nodes in the sense of {!Tnode.is_in_context_force}. NOTE: it must be called
     after compilation; otherwise, it will disrupt memory mode inference. *)

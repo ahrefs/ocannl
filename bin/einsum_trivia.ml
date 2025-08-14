@@ -3,6 +3,7 @@ open Ocannl
 module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
+module NTDSL = Operation.NTDSL
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -37,7 +38,7 @@ let _suspended () =
   ignore (Train.forward_once backend ho2);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2
 
-let () =
+let _suspended () =
   let module Backend = (val Backends.fresh_backend ()) in
   let backend =
     (module Backend : Backend
@@ -59,3 +60,30 @@ let () =
      "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> ignore (Train.forward_once backend f)); *)
   (* Train.printf ~here:[%here] ~with_code:false ~with_grad:false a2; *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  let module Backend = (val Backends.fresh_backend ()) in
+  let backend =
+    (module Backend : Backend
+      with type buffer_ptr = Backend.buffer_ptr
+       and type dev = Backend.dev
+       and type runner = Backend.runner
+       and type event = Backend.event
+       and type optimize_ctx = Backend.optimize_ctx)
+  in
+
+  let ri = TDSL.range 3 in
+  let%op ti = ri ++ "i=>i0" in
+  (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
+  let%cd _ = ti =: 0 ++ "i=>i2" in
+  let rj = TDSL.range 4 in
+  let%op tj = rj ++ "j=>j1" in
+  let rk = TDSL.range 5 in
+  let%op tk = rk ++ "k=>k2" in
+  let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
+  Train.set_hosted tk.value;
+  ignore (Train.forward_once backend positions);
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false positions;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ti;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false tk
