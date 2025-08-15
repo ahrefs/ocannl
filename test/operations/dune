@@ -139,6 +139,14 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name test_where_simple)
+ (modules test_where_simple)
+ (libraries ocannl base stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

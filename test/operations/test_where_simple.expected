@@ -1,0 +1,12 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+x = 2.000000, gradient = 1.000000
+y = 3.000000, gradient = 0.000000
+result = 2.000000
+Expected: x gradient = 1.0, y gradient = 0.0
+
+Test 2: where(false, x, y)
+x = 2.000000, gradient = 0.000000
+y = 3.000000, gradient = 1.000000
+result = 3.000000
+Expected: x gradient = 0.0, y gradient = 1.0

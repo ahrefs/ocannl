@@ -18,10 +18,15 @@ let graph_t () : unit =
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
+  let%op f x = where (x < !.0.) (sin x) (cos x) in
   (* let%op f x = sin x in *)
-  let%op f x = sin x in
-  let size = 50 in
-  let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) + 0.1) in
+  (* let%op f x = sin x in *)
+  let size = 10 in
+  let x_min = -5. in
+  let x_max = 5. in
+  let xs =
+    Array.init size ~f:Float.(fun i -> x_min + (of_int i * (x_max - x_min) / (of_int size - 1.)))
+  in
   let x_flat = Tensor.term_init xs ~label:[ "x_flat" ] ~grad_spec:Require_grad () in
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op xkcd = x_flat @| step_sym in

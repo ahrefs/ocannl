@@ -87,6 +87,9 @@ type traced_array = {
   mutable read_before_write : bool;
       (** The node is read before it is written (i.e. it is recurrent). *)
   mutable read_only : bool;
+      (** Surprisingly, the notions of read-only and of constant memory mode come apart: small
+          hosted constants are not read-only because they are initialized on devices by being
+          assigned to; and a volatile memory mode is read-only from the devices' perspective. *)
   mutable is_scalar_constexpr : bool;
       (** True only if the tensor node has all axes of dimension 1, is either zeroed-out or assigned
           before accessed, is assigned at most once, and from an expression involving only constants

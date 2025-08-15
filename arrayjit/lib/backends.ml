@@ -494,14 +494,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       let hash_find_exn ~message tbl =
         try Hashtbl.find_exn tbl key
         with exn ->
-          [%log "Backends.alloc_if_needed: failed to find node in hash table", message, (key : Tnode.t)];
+          [%log
+            "Backends.alloc_if_needed: failed to find node in hash table", message, (key : Tnode.t)];
           raise exn
       in
       let device = stream.device in
-      if node.Low_level.read_only then (
+      (* It's the user's responsibility to ensure that constants are initialized on devices, the
+         user can choose to run initialization code on multiple streams redundantly, or on the owner
+         stream only and then to use init_from_device. *)
+      if node.Low_level.read_only || Tn.known_constant key then (
         if Tn.known_non_cross_stream key then add_new_exn ()
         else
-          let buffer =
+          let read_only_buffer : Device.buffer_ptr =
             match use_host_memory with
             | None -> Hashtbl.find_or_add device.cross_stream_candidates key ~default
             | Some get_buffer_ptr ->
@@ -518,17 +522,20 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           in
           if Hashtbl.mem device.cross_stream_candidates key then
             Tn.update_memory_sharing key Tn.Shared_cross_streams 39;
-         add_old_exn buffer)
+          add_old_exn read_only_buffer)
       else if Tn.known_shared_cross_streams key then (
         if Hashtbl.mem device.owner_stream key then (
-          if not (equal_stream stream (hash_find_exn ~message:"owner_stream" device.owner_stream)) then
+          if not (equal_stream stream (hash_find_exn ~message:"owner_stream" device.owner_stream))
+          then
             raise
             @@ Utils.User_error
                  ("Backends.alloc_if_needed: node " ^ Tn.debug_name key
                 ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
         else Hashtbl.add_exn device.owner_stream ~key ~data:stream;
-        let buffer = hash_find_exn ~message:"cross_stream_candidates" device.cross_stream_candidates in
-        add_old_exn buffer)
+        let shared_buffer : Device.buffer_ptr =
+          hash_find_exn ~message:"cross_stream_candidates" device.cross_stream_candidates
+        in
+        add_old_exn shared_buffer)
       else (
         Tn.update_memory_sharing key Tn.Per_stream 410;
         Hashtbl.remove device.cross_stream_candidates key;
