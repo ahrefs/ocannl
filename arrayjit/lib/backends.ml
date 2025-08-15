@@ -7,8 +7,10 @@ open Backend_impl
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_BACKENDS=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_BACKENDS"]
 
 let check_merge_buffer stream ~code_node =
   let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
@@ -40,7 +42,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
            if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let%track2_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
+  let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
         if Tn.potentially_cross_stream tn then
@@ -87,7 +89,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%track2_sexp from_host (ctx : Backend.context) tn =
+  let%track3_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         wait_for_all ctx ctx.stream.reader_streams tn;
@@ -98,7 +100,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | _ -> false
 
-  let%track2_sexp init_from_host (ctx : Backend.context) tn =
+  let%track3_sexp init_from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, None ->
         let dims = Lazy.force tn.dims in
@@ -120,7 +122,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
              ("init_from_host: tensor node is not hosted: " ^ Tn.debug_name tn ^ ", for stream "
             ^ Backend.get_name ctx.stream)
 
-  let%track2_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
+  let%track3_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
@@ -159,7 +161,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
-  let%track2_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
+  let%track3_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
     match Map.find src.ctx_arrays tn with
@@ -491,11 +493,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           [%log "Backends.alloc_if_needed: failed to add old node to context", (key : Tnode.t)];
           raise exn
       in
-      let hash_find_exn ~message tbl =
+      let hash_find_exn ~message:_msg tbl =
         try Hashtbl.find_exn tbl key
         with exn ->
           [%log
-            "Backends.alloc_if_needed: failed to find node in hash table", message, (key : Tnode.t)];
+            "Backends.alloc_if_needed: failed to find node in hash table", _msg, (key : Tnode.t)];
           raise exn
       in
       let device = stream.device in

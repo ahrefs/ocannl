@@ -1,5 +1,10 @@
 open Base
 
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_INDEXING=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_INDEXING"]
+
 type symbol = Symbol of int [@@deriving compare, equal, sexp, hash, variants]
 
 let unique_id = ref 1
@@ -218,7 +223,7 @@ let is_surjective proj =
 
 let is_injective proj =
   let product_iterator_set = Set.of_array (module Symbol) proj.product_iterators in
-  
+
   (* Check each LHS index for injectivity *)
   let lhs_symbols, is_injective_mapping =
     Array.fold proj.project_lhs ~init:([], true) ~f:(fun (syms, still_injective) idx ->
@@ -229,19 +234,17 @@ let is_injective proj =
           | Fixed_idx _ -> (syms, true)
           | Affine { symbols; _ } ->
               (* Filter for symbols that are product iterators *)
-              let product_symbols = 
-                List.filter symbols ~f:(fun (_coeff, s) -> 
-                  Set.mem product_iterator_set s)
+              let product_symbols =
+                List.filter symbols ~f:(fun (_coeff, s) -> Set.mem product_iterator_set s)
               in
               (* If more than one product iterator in this Affine index, not injective *)
-              if List.length product_symbols > 1 then 
-                (syms, false)
+              if List.length product_symbols > 1 then (syms, false)
               else
                 (* (coefficients don't matter for injectivity) *)
                 (List.map product_symbols ~f:snd @ syms, true)
           | Sub_axis -> (syms, true))
   in
-  
+
   if not is_injective_mapping then false
   else
     let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in

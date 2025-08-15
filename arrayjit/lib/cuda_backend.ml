@@ -7,8 +7,10 @@ open Backend_intf
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_CUDA_BACKEND=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_CUDA_BACKEND"]
 
 let () =
   Cu.cuda_call_hook :=
@@ -351,7 +353,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string ")")
-      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Fp8_prec _ | Uint4x32_prec _) ->
+      | ( ToPowOf,
+          (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Fp8_prec _ | Uint4x32_prec _)
+        ) ->
           invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
       | ToPowOf, Bfloat16_prec _ ->
           fun v1 v2 ->
@@ -666,7 +670,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let vec_unop_syntax prec op v =
       let open PPrint in
       match (op, prec) with
-      | Ops.Uint4x32_to_prec_uniform, _ -> 
+      | Ops.Uint4x32_to_prec_uniform, _ ->
           group (string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform_vec(") ^^ v ^^ rparen)
 
     let ternop_syntax prec v =
@@ -698,7 +702,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Single_prec _, Half_prec _ -> ("__float2half(", ")")
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
       | Double_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
-      | Single_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")  
+      | Single_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | Int32_prec _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
       | Uint4x32_prec _, _ -> ("", ".v[0]")

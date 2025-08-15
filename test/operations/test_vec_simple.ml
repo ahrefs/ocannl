@@ -4,7 +4,6 @@ module Tensor = Ocannl.Tensor
 
 let () =
   let module Backend = (val Backends.fresh_backend ()) in
-
   (* Generate random bits *)
   let%op random_bits = threefry4x32 (embed_self_id ()) 42L in
 

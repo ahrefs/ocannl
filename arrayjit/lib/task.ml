@@ -3,8 +3,10 @@ module Lazy = Utils.Lazy
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_TASK=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_TASK"]
 
 type t =
   | Task : { context_lifetime : ('a[@sexp.opaque]); description : string; work : unit -> unit } -> t

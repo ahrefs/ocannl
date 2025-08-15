@@ -7,8 +7,10 @@ module Nd = Ndarray
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_ASSIGNMENTS=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_ASSIGNMENTS"]
 
 type init_data =
   | Reshape of Ndarray.t
@@ -247,14 +249,14 @@ let%track4_sexp to_low_level code =
             }
     in
     let for_loops = for_loop [] (Array.to_list projections.product_space) in
-    (* Need initialization if:
-       - initialize_neutral is true AND
-       - (not surjective OR not injective)
+    (* Need initialization if: initialize_neutral is true AND (not surjective OR not injective)
+
        Not surjective: some positions never written (need init to avoid garbage)
+
        Not injective: accumulation needed (need init for first += operation) *)
-    let needs_init = 
-      initialize_neutral && 
-      not (Indexing.is_surjective projections && Indexing.is_injective projections)
+    let needs_init =
+      initialize_neutral
+      && not (Indexing.is_surjective projections && Indexing.is_injective projections)
     in
     if needs_init then
       let dims = lazy projections.lhs_dims in
@@ -341,7 +343,8 @@ let%track4_sexp to_low_level code =
     | Fetch { array; fetch_op = Constant c; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
     | Fetch { array; fetch_op = Constant_bits i; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant_bits i)
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
         (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->

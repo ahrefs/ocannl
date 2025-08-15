@@ -5,8 +5,10 @@ module Tn = Tnode
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_LOW_LEVEL=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_LOW_LEVEL"]
 
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
@@ -221,8 +223,9 @@ let is_complex_comp traced_store llsc =
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
+  (* FIXME(#351): avoid excessive inlining while CSE is not implemented *)
   let inline_complex_computations =
-    Utils.get_global_flag ~default:true ~arg_name:"inline_complex_computations"
+    Utils.get_global_flag ~default:false ~arg_name:"inline_complex_computations"
   in
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   (* FIXME: migrate hashtable to use offsets instead of indices *)

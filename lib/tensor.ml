@@ -15,8 +15,10 @@ type projections = { projections_debug : string; projections : Ir.Indexing.proje
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_TENSOR=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_TENSOR"]
 
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.t; backprop : Asgns.comp }
 [@@deriving sexp_of]
@@ -477,8 +479,8 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some
-        (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_self_id | Range_over_offsets
-         | Constant_fill _ ) as fetch_op) ->
+        (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_self_id
+         | Range_over_offsets | Constant_fill _ ) as fetch_op) ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in

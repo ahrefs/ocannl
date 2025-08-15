@@ -4,8 +4,10 @@ module Nd = Ndarray
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_TNODE=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_TNODE"]
 
 (** A possible algorithm for deciding sharing within a single device:
     - If a tensor node is read-only for a context, and not otherwise recorded, it is stored as a

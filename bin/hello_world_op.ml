@@ -9,8 +9,10 @@ module type Backend = Ir.Backend_intf.Backend
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_HELLO_WORLD_OP=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_HELLO_WORLD_OP"]
 
 let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   Tensor.unsafe_reinitialize ();

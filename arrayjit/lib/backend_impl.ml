@@ -7,8 +7,10 @@ module Lazy = Utils.Lazy
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_BACKEND_IMPL=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_BACKEND_IMPL"]
 
 open Backend_intf
 
@@ -54,11 +56,11 @@ module No_device_buffer_and_copying () :
     (* FIXME(#344, #355): This is not efficient, but it won't be used for long. *)
     let ptr = alloc_impl ~size_in_bytes in
     (* Zero-initialize the allocated memory *)
-    if size_in_bytes > 0 then (
-      let arr = Ctypes.from_voidp Ctypes.uint8_t ptr in
-      for i = 0 to size_in_bytes - 1 do
-        Ctypes.(arr +@ i <-@ Unsigned.UInt8.zero)
-      done);
+    (if size_in_bytes > 0 then
+       let arr = Ctypes.from_voidp Ctypes.uint8_t ptr in
+       for i = 0 to size_in_bytes - 1 do
+         Ctypes.(arr +@ i <-@ Unsigned.UInt8.zero)
+       done);
     ptr
 
   let%track7_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)

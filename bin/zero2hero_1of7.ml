@@ -10,8 +10,10 @@ module type Backend = Ir.Backend_intf.Backend
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_ZERO2HERO_1OF7=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_ZERO2HERO_1OF7"]
 
 let _suspended () =
   let module Backend = (val Backends.fresh_backend ()) in

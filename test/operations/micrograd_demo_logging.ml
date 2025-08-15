@@ -29,7 +29,8 @@ let () =
   (* FIXME(#351): this generates horrible code without common expression elimination, with default
      optimization settings. Remove the following line once #351 is completed. *)
   Train.every_non_literal_on_host g;
-  (* FIXME(#344): However, with the above line, the Metal backend crashes until #344 is completed. *)
+  (* FIXME(#344): However, with the above line, the Metal backend crashes until #344 is
+     completed. *)
   Utils.capture_stdout_logs @@ fun () ->
   ignore (Train.update_once (module Backend) g);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false g;

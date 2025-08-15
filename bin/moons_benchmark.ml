@@ -10,8 +10,10 @@ module CDSL = Train.CDSL
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_MOONS_BENCHMARK=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_MOONS_BENCHMARK"]
 
 let classify_moons ~seed ~on_device ~inlining_cutoff ~num_streams ~batch_size ~backend_name
     ~value_prec ~grad_prec () =

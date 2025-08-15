@@ -4,8 +4,10 @@ open Backend_intf
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
-[%%global_debug_log_level 9]
-[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL"]
+[%%global_debug_log_level 0]
+
+(* export OCANNL_LOG_LEVEL_C_SYNTAX=9 to enable debugging logs. *)
+[%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_C_SYNTAX"]
 
 module Tn = Tnode
 
@@ -1042,8 +1044,7 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ hardline
         ^^ separate_map hardline
              (fun ident ->
-               Option.value_exn ~here:[%here] B.local_heap_dealloc ~ident_doc:(string ident)
-               ^^ semi)
+               Option.value_exn ~here:[%here] B.local_heap_dealloc ~ident_doc:(string ident) ^^ semi)
              !heap_allocated
         ^^ hardline;
 
