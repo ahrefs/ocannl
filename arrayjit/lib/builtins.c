@@ -774,7 +774,7 @@ CAMLprim value arrayjit_single_to_fp8(value v_float)
 }
 
 // TODO: a more efficient approach would involve computing strides once and using memcpy
-// for contiguous inner slices, but that adds complexity).
+// for contiguous inner slices, but that adds complexity.
 CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value v_padding)
 {
   CAMLparam3(v_source, v_target, v_padding);
