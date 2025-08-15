@@ -20,7 +20,7 @@ let main () =
   let len = batch_size * 20 in
   let init_lr = 0.1 in
   (* let epochs = 10 in *)
-  let epochs = 80 in
+  let epochs = 120 in
   (* let epochs = 1 in *)
   let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
   let moons_coordinates, moons_labels =
@@ -58,7 +58,7 @@ let main () =
       ()
   in
   let epoch_loss = List.hd_exn rev_epoch_losses in
-  Stdio.printf "Epoch loss: %f\n%!" epoch_loss;
+  Stdio.printf "Epoch loss: %.3f\n%!" epoch_loss;
   (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n" else *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
   let classes = Tn.points_1d ~xdim:0 outputs.value in
