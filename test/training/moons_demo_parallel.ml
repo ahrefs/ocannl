@@ -8,7 +8,7 @@ module CDSL = Train.CDSL
 
 let main () =
   (* Micrograd half-moons example, with multi-stream execution simulating multi-device. *)
-  let seed = 18 in
+  let seed = 2 in
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
   let hid_dim = 16 in

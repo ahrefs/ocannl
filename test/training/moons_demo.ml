@@ -8,7 +8,7 @@ module Asgns = Ir.Assignments
 
 let main () =
   (* Micrograd half-moons example, single device/stream. *)
-  let seed = 18 in
+  let seed = 1 in
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions

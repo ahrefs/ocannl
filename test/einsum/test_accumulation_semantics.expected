@@ -3,7 +3,7 @@ Found 0, in the config file
 
 === Testing einsum reduction (surjective but not injective) ===
 Input tensor (shape: batch=2, input=3, output=4):
-HERE: test/einsum/test_accumulation_semantics.ml:32:21
+HERE: test/einsum/test_accumulation_semantics.ml:30:21
 ┌─────────────────────────────────────────────────────────────┐
 │[0]: r2x4x3 shape 0:2|2:3->1:4                               │
 │┌──────┬────────────────────────┬───────────────────────────┐│
@@ -18,7 +18,7 @@ HERE: test/einsum/test_accumulation_semantics.ml:32:21
 └─────────────────────────────────────────────────────────────┘
 
 Result after reduction 'b|i->o => b|i' (should sum over output dimension):
-HERE: test/einsum/test_accumulation_semantics.ml:35:21
+HERE: test/einsum/test_accumulation_semantics.ml:33:21
 ┌────────────────────────────────────┐
 │[1]: =>_result shape 0:2|1:3        │
 │┌──────┬───────────────────────────┐│
@@ -35,11 +35,11 @@ Expected values (summing over output dimension):
 
 === Testing diagonal tensor (not surjective) ===
 Input (1D tensor of size 5):
-HERE: test/einsum/test_accumulation_semantics.ml:59:21
+HERE: test/einsum/test_accumulation_semantics.ml:55:21
 [0]: 0...5 shape 0:6  <not-hosted>
 
 Diagonal tensor 'i=>ii' (5x5 with zeros off-diagonal):
-HERE: test/einsum/test_accumulation_semantics.ml:62:21
+HERE: test/einsum/test_accumulation_semantics.ml:58:21
 ┌──────────────────────────────────────┐
 │[1]: =>_diagonal shape 0:6,1:6        │
 │┌──────┬─────────────────────────────┐│
@@ -57,11 +57,11 @@ Note: Off-diagonal elements should be zero (initialized by Zero_out)
 
 === Testing fixed index projection (not surjective) ===
 Input (1D tensor of size 4):
-HERE: test/einsum/test_accumulation_semantics.ml:84:21
+HERE: test/einsum/test_accumulation_semantics.ml:78:21
 [0]: 0...4 shape 0:5  <not-hosted>
 
 Sparse tensor 'i=>i0' (only first column populated):
-HERE: test/einsum/test_accumulation_semantics.ml:87:21
+HERE: test/einsum/test_accumulation_semantics.ml:81:21
 ┌─────────────────────────────┐
 │[1]: =>_sparse shape 0:5,1:3 │
 │┌──────┬──────────────────┐  │
@@ -79,11 +79,11 @@ Note: Only column 0 should have values, others should be zero
 
 === Testing bijective transpose (optimization case) ===
 Input (3x4 matrix):
-HERE: test/einsum/test_accumulation_semantics.ml:109:21
+HERE: test/einsum/test_accumulation_semantics.ml:100:21
 [0]: r3x4 shape 0:3,1:4  <not-hosted>
 
 Transposed 'ij=>ji' (4x3 matrix):
-HERE: test/einsum/test_accumulation_semantics.ml:112:21
+HERE: test/einsum/test_accumulation_semantics.ml:103:21
 ┌─────────────────────────────────┐
 │[1]: =>_transposed shape 0:4,1:3 │
 │┌──────┬─────────────────────┐   │
