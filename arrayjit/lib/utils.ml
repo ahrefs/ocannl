@@ -430,7 +430,7 @@ let _get_local_debug_runtime = get_local_debug_runtime
 
 [%%global_debug_log_level 0]
 
-(* export OCANNL_LOG_LEVEL_UTILS=9 to enable debugging logs. *)
+(* export OCANNL_LOG_LEVEL_UTILS=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_UTILS"]
 
 (* [%%global_debug_interrupts { max_nesting_depth = 100; max_num_children = 1000 }] *)

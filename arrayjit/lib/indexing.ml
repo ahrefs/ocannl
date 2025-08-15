@@ -2,7 +2,7 @@ open Base
 
 [%%global_debug_log_level 0]
 
-(* export OCANNL_LOG_LEVEL_INDEXING=9 to enable debugging logs. *)
+(* export OCANNL_LOG_LEVEL_INDEXING=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_INDEXING"]
 
 type symbol = Symbol of int [@@deriving compare, equal, sexp, hash, variants]

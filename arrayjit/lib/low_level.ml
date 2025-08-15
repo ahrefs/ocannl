@@ -7,7 +7,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 [%%global_debug_log_level 0]
 
-(* export OCANNL_LOG_LEVEL_LOW_LEVEL=9 to enable debugging logs. *)
+(* export OCANNL_LOG_LEVEL_LOW_LEVEL=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_LOW_LEVEL"]
 
 module Scope_id = struct
