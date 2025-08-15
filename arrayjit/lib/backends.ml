@@ -120,7 +120,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
              ("init_from_host: tensor node is not hosted: " ^ Tn.debug_name tn ^ ", for stream "
             ^ Backend.get_name ctx.stream)
 
-  let%diagn2_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
+  let%track2_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
@@ -159,7 +159,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
               true)
 
-  let%diagn2_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
+  let%track2_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
     let ordinal_of ctx = ctx.stream.device.ordinal in
     let name_of ctx = Backend.(get_name ctx.stream) in
     match Map.find src.ctx_arrays tn with
@@ -341,7 +341,7 @@ struct
     let bindings, schedules =
       Array.fold_mapi code_batch.procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
-            let ctx_arrays = Option.value_exn ctx_arrays.(i) in
+            let ctx_arrays = Option.value_exn ~here:[%here] ctx_arrays.(i) in
             let bindings', to_schedule =
               link_compiled ~merge_buffer ~runner_label ctx_arrays proc
             in
@@ -384,7 +384,7 @@ struct
             if allocated_capacity < size_in_bytes then
               s.allocated_buffer <-
                 Some (alloc_buffer ?old_buffer:s.allocated_buffer ~size_in_bytes dst.stream);
-            let merge_ptr = (Option.value_exn s.allocated_buffer).ptr in
+            let merge_ptr = (Option.value_exn ~here:[%here] s.allocated_buffer).ptr in
             s.merge_buffer := s.allocated_buffer;
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
     in
@@ -479,12 +479,29 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            | _ -> ());
         dst_ptr
       in
-      let add_new () = Map.add_exn ctx_arrays ~key ~data:(default ()) in
+      let add_new_exn () =
+        try Map.add_exn ctx_arrays ~key ~data:(default ())
+        with exn ->
+          [%log "Backends.alloc_if_needed: failed to add new node to context", (key : Tnode.t)];
+          raise exn
+      in
+      let add_old_exn data =
+        try Map.add_exn ctx_arrays ~key ~data
+        with exn ->
+          [%log "Backends.alloc_if_needed: failed to add old node to context", (key : Tnode.t)];
+          raise exn
+      in
+      let hash_find_exn ~message tbl =
+        try Hashtbl.find_exn tbl key
+        with exn ->
+          [%log "Backends.alloc_if_needed: failed to find node in hash table", message, (key : Tnode.t)];
+          raise exn
+      in
       let device = stream.device in
       if node.Low_level.read_only then (
-        if Tn.known_non_cross_stream key then add_new ()
+        if Tn.known_non_cross_stream key then add_new_exn ()
         else
-          let data =
+          let buffer =
             match use_host_memory with
             | None -> Hashtbl.find_or_add device.cross_stream_candidates key ~default
             | Some get_buffer_ptr ->
@@ -501,21 +518,21 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           in
           if Hashtbl.mem device.cross_stream_candidates key then
             Tn.update_memory_sharing key Tn.Shared_cross_streams 39;
-          Map.add_exn ctx_arrays ~key ~data)
+         add_old_exn buffer)
       else if Tn.known_shared_cross_streams key then (
         if Hashtbl.mem device.owner_stream key then (
-          if not (equal_stream stream (Hashtbl.find_exn device.owner_stream key)) then
+          if not (equal_stream stream (hash_find_exn ~message:"owner_stream" device.owner_stream)) then
             raise
             @@ Utils.User_error
                  ("Backends.alloc_if_needed: node " ^ Tn.debug_name key
                 ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
         else Hashtbl.add_exn device.owner_stream ~key ~data:stream;
-        let data = Hashtbl.find_exn device.cross_stream_candidates key in
-        Map.add_exn ctx_arrays ~key ~data)
+        let buffer = hash_find_exn ~message:"cross_stream_candidates" device.cross_stream_candidates in
+        add_old_exn buffer)
       else (
         Tn.update_memory_sharing key Tn.Per_stream 410;
         Hashtbl.remove device.cross_stream_candidates key;
-        add_new ()))
+        add_new_exn ()))
     else ctx_arrays
 
   let%debug3_sexp link context (code : code) =

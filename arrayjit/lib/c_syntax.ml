@@ -969,7 +969,7 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 match source with
                 | Merge_buffer ->
-                    let merge_tn = Option.value_exn merge_node in
+                    let merge_tn = Option.value_exn ~here:[%here] merge_node in
                     let base_msg =
                       Printf.sprintf "%s &[%d] = %%p\n" p_name_and_type (Tnode.num_elems merge_tn)
                     in
@@ -1017,7 +1017,7 @@ module C_syntax (B : C_syntax_config) = struct
                then (
                  (* Heap allocation for large arrays *)
                  heap_allocated := get_ident tn :: !heap_allocated;
-                 Option.value_exn B.local_heap_alloc
+                 Option.value_exn ~here:[%here] B.local_heap_alloc
                    ~zero_initialized:node.Low_level.zero_initialized ~num_elems ~typ_doc ~ident_doc
                  ^^ semi ^^ hardline)
                else
@@ -1041,7 +1041,9 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ string "/* Cleanup heap-allocated arrays. */"
         ^^ hardline
         ^^ separate_map hardline
-             (fun ident -> Option.value_exn B.local_heap_dealloc ~ident_doc:(string ident) ^^ semi)
+             (fun ident ->
+               Option.value_exn ~here:[%here] B.local_heap_dealloc ~ident_doc:(string ident)
+               ^^ semi)
              !heap_allocated
         ^^ hardline;
 
