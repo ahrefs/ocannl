@@ -87,6 +87,7 @@ type virtualize_settings = {
   mutable max_tracing_dim : int;
   mutable inline_scalar_constexprs : bool;
   mutable inline_simple_computations : bool;
+  mutable inline_complex_computations : bool;
 }
 
 let virtualize_settings =
@@ -103,12 +104,17 @@ let virtualize_settings =
   let inline_simple_computations =
     Utils.get_global_flag ~default:true ~arg_name:"inline_simple_computations"
   in
+  let inline_complex_computations =
+    (* TODO(#351): change to true once CSE is implemented *)
+    Utils.get_global_flag ~default:false ~arg_name:"inline_complex_computations"
+  in
   {
     enable_device_only;
     max_visits;
     max_tracing_dim;
     inline_scalar_constexprs;
     inline_simple_computations;
+    inline_complex_computations;
   }
 
 type visits = Visits of int | Recurrent [@@deriving sexp, equal, variants]
@@ -224,9 +230,6 @@ let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   (* FIXME(#351): avoid excessive inlining while CSE is not implemented *)
-  let inline_complex_computations =
-    Utils.get_global_flag ~default:false ~arg_name:"inline_complex_computations"
-  in
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   (* FIXME: migrate hashtable to use offsets instead of indices *)
   let lookup env indices =
@@ -341,7 +344,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         let traced : traced_array = get_node traced_store ptr in
         let at_pos = lookup env indices in
         if
-          (not inline_complex_computations)
+          (not virtualize_settings.inline_complex_computations)
           || Option.value_map access_pos ~default:true ~f:(fun pos ->
                  not ([%equal: int array] pos at_pos))
         then

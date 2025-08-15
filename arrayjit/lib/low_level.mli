@@ -68,6 +68,7 @@ type virtualize_settings = {
   mutable max_tracing_dim : int;
   mutable inline_scalar_constexprs : bool;
   mutable inline_simple_computations : bool;
+  mutable inline_complex_computations : bool;
 }
 
 val virtualize_settings : virtualize_settings
