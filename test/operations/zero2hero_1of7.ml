@@ -268,27 +268,8 @@ let%expect_test "Simple gradients hosted" =
   let ctx = Train.init_params (module Backend) ~ctx IDX.empty l in
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
   let sgd_routine = Train.to_routine (module Backend) grad_routine.context IDX.empty sgd in
-  (* Check out the initial state without running an init or forward pass. *)
-  Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
-                       #12 *._l
-                        0.00
-                       #13 grad_*._l
-                        0.00
-                 #8 +_d                   │#10 f non-emb
-                  0.00                    │ -2.00
-                 #9 grad_+_d              │#11 grad_f
-                  0.00                    │ 0.00
-          #4 *._e            │#6 c non-emb│
-           0.00              │ 1.00e+1    │
-          #5 grad_*._e       │#7 grad_c   │
-           0.00              │ 0.00       │
-    #0 a non-emb│#2 b non-emb│            │
-     2.00       │ -3.00      │            │
-    #1 grad_a   │#3 grad_b   │            │
-     0.00       │ 0.00       │            │
-    |}];
+  (* Note the initial state without running an init or forward pass can contain garbage. *)
+  (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.run grad_routine;
@@ -398,27 +379,8 @@ let%expect_test "Simple gradients virtual" =
     |}];
   let ctx = Train.init_params (module Backend) ~ctx IDX.empty l in
   let grad_routine = Train.to_routine (module Backend) ctx IDX.empty grad in
-  (* Check out the state without running a forward pass or compiling the SGD update. *)
-  Train.printf_tree ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
-                   #12 *._l
-                    0.00
-                   #13 grad_*._l Virt/40
-                   <void>
-             #8 +_d Virt/152              │#10 f non-emb
-             <void>                       │ -2.00
-             #9 grad_+_d Virt/151         │#11 grad_f
-             <void>                       │ 0.00
-      #4 *._e Virt/152       │#6 c non-emb│
-      <void>                 │ 1.00e+1    │
-      #5 grad_*._e Virt/151  │#7 grad_c   │
-      <void>                 │ 0.00       │
-    #0 a non-emb│#2 b non-emb│            │
-     2.00       │ -3.00      │            │
-    #1 grad_a   │#3 grad_b   │            │
-     0.00       │ 0.00       │            │
-    |}];
+  (* Note the state without running initialization can contain garbage. *)
+  (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   Train.run grad_routine;
@@ -429,13 +391,13 @@ let%expect_test "Simple gradients virtual" =
                     -8.00
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Virt/152              │#10 f non-emb
+             #8 +_d Local/1046            │#10 f non-emb
              <void>                       │ -2.00
-             #9 grad_+_d Virt/151         │#11 grad_f
+             #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.00e+1    │
-      #5 grad_*._e Virt/151  │#7 grad_c   │
+      #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      2.00       │ -3.00      │            │
@@ -455,13 +417,13 @@ let%expect_test "Simple gradients virtual" =
                     -8.00
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Virt/152              │#10 f non-emb
+             #8 +_d Local/1046            │#10 f non-emb
              <void>                       │ -2.40
-             #9 grad_+_d Virt/151         │#11 grad_f
+             #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
-      #5 grad_*._e Virt/151  │#7 grad_c   │
+      #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
@@ -478,13 +440,13 @@ let%expect_test "Simple gradients virtual" =
                     -1.57e+1
                    #13 grad_*._l Virt/40
                    <void>
-             #8 +_d Virt/152              │#10 f non-emb
+             #8 +_d Local/1046            │#10 f non-emb
              <void>                       │ -2.40
-             #9 grad_+_d Virt/151         │#11 grad_f
+             #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 6.56
       #4 *._e Virt/152       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
-      #5 grad_*._e Virt/151  │#7 grad_c   │
+      #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.40      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
@@ -538,7 +500,7 @@ let%expect_test "2D neuron virtual" =
                7.00e-1
               #9 grad_+_v Virt/40
               <void>
-         #6 * Local/9046       │#0 b non-emb
+         #6 * Local/1046       │#0 b non-emb
          <void>                │ 6.70
          #7 grad_* Virt/40     │#1 grad_b
          <void>                │ 1.00
