@@ -649,11 +649,11 @@ module C_syntax (B : C_syntax_config) = struct
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
         (* Generate assignments for each output element *)
+        let open PPrint in
+        let vec_var = string "vec_result" in
+        let vec_typ = string (B.vec_typ_of_prec ~length prec) in
+        let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
         let assignments =
-          let open PPrint in
-          let vec_var = string "vec_result" in
-          let vec_typ = string (B.vec_typ_of_prec ~length prec) in
-          let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
           let elem_assigns =
             List.init length ~f:(fun i ->
                 let offset_doc =
@@ -671,7 +671,7 @@ module C_syntax (B : C_syntax_config) = struct
                 ^^ string (".v[" ^ Int.to_string i ^ "]")
                 ^^ semi)
           in
-          vec_decl ^^ hardline ^^ separate hardline elem_assigns
+          separate hardline elem_assigns
         in
         if Utils.debug_log_from_routines () then
           let open PPrint in
@@ -714,13 +714,15 @@ module C_syntax (B : C_syntax_config) = struct
             comment_log ^^ hardline ^^ separate hardline value_logs ^^ hardline ^^ flush_log
           in
           let block_content =
-            if PPrint.is_empty local_defs then assignments ^^ hardline ^^ log_docs
-            else local_defs ^^ hardline ^^ assignments ^^ hardline ^^ log_docs
+            if PPrint.is_empty local_defs then
+              vec_decl ^^ hardline ^^ log_docs ^^ hardline ^^ assignments
+            else
+              local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ log_docs ^^ hardline ^^ assignments
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-        else if PPrint.is_empty local_defs then assignments
+        else if PPrint.is_empty local_defs then vec_decl ^^ hardline ^^ assignments
         else
-          let block_content = local_defs ^^ hardline ^^ assignments in
+          let block_content = local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ assignments in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Set_local (({ tn = { prec; _ }; _ } as id), value) ->
         let local_defs, value_doc = pp_scalar (Lazy.force prec) value in
