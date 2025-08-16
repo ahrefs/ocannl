@@ -63,10 +63,10 @@ let main () =
         let batch_ref = IDX.find_exn sgd_routine.bindings batch_n in 
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         if !step_ref = steps - 5 then Stdio.printf "\n%!"; 
-        if !step_ref < 10 || !step_ref > steps - 5 then
-          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%f, loss=%f, epoch loss=%f\n%!" 
+        if !step_ref < 10 then
+          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%f, loss=%.5g, epoch loss=%.5g\n%!" 
             epoch !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0] !epoch_loss;
-        if !step_ref > 10 && !step_ref < steps - 5 && !step_ref % 100 = 0 then Stdio.printf ".%!";
+        if !step_ref > 10 && !step_ref % 100 = 0 then Stdio.printf ".%!";
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
@@ -92,7 +92,7 @@ let main () =
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true
+    PrintBox_utils.plot ~as_canvas:true ~small:true
       [
         Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };
@@ -102,18 +102,18 @@ let main () =
   in
   Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
   PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "Loss:\n%!";
+  Stdio.printf "\nLoss:\n%!";
   let plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"loss"
       [ Line_plot { points = Array.of_list_rev !losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
   Stdio.printf "Log-loss, for better visibility:\n%!";
-  let plot_loss =
+  let _plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"log loss"
       [ Line_plot { points = Array.of_list_rev !log_losses; content = PrintBox.line "-" } ]
   in
-  PrintBox_text.output Stdio.stdout plot_loss;
+  (* PrintBox_text.output Stdio.stdout plot_loss; *)
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate"

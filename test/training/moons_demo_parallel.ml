@@ -42,9 +42,9 @@ let main () =
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step:_ ~at_epoch ~learning_rate ~epoch_loss =
     if at_epoch = epochs - 5 then Stdio.printf "\n%!"; 
-    if at_epoch < 10 || at_epoch > epochs - 5 then
-      Stdio.printf "Epoch=%d, lr=%f, loss=%f\n%!" at_epoch learning_rate epoch_loss;
-    if at_epoch > 10 && at_epoch < epochs - 5 && at_epoch % 10 = 0 then Stdio.printf ".%!";
+    if at_epoch < 10 then
+      Stdio.printf "Epoch=%d, lr=%f, loss=%.5g\n%!" at_epoch learning_rate epoch_loss;
+    if at_epoch > 10 && at_epoch % 10 = 0 then Stdio.printf ".%!";
   in
   let {
     Train.inputs;
@@ -70,7 +70,7 @@ let main () =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true
+    PrintBox_utils.plot ~as_canvas:true ~small:true
       [
         PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };
@@ -80,8 +80,8 @@ let main () =
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
   PrintBox_text.output Stdio.stdout plot_moons;
-  Stdio.printf "\nBatch Log-loss:\n%!";
-  let plot_loss =
+  (* Stdio.printf "\nBatch Log-loss:\n%!"; *)
+  let _plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"batch log loss"
       [
         Line_plot
@@ -92,14 +92,14 @@ let main () =
           };
       ]
   in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "\nEpoch Log-loss:\n%!";
+  (* PrintBox_text.output Stdio.stdout plot_loss; *)
+  Stdio.printf "\nEpoch loss:\n%!";
   let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch log loss"
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch loss"
       [
         Line_plot
           {
-            points = Array.of_list_rev_map rev_epoch_losses ~f:Float.log;
+            points = Array.of_list_rev rev_epoch_losses;
             content = PrintBox.line "-";
           };
       ]
