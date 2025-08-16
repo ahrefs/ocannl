@@ -91,8 +91,8 @@ let main () =
     Train.run result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in
-  let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true ~size:(100, 100)
+  let _plot_moons =
+    PrintBox_utils.plot ~as_canvas:true
       [
         Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };
@@ -100,8 +100,8 @@ let main () =
           { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
       ]
   in
-  Stdio.printf "Half-moons scatterplot and decision boundary:\n%!";
-  PrintBox_text.output Stdio.stdout plot_moons;
+  (* Stdio.printf "Half-moons scatterplot and decision boundary:\n%!"; *)
+  (* PrintBox_text.output Stdio.stdout plot_moons; *)
   Stdio.printf "\nLoss:\n%!";
   let plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"loss"

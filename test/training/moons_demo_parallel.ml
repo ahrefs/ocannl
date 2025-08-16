@@ -72,10 +72,10 @@ let main () =
   let plot_moons =
     PrintBox_utils.plot ~as_canvas:true ~size:(100, 100)
       [
-        PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
-        Scatterplot { points = points2; content = PrintBox.line "%" };
         Boundary_map
           { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
+        Scatterplot { points = points1; content = PrintBox.line "#" };
+        Scatterplot { points = points2; content = PrintBox.line "%" };
       ]
   in
   Stdio.printf "\nHalf-moons scatterplot and decision boundary:\n";
@@ -95,7 +95,7 @@ let main () =
   (* PrintBox_text.output Stdio.stdout plot_loss; *)
   Stdio.printf "\nEpoch loss:\n%!";
   let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch loss"
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch loss" ~small:true
       [
         Line_plot
           {
