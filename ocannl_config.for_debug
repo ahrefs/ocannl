@@ -1,0 +1,22 @@
+hyperlink_prefix=vscode://file//wsl.localhost/ubuntu-24.04/home/lukstafi/ocannl/
+snapshot_every_sec=
+debug_highlights=
+time_tagged=clock
+elapsed_times=milliseconds
+logs_print_entry_ids=false
+logs_verbose_entry_ids=false
+toc_entry_minimal_depth=0
+toc_entry_minimal_span=1ms
+virtualize_max_visits=2
+inline_scalar_constexprs=true
+output_debug_files_in_run_directory=true
+cd_ident_style=heuristic
+ll_ident_style=heuristic
+randomness_lib=for_tests
+automatic_host_transfers=true
+# only for DEBUG:
+log_level=9
+# debug_backend=flushing
+output_debug_files_in_build_directory=true
+debug_log_from_routines=true
+debug_log_to_stream_files=true
