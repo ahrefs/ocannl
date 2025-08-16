@@ -59,3 +59,34 @@
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))
+
+(test
+ (name inline_permuted_view)
+ (modules inline_permuted_view)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias runtest)
+ (target
+  (dir build_files))
+ (action
+  (run
+   %{dep:inline_permuted_view.exe}
+   "--ocannl_output_debug_files_in_build_directory=true")))
+
+(rule
+ (deps "build_files/c_fwd.ll")
+ (target "inline_permuted_view-c_fwd.ll.actual")
+ (action
+  (copy
+   "build_files/c_fwd.ll"
+   "inline_permuted_view-c_fwd.ll.actual")))
+
+(rule
+ (alias runtest)
+ (action
+  (diff
+   "inline_permuted_view-c_fwd.ll.expected"
+   "inline_permuted_view-c_fwd.ll.actual")))
