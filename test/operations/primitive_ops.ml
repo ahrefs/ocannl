@@ -23,6 +23,7 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let%op fx = f x in
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
+  (* There actually are no params! Stress test the empty comp case. *)
   let ctx = Train.init_params (module Backend) IDX.empty fx in
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
@@ -47,8 +48,7 @@ let%expect_test "relu" =
   let%op f x = relu x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 5.00│                                                                                                   #│
     │     │                                                                                                  # │
@@ -100,8 +100,7 @@ let%expect_test "sat01" =
   let%op f x = sat01 x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00│                                                 * *********###################### #### ####### ####│
     │     │                                                                                                    │
@@ -153,8 +152,7 @@ let%expect_test "exp(x)" =
   let%op f x = exp x in
   let plot_box = plot_unop ~f ~x_max:1.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 2.71│                                                                                                   *│
     │     │                                                                                                    │
@@ -206,8 +204,7 @@ let%expect_test "log(x)" =
   let%op f x = log x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+1│*                                                                                                   │
     │        │                                                                                                    │
@@ -259,8 +256,7 @@ let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.44e+1│*                                                                                                   │
     │        │                                                                                                    │
@@ -312,8 +308,7 @@ let%expect_test "sin(x)" =
   let%op f x = sin x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 9.99e-1 │                                                                 #                                  │
     │         │#### ##                                        *** **         ### ###                               │
@@ -365,8 +360,7 @@ let%expect_test "cos(x)" =
   let%op f x = cos x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 9.99e-1 │                                  *                                                                 │
     │         │                               *** ***         ### ##                                        ** ****│
@@ -418,8 +412,7 @@ let%expect_test "neg(x)" =
   let%op f x = neg x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌──────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 5.00 │#                                                                                                   │
     │      │ ##                                                                                                 │
@@ -471,8 +464,7 @@ let%expect_test "fma(x, 2, 1)" =
   let%op f x = fma x !.2. !.1. in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.10e+1│                                                                                                   #│
     │        │                                                                                                 ## │
@@ -524,8 +516,7 @@ let%expect_test "sqrt(x)" =
   let%op f x = sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 2.23│                                                                                                   #│
     │     │                                                                                              ##### │
@@ -577,8 +568,7 @@ let%expect_test "recip(x)" =
   let%op f x = recip x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+1 │#                                                                                                   │
     │         │                                                                                                    │
@@ -630,8 +620,7 @@ let%expect_test "recip_sqrt(x)" =
   let%op f x = recip_sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 3.16    │#                                                                                                   │
     │         │                                                                                                    │
@@ -683,8 +672,7 @@ let%expect_test "tanh(x)" =
   let%op f x = tanh x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 9.99e-1 │                                                                                                   #│
     │         │                                                ** *                ############## #### ####### ### │
@@ -736,8 +724,7 @@ let%expect_test "uint4x32_to_prec_uniform(x)" =
   let%op f x = uint4x32_to_prec_uniform x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 7.52e-1│#                                                                                                   │
     │        │ ### ### ### ### ######## ############### ########                                                  │
@@ -789,8 +776,7 @@ let%expect_test "where(x < 0, sin(x), cos(x))" =
   let%op f x = where (x < !.0.) (sin x) (cos x) in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 9.99e-1 │  #                                                                                             *   │
     │         │#### ##                                        *** ##                                        **  ***│

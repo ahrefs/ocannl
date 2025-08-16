@@ -505,6 +505,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          user can choose to run initialization code on multiple streams redundantly, or on the owner
          stream only and then to use init_from_device. *)
       if node.Low_level.read_only || Tn.known_constant key then (
+        if not node.Low_level.read_only then
+          [%log "Backends.alloc_if_needed: constant node is not read-only", (key : Tnode.t)];
         if Tn.known_non_cross_stream key then add_new_exn ()
         else
           let read_only_buffer : Device.buffer_ptr =

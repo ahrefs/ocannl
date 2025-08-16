@@ -4,7 +4,7 @@ Tnode: collecting accessible arrays...
 n0 moons_flat as moons_flat: Host&shared/49039; single prec 40x10x2; mem in bytes: 3_200
 n1 moons_classes as moons_classes: Host&shared/49039; single prec 40x10x1; mem in bytes: 1_600
 n2 range_over_offsets as range_over_offsets: Virt/15; uint4x32 prec 4; mem in bytes: <not-in-yet>
-n3 42_random_seed as random_seed_42: Host-const/36; uint4x32 prec 1; mem in bytes: 16
+n3 42_random_seed as random_seed_42: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
 n4 !@self_id as n4: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
 n5 threefry4x32 as threefry4x32: Virt/15; uint4x32 prec 4; mem in bytes: <not-in-yet>
 n6 threefry4x32 as threefry4x32: Virt/15; uint4x32 prec 4; mem in bytes: <not-in-yet>

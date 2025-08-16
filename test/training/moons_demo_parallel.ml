@@ -8,7 +8,7 @@ module CDSL = Train.CDSL
 
 let main () =
   (* Micrograd half-moons example, with multi-stream execution simulating multi-device. *)
-  let seed = 2 in
+  let seed = 6 in
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
   let hid_dim = 16 in
@@ -40,7 +40,12 @@ let main () =
   let module Backend = (val Backends.fresh_backend ()) in
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ = () in
   (* Tn.print_accessible_headers (); *)
-  let per_epoch_callback ~at_step:_ ~at_epoch:_ ~learning_rate:_ ~epoch_loss:_ = () in
+  let per_epoch_callback ~at_step:_ ~at_epoch ~learning_rate ~epoch_loss =
+    if at_epoch = epochs - 5 then Stdio.printf "\n%!"; 
+    if at_epoch < 10 || at_epoch > epochs - 5 then
+      Stdio.printf "Epoch=%d, lr=%f, loss=%f\n%!" at_epoch learning_rate epoch_loss;
+    if at_epoch > 10 && at_epoch < epochs - 5 && at_epoch % 10 = 0 then Stdio.printf ".%!";
+  in
   let {
     Train.inputs;
     outputs;

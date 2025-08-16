@@ -74,30 +74,6 @@
  (modes exe))
 
 (executable
- (name micrograd_demo)
- (modules micrograd_demo)
- (libraries ocannl base stdio datasets)
- (preprocess
-  (pps ppx_here ppx_sexp_conv ppx_ocannl ppx_minidebug))
- (modes exe))
-
-(executable
- (name moons_demo)
- (modules moons_demo)
- (libraries ocannl base stdio datasets)
- (preprocess
-  (pps ppx_here ppx_sexp_conv ppx_ocannl ppx_minidebug))
- (modes exe))
-
-(executable
- (name moons_demo_parallel)
- (modules moons_demo_parallel)
- (libraries ocannl base stdio datasets)
- (preprocess
-  (pps ppx_here ppx_ocannl))
- (modes exe))
-
-(executable
  (name micrograd_demo_logging)
  (modules micrograd_demo_logging)
  (libraries ocannl)

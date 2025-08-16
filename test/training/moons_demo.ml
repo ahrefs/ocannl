@@ -8,7 +8,7 @@ module Asgns = Ir.Assignments
 
 let main () =
   (* Micrograd half-moons example, single device/stream. *)
-  let seed = 1 in
+  let seed = 2 in
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
@@ -56,12 +56,17 @@ let main () =
   in
   let step_ref = IDX.find_exn sgd_routine.bindings step_n in
   step_ref := 0;
-  for _epoch = 1 to epochs do
+  for epoch = 1 to epochs do
+    let epoch_loss = ref 0. in
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;
-        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
-           step=%d, batch=%d, lr=%f, loss=%f\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
-           scalar_loss.@[0]; *)
+        let batch_ref = IDX.find_exn sgd_routine.bindings batch_n in 
+        epoch_loss := !epoch_loss +. scalar_loss.@[0];
+        if !step_ref = steps - 5 then Stdio.printf "\n%!"; 
+        if !step_ref < 10 || !step_ref > steps - 5 then
+          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%f, loss=%f, epoch loss=%f\n%!" 
+            epoch !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0] !epoch_loss;
+        if !step_ref > 10 && !step_ref < steps - 5 && !step_ref % 100 = 0 then Stdio.printf ".%!";
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;

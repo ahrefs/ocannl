@@ -36,6 +36,7 @@ let graph_t () : unit =
   Train.set_hosted xkcd.value;
   Train.set_hosted x_flat.value;
   Train.set_hosted (Option.value_exn ~here:[%here] xkcd.diff).grad;
+  (* There actually are no params! Stress test the empty comp case. *)
   let ctx = Train.init_params (module Backend) IDX.empty fx in
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine (module Backend) ctx bindings update in
