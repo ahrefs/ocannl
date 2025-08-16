@@ -1,10 +1,10 @@
 float *a &[1] = 0xNNNN
 float *b &[1] = 0xNNNN
 COMMENT: init params for g
-# b[0] := 2;
-b[0]{=MAYBE UNINITIALIZED} = 2000e-3 = (float)(2)
 # a[0] := -4;
 a[0]{=MAYBE UNINITIALIZED} = -4000e-3 = (float)(-4)
+# b[0] := 2;
+b[0]{=MAYBE UNINITIALIZED} = 2000e-3 = (float)(2)
 COMMENT: end
 float *a &[1] = 0xNNNN
 float *a_grad &[1] = 0xNNNN
