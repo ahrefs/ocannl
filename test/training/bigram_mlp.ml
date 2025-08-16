@@ -44,7 +44,7 @@ let () =
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let epochs = 10 in
+  let epochs = 5 in
   let steps = epochs * n_batches in
 
   let%op input_gram = inputs @| batch_n in

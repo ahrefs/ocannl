@@ -72,7 +72,7 @@ let () =
 
   let open Operation.At in
   let batch_ref = IDX.find_exn sgd_step.bindings batch_n in
-  for epoch = 0 to 30 do
+  for epoch = 0 to 10 do
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
