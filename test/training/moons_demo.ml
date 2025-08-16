@@ -92,7 +92,7 @@ let main () =
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true ~size:(150, 150)
+    PrintBox_utils.plot ~as_canvas:true ~size:(100, 100)
       [
         Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };

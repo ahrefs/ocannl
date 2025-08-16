@@ -2,46 +2,16 @@ Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 bigrams: 228146
 input_size: 229000
-Epoch 0, batch 0, loss=4.0377
-Epoch 0, batch 100, loss=2.3477
-Epoch 0, batch 200, loss=2.6327
-Epoch 0, epoch loss=588.22
-Epoch 1, batch 0, loss=2.5969
-Epoch 1, batch 100, loss=2.3154
-Epoch 1, batch 200, loss=2.6052
-Epoch 1, epoch loss=564.92
-Epoch 2, batch 0, loss=2.5874
-Epoch 2, batch 100, loss=2.3016
-Epoch 2, batch 200, loss=2.5952
-Epoch 2, epoch loss=562.39
-Epoch 3, batch 0, loss=2.5766
-Epoch 3, batch 100, loss=2.2964
-Epoch 3, batch 200, loss=2.5905
-Epoch 3, epoch loss=561.13
-Epoch 4, batch 0, loss=2.5725
-Epoch 4, batch 100, loss=2.2911
-Epoch 4, batch 200, loss=2.5884
-Epoch 4, epoch loss=560.26
-Epoch 5, batch 0, loss=2.5685
-Epoch 5, batch 100, loss=2.2871
-Epoch 5, batch 200, loss=2.5854
-Epoch 5, epoch loss=559.69
-Epoch 6, batch 0, loss=2.561
-Epoch 6, batch 100, loss=2.2826
-Epoch 6, batch 200, loss=2.5834
-Epoch 6, epoch loss=559.19
-Epoch 7, batch 0, loss=2.5539
-Epoch 7, batch 100, loss=2.2788
-Epoch 7, batch 200, loss=2.58
-Epoch 7, epoch loss=558.79
-Epoch 8, batch 0, loss=2.547
-Epoch 8, batch 100, loss=2.2744
-Epoch 8, batch 200, loss=2.5786
-Epoch 8, epoch loss=558.48
-Epoch 9, batch 0, loss=2.5428
-Epoch 9, batch 100, loss=2.2702
-Epoch 9, batch 200, loss=2.5779
-Epoch 9, epoch loss=558.23
+Epoch 0, epoch loss=588.2
+Epoch 1, epoch loss=564.9
+Epoch 2, epoch loss=562.4
+Epoch 3, epoch loss=561.1
+Epoch 4, epoch loss=560.3
+Epoch 5, epoch loss=559.7
+Epoch 6, epoch loss=559.2
+Epoch 7, epoch loss=558.8
+Epoch 8, epoch loss=558.5
+Epoch 9, epoch loss=558.2
 nnou
 kyns
 hain

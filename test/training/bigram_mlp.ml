@@ -83,10 +83,9 @@ let () =
       Train.run sgd_step;
       let loss = batch_loss.@[0] in
       epoch_loss := !epoch_loss +. loss;
-      if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.5g\n%!" epoch batch loss;
       Int.incr step_ref
     done;
-    Stdio.printf "Epoch %d, epoch loss=%.5g\n%!" epoch !epoch_loss
+    Stdio.printf "Epoch %d, epoch loss=%.4g\n%!" epoch !epoch_loss
   done;
 
   (* Train.printf_tree batch_loss; *)
