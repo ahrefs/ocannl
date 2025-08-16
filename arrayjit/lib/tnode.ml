@@ -207,10 +207,20 @@ let default_to_most_local tn provenance =
   let provenance =
     match tn.memory_mode with Some (_, prov) -> (1000 * prov) + provenance | None -> provenance
   in
+  let stack_threshold_in_bytes =
+    Int.of_string @@ Utils.get_global_arg ~default:"16384" ~arg_name:"stack_threshold_in_bytes"
+  in
+  let local_mode =
+    if
+      stack_threshold_in_bytes > 0
+      && num_elems tn > stack_threshold_in_bytes / (Ops.prec_in_bytes @@ Lazy.force tn.prec)
+    then On_device Unset
+    else Local
+  in
   match tn.memory_mode with
   | None | Some (Effectively_constant, _) -> tn.memory_mode <- Some (Virtual, provenance)
-  | Some (Never_virtual, _) -> tn.memory_mode <- Some (Local, provenance)
-  | Some (Device_only, _) -> tn.memory_mode <- Some (Local, provenance)
+  | Some (Never_virtual, _) -> tn.memory_mode <- Some (local_mode, provenance)
+  | Some (Device_only, _) -> tn.memory_mode <- Some (local_mode, provenance)
   | Some (Materialized, _) -> tn.memory_mode <- Some (On_device Unset, provenance)
   | Some ((Virtual | Local | On_device _ | Hosted _), _) -> ()
 

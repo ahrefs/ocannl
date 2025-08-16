@@ -73,16 +73,6 @@ module type C_syntax_config = sig
         implementation should handle quoting [base_message_literal], choosing the log function
         (printf, fprintf, os_log), and prepending any necessary prefixes (like a log_id or
         captured_log_prefix) to the format string and arguments. *)
-
-  val local_heap_alloc :
-    (zero_initialized:bool ->
-    num_elems:int ->
-    typ_doc:PPrint.document ->
-    ident_doc:PPrint.document ->
-    PPrint.document)
-    option
-
-  val local_heap_dealloc : (ident_doc:PPrint.document -> PPrint.document) option
 end
 
 module Pure_C_config (Input : sig
@@ -468,30 +458,6 @@ struct
     ^^ (if List.is_empty args_docs then empty else comma ^^ space)
     ^^ separate (comma ^^ space) args_docs
     ^^ rparen ^^ semi
-
-  let local_heap_alloc ~zero_initialized ~num_elems ~typ_doc ~ident_doc =
-    let open PPrint in
-    let alloc_expr =
-      if zero_initialized then
-        string "calloc"
-        ^^ parens (OCaml.int num_elems ^^ comma ^^ space ^^ string "sizeof" ^^ parens typ_doc)
-      else
-        string "malloc"
-        ^^ parens
-             (OCaml.int num_elems ^^ space ^^ string "*" ^^ space ^^ string "sizeof"
-            ^^ parens typ_doc)
-    in
-    typ_doc ^^ space ^^ string "*" ^^ ident_doc ^^ space ^^ equals ^^ space
-    ^^ parens (typ_doc ^^ string "*")
-    ^^ alloc_expr
-
-  let local_heap_alloc = Some local_heap_alloc
-
-  let local_heap_dealloc ~ident_doc =
-    let open PPrint in
-    string "free(" ^^ ident_doc ^^ string ")"
-
-  let local_heap_dealloc = Some local_heap_dealloc
 end
 
 module C_syntax (B : C_syntax_config) = struct
@@ -998,10 +964,6 @@ module C_syntax (B : C_syntax_config) = struct
        in
        body := !body ^^ debug_init_doc ^^ hardline);
 
-    let heap_allocated = ref [] in
-    let stack_threshold_in_bytes =
-      Int.of_string @@ Utils.get_global_arg ~default:"16384" ~arg_name:"stack_threshold_in_bytes"
-    in
     let local_decls =
       string "/* Local declarations and initialization. */"
       ^^ hardline
@@ -1012,24 +974,8 @@ module C_syntax (B : C_syntax_config) = struct
                let ident_doc = string (get_ident tn) in
                let num_elems = Tn.num_elems tn in
                let size_doc = OCaml.int num_elems in
-               (* Use heap allocation for arrays larger than stack_threshold_in_bytes to avoid stack
-                  overflow in Domain threads *)
-
-               if
-                 Option.is_some B.local_heap_alloc && stack_threshold_in_bytes > 0
-                 && num_elems > stack_threshold_in_bytes / (Ops.prec_in_bytes @@ Lazy.force tn.prec)
-               then (
-                 (* Heap allocation for large arrays *)
-                 heap_allocated := get_ident tn :: !heap_allocated;
-                 Option.value_exn ~here:[%here] B.local_heap_alloc
-                   ~zero_initialized:node.Low_level.zero_initialized ~num_elems ~typ_doc ~ident_doc
-                 ^^ semi ^^ hardline)
-               else
-                 (* Stack allocation for small arrays *)
-                 let init_doc =
-                   if node.Low_level.zero_initialized then string " = {0}" else empty
-                 in
-                 typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
+               let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
+               typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
              else empty)
            (Hashtbl.to_alist traced_store)
     in
@@ -1037,18 +983,6 @@ module C_syntax (B : C_syntax_config) = struct
 
     let main_logic = string "/* Main logic. */" ^^ hardline ^^ compile_main llc in
     body := !body ^^ main_logic;
-
-    (* Free heap-allocated arrays *)
-    if Option.is_some B.local_heap_dealloc && not (List.is_empty !heap_allocated) then
-      body :=
-        !body ^^ hardline
-        ^^ string "/* Cleanup heap-allocated arrays. */"
-        ^^ hardline
-        ^^ separate_map hardline
-             (fun ident ->
-               Option.value_exn ~here:[%here] B.local_heap_dealloc ~ident_doc:(string ident) ^^ semi)
-             !heap_allocated
-        ^^ hardline;
 
     if Utils.debug_log_from_routines () && B.log_involves_file_management then
       body :=

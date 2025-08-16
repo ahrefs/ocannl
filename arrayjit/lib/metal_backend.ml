@@ -624,9 +624,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma ^^ space
         ^^ separate (comma ^^ space) args_docs
         ^^ rparen ^^ semi
-
-    let local_heap_alloc = None
-    let local_heap_dealloc = None
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =

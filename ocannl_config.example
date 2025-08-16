@@ -89,6 +89,7 @@ output_dlls_in_build_directory=false
 
 # Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.
 # Decrease it if you see crashes like `bus error`. Values smaller-or-equal 0 mean "no limits".
+# Tensors exceeding this size will be allocated on the device's global memory.
 stack_threshold_in_bytes=16384
 
 # Only tensor nodes with up to this many visits per array cell (in a dedicated interpreter)

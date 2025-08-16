@@ -733,9 +733,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ^^ comma ^^ space
       ^^ separate (comma ^^ space) all_args
       ^^ rparen ^^ semi
-
-    let local_heap_alloc = None
-    let local_heap_dealloc = None
   end
 
   let prepend_builtins b =
