@@ -80,23 +80,6 @@ type comp = {
 let to_comp asgns = { asgns; embedded_nodes = Set.empty (module Tnode) }
 let empty_comp = to_comp Noop
 
-let get_name_exn asgns =
-  let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
-  let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
-  let rec loop = function
-    | Block_comment (s, _) ->
-        Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
-    | Seq (t1, t2) ->
-        let n1 = loop t1 and n2 = loop t2 in
-        let prefix = String.common_prefix2_length n1 n2 in
-        let suffix = String.common_suffix2_length n1 n2 in
-        if String.is_empty n1 || String.is_empty n2 then n1 ^ n2
-        else String.drop_suffix n1 suffix ^ "_then_" ^ String.drop_prefix n2 prefix
-    | _ -> ""
-  in
-  let result = loop asgns in
-  if String.is_empty result then invalid_arg "Assignments.get_name: no comments in code" else result
-
 let is_total ~initialize_neutral ~projections =
   initialize_neutral && Indexing.is_surjective projections
 
@@ -535,6 +518,31 @@ let to_doc ?name ?static_indices () c =
   in
 
   header_doc ^^ nest 2 (doc_of_code c)
+
+let to_string c =
+  let doc = to_doc () c in
+  let b = Buffer.create 100 in
+  PPrint.ToBuffer.pretty 0.7 100 b doc;
+  Buffer.contents b
+
+let get_name_exn asgns =
+  let punct_or_sp = Str.regexp "[-@*/:.;, ]" in
+  let punct_and_sp = Str.regexp {|[-@*/:.;,]\( |$\)|} in
+  let rec loop = function
+    | Block_comment (s, _) ->
+        Str.global_replace punct_and_sp "" s |> Str.global_replace punct_or_sp "_"
+    | Seq (t1, t2) ->
+        let n1 = loop t1 and n2 = loop t2 in
+        let prefix = String.common_prefix2_length n1 n2 in
+        let suffix = String.common_suffix2_length n1 n2 in
+        if String.is_empty n1 || String.is_empty n2 then n1 ^ n2
+        else String.drop_suffix n1 suffix ^ "_then_" ^ String.drop_prefix n2 prefix
+    | _ -> ""
+  in
+  let result = loop asgns in
+  if String.is_empty result then
+    invalid_arg "Assignments.get_name_exn: no comments in code: " ^ to_string asgns
+  else result
 
 let%track6_sexp lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name static_indices
     (proc : t) : Low_level.optimized =
