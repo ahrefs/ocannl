@@ -36,3 +36,12 @@
  (libraries ocannl datasets)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name bigram_mlp)
+ (package neural_nets_lib)
+ (modules bigram_mlp)
+ (deps ocannl_config ../../datasets/names.txt)
+ (libraries ocannl datasets)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

@@ -1,0 +1,144 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+bigrams: 228146
+input_size: 229000
+Epoch 0, batch 0, loss=3.596803
+Epoch 0, batch 100, loss=2.404538
+Epoch 0, batch 200, loss=2.713312
+Epoch 0, epoch loss=611.678833
+Epoch 1, batch 0, loss=2.647410
+Epoch 1, batch 100, loss=2.355608
+Epoch 1, batch 200, loss=2.695120
+Epoch 1, epoch loss=583.552755
+Epoch 2, batch 0, loss=2.616959
+Epoch 2, batch 100, loss=2.341767
+Epoch 2, batch 200, loss=2.690594
+Epoch 2, epoch loss=579.073393
+Epoch 3, batch 0, loss=2.606693
+Epoch 3, batch 100, loss=2.332399
+Epoch 3, batch 200, loss=2.685702
+Epoch 3, epoch loss=576.878227
+Epoch 4, batch 0, loss=2.600307
+Epoch 4, batch 100, loss=2.323992
+Epoch 4, batch 200, loss=2.683693
+Epoch 4, epoch loss=575.402652
+Epoch 5, batch 0, loss=2.594286
+Epoch 5, batch 100, loss=2.321348
+Epoch 5, batch 200, loss=2.682261
+Epoch 5, epoch loss=574.648719
+Epoch 6, batch 0, loss=2.590291
+Epoch 6, batch 100, loss=2.319553
+Epoch 6, batch 200, loss=2.681007
+Epoch 6, epoch loss=574.212405
+Epoch 7, batch 0, loss=2.587613
+Epoch 7, batch 100, loss=2.318320
+Epoch 7, batch 200, loss=2.679791
+Epoch 7, epoch loss=573.923159
+Epoch 8, batch 0, loss=2.585782
+Epoch 8, batch 100, loss=2.317281
+Epoch 8, batch 200, loss=2.678619
+Epoch 8, epoch loss=573.712349
+Epoch 9, batch 0, loss=2.584289
+Epoch 9, batch 100, loss=2.316545
+Epoch 9, batch 200, loss=2.677656
+Epoch 9, epoch loss=573.545841
+Epoch 10, batch 0, loss=2.583350
+Epoch 10, batch 100, loss=2.315760
+Epoch 10, batch 200, loss=2.677120
+Epoch 10, epoch loss=573.416230
+Epoch 11, batch 0, loss=2.582342
+Epoch 11, batch 100, loss=2.314730
+Epoch 11, batch 200, loss=2.676593
+Epoch 11, epoch loss=573.304878
+Epoch 12, batch 0, loss=2.581072
+Epoch 12, batch 100, loss=2.314418
+Epoch 12, batch 200, loss=2.676084
+Epoch 12, epoch loss=573.217088
+Epoch 13, batch 0, loss=2.580139
+Epoch 13, batch 100, loss=2.313888
+Epoch 13, batch 200, loss=2.675808
+Epoch 13, epoch loss=573.160971
+Epoch 14, batch 0, loss=2.579073
+Epoch 14, batch 100, loss=2.313829
+Epoch 14, batch 200, loss=2.675538
+Epoch 14, epoch loss=573.108825
+Epoch 15, batch 0, loss=2.578053
+Epoch 15, batch 100, loss=2.313698
+Epoch 15, batch 200, loss=2.675146
+Epoch 15, epoch loss=573.053701
+Epoch 16, batch 0, loss=2.577008
+Epoch 16, batch 100, loss=2.313570
+Epoch 16, batch 200, loss=2.674981
+Epoch 16, epoch loss=573.022783
+Epoch 17, batch 0, loss=2.575933
+Epoch 17, batch 100, loss=2.313336
+Epoch 17, batch 200, loss=2.674882
+Epoch 17, epoch loss=572.994415
+Epoch 18, batch 0, loss=2.574802
+Epoch 18, batch 100, loss=2.313281
+Epoch 18, batch 200, loss=2.674819
+Epoch 18, epoch loss=572.970232
+Epoch 19, batch 0, loss=2.573628
+Epoch 19, batch 100, loss=2.313263
+Epoch 19, batch 200, loss=2.674825
+Epoch 19, epoch loss=572.953095
+Epoch 20, batch 0, loss=2.572425
+Epoch 20, batch 100, loss=2.313287
+Epoch 20, batch 200, loss=2.674947
+Epoch 20, epoch loss=572.944329
+Epoch 21, batch 0, loss=2.571131
+Epoch 21, batch 100, loss=2.313364
+Epoch 21, batch 200, loss=2.675090
+Epoch 21, epoch loss=572.937993
+Epoch 22, batch 0, loss=2.569772
+Epoch 22, batch 100, loss=2.313478
+Epoch 22, batch 200, loss=2.675289
+Epoch 22, epoch loss=572.938003
+Epoch 23, batch 0, loss=2.568363
+Epoch 23, batch 100, loss=2.313642
+Epoch 23, batch 200, loss=2.675533
+Epoch 23, epoch loss=572.942862
+Epoch 24, batch 0, loss=2.566818
+Epoch 24, batch 100, loss=2.313836
+Epoch 24, batch 200, loss=2.675862
+Epoch 24, epoch loss=572.957152
+Epoch 25, batch 0, loss=2.565202
+Epoch 25, batch 100, loss=2.314101
+Epoch 25, batch 200, loss=2.676244
+Epoch 25, epoch loss=572.973916
+Epoch 26, batch 0, loss=2.563537
+Epoch 26, batch 100, loss=2.314420
+Epoch 26, batch 200, loss=2.676718
+Epoch 26, epoch loss=573.000067
+Epoch 27, batch 0, loss=2.561750
+Epoch 27, batch 100, loss=2.314806
+Epoch 27, batch 200, loss=2.677269
+Epoch 27, epoch loss=573.032138
+Epoch 28, batch 0, loss=2.559874
+Epoch 28, batch 100, loss=2.315258
+Epoch 28, batch 200, loss=2.677783
+Epoch 28, epoch loss=573.068187
+Epoch 29, batch 0, loss=2.557876
+Epoch 29, batch 100, loss=2.315784
+Epoch 29, batch 200, loss=2.678444
+Epoch 29, epoch loss=573.116851
+nnou
+kynr
+hcen
+heyn
+fsh
+rysr
+loshar
+bri
+e
+keto
+fk
+a
+mejadu
+carinure
+ti
+sycan
+jandln
+khiehel
+ke
+une

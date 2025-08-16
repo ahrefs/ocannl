@@ -43,12 +43,16 @@ let () =
 
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
+  let step_n, bindings = IDX.get_static_symbol bindings in
+  let epochs = 30 in
+  let steps = epochs * n_batches in
 
   let%op input_gram = inputs @| batch_n in
   let%op output_gram = outputs @| batch_n in
 
   let%op mlp input =
-    let counts = exp (("w" + 1) * input) in
+    (* let counts = exp (("w3" + 1) * relu ("b2" 4 + ("w2" * relu ("b1" 8 + ("w1" * input))))) in *)
+    let counts = exp (("w2" + 1) * relu ("b1" 4 (* 24 *) + ("w1" * input))) in
     counts /. (counts ++ "...|... => ...|0")
   in
 
@@ -62,17 +66,17 @@ let () =
   (* FIXME(#344): When uncommented, this exceeds the number of buffer arguments supported by the Metal backend. *)
   (* Train.every_non_literal_on_host batch_loss; *)
   let update = Train.grad_update batch_loss in
-  let%op learning_rate = 1 in
-  let sgd = Train.sgd_update ~learning_rate batch_loss in
+  let%op learning_rate = 0.5 *. (1.5 *. !..steps - !@step_n) /. !..steps in
+  let sgd = Train.sgd_update ~learning_rate (* ~weight_decay:0.0001 *) batch_loss in
 
   let module Backend = (val Backends.fresh_backend ()) in
   let ctx = Train.init_params (module Backend) bindings batch_loss in
   let sgd_step = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
-  (* Train.printf w ~with_grad:false; *)
 
   let open Operation.At in
   let batch_ref = IDX.find_exn sgd_step.bindings batch_n in
-  for epoch = 0 to 30 do
+  let step_ref = IDX.find_exn sgd_step.bindings step_n in
+  for epoch = 0 to epochs - 1 do
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
@@ -80,11 +84,12 @@ let () =
       let loss = batch_loss.@[0] in
       epoch_loss := !epoch_loss +. loss;
       if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%f\n%!" epoch batch loss;
+      Int.incr step_ref
     done;
     Stdio.printf "Epoch %d, epoch loss=%f\n%!" epoch !epoch_loss
   done;
-  (* Train.printf_tree batch_loss; *)
 
+  (* Train.printf_tree batch_loss; *)
   let counter_n, bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_probs = mlp "cha" in
   let%cd infer_step =
