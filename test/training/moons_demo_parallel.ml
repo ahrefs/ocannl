@@ -70,7 +70,7 @@ let main () =
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   let callback (x, y) = Float.((infer_callback [| x; y |]).(0) >= 0.) in
   let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true ~small:true
+    PrintBox_utils.plot ~as_canvas:true ~size:(150, 150)
       [
         PrintBox_ext_plot.Scatterplot { points = points1; content = PrintBox.line "#" };
         Scatterplot { points = points2; content = PrintBox.line "%" };

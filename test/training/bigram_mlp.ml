@@ -44,7 +44,7 @@ let () =
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in
-  let epochs = 30 in
+  let epochs = 10 in
   let steps = epochs * n_batches in
 
   let%op input_gram = inputs @| batch_n in
@@ -52,7 +52,7 @@ let () =
 
   let%op mlp input =
     (* let counts = exp (("w3" + 1) * relu ("b2" 4 + ("w2" * relu ("b1" 8 + ("w1" * input))))) in *)
-    let counts = exp (("w2" + 1) * relu ("b1" 4 (* 24 *) + ("w1" * input))) in
+    let counts = exp (("w2" + 1) * relu ("b1" 24 + ("w1" * input))) in
     counts /. (counts ++ "...|... => ...|0")
   in
 
@@ -66,7 +66,7 @@ let () =
   (* FIXME(#344): When uncommented, this exceeds the number of buffer arguments supported by the Metal backend. *)
   (* Train.every_non_literal_on_host batch_loss; *)
   let update = Train.grad_update batch_loss in
-  let%op learning_rate = 0.5 *. (1.5 *. !..steps - !@step_n) /. !..steps in
+  let%op learning_rate = 1.5 *. ((1.5 *. !..steps) - !@step_n) /. !..steps in
   let sgd = Train.sgd_update ~learning_rate (* ~weight_decay:0.0001 *) batch_loss in
 
   let module Backend = (val Backends.fresh_backend ()) in
@@ -83,10 +83,10 @@ let () =
       Train.run sgd_step;
       let loss = batch_loss.@[0] in
       epoch_loss := !epoch_loss +. loss;
-      if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.6g\n%!" epoch batch loss;
+      if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.5g\n%!" epoch batch loss;
       Int.incr step_ref
     done;
-    Stdio.printf "Epoch %d, epoch loss=%.6g\n%!" epoch !epoch_loss
+    Stdio.printf "Epoch %d, epoch loss=%.5g\n%!" epoch !epoch_loss
   done;
 
   (* Train.printf_tree batch_loss; *)
