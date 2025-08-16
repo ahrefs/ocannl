@@ -85,7 +85,7 @@ let () =
       epoch_loss := !epoch_loss +. loss;
       Int.incr step_ref
     done;
-    Stdio.printf "Epoch %d, epoch loss=%.4g\n%!" epoch !epoch_loss
+    Stdio.printf "Epoch %d, epoch loss=%.3g\n%!" epoch !epoch_loss
   done;
 
   (* Train.printf_tree batch_loss; *)
@@ -128,5 +128,5 @@ let () =
     String.drop_prefix name_with_dot 1
   in
 
-  let names = Array.init 20 ~f:(fun _ -> gen_name ()) in
+  let names = Array.init 4 ~f:(fun _ -> gen_name ()) in
   Array.iter names ~f:print_endline

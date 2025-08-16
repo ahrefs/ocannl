@@ -2,33 +2,17 @@ Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 bigrams: 228146
 input_size: 229000
-Epoch 0, epoch loss=588.2
-Epoch 1, epoch loss=564.9
-Epoch 2, epoch loss=562.4
-Epoch 3, epoch loss=561.1
-Epoch 4, epoch loss=560.3
-Epoch 5, epoch loss=559.7
-Epoch 6, epoch loss=559.2
-Epoch 7, epoch loss=558.8
-Epoch 8, epoch loss=558.5
-Epoch 9, epoch loss=558.2
+Epoch 0, epoch loss=588
+Epoch 1, epoch loss=565
+Epoch 2, epoch loss=562
+Epoch 3, epoch loss=561
+Epoch 4, epoch loss=560
+Epoch 5, epoch loss=560
+Epoch 6, epoch loss=559
+Epoch 7, epoch loss=559
+Epoch 8, epoch loss=558
+Epoch 9, epoch loss=558
 nnou
 kyns
 hain
 heyn
-freerytr
-loshar
-bri
-e
-keur
-fi
-a
-mel
-cr
-d
-riowle
-ur
-tyben
-jandnihaniein
-an
-cphi
