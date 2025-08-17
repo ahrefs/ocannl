@@ -102,7 +102,7 @@ opam install cudajit  # for CUDA backend
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation
 - `debug_log_from_routines=true` - enables runtime logging
-- `debug_log_to_stream_files=true` - writes logs to `log_files/<backend>-<deviceF>-<stream>.log`
+- `debug_log_to_stream_files=true` - writes logs to `log_files/<backend>-<device>-<stream>.log`
 - `clean_up_artifacts_on_startup=false` - preserves debug files between runs
 
 ### Backend Development

@@ -10,259 +10,80 @@ float *a &[1] = 0xNNNN
 float *a_grad &[1] = 0xNNNN
 float *b &[1] = 0xNNNN
 float *b_grad &[1] = 0xNNNN
-float *e &[1] = 0xNNNN
-float *e_grad &[1] = 0xNNNN
-float *f &[1] = 0xNNNN
-float *f_grad &[1] = 0xNNNN
-float *n10 &[1] = 0xNNNN
-float *n11 &[1] = 0xNNNN
-float *n12 &[1] = 0xNNNN
-float *n12_grad &[1] = 0xNNNN
-float *n14_d &[1] = 0xNNNN
-float *n14_d_grad &[1] = 0xNNNN
-float *n17 &[1] = 0xNNNN
-float *n17_grad &[1] = 0xNNNN
-float *n19_c &[1] = 0xNNNN
-float *n19_c_grad &[1] = 0xNNNN
-float *n22 &[1] = 0xNNNN
-float *n22_grad &[1] = 0xNNNN
-float *n25 &[1] = 0xNNNN
-float *n25_grad &[1] = 0xNNNN
-float *n27 &[1] = 0xNNNN
-float *n27_grad &[1] = 0xNNNN
-float *n29_c &[1] = 0xNNNN
-float *n29_c_grad &[1] = 0xNNNN
-float *n31 &[1] = 0xNNNN
-float *n31_grad &[1] = 0xNNNN
-float *n33_relu &[1] = 0xNNNN
-float *n33_relu_grad &[1] = 0xNNNN
-float *n36 &[1] = 0xNNNN
-float *n36_grad &[1] = 0xNNNN
-float *n38 &[1] = 0xNNNN
-float *n38_grad &[1] = 0xNNNN
-float *n40_d &[1] = 0xNNNN
-float *n40_d_grad &[1] = 0xNNNN
-float *n42 &[1] = 0xNNNN
-float *n42_grad &[1] = 0xNNNN
-float *n44_relu &[1] = 0xNNNN
-float *n44_relu_grad &[1] = 0xNNNN
-float *n47 &[1] = 0xNNNN
-float *n47_grad &[1] = 0xNNNN
-float *n49 &[1] = 0xNNNN
-float *n49_grad &[1] = 0xNNNN
-float *n4_c &[1] = 0xNNNN
-float *n4_c_grad &[1] = 0xNNNN
-float *n51_d &[1] = 0xNNNN
-float *n51_d_grad &[1] = 0xNNNN
-float *n58 &[1] = 0xNNNN
-float *n60_g &[1] = 0xNNNN
-float *n60_g_grad &[1] = 0xNNNN
-float *n63 &[1] = 0xNNNN
-float *n63_grad &[1] = 0xNNNN
-float *n66 &[1] = 0xNNNN
-float *n68 &[1] = 0xNNNN
-float *n69 &[1] = 0xNNNN
-float *n7 &[1] = 0xNNNN
-float *n70_g &[1] = 0xNNNN
-float *n70_g_grad &[1] = 0xNNNN
-float *n7_grad &[1] = 0xNNNN
+float *g &[1] = 0xNNNN
 COMMENT: g forward and gradient update
-# n22[0] := (-1 * a[0]);
-n22[0]{=MAYBE UNINITIALIZED} = 4000e-3 = ((float)(-1) * a[0]{=-4000e-3})
 # n4_c[0] := (a[0] + b[0]);
 n4_c[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (a[0]{=-4000e-3} + b[0]{=2000e-3})
-# n17[0] := (n4_c[0] + n4_c[0]);
-n17[0]{=MAYBE UNINITIALIZED} = -4000e-3 = (n4_c[0]{=-2000e-3} + n4_c[0]{=-2000e-3})
-# n19_c[0] := (n17[0] + 1);
-n19_c[0]{=MAYBE UNINITIALIZED} = -3000e-3 = (n17[0]{=-4000e-3} + (float)(1))
-# n25[0] := (n19_c[0] + 1);
-n25[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (n19_c[0]{=-3000e-3} + (float)(1))
-# n27[0] := (n25[0] + n19_c[0]);
-n27[0]{=MAYBE UNINITIALIZED} = -5000e-3 = (n25[0]{=-2000e-3} + n19_c[0]{=-3000e-3})
-# n29_c[0] := (n27[0] + n22[0]);
-n29_c[0]{=MAYBE UNINITIALIZED} = -1000e-3 = (n27[0]{=-5000e-3} + n22[0]{=4000e-3})
+# n19_c[0] := ((n4_c[0] + n4_c[0]) + 1);
+n19_c[0]{=MAYBE UNINITIALIZED} = -3000e-3 = ((n4_c[0]{=-2000e-3} + n4_c[0]{=-2000e-3}) + (float)(1))
 # n42[0] := (b[0] - a[0]);
 n42[0]{=MAYBE UNINITIALIZED} = 6000e-3 = (b[0]{=2000e-3} - a[0]{=-4000e-3})
-# n44_relu[0] := relu(n42[0]);
-n44_relu[0]{=MAYBE UNINITIALIZED} = 6000e-3 = fmaxf(0.0, n42[0]{=6000e-3})
 # n31[0] := (b[0] + a[0]);
 n31[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (b[0]{=2000e-3} + a[0]{=-4000e-3})
-# n33_relu[0] := relu(n31[0]);
-n33_relu[0]{=MAYBE UNINITIALIZED} = 0e-3 = fmaxf(0.0, n31[0]{=-2000e-3})
-# n7[0] := (b[0] * (b[0] * b[0]));
-n7[0]{=MAYBE UNINITIALIZED} = 8000e-3 = (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3}))
-# n12[0] := (a[0] * b[0]);
-n12[0]{=MAYBE UNINITIALIZED} = -8000e-3 = (a[0]{=-4000e-3} * b[0]{=2000e-3})
-# n14_d[0] := (n12[0] + n7[0]);
-n14_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n12[0]{=-8000e-3} + n7[0]{=8000e-3})
-# n36[0] := (n14_d[0] * 2);
-n36[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n14_d[0]{=0e-3} * (float)(2))
-# n38[0] := (n14_d[0] + n36[0]);
-n38[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n14_d[0]{=0e-3} + n36[0]{=0e-3})
-# n40_d[0] := (n38[0] + n33_relu[0]);
-n40_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n38[0]{=0e-3} + n33_relu[0]{=0e-3})
-# n47[0] := (3 * n40_d[0]);
-n47[0]{=MAYBE UNINITIALIZED} = 0e-3 = ((float)(3) * n40_d[0]{=0e-3})
-# n49[0] := (n40_d[0] + n47[0]);
-n49[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n40_d[0]{=0e-3} + n47[0]{=0e-3})
-# n51_d[0] := (n49[0] + n44_relu[0]);
-n51_d[0]{=MAYBE UNINITIALIZED} = 6000e-3 = (n49[0]{=0e-3} + n44_relu[0]{=6000e-3})
-# e[0] := (n29_c[0] - n51_d[0]);
-e[0]{=MAYBE UNINITIALIZED} = -7000e-3 = (n29_c[0]{=-1000e-3} - n51_d[0]{=6000e-3})
+# n14_d[0] := fma(a[0], b[0], (b[0] * (b[0] * b[0])));
+n14_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = fmaf(a[0]{=-4000e-3},b[0]{=2000e-3},(b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))
+# n40_d[0] := (fma(n14_d[0], 2, n14_d[0]) + relu(n31[0]));
+n40_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (fmaf(n14_d[0]{=0e-3},(float)(2),n14_d[0]{=0e-3}) + fmaxf(0.0, n31[0]{=-2000e-3}))
+# e[0] := (fma(-1, a[0], ((n19_c[0] + 1) + n19_c[0])) - (fma(3, n40_d[0], n40_d[0]) + relu(n42[0])));
+e[0]{=MAYBE UNINITIALIZED} = -7000e-3 = (fmaf((float)(-1),a[0]{=-4000e-3},((n19_c[0]{=-3000e-3} + (float)(1)) + n19_c[0]{=-3000e-3})) - (fmaf((float)(3),n40_d[0]{=0e-3},n40_d[0]{=0e-3}) + fmaxf(0.0, n42[0]{=6000e-3})))
 # f[0] := (e[0] * e[0]);
 f[0]{=MAYBE UNINITIALIZED} = 49000e-3 = (e[0]{=-7000e-3} * e[0]{=-7000e-3})
-# n60_g[0] := (f[0] / 2);
-n60_g[0]{=MAYBE UNINITIALIZED} = 24500e-3 = (f[0]{=49000e-3} / (float)(2))
-# n63[0] := (10 / f[0]);
-n63[0]{=MAYBE UNINITIALIZED} = 204e-3 = ((float)(10) / f[0]{=49000e-3})
-# n70_g[0] := (n60_g[0] + n63[0]);
-n70_g[0]{=MAYBE UNINITIALIZED} = 24704e-3 = (n60_g[0]{=24500e-3} + n63[0]{=204e-3})
+# g[0] := ((f[0] / 2) + (10 / f[0]));
+g[0]{=MAYBE UNINITIALIZED} = 24704e-3 = ((f[0]{=49000e-3} / (float)(2)) + ((float)(10) / f[0]{=49000e-3}))
 COMMENT: g zero grads and backprop
-# n22_grad := 0
-n22_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # a_grad := 0
 a_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # b_grad := 0
 b_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n4_c_grad := 0
 n4_c_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n17_grad := 0
-n17_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n19_c_grad := 0
 n19_c_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n25_grad := 0
-n25_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n27_grad := 0
-n27_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n29_c_grad := 0
-n29_c_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n42_grad := 0
-n42_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n44_relu_grad := 0
-n44_relu_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n31_grad := 0
-n31_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n33_relu_grad := 0
-n33_relu_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n7_grad := 0
-n7_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n12_grad := 0
-n12_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n14_d_grad := 0
 n14_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n36_grad := 0
-n36_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n38_grad := 0
-n38_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n40_d_grad := 0
 n40_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n47_grad := 0
-n47_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n49_grad := 0
-n49_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n51_d_grad := 0
-n51_d_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# e_grad := 0
-e_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # f_grad := 0
 f_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n60_g_grad := 0
-n60_g_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n63_grad := 0
-n63_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n70_g_grad := 0
-n70_g_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
-# n70_g.grad[0] := 1;
-n70_g_grad[0]{=MAYBE UNINITIALIZED} = 1000e-3 = (float)(1)
-# n60_g.grad[0] := (n60_g.grad[0] + n70_g.grad[0]);
-n60_g_grad[0]{=MAYBE UNINITIALIZED} = 1000e-3 = (n60_g_grad[0]{=0e-3} + n70_g_grad[0]{=1000e-3})
-# n63.grad[0] := (n63.grad[0] + n70_g.grad[0]);
-n63_grad[0]{=MAYBE UNINITIALIZED} = 1000e-3 = (n63_grad[0]{=0e-3} + n70_g_grad[0]{=1000e-3})
-# n66[0] := (f[0] * f[0]);
-n66[0]{=MAYBE UNINITIALIZED} = 2401000e-3 = (f[0]{=49000e-3} * f[0]{=49000e-3})
-# n68[0] := -10;
-n68[0]{=MAYBE UNINITIALIZED} = -10000e-3 = (float)(-10)
-# n69[0] := (n68[0] / n66[0]);
-n69[0]{=MAYBE UNINITIALIZED} = -4e-3 = (n68[0]{=-10000e-3} / n66[0]{=2401000e-3})
-# f.grad[0] := fma(n63.grad[0], n69[0], f.grad[0]);
-f_grad[0]{=MAYBE UNINITIALIZED} = -4e-3 = fmaf(n63_grad[0]{=1000e-3},n69[0]{=-4e-3},f_grad[0]{=0e-3})
-# f.grad[0] := (f.grad[0] + (n60_g.grad[0] / 2));
-f_grad[0]{=MAYBE UNINITIALIZED} = 495e-3 = (f_grad[0]{=-4e-3} + (n60_g_grad[0]{=1000e-3} / (float)(2)))
-# n58[0] := (2 * e[0]);
-n58[0]{=MAYBE UNINITIALIZED} = -14000e-3 = ((float)(2) * e[0]{=-7000e-3})
-# e.grad[0] := fma(n58[0], f.grad[0], e.grad[0]);
-e_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = fmaf(n58[0]{=-14000e-3},f_grad[0]{=495e-3},e_grad[0]{=0e-3})
-# n29_c.grad[0] := (n29_c.grad[0] + e.grad[0]);
-n29_c_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = (n29_c_grad[0]{=0e-3} + e_grad[0]{=-6941e-3})
-# n51_d.grad[0] := (n51_d.grad[0] - e.grad[0]);
-n51_d_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n51_d_grad[0]{=0e-3} - e_grad[0]{=-6941e-3})
-# n49.grad[0] := (n49.grad[0] + n51_d.grad[0]);
-n49_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n49_grad[0]{=0e-3} + n51_d_grad[0]{=6941e-3})
-# n44_relu.grad[0] := (n44_relu.grad[0] + n51_d.grad[0]);
-n44_relu_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n44_relu_grad[0]{=0e-3} + n51_d_grad[0]{=6941e-3})
-# n40_d.grad[0] := (n40_d.grad[0] + n49.grad[0]);
-n40_d_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n40_d_grad[0]{=0e-3} + n49_grad[0]{=6941e-3})
-# n47.grad[0] := (n47.grad[0] + n49.grad[0]);
-n47_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n47_grad[0]{=0e-3} + n49_grad[0]{=6941e-3})
-# n40_d.grad[0] := fma(3, n47.grad[0], n40_d.grad[0]);
-n40_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = fmaf((float)(3),n47_grad[0]{=6941e-3},n40_d_grad[0]{=6941e-3})
-# n38.grad[0] := (n38.grad[0] + n40_d.grad[0]);
-n38_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n38_grad[0]{=0e-3} + n40_d_grad[0]{=27766e-3})
-# n33_relu.grad[0] := (n33_relu.grad[0] + n40_d.grad[0]);
-n33_relu_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n33_relu_grad[0]{=0e-3} + n40_d_grad[0]{=27766e-3})
-# n14_d.grad[0] := (n14_d.grad[0] + n38.grad[0]);
-n14_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n14_d_grad[0]{=0e-3} + n38_grad[0]{=27766e-3})
-# n36.grad[0] := (n36.grad[0] + n38.grad[0]);
-n36_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n36_grad[0]{=0e-3} + n38_grad[0]{=27766e-3})
-# n14_d.grad[0] := fma(n36.grad[0], 2, n14_d.grad[0]);
-n14_d_grad[0]{=MAYBE UNINITIALIZED} = 83300e-3 = fmaf(n36_grad[0]{=27766e-3},(float)(2),n14_d_grad[0]{=27766e-3})
-# n12.grad[0] := (n12.grad[0] + n14_d.grad[0]);
-n12_grad[0]{=MAYBE UNINITIALIZED} = 83300e-3 = (n12_grad[0]{=0e-3} + n14_d_grad[0]{=83300e-3})
-# n7.grad[0] := (n7.grad[0] + n14_d.grad[0]);
-n7_grad[0]{=MAYBE UNINITIALIZED} = 83300e-3 = (n7_grad[0]{=0e-3} + n14_d_grad[0]{=83300e-3})
-# a.grad[0] := fma(n12.grad[0], b[0], a.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = fmaf(n12_grad[0]{=83300e-3},b[0]{=2000e-3},a_grad[0]{=0e-3})
-# b.grad[0] := fma(a[0], n12.grad[0], b.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = -333201e-3 = fmaf(a[0]{=-4000e-3},n12_grad[0]{=83300e-3},b_grad[0]{=0e-3})
-# n10[0] := (b[0] * b[0]);
-n10[0]{=MAYBE UNINITIALIZED} = 4000e-3 = (b[0]{=2000e-3} * b[0]{=2000e-3})
-# n11[0] := (3 * n10[0]);
-n11[0]{=MAYBE UNINITIALIZED} = 12000e-3 = ((float)(3) * n10[0]{=4000e-3})
-# b.grad[0] := fma(n11[0], n7.grad[0], b.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = fmaf(n11[0]{=12000e-3},n7_grad[0]{=83300e-3},b_grad[0]{=-333201e-3})
-# n31.grad[0] := (n31.grad[0] + relu_gate(n31[0], n33_relu.grad[0]));
-n31_grad[0]{=MAYBE UNINITIALIZED} = 0e-3 = (n31_grad[0]{=0e-3} + ((n31[0]{=-2000e-3} > 0.0f) ? n33_relu_grad[0]{=27766e-3} : 0.0f))
-# b.grad[0] := (b.grad[0] + n31.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = (b_grad[0]{=666402e-3} + n31_grad[0]{=0e-3})
-# a.grad[0] := (a.grad[0] + n31.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = (a_grad[0]{=166600e-3} + n31_grad[0]{=0e-3})
-# n42.grad[0] := (n42.grad[0] + relu_gate(n42[0], n44_relu.grad[0]));
-n42_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = (n42_grad[0]{=0e-3} + ((n42[0]{=6000e-3} > 0.0f) ? n44_relu_grad[0]{=6941e-3} : 0.0f))
-# b.grad[0] := (b.grad[0] + n42.grad[0]);
-b_grad[0]{=MAYBE UNINITIALIZED} = 673344e-3 = (b_grad[0]{=666402e-3} + n42_grad[0]{=6941e-3})
-# a.grad[0] := (a.grad[0] - n42.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 159658e-3 = (a_grad[0]{=166600e-3} - n42_grad[0]{=6941e-3})
-# n27.grad[0] := (n27.grad[0] + n29_c.grad[0]);
-n27_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = (n27_grad[0]{=0e-3} + n29_c_grad[0]{=-6941e-3})
-# n22.grad[0] := (n22.grad[0] + n29_c.grad[0]);
-n22_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = (n22_grad[0]{=0e-3} + n29_c_grad[0]{=-6941e-3})
-# n25.grad[0] := (n25.grad[0] + n27.grad[0]);
-n25_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = (n25_grad[0]{=0e-3} + n27_grad[0]{=-6941e-3})
-# n19_c.grad[0] := (n19_c.grad[0] + n27.grad[0]);
-n19_c_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = (n19_c_grad[0]{=0e-3} + n27_grad[0]{=-6941e-3})
-# n19_c.grad[0] := (n19_c.grad[0] + n25.grad[0]);
-n19_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n19_c_grad[0]{=-6941e-3} + n25_grad[0]{=-6941e-3})
-# n17.grad[0] := (n17.grad[0] + n19_c.grad[0]);
-n17_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n17_grad[0]{=0e-3} + n19_c_grad[0]{=-13883e-3})
-# n4_c.grad[0] := (n4_c.grad[0] + n17.grad[0]);
-n4_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n4_c_grad[0]{=0e-3} + n17_grad[0]{=-13883e-3})
-# n4_c.grad[0] := (n4_c.grad[0] + n17.grad[0]);
-n4_c_grad[0]{=MAYBE UNINITIALIZED} = -27766e-3 = (n4_c_grad[0]{=-13883e-3} + n17_grad[0]{=-13883e-3})
+# f.grad[0] := fma(1, (-10 / (f[0] * f[0])), f.grad[0]);
+f_grad[0]{=MAYBE UNINITIALIZED} = -4e-3 = fmaf((float)(1),((float)(-10) / (f[0]{=49000e-3} * f[0]{=49000e-3})),f_grad[0]{=0e-3})
+# f.grad[0] := (f.grad[0] + 0.5);
+f_grad[0]{=MAYBE UNINITIALIZED} = 495e-3 = (f_grad[0]{=-4e-3} + (float)(0.5))
+# n40_d.grad[0] := fma(-1, ((2 * e[0]) * f.grad[0]), n40_d.grad[0]);
+n40_d_grad[0]{=MAYBE UNINITIALIZED} = 6941e-3 = fmaf((float)(-1),(((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}),n40_d_grad[0]{=0e-3})
+# n40_d.grad[0] := fma(3, (-1 * ((2 * e[0]) * f.grad[0])), n40_d.grad[0]);
+n40_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = fmaf((float)(3),((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})),n40_d_grad[0]{=6941e-3})
+# n14_d.grad[0] := (n14_d.grad[0] + n40_d.grad[0]);
+n14_d_grad[0]{=MAYBE UNINITIALIZED} = 27766e-3 = (n14_d_grad[0]{=0e-3} + n40_d_grad[0]{=27766e-3})
+# n14_d.grad[0] := fma(n40_d.grad[0], 2, n14_d.grad[0]);
+n14_d_grad[0]{=MAYBE UNINITIALIZED} = 83300e-3 = fmaf(n40_d_grad[0]{=27766e-3},(float)(2),n14_d_grad[0]{=27766e-3})
+# a.grad[0] := fma(n14_d.grad[0], b[0], a.grad[0]);
+a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = fmaf(n14_d_grad[0]{=83300e-3},b[0]{=2000e-3},a_grad[0]{=0e-3})
+# b.grad[0] := fma(a[0], n14_d.grad[0], b.grad[0]);
+b_grad[0]{=MAYBE UNINITIALIZED} = -333201e-3 = fmaf(a[0]{=-4000e-3},n14_d_grad[0]{=83300e-3},b_grad[0]{=0e-3})
+# b.grad[0] := fma((3 * (b[0] * b[0])), n14_d.grad[0], b.grad[0]);
+b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = fmaf(((float)(3) * (b[0]{=2000e-3} * b[0]{=2000e-3})),n14_d_grad[0]{=83300e-3},b_grad[0]{=-333201e-3})
+# b.grad[0] := (b.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
+b_grad[0]{=MAYBE UNINITIALIZED} = 666402e-3 = (b_grad[0]{=666402e-3} + ((n31[0]{=-2000e-3} > 0.0f) ? n40_d_grad[0]{=27766e-3} : 0.0f))
+# a.grad[0] := (a.grad[0] + relu_gate(n31[0], n40_d.grad[0]));
+a_grad[0]{=MAYBE UNINITIALIZED} = 166600e-3 = (a_grad[0]{=166600e-3} + ((n31[0]{=-2000e-3} > 0.0f) ? n40_d_grad[0]{=27766e-3} : 0.0f))
+# b.grad[0] := (b.grad[0] + relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
+b_grad[0]{=MAYBE UNINITIALIZED} = 673344e-3 = (b_grad[0]{=666402e-3} + ((n42[0]{=6000e-3} > 0.0f) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0f))
+# a.grad[0] := (a.grad[0] - relu_gate(n42[0], (-1 * ((2 * e[0]) * f.grad[0]))));
+a_grad[0]{=MAYBE UNINITIALIZED} = 159658e-3 = (a_grad[0]{=166600e-3} - ((n42[0]{=6000e-3} > 0.0f) ? ((float)(-1) * (((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3})) : 0.0f))
+# n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
+n19_c_grad[0]{=MAYBE UNINITIALIZED} = -6941e-3 = fmaf(((float)(2) * e[0]{=-7000e-3}),f_grad[0]{=495e-3},n19_c_grad[0]{=0e-3})
+# n19_c.grad[0] := fma((2 * e[0]), f.grad[0], n19_c.grad[0]);
+n19_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = fmaf(((float)(2) * e[0]{=-7000e-3}),f_grad[0]{=495e-3},n19_c_grad[0]{=-6941e-3})
+# n4_c.grad[0] := (n4_c.grad[0] + n19_c.grad[0]);
+n4_c_grad[0]{=MAYBE UNINITIALIZED} = -13883e-3 = (n4_c_grad[0]{=0e-3} + n19_c_grad[0]{=-13883e-3})
+# n4_c.grad[0] := (n4_c.grad[0] + n19_c.grad[0]);
+n4_c_grad[0]{=MAYBE UNINITIALIZED} = -27766e-3 = (n4_c_grad[0]{=-13883e-3} + n19_c_grad[0]{=-13883e-3})
 # a.grad[0] := (a.grad[0] + n4_c.grad[0]);
 a_grad[0]{=MAYBE UNINITIALIZED} = 131892e-3 = (a_grad[0]{=159658e-3} + n4_c_grad[0]{=-27766e-3})
 # b.grad[0] := (b.grad[0] + n4_c.grad[0]);
 b_grad[0]{=MAYBE UNINITIALIZED} = 645577e-3 = (b_grad[0]{=673344e-3} + n4_c_grad[0]{=-27766e-3})
-# a.grad[0] := fma(-1, n22.grad[0], a.grad[0]);
-a_grad[0]{=MAYBE UNINITIALIZED} = 138833e-3 = fmaf((float)(-1),n22_grad[0]{=-6941e-3},a_grad[0]{=131892e-3})
+# a.grad[0] := fma(-1, ((2 * e[0]) * f.grad[0]), a.grad[0]);
+a_grad[0]{=MAYBE UNINITIALIZED} = 138833e-3 = fmaf((float)(-1),(((float)(2) * e[0]{=-7000e-3}) * f_grad[0]{=495e-3}),a_grad[0]{=131892e-3})
 COMMENT: end
 COMMENT: end

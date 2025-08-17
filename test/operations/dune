@@ -18,6 +18,7 @@
 
 ; Solution: Create intermediate targets that guarantee file generation
 ; Step 1: Run the test and create a backend-specific sentinel file when done
+
 (rule
  (targets micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (action
@@ -27,10 +28,13 @@
     "--ocannl_debug_backend=text"
     "--ocannl_log_file_stem=micrograd_demo_logging"
     "--ocannl_log_main_domain_to_stdout=false"
-    "--ocannl_debug_log_to_stream_files=true")
+    "--ocannl_debug_log_to_stream_files=true"
+    ; We have to clean up to avoid appending to results of a previous run
+    "--ocannl_clean_up_artifacts_on_startup=true")
    (write-file %{targets} "completed\n"))))
 
 ; Step 2: Process the log file, depending on the backend-specific sentinel
+
 (rule
  (deps micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
@@ -77,6 +81,7 @@
   (pps ppx_here ppx_ocannl)))
 
 ; Generate both ll files and actual files in one rule using no-infer
+
 (rule
  (target n3_fwd_with_prec-unoptimized.ll.actual)
  (action
