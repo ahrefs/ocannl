@@ -5,13 +5,23 @@
 - Support for Brain float aka. bfloat16 aka. BF16, and for FP8.
 - Support for convolution via affine indexing expressions in: projections, einsum notation, shape inference.
 - MNIST and CIFAR10 datasets (borrowed from Raven).
+- Names dataset with bigram use-case helper.
+- Half-moons synthetic dataset.
 - New precision `Uint4x32` that piggybacks on the `Complex.t` type for the `Bigarray` backing.
-- TODO: New operation `Threefry4x32`, which is unusually and hopefully uniquely coarse-grained (requiring nontrivial implementation code for each backend that should conform to a common algorithm).
-  - This way we avoid introducing multiple operations on bits. We might yet split this operation into more fine grained ones.
-- TODO: Support of counter-based randomness, and behind-the-scenes key splitting by the relevant operations.
-  - TODO: The cascade of splits uses the Tnode id, the train step and the tensor cell position.
-- TODO: Added a new operation `Uint4x32_to_prec_uniform` to `unop`. It has a dedicated support in shape and projection inference to account for not being pointwise / is not shape-preserving due to efficient use of the 128 bits.
+- New precision `Int64` for integer operations.
+- New operation `Threefry4x32`, which is unusually and hopefully uniquely coarse-grained (requiring nontrivial implementation code for each backend that should conform to a common algorithm).
+  - This way we avoid introducing multiple operations on bits.
+- Support of counter-based randomness via the `Threefry4x32` operation and random seed tracking.
+  - The cascade of splits uses the Tnode id, the train step and the tensor cell position.
+- Added a new operation `Uint4x32_to_prec_uniform` that converts the 128-bit random values to floating point uniform distributions efficiently.
+- Vector operations support with `Set_from_vec` in low-level IR for efficient vectorized assignments.
 - Added a field `params` to `Tensor.t` since we need to track parameters to properly initialize computations (see below).
+- `Embed_self_id` operation for positional embeddings.
+- Bidirectional precision inference (both top-down and bottom-up).
+- Enhanced `%cd` syntax with support for `.forward`, `.backprop`, `.zero_grads` and automatic comment generation.
+- Inline tensor declarations in `%cd` syntax for standalone expressions.
+- `Train.init_params` for streamlined parameter initialization.
+- Better configurability with `inline_complex_computations` setting.
 
 ### Changed
 
@@ -20,6 +30,29 @@
   - Also renamed the badly named `Get_global` to `Access`.
 - Initialization now needs to be handled via running the corresponding code explicitly. In particular `Tensor.init_params` will run the forward code of tensors from the `params` field.
 - Virtual nodes and inlining now also work across routines. This required changing the API to pass the `optimize_ctx` optimization context.
+- Made ppx_minidebug logging per-file opt-in at compile time for better control.
+- Refactored Tensor API to reduce boilerplate and share parameter signatures.
+- Renamed `float_t` to `scalar_t` throughout the codebase for consistency.
+- Migrated from heap-local allocation to on-stack allocation by default.
+- Improved shape inference with better Total_elems constraint handling and LUB (Least Upper Bound) support.
+- Enhanced projections inference with better slot selection heuristics.
+- More defensive handling of empty dimensions and zero-dimension scalars.
+
+### Fixed
+
+- Memory leak in builtins.c.
+- Context handling for constants initialized on devices.
+- Zero-initialization that wasn't being performed on Linux (MacOS zero-initializes by default).
+- Surjectivity and bijectivity checking in indexing operations.
+- CUDA backend regressions and missing constructs.
+- Duplicate Shape_rows constraints elimination.
+- Precision inference issues with premature forcing.
+- Bus error on large datasets.
+- Session-level bugs that appeared only in specific backends.
+- Identifier generation to not start with digits.
+- Host-device synchronization issues with `devices_not_lagging_host` semantics.
+- Shape inference corner cases with Total_elems and row constraints.
+- Various issues with convolution and strided iteration support.
 
 ## [0.5.3] -- 2025-05-24
 
