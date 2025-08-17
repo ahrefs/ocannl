@@ -43,9 +43,11 @@ let main () =
   let epoch_loss_target_limits = [| 87.; 32.; 29.; 26.; 23.; 20.; 19.; 17.; 16.; 15. |] in
   let per_epoch_callback ~at_step:_ ~at_epoch ~learning_rate:_ ~epoch_loss =
     if at_epoch < 10 then
-      Stdio.printf "Epoch=%d, loss under target %g: %b\n%!" at_epoch
+      Stdio.printf "Epoch=%d, loss under target %g: %b%s\n%!" at_epoch
         epoch_loss_target_limits.(at_epoch)
-        Float.(epoch_loss_target_limits.(at_epoch) > epoch_loss);
+        Float.(epoch_loss_target_limits.(at_epoch) > epoch_loss)
+        (if Float.(epoch_loss_target_limits.(at_epoch) > epoch_loss) then ""
+         else ", actual loss: " ^ Float.to_string epoch_loss);
     if at_epoch > 10 && at_epoch % 10 = 0 then Stdio.printf ".%!"
   in
   let {
@@ -65,7 +67,9 @@ let main () =
       ()
   in
   let epoch_loss = List.hd_exn rev_epoch_losses in
-  Stdio.printf "\nFinal epoch loss under target 0.002: %b\n%!" Float.(0.002 > epoch_loss);
+  Stdio.printf "\nFinal epoch loss under target 0.002: %b%s\n%!"
+    Float.(0.002 > epoch_loss)
+    (if Float.(0.002 > epoch_loss) then "" else ", actual loss: " ^ Float.to_string epoch_loss);
   (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n" else *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
   let classes = Tn.points_1d ~xdim:0 outputs.value in
