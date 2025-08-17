@@ -16,20 +16,23 @@
   (action
    (run %{dep:../../../arrayjit/bin/read_config.exe} "--read=backend"))))
 
+; Solution: Create intermediate targets that guarantee file generation
+; Step 1: Run the test and create a sentinel file when done
 (rule
- (alias runtest)
- (target
-  (dir log_files))
+ (targets micrograd_demo.done)
  (action
-  (run
-   %{dep:micrograd_demo_logging.exe}
-   "--ocannl_debug_backend=text"
-   "--ocannl_log_file_stem=micrograd_demo_logging"
-   "--ocannl_log_main_domain_to_stdout=false"
-   "--ocannl_debug_log_to_stream_files=true")))
+  (progn
+   (run
+    %{dep:micrograd_demo_logging.exe}
+    "--ocannl_debug_backend=text"
+    "--ocannl_log_file_stem=micrograd_demo_logging"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_debug_log_to_stream_files=true")
+   (write-file %{targets} "completed\n"))))
 
+; Step 2: Process the log file, depending on the sentinel
 (rule
- (deps "log_files/%{read:config/ocannl_backend.txt}-0-0.log")
+ (deps micrograd_demo.done)
  (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
  (action
   (progn
@@ -38,19 +41,19 @@
     " = 0x[0-9a-fA-F]+"
     " = 0xNNNN"
     "log_files/%{read:config/ocannl_backend.txt}-0-0.log"
-    "%{read:config/ocannl_backend.txt}-0-0.log.actual")
+    "%{target}")
    (run
     %{dep:../../tools/minised.exe}
     " = 00[0-9a-fA-F]+"
     " = 0xNNNN"
-    "%{read:config/ocannl_backend.txt}-0-0.log.actual"
-    "%{read:config/ocannl_backend.txt}-0-0.log.actual")
+    "%{target}"
+    "%{target}")
    (run
     %{dep:../../tools/minised.exe}
     "\\([a-z0-9_]+\\)\\[0\\]{=[-.e0-9]+} = "
     "\\1[0]{=MAYBE UNINITIALIZED} = "
-    "%{read:config/ocannl_backend.txt}-0-0.log.actual"
-    "%{read:config/ocannl_backend.txt}-0-0.log.actual"))))
+    "%{target}"
+    "%{target}"))))
 
 (rule
  (alias runtest)
@@ -73,28 +76,28 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; Generate both ll files and actual files in one rule using no-infer
 (rule
- (alias runtest)
- (target
-  (dir build_files))
+ (target n3_fwd_with_prec-unoptimized.ll.actual)
  (action
-  (progn
-   (run
-    %{dep:threefry4x32_demo.exe}
-    "--ocannl_output_prec_in_ll_files=true"
-    "--ocannl_output_debug_files_in_build_directory=true")
-   (run
-    %{dep:top_down_prec.exe}
-    "--ocannl_output_prec_in_ll_files=true"
-    "--ocannl_output_debug_files_in_build_directory=true"))))
+  (no-infer
+   (progn
+    (run
+     %{dep:threefry4x32_demo.exe}
+     "--ocannl_output_prec_in_ll_files=true"
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/n3_fwd-unoptimized.ll %{target})))))
 
 (rule
- (deps "build_files/n3_fwd-unoptimized.ll")
- (target "n3_fwd_with_prec-unoptimized.ll.actual")
+ (target top_down_prec-unoptimized.ll.actual)
  (action
-  (copy
-   "build_files/n3_fwd-unoptimized.ll"
-   "n3_fwd_with_prec-unoptimized.ll.actual")))
+  (no-infer
+   (progn
+    (run
+     %{dep:top_down_prec.exe}
+     "--ocannl_output_prec_in_ll_files=true"
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/d_fwd-unoptimized.ll %{target})))))
 
 (rule
  (alias runtest)
@@ -102,14 +105,6 @@
   (diff
    "n3_fwd_with_prec-unoptimized.ll.expected"
    "n3_fwd_with_prec-unoptimized.ll.actual")))
-
-(rule
- (deps "build_files/d_fwd-unoptimized.ll")
- (target "top_down_prec-unoptimized.ll.actual")
- (action
-  (copy
-   "build_files/d_fwd-unoptimized.ll"
-   "top_down_prec-unoptimized.ll.actual")))
 
 (rule
  (alias runtest)

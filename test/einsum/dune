@@ -69,18 +69,14 @@
 
 (rule
  (alias runtest)
- (target
-  (dir build_files))
+ (target inline_permuted_view-c_fwd.ll.actual)
  (action
-  (run
-   %{dep:inline_permuted_view.exe}
-   "--ocannl_output_debug_files_in_build_directory=true")))
-
-(rule
- (deps "build_files/c_fwd.ll")
- (target "inline_permuted_view-c_fwd.ll.actual")
- (action
-  (copy "build_files/c_fwd.ll" "inline_permuted_view-c_fwd.ll.actual")))
+  (no-infer
+   (progn
+    (run
+     %{dep:inline_permuted_view.exe}
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/c_fwd.ll %{target})))))
 
 (rule
  (alias runtest)
