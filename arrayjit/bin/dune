@@ -1,4 +1,6 @@
 (executable
+ (package arrayjit)
+ (public_name arrayjit_read_config)
  (name read_config)
  (modules read_config)
  (libraries utils)

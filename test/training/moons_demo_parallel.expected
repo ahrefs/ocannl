@@ -1,17 +1,17 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Epoch=0, lr=0.199, loss=86.008
-Epoch=1, lr=0.198, loss=30.702
-Epoch=2, lr=0.198, loss=27.25
-Epoch=3, lr=0.197, loss=24.172
-Epoch=4, lr=0.196, loss=21.705
-Epoch=5, lr=0.195, loss=18.794
-Epoch=6, lr=0.194, loss=17.389
-Epoch=7, lr=0.193, loss=15.646
-Epoch=8, lr=0.193, loss=15.238
-Epoch=9, lr=0.192, loss=13.168
+Epoch=0, loss under target 87: true
+Epoch=1, loss under target 32: true
+Epoch=2, loss under target 29: true
+Epoch=3, loss under target 26: true
+Epoch=4, loss under target 23: true
+Epoch=5, loss under target 20: true
+Epoch=6, loss under target 19: true
+Epoch=7, loss under target 17: true
+Epoch=8, loss under target 16: true
+Epoch=9, loss under target 15: true
 ..........
-Epoch loss: 0.000
+Final epoch loss under target 0.002: true
 
 Epoch loss:
 ┌────────┬─────────────────────────┐
@@ -23,8 +23,8 @@ Epoch loss:
 │        │                         │
 │l       │-                        │
 │o       │-                        │
-│s       │ --- -                   │
-│s0.00   │   ----------------------│
+│s       │ ----                    │
+│s0.00   │  -----------------------│
 ├────────┼─────────────────────────┤
 │        │0.00              1.19e+2│
 │        │          step           │
