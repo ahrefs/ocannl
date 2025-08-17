@@ -43,7 +43,7 @@ let main () =
   let per_epoch_callback ~at_step:_ ~at_epoch ~learning_rate ~epoch_loss =
     if at_epoch = epochs - 5 then Stdio.printf "\n%!"; 
     if at_epoch < 10 then
-      Stdio.printf "Epoch=%d, lr=%f, loss=%.5g\n%!" at_epoch learning_rate epoch_loss;
+      Stdio.printf "Epoch=%d, lr=%.3g, loss=%.5g\n%!" at_epoch learning_rate epoch_loss;
     if at_epoch > 10 && at_epoch % 10 = 0 then Stdio.printf ".%!";
   in
   let {
