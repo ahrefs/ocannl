@@ -60,12 +60,12 @@ let main () =
     let epoch_loss = ref 0. in
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
         Train.run sgd_routine;
-        let batch_ref = IDX.find_exn sgd_routine.bindings batch_n in 
+        let batch_ref = IDX.find_exn sgd_routine.bindings batch_n in
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
-        if !step_ref = steps - 5 then Stdio.printf "\n%!"; 
+        if !step_ref = steps - 5 then Stdio.printf "\n%!";
         if !step_ref < 10 then
-          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%.3g, loss=%.5g, epoch loss=%.5g\n%!" 
-            epoch !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0] !epoch_loss;
+          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%.3g, loss=%.5g, epoch loss=%.5g\n%!" epoch
+            !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0] !epoch_loss;
         if !step_ref > 10 && !step_ref % 100 = 0 then Stdio.printf ".%!";
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;

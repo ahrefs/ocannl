@@ -80,9 +80,7 @@
  (deps "build_files/c_fwd.ll")
  (target "inline_permuted_view-c_fwd.ll.actual")
  (action
-  (copy
-   "build_files/c_fwd.ll"
-   "inline_permuted_view-c_fwd.ll.actual")))
+  (copy "build_files/c_fwd.ll" "inline_permuted_view-c_fwd.ll.actual")))
 
 (rule
  (alias runtest)

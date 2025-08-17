@@ -79,12 +79,12 @@ let () =
       Train.run sgd_step;
       let loss = batch_loss.@[0] in
       epoch_loss := !epoch_loss +. loss;
-      if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.5g\n%!" epoch batch loss;
+      if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.5g\n%!" epoch batch loss
     done;
     Stdio.printf "Epoch %d, epoch loss=%.5g\n%!" epoch !epoch_loss
   done;
-  (* Train.printf_tree batch_loss; *)
 
+  (* Train.printf_tree batch_loss; *)
   let counter_n, bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_probs = mlp "cha" in
   let%cd infer_step =

@@ -41,10 +41,10 @@ let main () =
   let per_batch_callback ~at_batch:_ ~at_step:_ ~learning_rate:_ ~batch_loss:_ ~epoch_loss:_ = () in
   (* Tn.print_accessible_headers (); *)
   let per_epoch_callback ~at_step:_ ~at_epoch ~learning_rate ~epoch_loss =
-    if at_epoch = epochs - 5 then Stdio.printf "\n%!"; 
+    if at_epoch = epochs - 5 then Stdio.printf "\n%!";
     if at_epoch < 10 then
       Stdio.printf "Epoch=%d, lr=%.3g, loss=%.5g\n%!" at_epoch learning_rate epoch_loss;
-    if at_epoch > 10 && at_epoch % 10 = 0 then Stdio.printf ".%!";
+    if at_epoch > 10 && at_epoch % 10 = 0 then Stdio.printf ".%!"
   in
   let {
     Train.inputs;
@@ -96,13 +96,7 @@ let main () =
   Stdio.printf "\nEpoch loss:\n%!";
   let plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"epoch loss" ~small:true
-      [
-        Line_plot
-          {
-            points = Array.of_list_rev rev_epoch_losses;
-            content = PrintBox.line "-";
-          };
-      ]
+      [ Line_plot { points = Array.of_list_rev rev_epoch_losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss
 
