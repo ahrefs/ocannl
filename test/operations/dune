@@ -17,9 +17,9 @@
    (run %{dep:../../../arrayjit/bin/read_config.exe} "--read=backend"))))
 
 ; Solution: Create intermediate targets that guarantee file generation
-; Step 1: Run the test and create a sentinel file when done
+; Step 1: Run the test and create a backend-specific sentinel file when done
 (rule
- (targets micrograd_demo.done)
+ (targets micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (action
   (progn
    (run
@@ -30,9 +30,9 @@
     "--ocannl_debug_log_to_stream_files=true")
    (write-file %{targets} "completed\n"))))
 
-; Step 2: Process the log file, depending on the sentinel
+; Step 2: Process the log file, depending on the backend-specific sentinel
 (rule
- (deps micrograd_demo.done)
+ (deps micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
  (action
   (progn
