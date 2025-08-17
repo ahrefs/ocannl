@@ -20,8 +20,8 @@ let graph_t () : unit =
   let module Backend = (val Backends.fresh_backend ()) in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
-  let%op f x = where (x < !.0.) (sin x) (cos x) in
-  (* let%op f x = sin x in *)
+  let%op f x = uint4x32_to_prec_uniform x in
+  (* let%op f x = where (x < !.0.) (sin x) (cos x) in *)
   (* let%op f x = sin x in *)
   let size = 10 in
   let x_min = -5. in
@@ -43,6 +43,7 @@ let graph_t () : unit =
   Train.run fx_routine;
   let step_ref = IDX.find_exn fx_routine.bindings step_sym in
   Train.printf_tree ~with_grad:true ~depth:9 xkcd;
+  Utils.capture_stdout_logs @@ fun () ->
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->

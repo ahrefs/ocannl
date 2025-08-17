@@ -190,4 +190,58 @@ __device__ uint4x32_t int64_to_uint4x32(long long x) {
   uint4x32_t result = {{(unsigned int)(bits & 0xFFFFFFFF), (unsigned int)(bits >> 32), 0, 0}};
   return result;
 }
+
+/* Conversion functions from various precisions to uint4x32_t */
+__device__ uint4x32_t single_to_uint4x32(float x) {
+  unsigned int bits = __float_as_uint(x);
+  uint4x32_t result = {{bits, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t double_to_uint4x32(double x) {
+  unsigned long long bits = __double_as_longlong(x);
+  uint4x32_t result = {{(unsigned int)(bits & 0xFFFFFFFF), (unsigned int)(bits >> 32), 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t int32_to_uint4x32(int x) {
+  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t uint32_to_uint4x32(unsigned int x) {
+  uint4x32_t result = {{x, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t uint64_to_uint4x32(unsigned long long x) {
+  uint4x32_t result = {{(unsigned int)(x & 0xFFFFFFFF), (unsigned int)(x >> 32), 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t byte_to_uint4x32(unsigned char x) {
+  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t uint16_to_uint4x32(unsigned short x) {
+  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t bfloat16_to_uint4x32(unsigned short x) {
+  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t half_to_uint4x32(__half x) {
+  unsigned short bits = __half_as_ushort(x);
+  uint4x32_t result = {{(unsigned int)bits, 0, 0, 0}};
+  return result;
+}
+
+__device__ uint4x32_t fp8_to_uint4x32(unsigned char x) {
+  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  return result;
+}
 |}

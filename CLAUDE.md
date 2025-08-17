@@ -94,11 +94,32 @@ opam install cudajit  # for CUDA backend
 - Key configs: backend selection, debug logging, optimization levels
 - Config is searched in current and ancestor directories
 
+**Configuration Methods** (in order of precedence):
+1. Command-line flags: `--ocannl_<option>=<value>` (e.g., `--ocannl_backend=cuda`)
+2. Environment variables: `OCANNL_<OPTION>=<value>` (e.g., `OCANNL_BACKEND=cuda`)
+3. Config file: `ocannl_config` in current or ancestor directories
+
+**Important Debug Settings**:
+- `output_debug_files_in_build_directory=true` - enables `build_files/` generation
+- `debug_log_from_routines=true` - enables runtime logging
+- `debug_log_to_stream_files=true` - writes logs to `log_files/<backend>-<stream>-<stream>.log`
+- `clean_up_artifacts_on_startup=false` - preserves debug files between runs
+
 ### Backend Development
 
 - Backends must implement stream-based execution with FIFO queuing
 - Support for events and synchronization between streams/devices  
 - Code generation through `Low_level.t` to backend-specific representations
+
+**Backend Code Generation Architecture**:
+- `c_syntax.ml` provides a functor with default C code generation patterns
+- `cc_backend.ml` uses defaults from `c_syntax.ml` with minimal overrides
+- `cuda_backend.ml` overrides more functions for CUDA-specific syntax (e.g., `__float2half`)
+- Both backends must provide `convert_precision` for type conversions
+- Builtin functions (e.g., type conversions) must be implemented in:
+  - `builtins.c` for C backends
+  - `builtins_cuda_small.ml` for CUDA backend
+- When adding new precision types, ensure conversion functions exist in all backend builtins
 
 ### Syntax Extensions
 
@@ -115,6 +136,16 @@ opam install cudajit  # for CUDA backend
 2. Implement interpretation in the same file
 3. Add syntax support in `lib/ppx_*.ml` if needed
 4. Add high-level wrappers in `lib/operation.ml`
+
+### Debugging Backend Discrepancies
+
+When outputs differ between backends:
+1. Compare runtime logs in `<backend>-<stream>-<stream>.log` files
+2. Check generated code in `build_files/*.c` vs `*.cu` for differences
+3. Common issues:
+   - Missing builtin function implementations in one backend
+   - Incorrect type conversion in `convert_precision` overrides
+   - Different numerical precision between CPU and GPU operations
 
 ### Backend Extensions
 
@@ -135,6 +166,8 @@ opam install cudajit  # for CUDA backend
 - Use `log_level=2` for verbose ppx_minidebug output
 - CUDA debugging requires `Utils.capture_stdout_logs` wrapper
 - Debug files generated in `log_files/` directory (cleaned on startup by default)
+- Runtime logs from execution are written to `<backend>-<stream>-<stream>.log` (e.g., `cuda-0-0.log`)
+- Generated code files in `build_files/` show high-level `.cd`, intermediate `.ll`, and backend-specific `.c`/`.cu` files
 
 ## Performance Considerations
 
