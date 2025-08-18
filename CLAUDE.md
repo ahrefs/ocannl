@@ -99,6 +99,14 @@ opam install cudajit  # for CUDA backend
 2. Environment variables: `OCANNL_<OPTION>=<value>` (e.g., `OCANNL_BACKEND=cuda`)
 3. Config file: `ocannl_config` in current or ancestor directories
 
+**Testing with Different Configurations**:
+- When using environment variables for test configuration, Dune won't detect changes and may skip tests
+- **Warning**: `dune test --force` does NOT re-run expect tests (only rules with alias fields)
+- Reliable ways to ensure tests run with new configuration:
+  1. Modify `test/config/ocannl_config` directly
+  2. Run `dune clean` before testing
+  3. Touch/modify test source files
+
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation
 - `debug_log_from_routines=true` - enables runtime logging
