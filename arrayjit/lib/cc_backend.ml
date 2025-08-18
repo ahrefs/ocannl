@@ -215,11 +215,230 @@ struct
       not @@ Utils.get_global_flag ~default:false ~arg_name:"prefer_backend_uniformity"
   end)
 
-  (* Override to add our custom type and conversion support *)
-  let typ_of_prec = typ_of_prec
-  let vec_typ_of_prec = vec_typ_of_prec
-  let extra_declarations = extra_declarations (* Our bfloat16/fp8 conversion functions *)
-  let convert_precision = convert_precision
+  (* Add declarations for precision conversions that standard C compilers can use *)
+  let extra_declarations =
+    [
+      (* BFloat16 conversion functions *)
+      "static inline float bfloat16_to_single(unsigned short bf16) {";
+      "  unsigned int f32 = ((unsigned int)bf16) << 16;";
+      "  return *((float*)&f32);";
+      "}";
+      "";
+      "static inline unsigned short single_to_bfloat16(float f) {";
+      "  unsigned int f32 = *((unsigned int*)&f);";
+      "  unsigned int rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);";
+      "  return (unsigned short)(rounded >> 16);";
+      "}";
+      "";
+      (* Half (Float16) support with zero-overhead abstraction *)
+      "#ifdef __FLT16_MAX__";
+      "  #define HAS_NATIVE_FLOAT16 1";
+      "  #define HALF_T _Float16";
+      "  #define HALF_TO_FP(x) (x)  /* Identity - already floating point */";
+      "  #define FP_TO_HALF(x) (x)  /* Identity - already half precision */";
+      "  #define HALF_TO_FLOAT(x) ((float)(x))";
+      "  #define FLOAT_TO_HALF(x) ((_Float16)(x))";
+      "#else";
+      "  #define HAS_NATIVE_FLOAT16 0";
+      "  #define HALF_T unsigned short";
+      "  #define HALF_TO_FP(x) half_to_single(x)  /* Convert to float for computation */";
+      "  #define FP_TO_HALF(x) single_to_half(x)  /* Convert back from float */";
+      "  #define HALF_TO_FLOAT(x) half_to_single(x)";
+      "  #define FLOAT_TO_HALF(x) single_to_half(x)";
+      "  /* Conversion functions for emulation - provided by builtins.c */";
+      "  extern float half_to_single(unsigned short h);";
+      "  extern unsigned short single_to_half(float f);";
+      "#endif";
+      "";
+      (* FP8 E5M2 conversion functions *)
+      "static inline float fp8_to_single(unsigned char fp8) {";
+      "  if (fp8 == 0) return 0.0f;";
+      "  unsigned int sign = (fp8 >> 7) & 1;";
+      "  unsigned int exp = (fp8 >> 2) & 0x1F;";
+      "  unsigned int mant = fp8 & 0x3;";
+      "  if (exp == 0x1F) {";
+      "    if (mant == 0) return sign ? -INFINITY : INFINITY;";
+      "    else return NAN;";
+      "  }";
+      "  if (exp == 0) {";
+      "    float result = ldexpf((float)mant / 4.0f, -14);";
+      "    if (sign) result = -result;";
+      "    return result;";
+      "  }";
+      "  float result = (1.0f + (float)mant * 0.25f) * ldexpf(1.0f, (int)exp - 15);";
+      "  if (sign) result = -result;";
+      "  return result;";
+      "}";
+      "";
+      "static inline unsigned char single_to_fp8(float f) {";
+      "  if (f == 0.0f) return 0;";
+      "  unsigned int sign = (f < 0) ? 1 : 0;";
+      "  f = fabsf(f);";
+      "  if (isinf(f)) return (sign << 7) | 0x7C;";
+      "  if (isnan(f)) return (sign << 7) | 0x7F;";
+      "  int exp_val;";
+      "  float mant_f = frexpf(f, &exp_val);";
+      "  int exp = exp_val + 14;";
+      "  if (exp < 0) return sign << 7;";
+      "  if (exp > 30) return (sign << 7) | 0x7C;";
+      "  if (exp == 0) {";
+      "    float denorm_mant = f * ldexpf(1.0f, 14) * 4.0f;";
+      "    unsigned int mant_bits = (unsigned int)(denorm_mant + 0.5f);";
+      "    if (mant_bits > 3) mant_bits = 3;";
+      "    return (sign << 7) | mant_bits;";
+      "  }";
+      "  mant_f = (mant_f - 0.5f) * 4.0f;";
+      "  unsigned int mant_bits = (unsigned int)(mant_f + 0.5f);";
+      "  if (mant_bits > 3) mant_bits = 3;";
+      "  return (unsigned char)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));";
+      "}";
+    ]
+
+  (* Override operation syntax to handle special precision types *)
+  let ternop_syntax prec op v1 v2 v3 =
+    match prec with
+    | Ops.Bfloat16_prec _ ->
+        (* For BFloat16, perform operations in float precision *)
+        let open PPrint in
+        let float_v1 = string "bfloat16_to_single(" ^^ v1 ^^ string ")" in
+        let float_v2 = string "bfloat16_to_single(" ^^ v2 ^^ string ")" in
+        let float_v3 = string "bfloat16_to_single(" ^^ v3 ^^ string ")" in
+        let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
+        let float_result =
+          group
+            (string op_prefix ^^ float_v1 ^^ string op_infix1
+            ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+            ^^ string op_infix2
+            ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
+            ^^ string op_suffix)
+        in
+        string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+    | Ops.Half_prec _ ->
+        (* For Half, perform operations in float precision on non-native systems *)
+        let open PPrint in
+        let float_v1 = string "HALF_TO_FP(" ^^ v1 ^^ string ")" in
+        let float_v2 = string "HALF_TO_FP(" ^^ v2 ^^ string ")" in
+        let float_v3 = string "HALF_TO_FP(" ^^ v3 ^^ string ")" in
+        let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
+        let float_result =
+          group
+            (string op_prefix ^^ float_v1 ^^ string op_infix1
+            ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+            ^^ string op_infix2
+            ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
+            ^^ string op_suffix)
+        in
+        string "FP_TO_HALF(" ^^ float_result ^^ string ")"
+    | Ops.Fp8_prec _ ->
+        (* For FP8, perform operations in float precision *)
+        let open PPrint in
+        let float_v1 = string "fp8_to_single(" ^^ v1 ^^ string ")" in
+        let float_v2 = string "fp8_to_single(" ^^ v2 ^^ string ")" in
+        let float_v3 = string "fp8_to_single(" ^^ v3 ^^ string ")" in
+        let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
+        let float_result =
+          group
+            (string op_prefix ^^ float_v1 ^^ string op_infix1
+            ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+            ^^ string op_infix2
+            ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
+            ^^ string op_suffix)
+        in
+        string "single_to_fp8(" ^^ float_result ^^ string ")"
+    | _ ->
+        let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
+        let open PPrint in
+        group
+          (string op_prefix ^^ v1 ^^ string op_infix1
+          ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
+          ^^ string op_infix2
+          ^^ ifflat (space ^^ v3) (nest 2 (break 1 ^^ v3))
+          ^^ string op_suffix)
+
+  let binop_syntax prec op v1 v2 =
+    match op with
+    | Ops.Threefry4x32 -> (
+        match prec with
+        | Ops.Uint4x32_prec _ ->
+            let open PPrint in
+            group (string "arrayjit_threefry4x32(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
+        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32 on non-uint4x32 precision")
+    | _ -> (
+        match prec with
+        | Ops.Bfloat16_prec _ ->
+            (* For BFloat16, perform all operations in float precision *)
+            let open PPrint in
+            let float_v1 = string "bfloat16_to_single(" ^^ v1 ^^ string ")" in
+            let float_v2 = string "bfloat16_to_single(" ^^ v2 ^^ string ")" in
+            let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
+            let float_result =
+              group
+                (string op_prefix ^^ float_v1 ^^ string op_infix
+                ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+                ^^ string op_suffix)
+            in
+            string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+        | Ops.Fp8_prec _ ->
+            (* For FP8, perform all operations in float precision *)
+            let open PPrint in
+            let float_v1 = string "fp8_to_single(" ^^ v1 ^^ string ")" in
+            let float_v2 = string "fp8_to_single(" ^^ v2 ^^ string ")" in
+            let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
+            let float_result =
+              group
+                (string op_prefix ^^ float_v1 ^^ string op_infix
+                ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+                ^^ string op_suffix)
+            in
+            string "single_to_fp8(" ^^ float_result ^^ string ")"
+        | Ops.Half_prec _ ->
+            (* For Half, perform all operations in float precision on non-native systems *)
+            let open PPrint in
+            let float_v1 = string "HALF_TO_FP(" ^^ v1 ^^ string ")" in
+            let float_v2 = string "HALF_TO_FP(" ^^ v2 ^^ string ")" in
+            let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
+            let float_result =
+              group
+                (string op_prefix ^^ float_v1 ^^ string op_infix
+                ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+                ^^ string op_suffix)
+            in
+            string "FP_TO_HALF(" ^^ float_result ^^ string ")"
+        | _ ->
+            let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax prec op in
+            let open PPrint in
+            group
+              (string op_prefix ^^ v1 ^^ string op_infix
+              ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
+              ^^ string op_suffix))
+
+  let unop_syntax prec op v =
+    match prec with
+    | Ops.Bfloat16_prec _ ->
+        (* For BFloat16, perform operations in float precision *)
+        let open PPrint in
+        let float_v = string "bfloat16_to_single(" ^^ v ^^ string ")" in
+        let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
+        let float_result = group (string op_prefix ^^ float_v ^^ string op_suffix) in
+        string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+    | Ops.Fp8_prec _ ->
+        (* For FP8, perform operations in float precision *)
+        let open PPrint in
+        let float_v = string "fp8_to_single(" ^^ v ^^ string ")" in
+        let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
+        let float_result = group (string op_prefix ^^ float_v ^^ string op_suffix) in
+        string "single_to_fp8(" ^^ float_result ^^ string ")"
+    | Ops.Half_prec _ ->
+        (* For Half, perform operations in float precision on non-native systems *)
+        let open PPrint in
+        let float_v = string "HALF_TO_FP(" ^^ v ^^ string ")" in
+        let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
+        let float_result = group (string op_prefix ^^ float_v ^^ string op_suffix) in
+        string "FP_TO_HALF(" ^^ float_result ^^ string ")"
+    | _ ->
+        let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
+        let open PPrint in
+        group (string op_prefix ^^ v ^^ string op_suffix)
 end
 
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
