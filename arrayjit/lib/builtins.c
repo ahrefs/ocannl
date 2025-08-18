@@ -91,16 +91,34 @@ static uint16_t float_to_half_emulated(float f) {
             /* Too small - flush to zero */
             return sign << 15;
         }
-        /* Subnormal */
+        /* Subnormal - with proper rounding */
         uint32_t shift = -new_exp + 1;
-        mantissa = (mantissa | 0x800000) >> shift;
-        return (sign << 15) | (mantissa >> 13);
+        mantissa = (mantissa | 0x800000);
+        if (shift < 13) {
+            /* Round before final shift */
+            mantissa = (mantissa + (1 << (shift + 12))) >> (shift + 13);
+        } else {
+            /* Shift is large, need to be careful with rounding */
+            mantissa = mantissa >> shift;
+            mantissa = (mantissa + 0x1000) >> 13;
+        }
+        return (sign << 15) | mantissa;
     } else if (new_exp >= 0x1F) {
         /* Overflow to infinity */
         return (sign << 15) | (0x1F << 10);
     } else {
-        /* Normal number */
-        return (sign << 15) | (new_exp << 10) | (mantissa >> 13);
+        /* Normal number - with proper rounding */
+        uint32_t rounded_mantissa = (mantissa + 0x1000) >> 13;
+        if (rounded_mantissa > 0x3FF) {
+            /* Rounding caused overflow in mantissa */
+            new_exp++;
+            rounded_mantissa = 0;
+            if (new_exp >= 0x1F) {
+                /* Overflow to infinity */
+                return (sign << 15) | (0x1F << 10);
+            }
+        }
+        return (sign << 15) | (new_exp << 10) | rounded_mantissa;
     }
 }
 
@@ -306,29 +324,15 @@ extern uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     float f = uint32_to_single_uniform(x.v[0]);
     uint32_t bits;
     memcpy(&bits, &f, sizeof(float));
-    return (uint16_t)(bits >> 16);
+    /* Add proper rounding for bfloat16 */
+    return (uint16_t)((bits + 0x8000) >> 16);
 }
 
 /* Uint4x32 to float16 uniform - uses first 16 bits */
 extern uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
-    /* Simplified conversion - proper fp16 would need more complex handling */
-    /* This creates a uniform distribution in [0, 1) for fp16 */
-    uint16_t raw = (uint16_t)(x.v[0] & 0xFFFF);
-    /* Map to [0, 1) range in fp16 format */
-    /* Sign bit = 0, exponent between -14 and 0, mantissa from raw bits */
-    if (raw == 0) return 0;
-    
-    /* Find the highest set bit */
-    int shift = 0;
-    uint16_t temp = raw;
-    while (temp >>= 1) shift++;
-    
-    /* Normalize mantissa */
-    uint16_t mantissa = (raw << (10 - shift)) & 0x3FF;
-    /* Exponent for values in [0, 1) */
-    uint16_t exponent = 14 - shift;
-    
-    return (exponent << 10) | mantissa;
+    /* Convert through float for consistent behavior */
+    float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
+    return FLOAT_TO_HALF(f);
 }
 
 /* Uint4x32 to fp8 uniform - uses first 8 bits */
@@ -407,8 +411,9 @@ extern uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
         uint32_t bits1, bits2;
         memcpy(&bits1, &f1, sizeof(float));
         memcpy(&bits2, &f2, sizeof(float));
-        result.v[i*2 + 0] = (uint16_t)(bits1 >> 16);
-        result.v[i*2 + 1] = (uint16_t)(bits2 >> 16);
+        // Add proper rounding for bfloat16 (round to nearest even)
+        result.v[i*2 + 0] = (uint16_t)((bits1 + 0x8000) >> 16);
+        result.v[i*2 + 1] = (uint16_t)((bits2 + 0x8000) >> 16);
     }
     return result;
 }
