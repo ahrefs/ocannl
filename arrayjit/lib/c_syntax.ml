@@ -27,8 +27,6 @@ module type C_syntax_config = sig
   val buffer_suffix : pos:int -> string
   val arg_int_prefix : string
   val extra_args : string list
-  val includes : string list
-  val extra_declarations : string list
   val typ_of_prec : Ops.prec -> string
   val vec_typ_of_prec : length:int -> Ops.prec -> string
   val ident_blacklist : string list
@@ -94,8 +92,6 @@ struct
   let buffer_suffix = fun ~pos:_ -> ""
   let arg_int_prefix = "const int "
   let extra_args = []
-  let includes = [ "<stdio.h>"; "<stdlib.h>"; "<string.h>"; "<math.h>" ]
-  let extra_declarations = []
 
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
@@ -236,8 +232,6 @@ module C_syntax (B : C_syntax_config) = struct
     @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
-  let pp_include s = PPrint.(string "#include " ^^ string s)
-
   open Indexing
   open Doc_helpers
 
@@ -261,12 +255,6 @@ module C_syntax (B : C_syntax_config) = struct
     Buffer.contents buf
 
   let array_offset_to_string (idcs, dims) = doc_to_string @@ pp_array_offset (idcs, dims)
-
-  let print_declarations () =
-    let open PPrint in
-    let includes = separate hardline (List.map B.includes ~f:pp_include) in
-    let extras = separate hardline (List.map B.extra_declarations ~f:string) in
-    includes ^^ hardline ^^ extras ^^ hardline
 
   let pp_local_defs (local_defs : (int * PPrint.document) list) =
     let open PPrint in
