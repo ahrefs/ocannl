@@ -91,24 +91,51 @@ static uint16_t float_to_half_emulated(float f) {
             /* Too small - flush to zero */
             return sign << 15;
         }
-        /* Subnormal - with proper rounding */
+        /* Subnormal - with round-to-nearest-even */
         uint32_t shift = -new_exp + 1;
         mantissa = (mantissa | 0x800000);
-        if (shift < 13) {
-            /* Round before final shift */
-            mantissa = (mantissa + (1 << (shift + 12))) >> (shift + 13);
-        } else {
-            /* Shift is large, need to be careful with rounding */
-            mantissa = mantissa >> shift;
-            mantissa = (mantissa + 0x1000) >> 13;
+        
+        /* For subnormal, we need to shift right by (shift + 13) total bits */
+        uint32_t total_shift = shift + 13;
+        
+        if (total_shift >= 24) {
+            /* Would shift away all bits */
+            return sign << 15;
         }
+        
+        /* Extract guard, round, and sticky bits before shifting */
+        uint32_t guard_bit = (mantissa >> (total_shift - 1)) & 1;
+        uint32_t round_bit = total_shift > 1 ? ((mantissa >> (total_shift - 2)) & 1) : 0;
+        uint32_t sticky_mask = (1U << (total_shift - 2)) - 1;
+        uint32_t sticky_bits = total_shift > 1 ? (mantissa & sticky_mask) : 0;
+        
+        mantissa = mantissa >> total_shift;
+        
+        /* Round to nearest even */
+        if (guard_bit && (round_bit || sticky_bits || (mantissa & 1))) {
+            mantissa++;
+        }
+        
         return (sign << 15) | mantissa;
     } else if (new_exp >= 0x1F) {
         /* Overflow to infinity */
         return (sign << 15) | (0x1F << 10);
     } else {
-        /* Normal number - with proper rounding */
-        uint32_t rounded_mantissa = (mantissa + 0x1000) >> 13;
+        /* Normal number - with round-to-nearest-even (banker's rounding) */
+        uint32_t rounded_mantissa;
+        uint32_t guard_bit = (mantissa >> 12) & 1;
+        uint32_t round_bit = (mantissa >> 11) & 1;
+        uint32_t sticky_bits = mantissa & 0x7FF;
+        
+        rounded_mantissa = mantissa >> 13;
+        
+        /* Round to nearest even: round up if we have:
+         * - guard bit set and (round bit set OR sticky bits non-zero OR mantissa LSB set)
+         */
+        if (guard_bit && (round_bit || sticky_bits || (rounded_mantissa & 1))) {
+            rounded_mantissa++;
+        }
+        
         if (rounded_mantissa > 0x3FF) {
             /* Rounding caused overflow in mantissa */
             new_exp++;
@@ -324,8 +351,10 @@ extern uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     float f = uint32_to_single_uniform(x.v[0]);
     uint32_t bits;
     memcpy(&bits, &f, sizeof(float));
-    /* Add proper rounding for bfloat16 */
-    return (uint16_t)((bits + 0x8000) >> 16);
+    /* Round to nearest even for bfloat16 */
+    uint16_t bf = bits >> 16;
+    if ((bits & 0x8000) && ((bits & 0x7FFF) || (bf & 1))) bf++;
+    return bf;
 }
 
 /* Uint4x32 to float16 uniform - uses first 16 bits */
@@ -411,9 +440,14 @@ extern uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
         uint32_t bits1, bits2;
         memcpy(&bits1, &f1, sizeof(float));
         memcpy(&bits2, &f2, sizeof(float));
-        // Add proper rounding for bfloat16 (round to nearest even)
-        result.v[i*2 + 0] = (uint16_t)((bits1 + 0x8000) >> 16);
-        result.v[i*2 + 1] = (uint16_t)((bits2 + 0x8000) >> 16);
+        // Round to nearest even for bfloat16
+        uint16_t bf1 = bits1 >> 16;
+        uint16_t bf2 = bits2 >> 16;
+        // Check if we need to round up (guard bit set and round/sticky or LSB)
+        if ((bits1 & 0x8000) && ((bits1 & 0x7FFF) || (bf1 & 1))) bf1++;
+        if ((bits2 & 0x8000) && ((bits2 & 0x7FFF) || (bf2 & 1))) bf2++;
+        result.v[i*2 + 0] = bf1;
+        result.v[i*2 + 1] = bf2;
     }
     return result;
 }
