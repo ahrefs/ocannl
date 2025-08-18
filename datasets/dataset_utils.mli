@@ -3,7 +3,7 @@
 val get_cache_dir : string -> string
 (** Return the platform-specific cache directory path for the given dataset.
 
-    The default location is "~/.cache/ocaml-nx/datasets/[dataset_name]/".
+    The default location is "~/.cache/ocannl/datasets/[dataset_name]/".
 
     {2 Parameters}
     - dataset_name: the name of the dataset.

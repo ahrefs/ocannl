@@ -5,9 +5,22 @@ let () = Curl.global_init Curl.CURLINIT_GLOBALALL
 let mkdir_p path perm =
   if path = "" || path = "." || path = Filename.dir_sep then ()
   else
-    let components = String.split_on_char Filename.dir_sep.[0] path |> List.filter (( <> ) "") in
-    let is_absolute = path <> "" && path.[0] = Filename.dir_sep.[0] in
-    let initial_prefix = if is_absolute then Filename.dir_sep else "." in
+    (* Handle Windows drive letters specially *)
+    let path_to_split, _is_absolute, initial_prefix = 
+      if (Sys.win32 || Sys.cygwin) && String.length path >= 2 && path.[1] = ':' then
+        (* Windows path with drive letter like C:\path or C:/path *)
+        let drive_prefix = (String.sub path 0 2) ^ Filename.dir_sep in
+        let rest = if String.length path > 3 then String.sub path 3 (String.length path - 3) else "" in
+        rest, true, drive_prefix
+      else if path <> "" && path.[0] = Filename.dir_sep.[0] then
+        (* Absolute path starting with separator *)
+        let rest = if String.length path > 1 then String.sub path 1 (String.length path - 1) else "" in
+        rest, true, Filename.dir_sep
+      else
+        (* Relative path *)
+        path, false, "."
+    in
+    let components = String.split_on_char Filename.dir_sep.[0] path_to_split |> List.filter (( <> ) "") in
 
     ignore
       (List.fold_left
@@ -39,11 +52,25 @@ let mkdir_p path perm =
     ()
 
 module Xdg = struct
-  let home = try Sys.getenv "HOME" with Not_found -> failwith "HOME environment variable not set."
-  let cache_base = home ^ "/.cache/ocaml-nx/datasets/"
+  let home = 
+    if Sys.win32 || Sys.cygwin then
+      try Sys.getenv "USERPROFILE" 
+      with Not_found -> 
+        try Sys.getenv "HOMEPATH" 
+        with Not_found -> failwith "Neither USERPROFILE nor HOMEPATH environment variables are set."
+    else
+      try Sys.getenv "HOME" 
+      with Not_found -> failwith "HOME environment variable not set."
+  
+  let cache_base = 
+    let sep = Filename.dir_sep in
+    if Sys.win32 || Sys.cygwin then
+      home ^ sep ^ "AppData" ^ sep ^ "Local" ^ sep ^ "ocannl" ^ sep ^ "datasets" ^ sep
+    else
+      home ^ sep ^ ".cache" ^ sep ^ "ocannl" ^ sep ^ "datasets" ^ sep
 end
 
-let get_cache_dir dataset_name = Xdg.cache_base ^ dataset_name ^ "/"
+let get_cache_dir dataset_name = Xdg.cache_base ^ dataset_name ^ Filename.dir_sep
 let mkdir_p dir = try mkdir_p dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
 
 let download_file url dest_path =
@@ -58,7 +85,7 @@ let download_file url dest_path =
   h#set_timeout 300;
   (* 5 minutes *)
   (* Provide a user agent *)
-  h#set_useragent "ocaml-nx-datasets/0.1.0";
+  h#set_useragent "ocannl-datasets/0.6.0";
 
   let oc = open_out_bin dest_path in
   let result =
@@ -96,15 +123,39 @@ let ensure_extracted_archive ~url ~archive_path ~extract_dir ~check_file =
     Printf.printf "Extracting %s to %s ...\n%!" archive_path extract_dir;
     (* Basic support for tar.gz *)
     if Filename.check_suffix archive_path ".tar.gz" then (
-      let command =
-        Printf.sprintf "tar xzf %s -C %s" (Filename.quote archive_path) (Filename.quote extract_dir)
+      (* Try different extraction methods based on platform *)
+      let extract_success = 
+        if Sys.win32 || Sys.cygwin then
+          (* On Windows, try to use tar.exe if available (Windows 10+), otherwise fail gracefully *)
+          let command = 
+            Printf.sprintf "tar.exe -xzf %s -C %s" 
+              (Filename.quote archive_path) (Filename.quote extract_dir)
+          in
+          Printf.printf "Executing: %s\n%!" command;
+          try
+            let exit_code = Unix.system command in
+            if exit_code = Unix.WEXITED 0 then
+              (Printf.printf "Extracted archive successfully using tar.exe.\n%!";
+               true)
+            else
+              (Printf.printf "tar.exe failed, trying alternative methods...\n%!";
+               false)
+          with _ -> 
+            (Printf.printf "tar.exe not available on this Windows system.\n%!";
+             false)
+        else
+          (* On Unix-like systems, use standard tar command *)
+          let command =
+            Printf.sprintf "tar xzf %s -C %s" 
+              (Filename.quote archive_path) (Filename.quote extract_dir)
+          in
+          Printf.printf "Executing: %s\n%!" command;
+          let exit_code = Unix.system command in
+          exit_code = Unix.WEXITED 0
       in
-      Printf.printf "Executing: %s\n%!" command;
-      let exit_code = Unix.system command in
-      if exit_code <> Unix.WEXITED 0 then
-        failwith (Printf.sprintf "Archive extraction command failed: '%s'" command)
-      else Printf.printf "Extracted archive successfully.\n%!"
-      (* Verify extraction *))
+      if not extract_success then
+        failwith (Printf.sprintf "Archive extraction failed for %s. On Windows, ensure tar.exe is available (Windows 10+) or extract manually." archive_path)
+      else Printf.printf "Archive extracted successfully.\n%!")
     else failwith (Printf.sprintf "Unsupported archive type for %s (only .tar.gz)" archive_path);
 
     if not (Sys.file_exists check_file_full_path) then
