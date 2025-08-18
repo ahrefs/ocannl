@@ -35,7 +35,24 @@ typedef struct { int64_t v[2]; } int64x2_t;
 typedef struct { int8_t v[16]; } int8x16_t;
 typedef struct { uint16_t v[8]; } uint16x8_t;
 typedef struct { uint8_t v[16]; } uint8x16_t;
-typedef struct { _Float16 v[8]; } half8_t;
+/* Half precision support with zero-overhead abstraction */
+#ifdef __FLT16_MAX__
+  #define HAS_NATIVE_FLOAT16 1
+  #define HALF_T _Float16
+  #define HALF_TO_FP(x) (x)  /* Identity - already floating point */
+  #define FP_TO_HALF(x) (x)  /* Identity - already half precision */
+  #define HALF_TO_FLOAT(x) ((float)(x))
+  #define FLOAT_TO_HALF(x) ((_Float16)(x))
+#else
+  #define HAS_NATIVE_FLOAT16 0
+  #define HALF_T uint16_t
+  #define HALF_TO_FP(x) half_to_single(x)  /* Convert to float for computation */
+  #define FP_TO_HALF(x) single_to_half(x)  /* Convert back from float */
+  #define HALF_TO_FLOAT(x) half_to_single(x)
+  #define FLOAT_TO_HALF(x) single_to_half(x)
+#endif
+
+typedef struct { HALF_T v[8]; } half8_t;
 
 /* Conversion functions from uint4x32 to various precisions uniformly */
 extern float4_t uint4x32_to_single_uniform_vec(uint4x32_t x);

@@ -267,7 +267,7 @@ let c_typ_of_prec = function
   | Int32_prec _ -> "int"
   | Int64_prec _ -> "long long"
   | Uint4x32_prec _ -> "uint4x32_t" (* Note that both CUDA and Metal usa a native type uint4 here *)
-  | Half_prec _ -> "_Float16"
+  | Half_prec _ -> "HALF_T"
   | Bfloat16_prec _ -> "unsigned short" (* Bfloat16 represented as uint16 *)
   | Fp8_prec _ -> "unsigned char" (* FP8 represented as uint8 *)
   | Single_prec _ -> "float"
@@ -670,15 +670,15 @@ let c_convert_precision ~from ~to_ =
   | Fp8_prec _, Double_prec _ -> ("(double)fp8_to_single(", ")")
   | Double_prec _, Fp8_prec _ -> ("single_to_fp8((float)", ")")
   (* Conversions involving BFloat16 and other types *)
-  | Bfloat16_prec _, Half_prec _ -> ("(_Float16)bfloat16_to_single(", ")")
-  | Half_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)", ")")
+  | Bfloat16_prec _, Half_prec _ -> ("FLOAT_TO_HALF(bfloat16_to_single(", "))")
+  | Half_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(HALF_TO_FLOAT(", "))")
   | Bfloat16_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _) ->
       ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_single(", ")")
   | (Byte_prec _ | Uint16_prec _ | Int32_prec _), Bfloat16_prec _ ->
       ("single_to_bfloat16((float)", ")")
   (* Conversions involving FP8 and other types *)
-  | Fp8_prec _, Half_prec _ -> ("(_Float16)fp8_to_single(", ")")
-  | Half_prec _, Fp8_prec _ -> ("single_to_fp8((float)", ")")
+  | Fp8_prec _, Half_prec _ -> ("FLOAT_TO_HALF(fp8_to_single(", "))")
+  | Half_prec _, Fp8_prec _ -> ("single_to_fp8(HALF_TO_FLOAT(", "))")
   | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _) ->
       ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_single(", ")")
   | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _), Fp8_prec _ ->
@@ -686,6 +686,15 @@ let c_convert_precision ~from ~to_ =
   (* BFloat16 <-> FP8 conversions *)
   | Bfloat16_prec _, Fp8_prec _ -> ("single_to_fp8(bfloat16_to_single(", "))")
   | Fp8_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(fp8_to_single(", "))")
+  (* Half precision conversions - use macros for zero overhead on native systems *)
+  | Half_prec _, Single_prec _ -> ("HALF_TO_FLOAT(", ")")
+  | Single_prec _, Half_prec _ -> ("FLOAT_TO_HALF(", ")")
+  | Half_prec _, Double_prec _ -> ("(double)HALF_TO_FLOAT(", ")")
+  | Double_prec _, Half_prec _ -> ("FLOAT_TO_HALF((float)", ")")
+  | Half_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _) ->
+      ("(" ^ c_typ_of_prec to_ ^ ")HALF_TO_FLOAT(", ")")
+  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _), Half_prec _ ->
+      ("FLOAT_TO_HALF((float)", ")")
   (* Uint4x32 conversions - special handling *)
   | Uint4x32_prec _, _ -> ("uint4x32_to_" ^ prec_string to_ ^ "(", ")")
   | _, Uint4x32_prec _ -> (prec_string from ^ "_to_uint4x32(", ")")
@@ -720,6 +729,8 @@ external bfloat16_to_single : int -> float = "arrayjit_bfloat16_to_single"
 (** Original conversion functions *)
 
 external single_to_bfloat16 : float -> int = "arrayjit_single_to_bfloat16"
+external half_to_single : int -> float = "arrayjit_half_to_single"
+external single_to_half : float -> int = "arrayjit_single_to_half"
 external fp8_to_single : int -> float = "arrayjit_fp8_to_single"
 external single_to_fp8 : float -> int = "arrayjit_single_to_fp8"
 

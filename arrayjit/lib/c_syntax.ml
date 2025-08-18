@@ -110,6 +110,26 @@ struct
       "  return (unsigned short)(rounded >> 16);";
       "}";
       "";
+      (* Half (Float16) support with zero-overhead abstraction *)
+      "#ifdef __FLT16_MAX__";
+      "  #define HAS_NATIVE_FLOAT16 1";
+      "  #define HALF_T _Float16";
+      "  #define HALF_TO_FP(x) (x)  /* Identity - already floating point */";
+      "  #define FP_TO_HALF(x) (x)  /* Identity - already half precision */";
+      "  #define HALF_TO_FLOAT(x) ((float)(x))";
+      "  #define FLOAT_TO_HALF(x) ((_Float16)(x))";
+      "#else";
+      "  #define HAS_NATIVE_FLOAT16 0";
+      "  #define HALF_T unsigned short";
+      "  #define HALF_TO_FP(x) half_to_single(x)  /* Convert to float for computation */";
+      "  #define FP_TO_HALF(x) single_to_half(x)  /* Convert back from float */";
+      "  #define HALF_TO_FLOAT(x) half_to_single(x)";
+      "  #define FLOAT_TO_HALF(x) single_to_half(x)";
+      "  /* Conversion functions for emulation - provided by builtins.c */";
+      "  extern float half_to_single(unsigned short h);";
+      "  extern unsigned short single_to_half(float f);";
+      "#endif";
+      "";
       (* FP8 E5M2 conversion functions *)
       "static inline float fp8_to_single(unsigned char fp8) {";
       "  if (fp8 == 0) return 0.0f;";
@@ -248,6 +268,22 @@ struct
               ^^ string op_suffix))
         in
         PPrint.(string "single_to_bfloat16(" ^^ float_result ^^ string ")")
+    | Ops.Half_prec _ ->
+        (* For Half, perform operations in float precision on non-native systems *)
+        let float_v1 = PPrint.(string "HALF_TO_FP(" ^^ v1 ^^ string ")") in
+        let float_v2 = PPrint.(string "HALF_TO_FP(" ^^ v2 ^^ string ")") in
+        let float_v3 = PPrint.(string "HALF_TO_FP(" ^^ v3 ^^ string ")") in
+        let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax Ops.single op in
+        let float_result =
+          PPrint.(
+            group
+              (string op_prefix ^^ float_v1 ^^ string op_infix1
+              ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+              ^^ string op_infix2
+              ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
+              ^^ string op_suffix))
+        in
+        PPrint.(string "FP_TO_HALF(" ^^ float_result ^^ string ")")
     | Ops.Fp8_prec _ ->
         (* For FP8, perform operations in float precision *)
         let float_v1 = PPrint.(string "fp8_to_single(" ^^ v1 ^^ string ")") in
@@ -337,13 +373,17 @@ struct
             let open PPrint in
             group
               (parens
-                 (group (parens (v1 ^^ string " > 0.0f16 && " ^^ v1 ^^ string " < 1.0f16"))
+                 (group
+                    (parens
+                       (string "HALF_TO_FP(" ^^ v1
+                       ^^ string ") > 0.0f && HALF_TO_FP("
+                       ^^ v1 ^^ string ") < 1.0f"))
                  ^^ ifflat
                       (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0f16")
+                     ^^ string "FP_TO_HALF(0.0f)")
                       (nest 2
                          (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0f16"))))
+                        ^^ string "FP_TO_HALF(0.0f)"))))
         | Ops.Single_prec _ ->
             let open PPrint in
             group
@@ -399,6 +439,23 @@ struct
                   ^^ string op_suffix))
             in
             PPrint.(string "single_to_fp8(" ^^ float_result ^^ string ")")
+        | Ops.Half_prec _ ->
+            (* For Half, perform all operations in float precision on non-native systems *)
+            let float_v1 = PPrint.(string "HALF_TO_FP(" ^^ v1 ^^ string ")") in
+            let float_v2 = PPrint.(string "HALF_TO_FP(" ^^ v2 ^^ string ")") in
+            let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax Ops.single op in
+            let float_result =
+              PPrint.(
+                group
+                  (string op_prefix ^^ float_v1 ^^ string op_infix
+                  ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
+                  ^^ string op_suffix))
+            in
+            (* For comparison operations, return float result (0.0 or 1.0) converted to Half *)
+            (match op with
+            | Ops.Cmplt | Ops.Cmpeq | Ops.Cmpne | Ops.Or | Ops.And ->
+                PPrint.(string "FP_TO_HALF(" ^^ float_result ^^ string ")")
+            | _ -> PPrint.(string "FP_TO_HALF(" ^^ float_result ^^ string ")"))
         | _ ->
             let op_prefix, op_infix, op_suffix = Ops.binop_c_syntax prec op in
             let open PPrint in
@@ -421,6 +478,12 @@ struct
         let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
         let float_result = PPrint.(group (string op_prefix ^^ float_v ^^ string op_suffix)) in
         PPrint.(string "single_to_fp8(" ^^ float_result ^^ string ")")
+    | Ops.Half_prec _ ->
+        (* For Half, perform operations in float precision on non-native systems *)
+        let float_v = PPrint.(string "HALF_TO_FP(" ^^ v ^^ string ")") in
+        let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
+        let float_result = PPrint.(group (string op_prefix ^^ float_v ^^ string op_suffix)) in
+        PPrint.(string "FP_TO_HALF(" ^^ float_result ^^ string ")")
     | _ ->
         let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
         let open PPrint in
