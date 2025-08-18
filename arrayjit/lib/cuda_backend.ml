@@ -139,8 +139,17 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let with_debug =
       Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
     in
+    let cuda_include_opt =
+      match Sys.getenv "CUDA_PATH" with
+      | Some cuda_path -> [ "-I" ^ cuda_path ^ "/include" ]
+      | None -> (
+          (* Fallback to common location if CUDA_PATH is not set *)
+          if Stdlib.Sys.file_exists "/usr/local/cuda/include" then [ "-I/usr/local/cuda/include" ]
+          else [])
+    in
     let options =
-      "--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else [])
+      cuda_include_opt @ ("--use_fast_math"
+      :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else []))
     in
     (* FIXME: every now and then the compilation crashes because the options are garbled. *)
     (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
@@ -294,8 +303,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
 
     let kernel_prep_line =
       "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
-
-    let includes = [ "<cuda_fp16.h>"; "<cuda_bf16.h>" ]
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"
