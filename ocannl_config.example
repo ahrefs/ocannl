@@ -52,8 +52,11 @@ check_half_prec_constants_cutoff=16384.0
 #   recent modification.
 automatic_host_transfers=true
 
-# If true (the default), the directories log_files and build_files are deleted on startup.
-clean_up_artifacts_on_startup=true
+# If true, the build_files directory is deleted on startup.
+clean_up_build_files_on_startup=true
+
+# If true, the log_files directory is deleted on startup.
+clean_up_log_files_on_startup=true
 
 # Other configurations:
 

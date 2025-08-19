@@ -30,7 +30,7 @@
     "--ocannl_log_main_domain_to_stdout=false"
     "--ocannl_debug_log_to_stream_files=true"
     ; We have to clean up to avoid appending to results of a previous run
-    "--ocannl_clean_up_artifacts_on_startup=true")
+    "--ocannl_clean_up_log_files_on_startup=true")
    (write-file %{targets} "completed\n"))))
 
 ; Step 2: Process the log file, depending on the backend-specific sentinel

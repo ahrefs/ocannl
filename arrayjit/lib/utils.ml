@@ -257,26 +257,28 @@ let diagn_log_file fname =
 
 let () =
   (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
-  let clean_up_artifacts_on_startup =
-    get_global_flag ~default:true ~arg_name:"clean_up_artifacts_on_startup"
+  let remove_dir_if_exists dirname =
+    if Stdlib.Sys.file_exists dirname && Stdlib.Sys.is_directory dirname then
+      try
+        Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
+            Stdlib.Sys.remove (Stdlib.Filename.concat dirname fname));
+        Stdlib.Sys.rmdir dirname
+      with exn ->
+        Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn)
+    else if Stdlib.Sys.file_exists dirname then
+      try Stdlib.Sys.remove dirname
+      with exn ->
+        Stdio.eprintf "Failed to delete file %s (expected a directory): %s\n%!" dirname
+          (Exn.to_string exn)
   in
-  if clean_up_artifacts_on_startup then (
-    let remove_dir_if_exists dirname =
-      if Stdlib.Sys.file_exists dirname && Stdlib.Sys.is_directory dirname then
-        try
-          Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
-              Stdlib.Sys.remove (Stdlib.Filename.concat dirname fname));
-          Stdlib.Sys.rmdir dirname
-        with exn ->
-          Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn)
-      else if Stdlib.Sys.file_exists dirname then
-        try Stdlib.Sys.remove dirname
-        with exn ->
-          Stdio.eprintf "Failed to delete file %s (expected a directory): %s\n%!" dirname
-            (Exn.to_string exn)
-    in
-    remove_dir_if_exists "log_files";
-    remove_dir_if_exists "build_files")
+  let clean_up_log_files_on_startup =
+    get_global_flag ~default:true ~arg_name:"clean_up_log_files_on_startup"
+  in
+  if clean_up_log_files_on_startup then remove_dir_if_exists "log_files";
+  let clean_up_build_files_on_startup =
+    get_global_flag ~default:true ~arg_name:"clean_up_build_files_on_startup"
+  in
+  if clean_up_build_files_on_startup then remove_dir_if_exists "build_files"
 
 let get_local_debug_runtime =
   let snapshot_every_sec =
