@@ -13,7 +13,6 @@ let () =
   (* Very similar to micrograd_demo.ml, but with an einsum shape inference corner case. *)
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let open Operation.At in
   let len = 200 in
   let batch_size = 10 in
   let n_batches = 2 * len / batch_size in
@@ -49,50 +48,8 @@ let () =
     Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
   in
   (* Skipping over the training loop, not needed for the test. *)
-  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
-  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let%cd mlp_result = mlp "point" in
-  let result_routine =
-    Train.to_routine
-      (module Backend)
-      sgd_routine.context IDX.empty
-      [%cd
-        ~~("moons infer";
-           mlp_result.forward)]
-  in
-  let callback (x, y) =
-    Tn.set_values point.value [| x; y |];
-    Train.run result_routine;
-    Float.(mlp_result.@[0] >= 0.)
-  in
-  let _plot_moons =
-    PrintBox_utils.plot ~as_canvas:true ~size:(5, 5)
-      [
-        Scatterplot { points = points1; content = PrintBox.line "#" };
-        Scatterplot { points = points2; content = PrintBox.line "%" };
-        Boundary_map
-          { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
-      ]
-  in
-  (* PrintBox_text.output Stdio.stdout _plot_moons; *)
-  (* Stdio.printf "Losses: %.4g, %.4g\n%!" losses.(epochs / 2) losses.(epochs - 1); *)
-  Tn.print_accessible_headers ();
+  Train.run sgd_routine;
 
-  (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
-  Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name mlp_result;
-  (* Note: mlp_result is not included in the resulting tensor's label, because the identifier label
-     does not propagate across function calls. *)
-  Stdio.printf "(mlp moons_input) name: %s\n%!"
-  @@ Tensor.debug_name
-  @@
-  match margin_loss.children with
-  | [
-   {
-     subtensor =
-       { children = [ _; { subtensor = { children = [ _; { subtensor; _ } ]; _ }; _ } ]; _ };
-     _;
-   };
-  ] ->
-      subtensor
-  | _ -> assert false
+  Tn.print_accessible_headers ();
+  (* This should force liveness of more tensor nodes for accessible headers. *)
+  Train.printf_tree scalar_loss
