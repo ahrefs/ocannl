@@ -104,7 +104,7 @@ let main () =
   (* PrintBox_text.output Stdio.stdout plot_moons; *)
   Stdio.printf "\nLoss:\n%!";
   let plot_loss =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"loss"
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"loss" ~small:true
       [ Line_plot { points = Array.of_list_rev !losses; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_loss;
@@ -116,7 +116,7 @@ let main () =
   (* PrintBox_text.output Stdio.stdout plot_loss; *)
   Stdio.printf "\nLearning rate:\n%!";
   let plot_lr =
-    PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate"
+    PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate" ~small:true
       [ Line_plot { points = Array.of_list_rev !learning_rates; content = PrintBox.line "-" } ]
   in
   PrintBox_text.output Stdio.stdout plot_lr;
