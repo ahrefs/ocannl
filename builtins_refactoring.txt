@@ -1,0 +1,830 @@
+╭───────────────────────────────────────────────────╮
+│ ✻ Welcome to Claude Code!                         │
+│                                                   │
+│   /help for help, /status for your current setup  │
+│                                                   │
+│   cwd: C:\Users\lukst\GitHub\ocannl               │
+╰───────────────────────────────────────────────────╯
+
+> This session is being continued from a previous conversation that ran out of context. The 
+  conversation is summarized below:
+  Analysis:
+  Let me chronologically analyze the conversation:
+
+  1. **Initial Request**: User reported `undefined reference` errors from the C compiler on 
+  Windows for functions like `uint4x32_to_<prec>_uniform_vec` related to random number 
+  generation. They specifically mentioned test `dune exec 
+  test\operations\test_vec_simple.exe`.
+
+  2. **My Investigation Approach**:
+     - Created a todo list to track progress
+     - Ran the failing test and identified specific undefined references: 
+  `int32_to_uint4x32`, `int64_to_uint4x32`, `arrayjit_threefry4x32`, 
+  `uint4x32_to_single_uniform_vec`
+     - Found these functions were defined in `arrayjit/lib/builtins.c`
+     - Examined generated C code in `build_files/n3_fwd.c` which had `extern` declarations 
+  for these functions
+
+  3. **Initial Misunderstanding**: I initially tried to modify `cc_backend.ml` to include 
+  `builtins.c` in the compilation command, but the user corrected me - explaining that 
+  `builtins.c` should already be statically linked by Dune, and questioned why it would be 
+  different on Windows.
+
+  4. **Root Cause Analysis**: 
+     - Found that `builtins.c` is included via `foreign_stubs` in the `ir` library's dune 
+  file
+     - Discovered the real issue: on Windows, symbols from statically linked OCaml libraries
+   aren't visible to dynamically compiled code (unlike Unix with `-undefined 
+  dynamic_lookup`)
+     - The functions were properly compiled into object files 
+  (`_build/default/arrayjit/lib/builtins.o`, `libir_stubs.a`) but not accessible at runtime
+
+  5. **Solution Attempts**:
+     - First tried adding Windows-specific export macros (`ARRAYJIT_API` using 
+  `__declspec(dllexport/dllimport)`) to all function definitions in `builtins.c`
+     - Then attempted to link the builtins object file when compiling generated code on 
+  Windows
+     - Finally moved to inline function definitions directly in the header within 
+  `cc_backend.ml`
+
+  6. **User Feedback**: At the end, user stated they want to use "textual prepending of 
+  builtins for all backends" and had made initial steps that need polish.
+
+  Key technical details:
+  - The issue is specific to Windows where dynamic libraries can't see symbols from the main
+   executable
+  - The functions are part of a Threefry4x32 random number generator implementation
+  - Both scalar and vectorized conversion functions are affected
+  - The solution involves making these functions available as inline implementations in the 
+  generated code header
+
+  Summary:
+  1. **Primary Request and Intent:**
+     - Investigate and fix `undefined reference` errors for random number generation 
+  functions (`uint4x32_to_<prec>_uniform_vec`, `int32_to_uint4x32`, `int64_to_uint4x32`, 
+  `arrayjit_threefry4x32`) on Windows
+     - These errors occur when running C compiler on generated code, specifically visible 
+  when running `dune exec test\operations\test_vec_simple.exe`
+     - User wants to use textual prepending of builtins for all backends as the solution 
+  approach
+
+  2. **Key Technical Concepts:**
+     - Windows vs Unix symbol visibility in dynamic libraries
+     - Static linking with OCaml foreign stubs
+     - C compiler linking issues with MinGW on Windows
+     - Threefry4x32 random number generator
+     - Float16/BFloat16/FP8 conversion functions
+     - Dynamic code compilation at runtime via `cc_backend`
+     - Symbol export/import mechanisms (`__declspec` on Windows)
+
+  3. **Files and Code Sections:**
+     - **`arrayjit/lib/builtins.c`**
+       - Contains implementations of random number generation and conversion functions
+       - Modified to add Windows export macros (`ARRAYJIT_API`)
+       - Added export macro definition:
+       ```c
+       /* Windows DLL export/import macros for proper symbol visibility */
+       #ifdef _WIN32
+         #ifdef BUILDING_DLL
+           #define ARRAYJIT_API __declspec(dllexport)
+         #else
+           #define ARRAYJIT_API __declspec(dllimport)
+         #endif
+       #else
+         #define ARRAYJIT_API
+       #endif
+       
+       /* For static linking within OCaml, we want symbols to be visible */
+       #ifdef __CYGWIN__
+         #undef ARRAYJIT_API
+         #define ARRAYJIT_API __attribute__((visibility("default")))
+       #endif
+       ```
+       - Replaced all `extern` declarations with `ARRAYJIT_API` for functions like 
+  `arrayjit_threefry4x32`, `uint4x32_to_single_uniform_vec`, etc.
+
+     - **`arrayjit/lib/cc_backend.ml`**
+       - Generates C code dynamically and compiles it at runtime
+       - Modified to include inline implementations of conversion functions in the header
+       - Added inline implementations for `int32_to_uint4x32`, `int64_to_uint4x32`, etc.:
+       ```ocaml
+       static inline uint4x32_t int32_to_uint4x32(int32_t x) {
+           uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+           return result;
+       }
+       ```
+       - Attempted to link builtins object file on Windows (later approach)
+
+     - **`build_files/n3_fwd.c`**
+       - Generated C code that references the missing functions
+       - Contains `extern` declarations but can't link to implementations
+
+     - **`arrayjit/lib/dune`**
+       - Shows `builtins` is included as `foreign_stubs` in the `ir` library
+       - Confirms builtins should be compiled and linked
+
+  4. **Errors and Fixes:**
+     - **Undefined reference errors**: Functions from `builtins.c` not visible to 
+  dynamically compiled code on Windows
+       - Fix attempt 1: Added `ARRAYJIT_API` export macros (didn't solve the issue)
+       - Fix attempt 2: Tried to link `builtins.o` when compiling generated code (had syntax
+   errors with Base library)
+       - Fix attempt 3: Changed to inline function definitions in header (partial 
+  implementation)
+     - **Compilation syntax errors**: 
+       - Used `=` instead of `String.equal` for string comparison
+       - Used `List.find_opt` instead of Base's `List.find`
+       - Tried to use `Findlib` module which wasn't available
+       - Accidentally removed function body when editing `uint4x32_to_fp8_uniform`
+     - **User feedback**: User corrected my initial approach, explaining that builtins.c 
+  should already be statically linked by Dune, redirecting me to investigate why Windows 
+  behaves differently
+
+  5. **Problem Solving:**
+     - Identified that Windows requires symbols to be resolved at link time unlike Unix
+     - Discovered that dynamically loaded libraries on Windows can't see symbols from the 
+  main executable
+     - Determined that inline function definitions in the generated code header would solve 
+  the issue
+     - User indicated preference for textual prepending approach for all backends
+
+  6. **All User Messages:**
+     - "Can you investigate the `undefined reference` errors from the C compiler on the 
+  generated code, they seem to be about `uint4x32_to_<prec>_uniform_vec` (these calls are to
+   generate random numbers), that I only see on Windows? Currently we are on a Windows 
+  machine. There is a couple other issues too but this one is the biggest. There are 
+  multiple failing tests, but to see one, you could run e.g. `dune exec 
+  test\operations\test_vec_simple.exe`"
+     - "The console got 'disconfigured' again, that's a stale opam switch. I updated the 
+  environment, try again."
+     - "[Request interrupted by user for tool use]The reason that builtins.c works on other 
+  systems is that the compiled object should be statically linked with the program by Dune. 
+  Why would it be different on Windows? Don't we have other functions from builtins.c 
+  linked? Maybe the vec functions are pruned?"
+     - "I still see the `undefined reference` error for `dune exec 
+  test\operations\test_vec_simple.exe`"
+     - "[Request interrupted by user]"
+     - "Your task is to create a detailed summary..." [summary request]
+     - Additional Instructions: "Alright you convinced me. We are going to use textual 
+  prepending of builtins for all backends. I made initial steps in that direction that need 
+  some more polish."
+
+  7. **Pending Tasks:**
+     - Complete the inline implementation of all required functions in `cc_backend.ml` 
+  header
+     - Add implementations for `arrayjit_threefry4x32` and vector conversion functions
+     - Apply textual prepending approach to all backends (not just Windows)
+     - Polish the user's initial steps toward textual prepending
+
+  8. **Current Work:**
+     Was in the process of adding inline implementations of the missing functions to the 
+  `builtins_header` in `cc_backend.ml`. Had successfully added the scalar conversion 
+  functions (`int32_to_uint4x32`, `int64_to_uint4x32`, etc.) but still needed to add:
+     - The complete Threefry4x32 implementation
+     - Vector conversion functions (`uint4x32_to_single_uniform_vec`, etc.)
+     The last edit replaced `extern` declarations with `static inline` implementations in 
+  the header string.
+
+  9. **Optional Next Step:**
+     Continue adding the remaining inline function implementations to `cc_backend.ml`'s 
+  `builtins_header`, specifically:
+     - Add the complete `arrayjit_threefry4x32` implementation with its helper functions
+     - Add `uint4x32_to_single_uniform_vec` and other vector conversion functions
+     - Apply this textual prepending approach consistently across all backends as requested 
+  by the user
+
+     Last task quote: "Let me add the complete inline implementation of the Threefry 
+  function and the key vector conversion functions we need" - This was interrupted, and 
+  aligns with user's directive: "We are going to use textual prepending of builtins for all 
+  backends. I made initial steps in that direction that need some more polish.".
+
+> /compact Alright you convinced me. We are going to use textual prepending of builtins for 
+all backends. I made initial steps in that direction that need some more polish.
+  ⎿  Compacted. ctrl+r to see full summary
+
+> It was probably a fool's errand to statically link the helper functions for kernels / 
+  routines. I now duplicated the non-OCaml content of builtins.c to builtins_cc.ml , I think
+   we can revert ARRAYJIT_API unless there's a distinction in how to configure inlining? 
+  Additionally, I unified builtins_cuda_small.ml and builtins_cuda_large.ml into 
+  builtins_cuda.ml (where previously I hoped to share builtins_cuda_large.ml object code 
+  across kernels but no longer intend that).
+
+● I'll help polish the textual prepending approach for builtins across all backends. Let me
+  first examine the current state of the new files and understand what needs to be done.
+
+● Update Todos
+  ⎿  ☐ Examine the new builtins_cc.ml file                               
+     ☐ Check the unified builtins_cuda.ml file
+     ☐ Revert ARRAYJIT_API macros in builtins.c
+     ☐ Update cc_backend.ml to use the new builtins_cc.ml
+     ☐ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Read(arrayjit\lib\builtins_cc.ml)
+  ⎿  Read 693 lines (ctrl+r to expand)
+
+● Now let me check the new unified builtins_cuda.ml file:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☐ Check the unified builtins_cuda.ml file
+     ☐ Revert ARRAYJIT_API macros in builtins.c
+     ☐ Update cc_backend.ml to use the new builtins_cc.ml
+     ☐ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Read(arrayjit\lib\builtins_cuda.ml)
+  ⎿  Read 100 lines (ctrl+r to expand)
+
+● Good, now let me check how the backends currently use builtins. Let me look at
+  cc_backend.ml:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☒ Check the unified builtins_cuda.ml file
+     ☐ Revert ARRAYJIT_API macros in builtins.c
+     ☐ Update cc_backend.ml to use the new builtins_cc.ml
+     ☐ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Let me first revert the ARRAYJIT_API macros in builtins.c since we're now using textual
+  prepending:
+
+● Search(pattern: "ARRAYJIT_API", path: "arrayjit\lib\builtins.c", output_mode: "content",
+        head_limit: 20)
+  ⎿  Found 20 lines (ctrl+r to expand)
+
+● Update(arrayjit\lib\builtins.c)
+  ⎿  Error editing file
+
+● Let me read the file first, then continue with the edits:
+
+● Read(arrayjit\lib\builtins.c)
+  ⎿  Read 50 lines (ctrl+r to expand)
+
+● Update(arrayjit\lib\builtins.c)
+  ⎿  Updated arrayjit\lib\builtins.c with 17 removals                                       
+        8    #include <string.h>
+        9    #include <stdlib.h>
+       10    
+       11 -  /* Windows DLL export/import macros for proper symbol visibility */
+       12 -  #ifdef _WIN32
+       13 -    #ifdef BUILDING_DLL
+       14 -      #define ARRAYJIT_API __declspec(dllexport)
+       15 -    #else
+       16 -      #define ARRAYJIT_API __declspec(dllimport)
+       17 -    #endif
+       18 -  #else
+       19 -    #define ARRAYJIT_API
+       20 -  #endif
+       21 -  
+       22 -  /* For static linking within OCaml, we want symbols to be visible */
+       23 -  #ifdef __CYGWIN__
+       24 -    #undef ARRAYJIT_API
+       25 -    #define ARRAYJIT_API __attribute__((visibility("default")))
+       26 -  #endif
+       27 -  
+       11    /* Check for _Float16 support and define macros for zero-overhead abstraction 
+     */
+       12    #ifdef __FLT16_MAX__
+       13      #define HAS_NATIVE_FLOAT16 1
+
+● Now remove all ARRAYJIT_API occurrences:
+
+● Bash(grep -n "ARRAYJIT_API" "C:\Users\lukst\GitHub\ocannl\arrayjit\lib\builtins.c" | head
+      -10)
+  ⎿  196:ARRAYJIT_API uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+     297:ARRAYJIT_API float uint32_to_single_uniform(uint32_t x) {
+     303:ARRAYJIT_API double uint32_to_double_uniform(uint32_t x) {
+     … +7 lines (ctrl+r to expand)
+
+● Update(arrayjit\lib\builtins.c)
+  ⎿  Updated arrayjit\lib\builtins.c with 40 additions and 40 removals                      
+       193    }
+       194    
+       195    /* Threefry4x32 implementation - 20 rounds */
+       196 -  ARRAYJIT_API uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t 
+     counter) {
+           - counter) {
+       196 +  uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+       197        uint32_t x[4];
+       198        uint32_t ks[5];
+       199        
+     ...
+       294    // These return vectors to efficiently use all random bits
+       295    
+       296    /* Convert to float in [0, 1) */
+       297 -  ARRAYJIT_API float uint32_to_single_uniform(uint32_t x) {
+       297 +  float uint32_to_single_uniform(uint32_t x) {
+       298        /* Use upper 24 bits for float mantissa (23 bits + implicit 1) */
+       299        return (x >> 8) * (1.0f / 16777216.0f);
+       300    }
+       301    
+       302    /* Convert to double in [0, 1) */
+       303 -  ARRAYJIT_API double uint32_to_double_uniform(uint32_t x) {
+       303 +  double uint32_to_double_uniform(uint32_t x) {
+       304        return x * (1.0 / 4294967296.0);
+       305    }
+       306    
+       307    /* Uint4x32 to float32 uniform - uses first 32 bits */
+       308 -  ARRAYJIT_API float uint4x32_to_single_uniform(uint4x32_t x) {
+       308 +  float uint4x32_to_single_uniform(uint4x32_t x) {
+       309        return uint32_to_single_uniform(x.v[0]);
+       310    }
+       311    
+       312    /* Uint4x32 to float64 uniform - uses first 64 bits */
+       313 -  ARRAYJIT_API double uint4x32_to_double_uniform(uint4x32_t x) {
+       313 +  double uint4x32_to_double_uniform(uint4x32_t x) {
+       314        uint64_t combined = ((uint64_t)x.v[1] << 32) | x.v[0];
+       315        return combined * (1.0 / 18446744073709551616.0);
+       316    }
+       317    
+       318    /* Uint4x32 to int32 uniform - full range */
+       319 -  ARRAYJIT_API int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
+       319 +  int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
+       320        return (int32_t)x.v[0];
+       321    }
+       322    
+       323    /* Uint4x32 to int64 uniform - full range */
+       324 -  ARRAYJIT_API int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
+       324 +  int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
+       325        return (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
+       326    }
+       327    
+       328    /* Uint4x32 to uint32 uniform - full range */
+       329 -  ARRAYJIT_API uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
+       329 +  uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
+       330        return x.v[0];
+       331    }
+       332    
+       333    /* Uint4x32 to uint64 uniform - full range */
+       334 -  ARRAYJIT_API uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
+       334 +  uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
+       335        return ((uint64_t)x.v[1] << 32) | x.v[0];
+       336    }
+       337    
+       338    /* Uint4x32 to int8 uniform - full range */
+       339 -  ARRAYJIT_API int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+       339 +  int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+       340        return (int8_t)(x.v[0] & 0xFF);
+       341    }
+       342    
+       343    /* Uint4x32 to uint16 uniform - full range */
+       344 -  ARRAYJIT_API uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
+       344 +  uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
+       345        return (uint16_t)(x.v[0] & 0xFFFF);
+       346    }
+       347    
+       348    /* Uint4x32 to bfloat16 uniform - uses first 16 bits */
+       349 -  ARRAYJIT_API uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
+       349 +  uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
+       350        /* Convert to float first, then to bfloat16 */
+       351        float f = uint32_to_single_uniform(x.v[0]);
+       352        uint32_t bits;
+     ...
+       358    }
+       359    
+       360    /* Uint4x32 to float16 uniform - uses first 16 bits */
+       361 -  ARRAYJIT_API uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
+       361 +  uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
+       362        /* Convert through float for consistent behavior */
+       363        float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
+       364        return FLOAT_TO_HALF(f);
+       365    }
+       366    
+       367    /* Uint4x32 to fp8 uniform - uses first 8 bits */
+       368 -  ARRAYJIT_API uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
+       368 +  uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
+       369        return (uint8_t)(x.v[0] & 0xFF);
+       370    }
+       371    
+       372    /* Vectorized conversion functions that use all 128 bits efficiently */
+       373    
+       374    /* Convert uint4x32 to 4 floats in [0, 1) */
+       375 -  ARRAYJIT_API float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+       375 +  float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+       376        float4_t result;
+       377        for (int i = 0; i < 4; i++) {
+       378            result.v[i] = uint32_to_single_uniform(x.v[i]);
+     ...
+       381    }
+       382    
+       383    /* Convert uint4x32 to 2 doubles in [0, 1) */
+       384 -  ARRAYJIT_API double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+       384 +  double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+       385        double2_t result;
+       386        uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
+       387        uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
+     ...
+       391    }
+       392    
+       393    /* Convert uint4x32 to 4 int32s - full range */
+       394 -  ARRAYJIT_API int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+       394 +  int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+       395        int32x4_t result;
+       396        for (int i = 0; i < 4; i++) {
+       397            result.v[i] = (int32_t)x.v[i];
+     ...
+       400    }
+       401    
+       402    /* Convert uint4x32 to 2 int64s - full range */
+       403 -  ARRAYJIT_API int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+       403 +  int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+       404        int64x2_t result;
+       405        result.v[0] = (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
+       406        result.v[1] = (int64_t)(((uint64_t)x.v[3] << 32) | x.v[2]);
+     ...
+       409    
+       410    
+       411    /* Convert uint4x32 to 16 int8s - full range */
+       412 -  ARRAYJIT_API int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+       412 +  int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+       413        int8x16_t result;
+       414        for (int i = 0; i < 4; i++) {
+       415            result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
+     ...
+       421    }
+       422    
+       423    /* Convert uint4x32 to 8 uint16s - full range */
+       424 -  ARRAYJIT_API uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+       424 +  uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+       425        uint16x8_t result;
+       426        for (int i = 0; i < 4; i++) {
+       427            result.v[i*2 + 0] = (uint16_t)(x.v[i] & 0xFFFF);
+     ...
+       431    }
+       432    
+       433    /* Convert uint4x32 to 8 bfloat16s uniform */
+       434 -  ARRAYJIT_API uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+       434 +  uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+       435        uint16x8_t result;
+       436        for (int i = 0; i < 4; i++) {
+       437            // Convert each uint32 to two bfloat16 values
+     ...
+       453    }
+       454    
+       455    /* Convert uint4x32 to 8 float16s uniform */
+       456 -  ARRAYJIT_API half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+       456 +  half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+       457        half8_t result;
+       458        for (int i = 0; i < 4; i++) {
+       459            // Extract two 16-bit values and convert to float in [0, 1)
+     ...
+       468    }
+       469    
+       470    /* Convert uint4x32 to 16 fp8s uniform */
+       471 -  ARRAYJIT_API uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+       471 +  uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+       472        uint8x16_t result;
+       473        for (int i = 0; i < 4; i++) {
+       474            result.v[i*4 + 0] = (uint8_t)(x.v[i] & 0xFF);
+     ...
+       480    }
+       481    
+       482    /* Conversion functions from various precisions to uint4x32_t */
+       483 -  ARRAYJIT_API uint4x32_t single_to_uint4x32(float x) {
+       483 +  uint4x32_t single_to_uint4x32(float x) {
+       484        uint32_t bits;
+       485        memcpy(&bits, &x, sizeof(float));
+       486        uint4x32_t result = {{bits, 0, 0, 0}};
+       487        return result;
+       488    }
+       489    
+       490 -  ARRAYJIT_API uint4x32_t double_to_uint4x32(double x) {
+       490 +  uint4x32_t double_to_uint4x32(double x) {
+       491        uint64_t bits;
+       492        memcpy(&bits, &x, sizeof(double));
+       493        uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 
+             32), 0, 0}};
+       494        return result;
+       495    }
+       496    
+       497 -  ARRAYJIT_API uint4x32_t int32_to_uint4x32(int32_t x) {
+       497 +  uint4x32_t int32_to_uint4x32(int32_t x) {
+       498        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       499        return result;
+       500    }
+       501    
+       502 -  ARRAYJIT_API uint4x32_t int64_to_uint4x32(int64_t x) {
+       502 +  uint4x32_t int64_to_uint4x32(int64_t x) {
+       503        uint64_t bits = (uint64_t)x;
+       504        uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 
+             32), 0, 0}};
+       505        return result;
+       506    }
+       507    
+       508 -  ARRAYJIT_API uint4x32_t uint32_to_uint4x32(uint32_t x) {
+       508 +  uint4x32_t uint32_to_uint4x32(uint32_t x) {
+       509        uint4x32_t result = {{x, 0, 0, 0}};
+       510        return result;
+       511    }
+       512    
+       513 -  ARRAYJIT_API uint4x32_t uint64_to_uint4x32(uint64_t x) {
+       513 +  uint4x32_t uint64_to_uint4x32(uint64_t x) {
+       514        uint4x32_t result = {{(uint32_t)(x & 0xFFFFFFFF), (uint32_t)(x >> 32), 0, 
+             0}};
+       515        return result;
+       516    }
+       517    
+       518 -  ARRAYJIT_API uint4x32_t byte_to_uint4x32(unsigned char x) {
+       518 +  uint4x32_t byte_to_uint4x32(unsigned char x) {
+       519        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       520        return result;
+       521    }
+       522    
+       523 -  ARRAYJIT_API uint4x32_t uint16_to_uint4x32(uint16_t x) {
+       523 +  uint4x32_t uint16_to_uint4x32(uint16_t x) {
+       524        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       525        return result;
+       526    }
+       527    
+       528 -  ARRAYJIT_API uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
+       528 +  uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
+       529        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       530        return result;
+       531    }
+       532    
+       533 -  ARRAYJIT_API uint4x32_t half_to_uint4x32(uint16_t x) {
+       533 +  uint4x32_t half_to_uint4x32(uint16_t x) {
+       534        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       535        return result;
+       536    }
+       537    
+       538 -  ARRAYJIT_API uint4x32_t fp8_to_uint4x32(uint8_t x) {
+       538 +  uint4x32_t fp8_to_uint4x32(uint8_t x) {
+       539        uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
+       540        return result;
+       541    }
+     ...
+       543    /* Pure C conversion functions for use in C backends */
+       544    
+       545    /* BFloat16 to Float conversion (C function) */
+       546 -  ARRAYJIT_API float bfloat16_to_single(uint16_t bf16)
+       546 +  float bfloat16_to_single(uint16_t bf16)
+       547    {
+       548      /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
+       549         To convert to float32, we shift left by 16 bits */
+     ...
+       552    }
+       553    
+       554    /* Float to BFloat16 conversion (C function) */
+       555 -  ARRAYJIT_API uint16_t single_to_bfloat16(float f)
+       555 +  uint16_t single_to_bfloat16(float f)
+       556    {
+       557      uint32_t f32 = *((uint32_t *)&f);
+       558    
+     ...
+       562    }
+       563    
+       564    /* Half (Float16) to Float conversion (C function) */
+       565 -  ARRAYJIT_API float half_to_single(uint16_t h)
+       565 +  float half_to_single(uint16_t h)
+       566    {
+       567      HALF_T half_val = UINT16_TO_HALF(h);
+       568      return HALF_TO_FLOAT(half_val);
+       569    }
+       570    
+       571    /* Float to Half (Float16) conversion (C function) */
+       572 -  ARRAYJIT_API uint16_t single_to_half(float f)
+       572 +  uint16_t single_to_half(float f)
+       573    {
+       574      HALF_T half_val = FLOAT_TO_HALF(f);
+       575      return HALF_TO_UINT16(half_val);
+     ...
+       577    
+       578    /* FP8 E5M2 format to Float conversion (C function)
+       579       Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
+       580 -  ARRAYJIT_API float fp8_to_single(uint8_t fp8)
+       580 +  float fp8_to_single(uint8_t fp8)
+       581    {
+       582      /* Handle zero */
+       583      if (fp8 == 0)
+     ...
+       620    }
+       621    
+       622    /* Float to FP8 E5M2 conversion (C function) */
+       623 -  ARRAYJIT_API uint8_t single_to_fp8(float f)
+       623 +  uint8_t single_to_fp8(float f)
+       624    {
+       625      /* Handle zero */
+       626      if (f == 0.0f)
+
+● Now let me update cc_backend.ml to use the new builtins_cc.ml:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☒ Check the unified builtins_cuda.ml file
+     ☒ Revert ARRAYJIT_API macros in builtins.c
+     ☐ Update cc_backend.ml to use the new builtins_cc.ml
+     ☐ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Search(pattern: "builtins_header", path: "arrayjit\lib\cc_backend.ml", output_mode:
+        "content")
+  ⎿  Found 8 lines (ctrl+r to expand)
+
+● Search(pattern: "let builtins_header =", path: "arrayjit\lib\cc_backend.ml", output_mode:
+        "content")
+  ⎿  Found 0 lines 
+
+● Search(pattern: "builtins_header", path: "arrayjit\lib\cc_backend.ml", output_mode:
+        "content")
+  ⎿  Found 13 lines (ctrl+r to expand)
+
+● Let me see where builtins_header is defined:
+
+● Search(pattern: "builtins_header", path: "arrayjit\lib", glob: "*.ml", output_mode:
+        "content")
+  ⎿  Found 5 lines (ctrl+r to expand)
+
+● Let me look at the imports to understand the module structure:
+
+● Read(arrayjit\lib\cc_backend.ml)
+  ⎿  Read 30 lines (ctrl+r to expand)
+
+● Let me search for where builtins_header is actually defined:
+
+● Bash(grep -n "builtins_header" "C:\Users\lukst\GitHub\ocannl\arrayjit\lib\cc_backend.ml")
+  ⎿  357:  let header_doc = PPrint.string builtins_header in
+
+● It seems builtins_header is not defined in cc_backend.ml. Let me check c_syntax.ml module:
+
+● Search(pattern: "builtins_header", path: "arrayjit\lib\c_syntax.ml", output_mode:
+        "content")
+  ⎿  Found 0 lines 
+
+● Let me check how cc_backend imports the syntax module:
+
+● Search(pattern: "module Syntax", path: "arrayjit\lib\cc_backend.ml", output_mode:
+        "content")
+  ⎿  Found 13 lines (ctrl+r to expand)
+
+● So it's using C_syntax.C_syntax functor. Let me look for builtins_header in
+  CC_syntax_config:
+
+● Search(pattern: "CC_syntax_config", path: "arrayjit\lib\cc_backend.ml", output_mode:
+        "content")
+  ⎿  Found 129 lines (ctrl+r to expand)
+
+● I can see that:
+  1. In line 328, the single compile function uses PPrint.string Builtins_cc.source
+  2. In line 357, the compile_batch function uses PPrint.string builtins_header
+
+  It seems builtins_header is undefined. Let me fix this by using Builtins_cc.source:
+
+● Update(arrayjit\lib\cc_backend.ml)
+  ⎿  Updated arrayjit\lib\cc_backend.ml with 1 addition and 1 removal                    
+       354                Syntax.compile_proc ~name idx_params lowered))
+       355      in
+       356      let all_proc_docs = List.filter_map (Array.to_list params_and_docs) 
+             ~f:(Option.map ~f:snd) in
+       357 -    let header_doc = PPrint.string builtins_header in
+       357 +    let header_doc = PPrint.string Builtins_cc.source in
+       358      let final_doc = PPrint.(header_doc ^^ separate hardline all_proc_docs) in
+       359      PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
+       360      build_file.finalize ();
+
+● Now let's update cuda_backend.ml to use the unified builtins_cuda.ml:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☒ Check the unified builtins_cuda.ml file
+     ☒ Revert ARRAYJIT_API macros in builtins.c
+     ☒ Update cc_backend.ml to use the new builtins_cc.ml
+     ☐ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Search(pattern: "Builtins_cuda_small\|Builtins_cuda_large", path:
+        "arrayjit\lib\cuda_backend.ml", output_mode: "content")
+  ⎿  Found 0 lines 
+
+● Search(pattern: "builtins_cuda", path: "arrayjit\lib\cuda_backend.ml", output_mode:
+        "content")
+  ⎿  Found 7 lines (ctrl+r to expand)
+
+● Now update cuda_backend.ml to use the unified Builtins_cuda:
+
+● Update(arrayjit\lib\cuda_backend.ml)
+  ⎿  Error editing file
+
+● Read(arrayjit\lib\cuda_backend.ml)
+  ⎿  Read 50 lines (ctrl+r to expand)
+
+● Update(arrayjit\lib\cuda_backend.ml)
+  ⎿  Updated arrayjit\lib\cuda_backend.ml with 1 addition and 3 removals                 
+       754        if Utils.debug_log_from_routines () then
+       755          Buffer.add_string b "__device__ int printf (const char * format, ... 
+             );\n";
+       756        Buffer.add_string b "\n\n";
+       757 -      Buffer.add_string b Builtins_cuda_small.source;
+       758 -      (* Include the full Threefry implementation directly in each kernel *)
+       759 -      Buffer.add_string b Builtins_cuda_large.source;
+       757 +      Buffer.add_string b Builtins_cuda.source;
+       758        Buffer.add_string b "\n\n"
+       759    
+       760      let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as 
+             lowered) =
+
+● Now let's remove the old builtins_cuda_small.ml and builtins_cuda_large.ml files:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☒ Check the unified builtins_cuda.ml file
+     ☒ Revert ARRAYJIT_API macros in builtins.c
+     ☒ Update cc_backend.ml to use the new builtins_cc.ml
+     ☒ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☐ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Bash(rm "C:\Users\lukst\GitHub\ocannl\arrayjit\lib\builtins_cuda_small.ml"
+      "C:\Users\lukst\GitHub\ocannl\arrayjit\lib\builtins_cuda_large.ml")
+  ⎿  Error: rm: cannot remove 
+     'C:\Users\lukst\GitHub\ocannl\arrayjit\lib\builtins_cuda_small.ml': No such file or 
+     directory
+     rm: cannot remove 'C:\Users\lukst\GitHub\ocannl\arrayjit\lib\builtins_cuda_large.ml': No
+      such file or directory
+
+● The files were already removed. Now let's test if our changes work:
+
+● Update Todos
+  ⎿  ☒ Examine the new builtins_cc.ml file                               
+     ☒ Check the unified builtins_cuda.ml file
+     ☒ Revert ARRAYJIT_API macros in builtins.c
+     ☒ Update cc_backend.ml to use the new builtins_cc.ml
+     ☒ Update cuda_backend.ml to use the unified builtins_cuda.ml
+     ☒ Remove old builtins_cuda_small.ml and builtins_cuda_large.ml files
+     ☐ Test the changes with test_vec_simple.exe
+
+● Bash(dune exec test/operations/test_vec_simple.exe)
+  ⎿  Error: cygpath: error converting "/usr/lib/gcc/x86_64-w64-mingw32/13/../../../../x86_64-
+     w64-mingw32/lib/x86_64-w64-mingw32/13/" - No such file or directory
+     ** Fatal error: Cannot find file "-lws2_32"
+     File "caml_startup", line 1:
+     Error: Error during linking (exit code 2)
+     -> required by _build/default/.ppx/75043774c5a01b57b509eb2653f835b2/ppx.exe
+     -> required by _build/default/arrayjit/lib/utils.pp.ml
+     -> required by _build/default/arrayjit/lib/.utils.objs/byte/utils.cmi
+     -> required by
+        _build/default/arrayjit/bin/.read_config.eobjs/native/dune__exe__Read_config.cmx
+     -> required by _build/default/arrayjit/bin/read_config.exe
+     … +5 lines (ctrl+r to see all)
+
+● There's a build error. Let me try building first:
+
+● Bash(dune build)
+  ⎿  Error: cygpath: error converting "/usr/lib/gcc/x86_64-w64-mingw32/13/../../../../x86_64-
+     w64-mingw32/lib/x86_64-w64-mingw32/13/" - No such file or directory
+     ** Fatal error: Cannot find file "-lws2_32"
+     File "caml_startup", line 1:
+     Error: Error during linking (exit code 2)
+     -> required by _build/default/.ppx/2511ab4984199b6fc747733171352ac0/ppx.exe
+     -> required by _build/default/arrayjit/bin/read_config.pp.ml
+     -> required by alias arrayjit/bin/all
+     -> required by alias default
+     File "tools/dune", line 2, characters 7-14:
+     2 |  (name minised)
+     … +24 lines (ctrl+r to see all)
+
+● There's a linking issue. This seems to be a separate problem from our changes. Let me
+  check if our changes at least compile correctly by checking just the compilation phase:
+
+● Bash(dune build @check)
+  ⎿  Error: cygpath: error converting "/usr/lib/gcc/x86_64-w64-mingw32/13/../../../../x86_64-
+     w64-mingw32/lib/x86_64-w64-mingw32/13/" - No such file or directory
+     ** Fatal error: Cannot find file "-lws2_32"
+     File "caml_startup", line 1:
+     Error: Error during linking (exit code 2)
+     -> required by _build/default/.ppx/0224ad3443a846e54f1637fccb074e7d/ppx.exe
+     -> required by _build/default/arrayjit/lib/ppx_helper.pp.ml
+     -> required by
+        _build/default/arrayjit/lib/.ppx_arrayjit.objs/byte/ppx_arrayjit__Ppx_helper.cmi
+     -> required by alias arrayjit/lib/check
+
+● The linking issue is preventing compilation. Let me check the git status to see what we've
+   changed:
+
+● Bash(git status)
+  ⎿  On branch master                               
+     Your branch is up to date with 'origin/master'.
+     … +19 lines (ctrl+r to expand)
+
+● Let me check what changed in the dune file:
+
+● Bash(git diff arrayjit/lib/dune)
+  ⎿  diff --git a/arrayjit/lib/dune b/arrayjit/lib/dune
+     index 184e800f..0640aadd 100644
+     --- a/arrayjit/lib/dune
+     … +18 lines (ctrl+r to expand)
+
+● Good, the dune file updates look correct. The compilation errors seem to be unrelated to
+  our changes (they're about missing system libraries on Windows). Let me create a simple
+  test to verify our changes work at the OCaml level:
+
+● Bash(ocaml -I _build/default/arrayjit/lib/.cc_backend.objs/byte -c -)
+  ⎿  No (tell Claude what to do differently)
+
