@@ -140,8 +140,34 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Utils.settings.output_debug_files_in_build_directory || Utils.settings.log_level > 0
     in
     let cuda_include_opt =
-      match Sys.getenv "CUDA_PATH" with
-      | Some cuda_path -> [ "-I" ^ cuda_path ^ "/include" ]
+      (* On Windows, check for the no-spaces junction created by ocaml-cudajit *)
+      let cuda_path = 
+        if String.(Stdlib.Sys.os_type = "Win32" || Stdlib.Sys.os_type = "Cygwin") then
+          let junction_path = 
+            match Sys.getenv "LOCALAPPDATA" with
+            | Some local_appdata -> local_appdata ^ "/cuda_path_link"
+            | None -> 
+                match Sys.getenv "CUDA_PATH" with
+                | Some p -> p
+                | None -> ""
+          in
+          if Stdlib.Sys.file_exists (junction_path ^ "/include") then
+            Some junction_path
+          else
+            Sys.getenv "CUDA_PATH"
+        else
+          Sys.getenv "CUDA_PATH"
+      in
+      match cuda_path with
+      | Some cuda_path -> 
+          (* Normalize path separators for Windows *)
+          let include_path = 
+            if String.(Stdlib.Sys.os_type = "Win32" || Stdlib.Sys.os_type = "Cygwin") then
+              String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c) (cuda_path ^ "/include")
+            else
+              cuda_path ^ "/include"
+          in
+          [ "-I" ^ include_path ]
       | None ->
           if
             (* Fallback to common location if CUDA_PATH is not set *)
@@ -154,8 +180,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       @ ("--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else []))
     in
     (* FIXME: every now and then the compilation crashes because the options are garbled. *)
-    (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
-    let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+    (*  Keep options alive during NVRTC call using Sys.opaque_identity *)
+    let ptx = 
+      let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
+      ignore (Sys.opaque_identity options);
+      ptx in
     if Utils.settings.output_debug_files_in_build_directory then (
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
       Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
