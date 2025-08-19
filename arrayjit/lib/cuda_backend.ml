@@ -179,12 +179,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       cuda_include_opt
       @ ("--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else []))
     in
-    (* FIXME: every now and then the compilation crashes because the options are garbled. *)
-    (*  Keep options alive during NVRTC call using Sys.opaque_identity *)
-    let ptx = 
-      let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
-      ignore (Sys.opaque_identity options);
-      ptx in
+    let ptx = Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug in
     if Utils.settings.output_debug_files_in_build_directory then (
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
       Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
