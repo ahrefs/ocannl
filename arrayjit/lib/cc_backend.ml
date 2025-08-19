@@ -83,25 +83,25 @@ let%track7_sexp c_compile_and_load ~f_path =
     | _ -> "-shared -fPIC"
   in
   (* On Windows, we need to link with the builtins library *)
-  let builtins_lib = 
+  let builtins_lib =
     if String.equal Sys.os_type "Win32" || String.equal Sys.os_type "Cygwin" then
       (* Try to find the builtins object file in the build directory *)
-      let paths = [
-        "_build/default/arrayjit/lib/builtins.o";
-        "_build/default/arrayjit/lib/libir_stubs.a";
-        "arrayjit/lib/builtins.o";
-      ] in
-      match List.find ~f:Stdlib.Sys.file_exists paths with
-      | Some path -> " " ^ path
-      | None -> ""
+      let paths =
+        [
+          "_build/default/arrayjit/lib/builtins.o";
+          "_build/default/arrayjit/lib/libir_stubs.a";
+          "arrayjit/lib/builtins.o";
+        ]
+      in
+      match List.find ~f:Stdlib.Sys.file_exists paths with Some path -> " " ^ path | None -> ""
     else ""
   in
   let cmdline : string =
-    Printf.sprintf "%s %s%s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path
-      builtins_lib (optimization_level ()) libname kernel_link_flags log_fname
+    Printf.sprintf "%s %s%s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path builtins_lib
+      (optimization_level ()) libname kernel_link_flags log_fname
   in
   (* Debug: write the command to the log file *)
-  let () = 
+  let () =
     let oc = Stdio.Out_channel.create ~append:false log_fname in
     Stdio.Out_channel.fprintf oc "Command: %s\n" cmdline;
     Stdio.Out_channel.fprintf oc "Builtins lib: '%s'\n" builtins_lib;
@@ -111,13 +111,22 @@ let%track7_sexp c_compile_and_load ~f_path =
   (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
      the logs. *)
   let start_time = Unix.gettimeofday () in
-  let timeout = Float.of_string @@ Utils.get_global_arg ~default:"100.0" ~arg_name:"cc_backend_post_compile_timeout" in
+  let wait_counter = ref 0 in
+  let timeout =
+    Float.of_string
+    @@ Utils.get_global_arg ~default:"360.0" ~arg_name:"cc_backend_post_compile_timeout"
+  in
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     let elapsed = Unix.gettimeofday () -. start_time in
     if Float.(elapsed > timeout) then
       failwith "Cc_backend.c_compile_and_load: timeout waiting for compilation files to appear";
+    wait_counter := !wait_counter + 1;
+    if !wait_counter = 3000 then
+      Stdio.printf "Cc_backend.c_compile_and_load: waiting for compilation files to appear%!";
+    if !wait_counter > 3000 && !wait_counter % 1000 = 0 then Stdio.printf ".%!";
     Unix.sleepf 0.001
   done;
+  if !wait_counter >= 3000 then Stdio.printf "\n%!";
   if rc <> 0 then (
     let errors =
       "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
