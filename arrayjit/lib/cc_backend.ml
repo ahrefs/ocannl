@@ -61,7 +61,6 @@ let%track7_sexp c_compile_and_load ~f_path =
   (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
      is not required to unload the library, although ideally it should. *)
   let run_id = Int.to_string @@ get_global_run_id () in
-  let log_fname = base_name ^ "_run_id_" ^ run_id ^ ".log" in
   let libname =
     let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
     if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then
@@ -71,7 +70,6 @@ let%track7_sexp c_compile_and_load ~f_path =
       (* Use temp_file without the run_id component *)
       Stdlib.Filename.temp_file file_stem (if Sys.win32 then ".dll" else ".so")
   in
-  (try Stdlib.Sys.remove log_fname with _ -> ());
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags =
     match Sys.os_type with
@@ -82,84 +80,58 @@ let%track7_sexp c_compile_and_load ~f_path =
     | "Win32" | "Cygwin" -> "-shared"
     | _ -> "-shared -fPIC"
   in
-  (* On Windows, we need to link with the builtins library *)
-  let builtins_lib =
-    if String.equal Sys.os_type "Win32" || String.equal Sys.os_type "Cygwin" then
-      (* Try to find the builtins object file in the build directory *)
-      let paths =
-        [
-          "_build/default/arrayjit/lib/builtins.o";
-          "_build/default/arrayjit/lib/libir_stubs.a";
-          "arrayjit/lib/builtins.o";
-        ]
-      in
-      match List.find ~f:Stdlib.Sys.file_exists paths with Some path -> " " ^ path | None -> ""
-    else ""
-  in
+  let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
   let cmdline : string =
-    Printf.sprintf "%s %s%s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path builtins_lib
-      (optimization_level ()) libname kernel_link_flags log_fname
+    Printf.sprintf "%s %s -O%d -o %s %s > %s 2>&1" (compiler_command ()) f_path
+      (optimization_level ()) libname kernel_link_flags temp_log
   in
-  (* Debug: write the command to the log file *)
-  let () =
-    let oc = Stdio.Out_channel.create ~append:false log_fname in
-    Stdio.Out_channel.fprintf oc "Command: %s\n" cmdline;
-    Stdio.Out_channel.fprintf oc "Builtins lib: '%s'\n" builtins_lib;
-    Stdio.Out_channel.close oc
-  in
+  (* Debug: log the command if debugging is enabled *)
+  [%log3 "command", cmdline];
   let rc : int = Stdlib.Sys.command cmdline in
-  (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
-     the logs. *)
+  (if rc <> 0 then (
+     let compiler_output =
+       try Stdio.In_channel.read_all temp_log with _ -> "(unable to read compiler output)"
+     in
+     (try Stdlib.Sys.remove temp_log with _ -> ());
+     invalid_arg
+     @@ Printf.sprintf
+          "OCANNL cc backend: generated code failed to compile (exit code %d).\n\
+           This is a bug in OCANNL. Please file an issue with the generated .c file at %s\n\
+           Compilation command: %s\n\
+           Compiler output:\n\
+           %s"
+          rc f_path cmdline compiler_output)
+   else try Stdlib.Sys.remove temp_log with _ -> ());
+  (* Wait a moment for the file to be fully written on success *)
   let start_time = Unix.gettimeofday () in
-  let wait_counter = ref 1 in
   let timeout =
     Float.of_string
-    @@ Utils.get_global_arg ~default:"3600.0" ~arg_name:"cc_backend_post_compile_timeout"
+    @@ Utils.get_global_arg ~default:"10.0" ~arg_name:"cc_backend_post_compile_timeout"
   in
-  while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
+  while not (Stdlib.Sys.file_exists libname) do
     let elapsed = Unix.gettimeofday () -. start_time in
     if Float.(elapsed > timeout) then
-      failwith "Cc_backend.c_compile_and_load: timeout waiting for compilation files to appear";
-    wait_counter := !wait_counter + 1;
-    if !wait_counter = 3000 then
-      Stdio.printf "Cc_backend.c_compile_and_load: waiting for compilation files to appear%!";
-    if !wait_counter > 3000 && !wait_counter % 1000 = 0 then Stdio.printf ".%!";
-    if !wait_counter % 30000 = 0 then Stdio.printf "\n%!";
+      failwith
+      @@ Printf.sprintf
+           "Cc_backend.c_compile_and_load: compiled library %s not found after successful \
+            compilation"
+           libname;
     Unix.sleepf 0.001
   done;
-  if !wait_counter >= 3000 then Stdio.printf "\n%!";
-  if rc <> 0 then (
-    let errors =
-      "Cc_backend.c_compile_and_load: compilation failed with errors:\n"
-      ^ Stdio.In_channel.read_all log_fname
-    in
-    Stdio.prerr_endline errors;
-    invalid_arg errors);
   (* Expected to succeed on MacOS only. *)
-  let sign_log_fname = base_name ^ "_run_id_" ^ run_id ^ "-sign.log" in
-  let rc =
-    Stdlib.Sys.command @@ Printf.sprintf "codesign -s - %s >> %s 2>&1" libname sign_log_fname
-  in
-  let start_time_sign = Unix.gettimeofday () in
-  let timeout_sign = 1.0 in
-  while
-    rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists sign_log_fname))
-  do
-    let elapsed_sign = Unix.gettimeofday () -. start_time_sign in
-    if Float.(elapsed_sign > timeout_sign) then
-      failwith "Cc_backend.c_compile_and_load: timeout waiting for codesign files to appear";
-    Unix.sleepf 0.001
-  done;
   let verify_codesign =
     Utils.get_global_flag ~default:false ~arg_name:"cc_backend_verify_codesign"
   in
-  if verify_codesign && rc <> 0 then (
-    let errors =
-      "Cc_backend.c_compile_and_load: codesign failed with errors:\n"
-      ^ Stdio.In_channel.read_all sign_log_fname
-    in
-    Stdio.prerr_endline errors;
-    invalid_arg errors);
+  (if verify_codesign then
+     let null_device = if Sys.win32 then "nul" else "/dev/null" in
+     let rc =
+       Stdlib.Sys.command @@ Printf.sprintf "codesign -s - %s > %s 2>&1" libname null_device
+     in
+     if rc <> 0 then
+       invalid_arg
+       @@ Printf.sprintf
+            "Cc_backend.c_compile_and_load: codesign failed with exit code %d for library %s" rc
+            libname);
   (* Note: RTLD_DEEPBIND not available on MacOS. *)
   let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
   let%track7_sexp finalize (lib : library) : unit = Dl.dlclose ~handle:lib.lib in
