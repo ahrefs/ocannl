@@ -1,26 +1,12 @@
 let source =
   {|
+#include <stdio.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* Windows DLL export/import macros for proper symbol visibility */
-#ifdef _WIN32
-  #ifdef BUILDING_DLL
-    #define ARRAYJIT_API __declspec(dllexport)
-  #else
-    #define ARRAYJIT_API __declspec(dllimport)
-  #endif
-#else
-  #define ARRAYJIT_API
-#endif
-
-/* For static linking within OCaml, we want symbols to be visible */
-#ifdef __CYGWIN__
-  #undef ARRAYJIT_API
-  #define ARRAYJIT_API __attribute__((visibility("default")))
-#endif
+/* No longer need export macros since we're using textual prepending */
 
 /* Check for _Float16 support and define macros for zero-overhead abstraction */
 #ifdef __FLT16_MAX__
@@ -207,7 +193,7 @@ void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned in
 }
 
 /* Threefry4x32 implementation - 20 rounds */
-ARRAYJIT_API uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     uint32_t x[4];
     uint32_t ks[5];
     
@@ -308,59 +294,59 @@ typedef struct { HALF_T v[8]; } half8_t;
 // These return vectors to efficiently use all random bits
 
 /* Convert to float in [0, 1) */
-ARRAYJIT_API float uint32_to_single_uniform(uint32_t x) {
+float uint32_to_single_uniform(uint32_t x) {
     /* Use upper 24 bits for float mantissa (23 bits + implicit 1) */
     return (x >> 8) * (1.0f / 16777216.0f);
 }
 
 /* Convert to double in [0, 1) */
-ARRAYJIT_API double uint32_to_double_uniform(uint32_t x) {
+double uint32_to_double_uniform(uint32_t x) {
     return x * (1.0 / 4294967296.0);
 }
 
 /* Uint4x32 to float32 uniform - uses first 32 bits */
-ARRAYJIT_API float uint4x32_to_single_uniform(uint4x32_t x) {
+float uint4x32_to_single_uniform(uint4x32_t x) {
     return uint32_to_single_uniform(x.v[0]);
 }
 
 /* Uint4x32 to float64 uniform - uses first 64 bits */
-ARRAYJIT_API double uint4x32_to_double_uniform(uint4x32_t x) {
+double uint4x32_to_double_uniform(uint4x32_t x) {
     uint64_t combined = ((uint64_t)x.v[1] << 32) | x.v[0];
     return combined * (1.0 / 18446744073709551616.0);
 }
 
 /* Uint4x32 to int32 uniform - full range */
-ARRAYJIT_API int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
+int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
     return (int32_t)x.v[0];
 }
 
 /* Uint4x32 to int64 uniform - full range */
-ARRAYJIT_API int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
+int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
     return (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
 }
 
 /* Uint4x32 to uint32 uniform - full range */
-ARRAYJIT_API uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
+uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
     return x.v[0];
 }
 
 /* Uint4x32 to uint64 uniform - full range */
-ARRAYJIT_API uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
+uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
     return ((uint64_t)x.v[1] << 32) | x.v[0];
 }
 
 /* Uint4x32 to int8 uniform - full range */
-ARRAYJIT_API int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
     return (int8_t)(x.v[0] & 0xFF);
 }
 
 /* Uint4x32 to uint16 uniform - full range */
-ARRAYJIT_API uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
+uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
     return (uint16_t)(x.v[0] & 0xFFFF);
 }
 
 /* Uint4x32 to bfloat16 uniform - uses first 16 bits */
-ARRAYJIT_API uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
+uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     /* Convert to float first, then to bfloat16 */
     float f = uint32_to_single_uniform(x.v[0]);
     uint32_t bits;
@@ -372,21 +358,21 @@ ARRAYJIT_API uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
 }
 
 /* Uint4x32 to float16 uniform - uses first 16 bits */
-ARRAYJIT_API uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
+uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
     /* Convert through float for consistent behavior */
     float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
     return FLOAT_TO_HALF(f);
 }
 
 /* Uint4x32 to fp8 uniform - uses first 8 bits */
-ARRAYJIT_API uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
+uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
     return (uint8_t)(x.v[0] & 0xFF);
 }
 
 /* Vectorized conversion functions that use all 128 bits efficiently */
 
 /* Convert uint4x32 to 4 floats in [0, 1) */
-ARRAYJIT_API float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
     float4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = uint32_to_single_uniform(x.v[i]);
@@ -395,7 +381,7 @@ ARRAYJIT_API float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 2 doubles in [0, 1) */
-ARRAYJIT_API double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
     double2_t result;
     uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
     uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
@@ -405,7 +391,7 @@ ARRAYJIT_API double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 4 int32s - full range */
-ARRAYJIT_API int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
     int32x4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = (int32_t)x.v[i];
@@ -414,7 +400,7 @@ ARRAYJIT_API int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 2 int64s - full range */
-ARRAYJIT_API int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
     int64x2_t result;
     result.v[0] = (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
     result.v[1] = (int64_t)(((uint64_t)x.v[3] << 32) | x.v[2]);
@@ -423,7 +409,7 @@ ARRAYJIT_API int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
 
 
 /* Convert uint4x32 to 16 int8s - full range */
-ARRAYJIT_API int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
     int8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
@@ -435,7 +421,7 @@ ARRAYJIT_API int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 uint16s - full range */
-ARRAYJIT_API uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*2 + 0] = (uint16_t)(x.v[i] & 0xFFFF);
@@ -445,7 +431,7 @@ ARRAYJIT_API uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 bfloat16s uniform */
-ARRAYJIT_API uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         // Convert each uint32 to two bfloat16 values
@@ -467,7 +453,7 @@ ARRAYJIT_API uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 float16s uniform */
-ARRAYJIT_API half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     half8_t result;
     for (int i = 0; i < 4; i++) {
         // Extract two 16-bit values and convert to float in [0, 1)
@@ -482,7 +468,7 @@ ARRAYJIT_API half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 16 fp8s uniform */
-ARRAYJIT_API uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     uint8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (uint8_t)(x.v[i] & 0xFF);
@@ -494,62 +480,62 @@ ARRAYJIT_API uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
 }
 
 /* Conversion functions from various precisions to uint4x32_t */
-ARRAYJIT_API uint4x32_t single_to_uint4x32(float x) {
+uint4x32_t single_to_uint4x32(float x) {
     uint32_t bits;
     memcpy(&bits, &x, sizeof(float));
     uint4x32_t result = {{bits, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t double_to_uint4x32(double x) {
+uint4x32_t double_to_uint4x32(double x) {
     uint64_t bits;
     memcpy(&bits, &x, sizeof(double));
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t int32_to_uint4x32(int32_t x) {
+uint4x32_t int32_to_uint4x32(int32_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t int64_to_uint4x32(int64_t x) {
+uint4x32_t int64_to_uint4x32(int64_t x) {
     uint64_t bits = (uint64_t)x;
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t uint32_to_uint4x32(uint32_t x) {
+uint4x32_t uint32_to_uint4x32(uint32_t x) {
     uint4x32_t result = {{x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t uint64_to_uint4x32(uint64_t x) {
+uint4x32_t uint64_to_uint4x32(uint64_t x) {
     uint4x32_t result = {{(uint32_t)(x & 0xFFFFFFFF), (uint32_t)(x >> 32), 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t byte_to_uint4x32(unsigned char x) {
+uint4x32_t byte_to_uint4x32(unsigned char x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t uint16_to_uint4x32(uint16_t x) {
+uint4x32_t uint16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
+uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t half_to_uint4x32(uint16_t x) {
+uint4x32_t half_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-ARRAYJIT_API uint4x32_t fp8_to_uint4x32(uint8_t x) {
+uint4x32_t fp8_to_uint4x32(uint8_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -557,7 +543,7 @@ ARRAYJIT_API uint4x32_t fp8_to_uint4x32(uint8_t x) {
 /* Pure C conversion functions for use in C backends */
 
 /* BFloat16 to Float conversion (C function) */
-ARRAYJIT_API float bfloat16_to_single(uint16_t bf16)
+float bfloat16_to_single(uint16_t bf16)
 {
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
@@ -566,7 +552,7 @@ ARRAYJIT_API float bfloat16_to_single(uint16_t bf16)
 }
 
 /* Float to BFloat16 conversion (C function) */
-ARRAYJIT_API uint16_t single_to_bfloat16(float f)
+uint16_t single_to_bfloat16(float f)
 {
   uint32_t f32 = *((uint32_t *)&f);
 
@@ -576,14 +562,14 @@ ARRAYJIT_API uint16_t single_to_bfloat16(float f)
 }
 
 /* Half (Float16) to Float conversion (C function) */
-ARRAYJIT_API float half_to_single(uint16_t h)
+float half_to_single(uint16_t h)
 {
   HALF_T half_val = UINT16_TO_HALF(h);
   return HALF_TO_FLOAT(half_val);
 }
 
 /* Float to Half (Float16) conversion (C function) */
-ARRAYJIT_API uint16_t single_to_half(float f)
+uint16_t single_to_half(float f)
 {
   HALF_T half_val = FLOAT_TO_HALF(f);
   return HALF_TO_UINT16(half_val);
@@ -591,7 +577,7 @@ ARRAYJIT_API uint16_t single_to_half(float f)
 
 /* FP8 E5M2 format to Float conversion (C function)
    Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
-ARRAYJIT_API float fp8_to_single(uint8_t fp8)
+float fp8_to_single(uint8_t fp8)
 {
   /* Handle zero */
   if (fp8 == 0)
@@ -634,7 +620,7 @@ ARRAYJIT_API float fp8_to_single(uint8_t fp8)
 }
 
 /* Float to FP8 E5M2 conversion (C function) */
-ARRAYJIT_API uint8_t single_to_fp8(float f)
+uint8_t single_to_fp8(float f)
 {
   /* Handle zero */
   if (f == 0.0f)
