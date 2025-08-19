@@ -142,14 +142,16 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let cuda_include_opt =
       match Sys.getenv "CUDA_PATH" with
       | Some cuda_path -> [ "-I" ^ cuda_path ^ "/include" ]
-      | None -> (
-          (* Fallback to common location if CUDA_PATH is not set *)
-          if Stdlib.Sys.file_exists "/usr/local/cuda/include" then [ "-I/usr/local/cuda/include" ]
-          else [])
+      | None ->
+          if
+            (* Fallback to common location if CUDA_PATH is not set *)
+            Stdlib.Sys.file_exists "/usr/local/cuda/include"
+          then [ "-I/usr/local/cuda/include" ]
+          else []
     in
     let options =
-      cuda_include_opt @ ("--use_fast_math"
-      :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else []))
+      cuda_include_opt
+      @ ("--use_fast_math" :: (if Utils.with_runtime_debug () then [ "--device-debug" ] else []))
     in
     (* FIXME: every now and then the compilation crashes because the options are garbled. *)
     (* Stdio.printf "PTX options %s\n%!" @@ String.concat ~sep:", " options; *)
@@ -688,7 +690,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | FMA, Ops.Half_prec _ -> func "__hfma"
       | FMA, Ops.Single_prec _ -> func "fmaf"
       | FMA, _ -> func "fma"
-
 
     let convert_precision ~from ~to_ =
       match (from, to_) with

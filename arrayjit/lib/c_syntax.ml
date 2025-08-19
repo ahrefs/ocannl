@@ -92,7 +92,6 @@ struct
   let buffer_suffix = fun ~pos:_ -> ""
   let arg_int_prefix = "const int "
   let extra_args = []
-
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
@@ -232,6 +231,7 @@ module C_syntax (B : C_syntax_config) = struct
     @@ Array.map B.procs ~f:(fun l -> l.llc)
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
+
   open Indexing
   open Doc_helpers
 
