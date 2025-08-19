@@ -14,151 +14,6 @@ open Backend_intf
 
 let name = "cc"
 
-(* Complete header with includes and declarations for arrayjit builtins *)
-let builtins_header =
-  {|
-/* Standard C library headers */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <stdint.h>
-
-typedef struct {
-    uint32_t v[4];
-} uint4x32_t;
-
-/* Threefry4x32 random number generator */
-extern uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter);
-
-/* Vector types for efficient extraction of multiple values */
-typedef struct { float v[4]; } float4_t;
-typedef struct { double v[2]; } double2_t;
-typedef struct { int32_t v[4]; } int32x4_t;
-typedef struct { int64_t v[2]; } int64x2_t;
-typedef struct { int8_t v[16]; } int8x16_t;
-typedef struct { uint16_t v[8]; } uint16x8_t;
-typedef struct { uint8_t v[16]; } uint8x16_t;
-/* Half precision support with zero-overhead abstraction */
-#ifdef __FLT16_MAX__
-  #define HAS_NATIVE_FLOAT16 1
-  #define HALF_T _Float16
-  #define HALF_TO_FP(x) (x)  /* Identity - already floating point */
-  #define FP_TO_HALF(x) (x)  /* Identity - already half precision */
-  #define HALF_TO_FLOAT(x) ((float)(x))
-  #define FLOAT_TO_HALF(x) ((_Float16)(x))
-#else
-  #define HAS_NATIVE_FLOAT16 0
-  #define HALF_T uint16_t
-  #define HALF_TO_FP(x) half_to_single(x)  /* Convert to float for computation */
-  #define FP_TO_HALF(x) single_to_half(x)  /* Convert back from float */
-  #define HALF_TO_FLOAT(x) half_to_single(x)
-  #define FLOAT_TO_HALF(x) single_to_half(x)
-#endif
-
-typedef struct { HALF_T v[8]; } half8_t;
-
-/* Conversion functions from uint4x32 to various precisions uniformly */
-extern float4_t uint4x32_to_single_uniform_vec(uint4x32_t x);
-extern double2_t uint4x32_to_double_uniform_vec(uint4x32_t x);
-extern int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x);
-extern int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x);
-extern int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x);
-extern uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x);
-extern uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x);
-extern half8_t uint4x32_to_half_uniform_vec(uint4x32_t x);
-extern uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x);
-
-/* Conversion functions from various precisions to uint4x32_t */
-extern uint4x32_t single_to_uint4x32(float x);
-extern uint4x32_t double_to_uint4x32(double x);
-extern uint4x32_t int32_to_uint4x32(int32_t x);
-extern uint4x32_t int64_to_uint4x32(int64_t x);
-extern uint4x32_t uint32_to_uint4x32(uint32_t x);
-extern uint4x32_t uint64_to_uint4x32(uint64_t x);
-extern uint4x32_t byte_to_uint4x32(unsigned char x);
-extern uint4x32_t uint16_to_uint4x32(uint16_t x);
-extern uint4x32_t bfloat16_to_uint4x32(uint16_t x);
-extern uint4x32_t half_to_uint4x32(uint16_t x);
-extern uint4x32_t fp8_to_uint4x32(uint8_t x);
-
-/* BFloat16 conversion functions */
-static inline float bfloat16_to_single(unsigned short bf16) {
-  unsigned int f32 = ((unsigned int)bf16) << 16;
-  return *((float*)&f32);
-}
-
-static inline unsigned short single_to_bfloat16(float f) {
-  unsigned int f32 = *((unsigned int*)&f);
-  unsigned int rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);
-  return (unsigned short)(rounded >> 16);
-}
-
-/* Half (Float16) support with zero-overhead abstraction */
-#ifdef __FLT16_MAX__
-  #define HAS_NATIVE_FLOAT16 1
-  #define HALF_T _Float16
-  #define HALF_TO_FP(x) (x)  /* Identity - already floating point */
-  #define FP_TO_HALF(x) (x)  /* Identity - already half precision */
-  #define HALF_TO_FLOAT(x) ((float)(x))
-  #define FLOAT_TO_HALF(x) ((_Float16)(x))
-#else
-  #define HAS_NATIVE_FLOAT16 0
-  #define HALF_T unsigned short
-  #define HALF_TO_FP(x) half_to_single(x)  /* Convert to float for computation */
-  #define FP_TO_HALF(x) single_to_half(x)  /* Convert back from float */
-  #define HALF_TO_FLOAT(x) half_to_single(x)
-  #define FLOAT_TO_HALF(x) single_to_half(x)
-  /* Conversion functions for emulation - provided by builtins.c */
-  extern float half_to_single(unsigned short h);
-  extern unsigned short single_to_half(float f);
-#endif
-
-/* FP8 E5M2 conversion functions */
-static inline float fp8_to_single(unsigned char fp8) {
-  if (fp8 == 0) return 0.0f;
-  unsigned int sign = (fp8 >> 7) & 1;
-  unsigned int exp = (fp8 >> 2) & 0x1F;
-  unsigned int mant = fp8 & 0x3;
-  if (exp == 0x1F) {
-    if (mant == 0) return sign ? -INFINITY : INFINITY;
-    else return NAN;
-  }
-  if (exp == 0) {
-    float result = ldexpf((float)mant / 4.0f, -14);
-    if (sign) result = -result;
-    return result;
-  }
-  float result = (1.0f + (float)mant * 0.25f) * ldexpf(1.0f, (int)exp - 15);
-  if (sign) result = -result;
-  return result;
-}
-
-static inline unsigned char single_to_fp8(float f) {
-  if (f == 0.0f) return 0;
-  unsigned int sign = (f < 0) ? 1 : 0;
-  f = fabsf(f);
-  if (isinf(f)) return (sign << 7) | 0x7C;
-  if (isnan(f)) return (sign << 7) | 0x7F;
-  int exp_val;
-  float mant_f = frexpf(f, &exp_val);
-  int exp = exp_val + 14;
-  if (exp < 0) return sign << 7;
-  if (exp > 30) return (sign << 7) | 0x7C;
-  if (exp == 0) {
-    float denorm_mant = f * ldexpf(1.0f, 14) * 4.0f;
-    unsigned int mant_bits = (unsigned int)(denorm_mant + 0.5f);
-    if (mant_bits > 3) mant_bits = 3;
-    return (sign << 7) | mant_bits;
-  }
-  mant_f = (mant_f - 0.5f) * 4.0f;
-  unsigned int mant_bits = (unsigned int)(mant_f + 0.5f);
-  if (mant_bits > 3) mant_bits = 3;
-  return (unsigned char)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));
-}
-
-|}
-
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
 
@@ -227,9 +82,30 @@ let%track7_sexp c_compile_and_load ~f_path =
     | "Win32" | "Cygwin" -> "-shared"
     | _ -> "-shared -fPIC"
   in
+  (* On Windows, we need to link with the builtins library *)
+  let builtins_lib = 
+    if String.equal Sys.os_type "Win32" || String.equal Sys.os_type "Cygwin" then
+      (* Try to find the builtins object file in the build directory *)
+      let paths = [
+        "_build/default/arrayjit/lib/builtins.o";
+        "_build/default/arrayjit/lib/libir_stubs.a";
+        "arrayjit/lib/builtins.o";
+      ] in
+      match List.find ~f:Stdlib.Sys.file_exists paths with
+      | Some path -> " " ^ path
+      | None -> ""
+    else ""
+  in
   let cmdline : string =
-    Printf.sprintf "%s %s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path
-      (optimization_level ()) libname kernel_link_flags log_fname
+    Printf.sprintf "%s %s%s -O%d -o %s %s >> %s 2>&1" (compiler_command ()) f_path
+      builtins_lib (optimization_level ()) libname kernel_link_flags log_fname
+  in
+  (* Debug: write the command to the log file *)
+  let () = 
+    let oc = Stdio.Out_channel.create ~append:false log_fname in
+    Stdio.Out_channel.fprintf oc "Command: %s\n" cmdline;
+    Stdio.Out_channel.fprintf oc "Builtins lib: '%s'\n" builtins_lib;
+    Stdio.Out_channel.close oc
   in
   let rc : int = Stdlib.Sys.command cmdline in
   (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
@@ -449,8 +325,8 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-  let header_doc = PPrint.string builtins_header in
-  let final_doc = PPrint.(header_doc ^^ proc_doc) in
+  let builtins_doc = PPrint.string Builtins_cc.source in
+  let final_doc = PPrint.(builtins_doc ^^ proc_doc) in
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();
@@ -478,7 +354,7 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
             Syntax.compile_proc ~name idx_params lowered))
   in
   let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
-  let header_doc = PPrint.string builtins_header in
+  let header_doc = PPrint.string Builtins_cc.source in
   let final_doc = PPrint.(header_doc ^^ separate hardline all_proc_docs) in
   PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
   build_file.finalize ();

@@ -1,12 +1,26 @@
-#include <caml/alloc.h>
-#include <caml/fail.h>
-#include <caml/memory.h>
-#include <caml/mlvalues.h>
-#include <caml/bigarray.h>
+let source =
+  {|
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+
+/* Windows DLL export/import macros for proper symbol visibility */
+#ifdef _WIN32
+  #ifdef BUILDING_DLL
+    #define ARRAYJIT_API __declspec(dllexport)
+  #else
+    #define ARRAYJIT_API __declspec(dllimport)
+  #endif
+#else
+  #define ARRAYJIT_API
+#endif
+
+/* For static linking within OCaml, we want symbols to be visible */
+#ifdef __CYGWIN__
+  #undef ARRAYJIT_API
+  #define ARRAYJIT_API __attribute__((visibility("default")))
+#endif
 
 /* Check for _Float16 support and define macros for zero-overhead abstraction */
 #ifdef __FLT16_MAX__
@@ -193,7 +207,7 @@ void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned in
 }
 
 /* Threefry4x32 implementation - 20 rounds */
-uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+ARRAYJIT_API uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     uint32_t x[4];
     uint32_t ks[5];
     
@@ -294,59 +308,59 @@ typedef struct { HALF_T v[8]; } half8_t;
 // These return vectors to efficiently use all random bits
 
 /* Convert to float in [0, 1) */
-float uint32_to_single_uniform(uint32_t x) {
+ARRAYJIT_API float uint32_to_single_uniform(uint32_t x) {
     /* Use upper 24 bits for float mantissa (23 bits + implicit 1) */
     return (x >> 8) * (1.0f / 16777216.0f);
 }
 
 /* Convert to double in [0, 1) */
-double uint32_to_double_uniform(uint32_t x) {
+ARRAYJIT_API double uint32_to_double_uniform(uint32_t x) {
     return x * (1.0 / 4294967296.0);
 }
 
 /* Uint4x32 to float32 uniform - uses first 32 bits */
-float uint4x32_to_single_uniform(uint4x32_t x) {
+ARRAYJIT_API float uint4x32_to_single_uniform(uint4x32_t x) {
     return uint32_to_single_uniform(x.v[0]);
 }
 
 /* Uint4x32 to float64 uniform - uses first 64 bits */
-double uint4x32_to_double_uniform(uint4x32_t x) {
+ARRAYJIT_API double uint4x32_to_double_uniform(uint4x32_t x) {
     uint64_t combined = ((uint64_t)x.v[1] << 32) | x.v[0];
     return combined * (1.0 / 18446744073709551616.0);
 }
 
 /* Uint4x32 to int32 uniform - full range */
-int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
+ARRAYJIT_API int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
     return (int32_t)x.v[0];
 }
 
 /* Uint4x32 to int64 uniform - full range */
-int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
+ARRAYJIT_API int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
     return (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
 }
 
 /* Uint4x32 to uint32 uniform - full range */
-uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
+ARRAYJIT_API uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
     return x.v[0];
 }
 
 /* Uint4x32 to uint64 uniform - full range */
-uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
+ARRAYJIT_API uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
     return ((uint64_t)x.v[1] << 32) | x.v[0];
 }
 
 /* Uint4x32 to int8 uniform - full range */
-int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+ARRAYJIT_API int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
     return (int8_t)(x.v[0] & 0xFF);
 }
 
 /* Uint4x32 to uint16 uniform - full range */
-uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
+ARRAYJIT_API uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
     return (uint16_t)(x.v[0] & 0xFFFF);
 }
 
 /* Uint4x32 to bfloat16 uniform - uses first 16 bits */
-uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
+ARRAYJIT_API uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     /* Convert to float first, then to bfloat16 */
     float f = uint32_to_single_uniform(x.v[0]);
     uint32_t bits;
@@ -358,21 +372,21 @@ uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
 }
 
 /* Uint4x32 to float16 uniform - uses first 16 bits */
-uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
+ARRAYJIT_API uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
     /* Convert through float for consistent behavior */
     float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
     return FLOAT_TO_HALF(f);
 }
 
 /* Uint4x32 to fp8 uniform - uses first 8 bits */
-uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
+ARRAYJIT_API uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
     return (uint8_t)(x.v[0] & 0xFF);
 }
 
 /* Vectorized conversion functions that use all 128 bits efficiently */
 
 /* Convert uint4x32 to 4 floats in [0, 1) */
-float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
     float4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = uint32_to_single_uniform(x.v[i]);
@@ -381,7 +395,7 @@ float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 2 doubles in [0, 1) */
-double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
     double2_t result;
     uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
     uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
@@ -391,7 +405,7 @@ double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 4 int32s - full range */
-int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
     int32x4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = (int32_t)x.v[i];
@@ -400,7 +414,7 @@ int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 2 int64s - full range */
-int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
     int64x2_t result;
     result.v[0] = (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
     result.v[1] = (int64_t)(((uint64_t)x.v[3] << 32) | x.v[2]);
@@ -409,7 +423,7 @@ int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
 
 
 /* Convert uint4x32 to 16 int8s - full range */
-int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
     int8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
@@ -421,7 +435,7 @@ int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 uint16s - full range */
-uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*2 + 0] = (uint16_t)(x.v[i] & 0xFFFF);
@@ -431,7 +445,7 @@ uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 bfloat16s uniform */
-uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         // Convert each uint32 to two bfloat16 values
@@ -453,7 +467,7 @@ uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 8 float16s uniform */
-half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     half8_t result;
     for (int i = 0; i < 4; i++) {
         // Extract two 16-bit values and convert to float in [0, 1)
@@ -468,7 +482,7 @@ half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
 }
 
 /* Convert uint4x32 to 16 fp8s uniform */
-uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+ARRAYJIT_API uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     uint8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (uint8_t)(x.v[i] & 0xFF);
@@ -480,62 +494,62 @@ uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
 }
 
 /* Conversion functions from various precisions to uint4x32_t */
-uint4x32_t single_to_uint4x32(float x) {
+ARRAYJIT_API uint4x32_t single_to_uint4x32(float x) {
     uint32_t bits;
     memcpy(&bits, &x, sizeof(float));
     uint4x32_t result = {{bits, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t double_to_uint4x32(double x) {
+ARRAYJIT_API uint4x32_t double_to_uint4x32(double x) {
     uint64_t bits;
     memcpy(&bits, &x, sizeof(double));
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
     return result;
 }
 
-uint4x32_t int32_to_uint4x32(int32_t x) {
+ARRAYJIT_API uint4x32_t int32_to_uint4x32(int32_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t int64_to_uint4x32(int64_t x) {
+ARRAYJIT_API uint4x32_t int64_to_uint4x32(int64_t x) {
     uint64_t bits = (uint64_t)x;
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
     return result;
 }
 
-uint4x32_t uint32_to_uint4x32(uint32_t x) {
+ARRAYJIT_API uint4x32_t uint32_to_uint4x32(uint32_t x) {
     uint4x32_t result = {{x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t uint64_to_uint4x32(uint64_t x) {
+ARRAYJIT_API uint4x32_t uint64_to_uint4x32(uint64_t x) {
     uint4x32_t result = {{(uint32_t)(x & 0xFFFFFFFF), (uint32_t)(x >> 32), 0, 0}};
     return result;
 }
 
-uint4x32_t byte_to_uint4x32(unsigned char x) {
+ARRAYJIT_API uint4x32_t byte_to_uint4x32(unsigned char x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t uint16_to_uint4x32(uint16_t x) {
+ARRAYJIT_API uint4x32_t uint16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
+ARRAYJIT_API uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t half_to_uint4x32(uint16_t x) {
+ARRAYJIT_API uint4x32_t half_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
 
-uint4x32_t fp8_to_uint4x32(uint8_t x) {
+ARRAYJIT_API uint4x32_t fp8_to_uint4x32(uint8_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -543,7 +557,7 @@ uint4x32_t fp8_to_uint4x32(uint8_t x) {
 /* Pure C conversion functions for use in C backends */
 
 /* BFloat16 to Float conversion (C function) */
-float bfloat16_to_single(uint16_t bf16)
+ARRAYJIT_API float bfloat16_to_single(uint16_t bf16)
 {
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
@@ -552,7 +566,7 @@ float bfloat16_to_single(uint16_t bf16)
 }
 
 /* Float to BFloat16 conversion (C function) */
-uint16_t single_to_bfloat16(float f)
+ARRAYJIT_API uint16_t single_to_bfloat16(float f)
 {
   uint32_t f32 = *((uint32_t *)&f);
 
@@ -562,14 +576,14 @@ uint16_t single_to_bfloat16(float f)
 }
 
 /* Half (Float16) to Float conversion (C function) */
-float half_to_single(uint16_t h)
+ARRAYJIT_API float half_to_single(uint16_t h)
 {
   HALF_T half_val = UINT16_TO_HALF(h);
   return HALF_TO_FLOAT(half_val);
 }
 
 /* Float to Half (Float16) conversion (C function) */
-uint16_t single_to_half(float f)
+ARRAYJIT_API uint16_t single_to_half(float f)
 {
   HALF_T half_val = FLOAT_TO_HALF(f);
   return HALF_TO_UINT16(half_val);
@@ -577,7 +591,7 @@ uint16_t single_to_half(float f)
 
 /* FP8 E5M2 format to Float conversion (C function)
    Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
-float fp8_to_single(uint8_t fp8)
+ARRAYJIT_API float fp8_to_single(uint8_t fp8)
 {
   /* Handle zero */
   if (fp8 == 0)
@@ -620,7 +634,7 @@ float fp8_to_single(uint8_t fp8)
 }
 
 /* Float to FP8 E5M2 conversion (C function) */
-uint8_t single_to_fp8(float f)
+ARRAYJIT_API uint8_t single_to_fp8(float f)
 {
   /* Handle zero */
   if (f == 0.0f)
@@ -676,398 +690,4 @@ uint8_t single_to_fp8(float f)
 
   return (uint8_t)((sign << 7) | ((exp & 0x1F) << 2) | (mant_bits & 0x3));
 }
-
-/* OCaml wrapper functions */
-
-/* Helper functions to convert between OCaml and C uint4x32_t */
-uint4x32_t ocaml_array_to_uint4x32(value v_array) {
-    uint4x32_t result;
-    result.v[0] = (uint32_t)Long_val(Field(v_array, 0));
-    result.v[1] = (uint32_t)Long_val(Field(v_array, 1));
-    result.v[2] = (uint32_t)Long_val(Field(v_array, 2));
-    result.v[3] = (uint32_t)Long_val(Field(v_array, 3));
-    return result;
-}
-
-value uint4x32_to_ocaml_array(uint4x32_t x) {
-    CAMLparam0();
-    CAMLlocal1(result);
-    result = caml_alloc(4, 0);
-    Store_field(result, 0, Val_long(x.v[0]));
-    Store_field(result, 1, Val_long(x.v[1]));
-    Store_field(result, 2, Val_long(x.v[2]));
-    Store_field(result, 3, Val_long(x.v[3]));
-    CAMLreturn(result);
-}
-
-/* Threefry4x32 OCaml wrapper */
-CAMLprim value arrayjit_threefry4x32_ocaml(value v_key, value v_counter)
-{
-  CAMLparam2(v_key, v_counter);
-  uint4x32_t key = ocaml_array_to_uint4x32(v_key);
-  uint4x32_t counter = ocaml_array_to_uint4x32(v_counter);
-  uint4x32_t result = arrayjit_threefry4x32(key, counter);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-/* Conversion from uint4x32 to various types - OCaml wrappers */
-CAMLprim value arrayjit_uint4x32_to_single_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  float result = uint4x32_to_single_uniform(x);
-  CAMLreturn(caml_copy_double((double)result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_double_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  double result = uint4x32_to_double_uniform(x);
-  CAMLreturn(caml_copy_double(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_int32_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  int32_t result = uint4x32_to_int32_uniform(x);
-  CAMLreturn(Val_long(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_int64_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  int64_t result = uint4x32_to_int64_uniform(x);
-  CAMLreturn(caml_copy_int64(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_uint32_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint32_t result = uint4x32_to_uint32_uniform(x);
-  CAMLreturn(Val_long(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_uint64_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint64_t result = uint4x32_to_uint64_uniform(x);
-  CAMLreturn(caml_copy_int64((int64_t)result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_byte_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  int8_t result = uint4x32_to_byte_uniform(x);
-  CAMLreturn(Val_int(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_uint16_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint16_t result = uint4x32_to_uint16_uniform(x);
-  CAMLreturn(Val_int(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_bfloat16_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint16_t result = uint4x32_to_bfloat16_uniform(x);
-  CAMLreturn(Val_int(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_half_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint16_t result = uint4x32_to_half_uniform(x);
-  CAMLreturn(Val_int(result));
-}
-
-CAMLprim value arrayjit_uint4x32_to_fp8_uniform_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
-  uint8_t result = uint4x32_to_fp8_uniform(x);
-  CAMLreturn(Val_int(result));
-}
-
-/* Conversion to uint4x32 from various types - OCaml wrappers */
-CAMLprim value arrayjit_single_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  float x = (float)Double_val(v_x);
-  uint4x32_t result = single_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_double_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  double x = Double_val(v_x);
-  uint4x32_t result = double_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_int32_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  int32_t x = (int32_t)Long_val(v_x);
-  uint4x32_t result = int32_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_int64_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  int64_t x = Int64_val(v_x);
-  uint4x32_t result = int64_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_uint32_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint32_t x = (uint32_t)Long_val(v_x);
-  uint4x32_t result = uint32_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_uint64_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint64_t x = (uint64_t)Int64_val(v_x);
-  uint4x32_t result = uint64_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_byte_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  unsigned char x = (unsigned char)Int_val(v_x);
-  uint4x32_t result = byte_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_uint16_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint16_t x = (uint16_t)Int_val(v_x);
-  uint4x32_t result = uint16_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_bfloat16_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint16_t x = (uint16_t)Int_val(v_x);
-  uint4x32_t result = bfloat16_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_half_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint16_t x = (uint16_t)Int_val(v_x);
-  uint4x32_t result = half_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-CAMLprim value arrayjit_fp8_to_uint4x32_ocaml(value v_x)
-{
-  CAMLparam1(v_x);
-  uint8_t x = (uint8_t)Int_val(v_x);
-  uint4x32_t result = fp8_to_uint4x32(x);
-  CAMLreturn(uint4x32_to_ocaml_array(result));
-}
-
-/* BFloat16 to Float conversion (OCaml wrapper) */
-CAMLprim value arrayjit_bfloat16_to_single(value v_bf16)
-{
-  CAMLparam1(v_bf16);
-  uint16_t bf16 = (uint16_t)Int_val(v_bf16);
-  float result = bfloat16_to_single(bf16);
-  CAMLreturn(caml_copy_double((double)result));
-}
-
-/* Float to BFloat16 conversion (OCaml wrapper) */
-CAMLprim value arrayjit_single_to_bfloat16(value v_float)
-{
-  CAMLparam1(v_float);
-  float f = (float)Double_val(v_float);
-  uint16_t bf16 = single_to_bfloat16(f);
-  CAMLreturn(Val_int(bf16));
-}
-
-/* Half (Float16) to Float conversion (OCaml wrapper) */
-CAMLprim value arrayjit_half_to_single(value v_half)
-{
-  CAMLparam1(v_half);
-  uint16_t half = (uint16_t)Int_val(v_half);
-  float result = half_to_single(half);
-  CAMLreturn(caml_copy_double((double)result));
-}
-
-/* Float to Half (Float16) conversion (OCaml wrapper) */
-CAMLprim value arrayjit_single_to_half(value v_float)
-{
-  CAMLparam1(v_float);
-  float f = (float)Double_val(v_float);
-  uint16_t half = single_to_half(f);
-  CAMLreturn(Val_int(half));
-}
-
-/* FP8 E5M2 format to Float conversion (OCaml wrapper) */
-CAMLprim value arrayjit_fp8_to_single(value v_fp8)
-{
-  CAMLparam1(v_fp8);
-  uint8_t fp8 = (uint8_t)Int_val(v_fp8);
-  float result = fp8_to_single(fp8);
-  CAMLreturn(caml_copy_double((double)result));
-}
-
-/* Float to FP8 E5M2 conversion (OCaml wrapper) */
-CAMLprim value arrayjit_single_to_fp8(value v_float)
-{
-  CAMLparam1(v_float);
-  float f = (float)Double_val(v_float);
-  uint8_t fp8 = single_to_fp8(f);
-  CAMLreturn(Val_int(fp8));
-}
-
-// TODO: a more efficient approach would involve computing strides once and using memcpy
-// for contiguous inner slices, but that adds complexity.
-CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value v_padding)
-{
-  CAMLparam3(v_source, v_target, v_padding);
-
-  struct caml_ba_array *source_ba = Caml_ba_array_val(v_source);
-  struct caml_ba_array *target_ba = Caml_ba_array_val(v_target);
-  int ndim = source_ba->num_dims;
-
-  if (ndim != target_ba->num_dims)
-  {
-    caml_failwith("Source and target must have the same number of dimensions");
-  }
-
-  if (ndim == 0)
-  {
-    CAMLreturn(Val_unit);
-  }
-
-  void *source_data = Caml_ba_data_val(v_source);
-  void *target_data = Caml_ba_data_val(v_target);
-
-  size_t elem_size = caml_ba_byte_size(source_ba);
-
-  // Use source dimensions directly from bigarray
-  intnat *source_shape = source_ba->dim;
-
-  // Extract paddings
-  if (Wosize_val(v_padding) != (uintnat)ndim)
-  {
-    caml_failwith("Padding array length mismatch");
-  }
-  intnat *left = malloc(ndim * sizeof(intnat));
-  if (left == NULL)
-  {
-    caml_failwith("Malloc failed");
-  }
-  intnat *right = malloc(ndim * sizeof(intnat));
-  if (right == NULL)
-  {
-    free(left);
-    caml_failwith("Malloc failed");
-  }
-  for (int d = 0; d < ndim; d++)
-  {
-    value pad = Field(v_padding, d);
-    left[d] = Long_val(Field(pad, 0));
-    right[d] = Long_val(Field(pad, 1));
-    if (left[d] < 0 || right[d] < 0)
-    {
-      free(left);
-      free(right);
-      caml_failwith("Negative padding");
-    }
-  }
-
-  // Verify target dimensions match source + padding
-  for (int d = 0; d < ndim; d++)
-  {
-    if (target_ba->dim[d] != source_shape[d] + left[d] + right[d])
-    {
-      free(left);
-      free(right);
-      caml_failwith("Target dimensions do not match source + padding");
-    }
-  }
-
-  // Multi-dimensional index loop
-  intnat *indices = calloc(ndim, sizeof(intnat));
-  if (indices == NULL)
-  {
-    free(left);
-    free(right);
-    caml_failwith("Calloc failed");
-  }
-
-  while (1)
-  {
-    // Compute source flat offset
-    intnat source_offset = 0;
-    intnat s_stride = 1;
-    for (int d = ndim - 1; d >= 0; d--)
-    {
-      source_offset += indices[d] * s_stride;
-      s_stride *= source_shape[d];
-    }
-
-    // Compute target flat offset with padding offset
-    intnat target_offset = 0;
-    intnat t_stride = 1;
-    for (int d = ndim - 1; d >= 0; d--)
-    {
-      target_offset += (indices[d] + left[d]) * t_stride;
-      t_stride *= target_ba->dim[d];
-    }
-
-    // Copy the element
-    memcpy((char *)target_data + target_offset * elem_size,
-           (char *)source_data + source_offset * elem_size,
-           elem_size);
-
-    // Increment indices (odometer-style)
-    int carry = 1;
-    for (int d = ndim - 1; d >= 0; d--)
-    {
-      if (carry == 0)
-        break;
-      indices[d] += carry;
-      if (indices[d] < source_shape[d])
-      {
-        carry = 0;
-      }
-      else
-      {
-        indices[d] = 0;
-        carry = 1;
-      }
-    }
-    if (carry == 1)
-      break; // Done
-  }
-
-  free(indices);
-  free(left);
-  free(right);
-
-  CAMLreturn(Val_unit);
-}
+|}

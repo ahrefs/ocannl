@@ -754,9 +754,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     if Utils.debug_log_from_routines () then
       Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
     Buffer.add_string b "\n\n";
-    Buffer.add_string b Builtins_cuda_small.source;
-    (* Include the full Threefry implementation directly in each kernel *)
-    Buffer.add_string b Builtins_cuda_large.source;
+    Buffer.add_string b Builtins_cuda.source;
     Buffer.add_string b "\n\n"
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =

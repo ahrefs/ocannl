@@ -62,7 +62,7 @@
  (name cuda_backend)
  (public_name arrayjit.cuda_backend)
  (optional)
- (modules cuda_backend builtins_cuda_large builtins_cuda_small)
+ (modules cuda_backend builtins_cuda)
  (libraries base cudajit.cuda cudajit.nvrtc utils ir)
  (preprocess
   (pps
@@ -129,6 +129,7 @@
    ppx_minidebug))
  (modules
   cc_backend
+  builtins_cc
   cuda_backend_impl
   metal_backend_impl
   lowered_backend_missing
