@@ -1,4 +1,4 @@
-## [0.6.0]  -- current
+## [0.6.0]  -- 2025-08-19
 
 ### Added
 
@@ -53,6 +53,8 @@
 - Host-device synchronization issues with `devices_not_lagging_host` semantics.
 - Shape inference corner cases with Total_elems and row constraints.
 - Various issues with convolution and strided iteration support.
+- Moved away from using statically loaded builtins.c from routines (kernels), all backends now prepend their builtins textually.
+- Emulating _Float16 aka. half on systems with C compilers that don't support it.
 
 ## [0.5.3] -- 2025-05-24
 

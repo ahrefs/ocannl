@@ -141,31 +141,24 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     let cuda_include_opt =
       (* On Windows, check for the no-spaces junction created by ocaml-cudajit *)
-      let cuda_path = 
+      let cuda_path =
         if String.(Stdlib.Sys.os_type = "Win32" || Stdlib.Sys.os_type = "Cygwin") then
-          let junction_path = 
+          let junction_path =
             match Sys.getenv "LOCALAPPDATA" with
             | Some local_appdata -> local_appdata ^ "/cuda_path_link"
-            | None -> 
-                match Sys.getenv "CUDA_PATH" with
-                | Some p -> p
-                | None -> ""
+            | None -> ( match Sys.getenv "CUDA_PATH" with Some p -> p | None -> "")
           in
-          if Stdlib.Sys.file_exists (junction_path ^ "/include") then
-            Some junction_path
-          else
-            Sys.getenv "CUDA_PATH"
-        else
-          Sys.getenv "CUDA_PATH"
+          if Stdlib.Sys.file_exists (junction_path ^ "/include") then Some junction_path
+          else Sys.getenv "CUDA_PATH"
+        else Sys.getenv "CUDA_PATH"
       in
       match cuda_path with
-      | Some cuda_path -> 
+      | Some cuda_path ->
           (* Normalize path separators for Windows *)
-          let include_path = 
+          let include_path =
             if String.(Stdlib.Sys.os_type = "Win32" || Stdlib.Sys.os_type = "Cygwin") then
               String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c) (cuda_path ^ "/include")
-            else
-              cuda_path ^ "/include"
+            else cuda_path ^ "/include"
           in
           [ "-I" ^ include_path ]
       | None ->
