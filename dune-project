@@ -1,6 +1,7 @@
 (lang dune 3.18)
 
 (using ctypes 0.3)
+
 (using dune_site 0.1)
 
 (using directory-targets 0.1)
@@ -51,13 +52,15 @@
   ; FIXME: Depend on printbox-text > 0.12.0 when it is released.
   (printbox-text
    (>= 0.12))
-  pprint
+  (pprint
+   (>= 20230830))
   stdio
   sexplib
   num
   (saturn_lockfree
    (>= 0.5.0))
-  (ppxlib (>= 0.36.0))
+  (ppxlib
+   (>= 0.36.0))
   ppx_compare
   ppx_hash
   ppx_here
@@ -84,7 +87,8 @@
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax")
  (description
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
- (sites (share data))
+ (sites
+  (share data))
  (depends
   (ocaml
    (>= 5.3.0))
@@ -108,6 +112,8 @@
    (>= 0.12))
   (angstrom
    (>= 0.15))
+  (pprint
+   (>= 20230830))
   stdio
   sexplib
   num
@@ -115,7 +121,8 @@
   curl
   time_now
   camlzip
-  (ppxlib (>= 0.36.0))
+  (ppxlib
+   (>= 0.36.0))
   ppx_compare
   ppx_fields_conv
   ppx_hash
