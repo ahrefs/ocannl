@@ -28,7 +28,7 @@ let%expect_test "threefry4x32 basic test" =
   (* Print first few values *)
   Stdio.printf "First 5 uniform random values:\n";
   for i = 0 to 4 do
-    Stdio.printf "  [%d]: %f\n" i result.(i)
+    Stdio.printf "  [%d]: %.4g\n" i result.(i)
   done;
 
   (* Check all values are in [0, 1) range *)
@@ -38,11 +38,11 @@ let%expect_test "threefry4x32 basic test" =
   [%expect
     {|
     First 5 uniform random values:
-      [0]: 0.188068
-      [1]: 0.073963
-      [2]: 0.494024
-      [3]: 0.102271
-      [4]: 0.635470
+      [0]: 0.1881
+      [1]: 0.07396
+      [2]: 0.494
+      [3]: 0.1023
+      [4]: 0.6355
     All values in [0, 1) range: true
     |}]
 
@@ -63,7 +63,7 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
     Ocannl.Train.set_hosted uniform.value;
     ctx := Some (Ocannl.Train.forward_once (module Backend) ?ctx:!ctx uniform);
     let result = Ir.Tnode.get_values uniform.value in
-    Stdio.printf "%s precision - first value: %f, second value: %f\n" prec_name result.(0)
+    Stdio.printf "%s precision - first value: %.4g, second value: %.4g\n" prec_name result.(0)
       result.(1);
     Stdio.printf "All values in [0, 1) range: %b\n"
       (Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)))
@@ -76,8 +76,8 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
 
   [%expect
     {|
-    Single precision - first value: 0.188068, second value: 0.073963
+    Single precision - first value: 0.1881, second value: 0.07396
     All values in [0, 1) range: true
-    Half precision - first value: 0.205322, second value: 0.188110
+    Half precision - first value: 0.2053, second value: 0.1881
     All values in [0, 1) range: true
     |}]

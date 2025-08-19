@@ -76,7 +76,7 @@ let () =
       ]
   in
   (* PrintBox_text.output Stdio.stdout _plot_moons; *)
-  (* Stdio.printf "Losses: %f, %f\n%!" losses.(epochs / 2) losses.(epochs - 1); *)
+  (* Stdio.printf "Losses: %.4g, %.4g\n%!" losses.(epochs / 2) losses.(epochs - 1); *)
   Tn.print_accessible_headers ();
 
   (* Testing how the syntax extension %op creates labels for the resulting tensors: *)

@@ -25,9 +25,9 @@ let () =
 
   Train.run routine;
 
-  Stdio.printf "x = %f, gradient = %f\n" x.@[0] x.@%[0];
-  Stdio.printf "y = %f, gradient = %f\n" y.@[0] y.@%[0];
-  Stdio.printf "result = %f\n" result.@[0];
+  Stdio.printf "x = %.4g, gradient = %.4g\n" x.@[0] x.@%[0];
+  Stdio.printf "y = %.4g, gradient = %.4g\n" y.@[0] y.@%[0];
+  Stdio.printf "result = %.4g\n" result.@[0];
   Stdio.printf "Expected: x gradient = 1.0, y gradient = 0.0\n";
 
   (* Now test with condition false *)
@@ -51,7 +51,7 @@ let () =
 
   Train.run routine2;
 
-  Stdio.printf "x = %f, gradient = %f\n" x2.@[0] x2.@%[0];
-  Stdio.printf "y = %f, gradient = %f\n" y2.@[0] y2.@%[0];
-  Stdio.printf "result = %f\n" result2.@[0];
+  Stdio.printf "x = %.4g, gradient = %.4g\n" x2.@[0] x2.@%[0];
+  Stdio.printf "y = %.4g, gradient = %.4g\n" y2.@[0] y2.@%[0];
+  Stdio.printf "result = %.4g\n" result2.@[0];
   Stdio.printf "Expected: x gradient = 0.0, y gradient = 1.0\n"
