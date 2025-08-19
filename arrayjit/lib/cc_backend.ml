@@ -111,10 +111,10 @@ let%track7_sexp c_compile_and_load ~f_path =
   (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
      the logs. *)
   let start_time = Unix.gettimeofday () in
-  let wait_counter = ref 0 in
+  let wait_counter = ref 1 in
   let timeout =
     Float.of_string
-    @@ Utils.get_global_arg ~default:"360.0" ~arg_name:"cc_backend_post_compile_timeout"
+    @@ Utils.get_global_arg ~default:"3600.0" ~arg_name:"cc_backend_post_compile_timeout"
   in
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     let elapsed = Unix.gettimeofday () -. start_time in
@@ -124,6 +124,7 @@ let%track7_sexp c_compile_and_load ~f_path =
     if !wait_counter = 3000 then
       Stdio.printf "Cc_backend.c_compile_and_load: waiting for compilation files to appear%!";
     if !wait_counter > 3000 && !wait_counter % 1000 = 0 then Stdio.printf ".%!";
+    if !wait_counter % 30000 = 0 then Stdio.printf "\n%!";
     Unix.sleepf 0.001
   done;
   if !wait_counter >= 3000 then Stdio.printf "\n%!";
