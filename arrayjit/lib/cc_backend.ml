@@ -111,7 +111,7 @@ let%track7_sexp c_compile_and_load ~f_path =
   (* Note: it seems waiting for the file to exist is necessary here and below regardless of needing
      the logs. *)
   let start_time = Unix.gettimeofday () in
-  let timeout = Float.of_string @@ Utils.get_global_arg ~default:"5.0" ~arg_name:"cc_backend_post_compile_timeout" in
+  let timeout = Float.of_string @@ Utils.get_global_arg ~default:"100.0" ~arg_name:"cc_backend_post_compile_timeout" in
   while rc = 0 && (not @@ (Stdlib.Sys.file_exists libname && Stdlib.Sys.file_exists log_fname)) do
     let elapsed = Unix.gettimeofday () -. start_time in
     if Float.(elapsed > timeout) then

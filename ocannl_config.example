@@ -204,6 +204,6 @@ default_prec=single
 # (where the initialization code sets the values).
 limit_constant_fill_size=16
 
-# The timeout for the CC backend to wait for the compilation files to appear.
+# The timeout for the CC backend to wait for the compilation files to appear, in seconds.
 # This is the wait after the compiler command exits (doesn't include the compilation time).
-cc_backend_post_compile_timeout=5.0
+cc_backend_post_compile_timeout=100.0
