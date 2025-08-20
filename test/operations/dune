@@ -14,6 +14,7 @@
  config
  (rule
   (target ocannl_backend.txt)
+  (package neural_nets_lib)
   (deps ocannl_config)
   (action
    (run %{dep:ocannl_read_config.exe} "--read=backend"))))
@@ -23,6 +24,7 @@
 
 (rule
  (targets micrograd_demo-%{read:config/ocannl_backend.txt}.done)
+ (package neural_nets_lib)
  (action
   (progn
    (run
@@ -40,6 +42,7 @@
 (rule
  (deps micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
+ (package neural_nets_lib)
  (action
   (progn
    (run
@@ -89,6 +92,7 @@
 
 (rule
  (target n3_fwd_with_prec-unoptimized.ll.actual)
+ (package neural_nets_lib)
  (action
   (no-infer
    (progn
@@ -100,6 +104,7 @@
 
 (rule
  (target top_down_prec-unoptimized.ll.actual)
+ (package neural_nets_lib)
  (action
   (no-infer
    (progn

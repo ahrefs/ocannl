@@ -9,6 +9,7 @@
 
 (rule
  (target test_numerical_types.output)
+ (package arrayjit)
  (deps test_numerical_types.exe ocannl_config)
  (action
   (with-stdout-to
