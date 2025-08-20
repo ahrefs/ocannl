@@ -10,7 +10,10 @@
 (rule
  (target test_numerical_types.output)
  (package arrayjit)
- (deps test_numerical_types.exe ocannl_config)
+ (deps
+  test_numerical_types.exe
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (action
   (with-stdout-to
    %{target}

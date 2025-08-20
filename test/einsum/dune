@@ -3,8 +3,10 @@
 
 (test
  (name moons_demo_variant)
- (package neural_nets_lib) 
- (deps ocannl_config)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules moons_demo_variant)
  (libraries ocannl datasets)
  (preprocess
@@ -13,7 +15,9 @@
 (test
  (name einsum_trivia_exec)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules einsum_trivia_exec)
  (libraries ocannl)
  (preprocess
@@ -22,7 +26,9 @@
 (test
  (name test_conv_syntax)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_conv_syntax)
  (libraries ocannl)
  (preprocess
@@ -31,7 +37,9 @@
 (test
  (name test_print_style)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_print_style)
  (libraries ocannl)
  (preprocess
@@ -40,7 +48,9 @@
 (test
  (name test_surjectivity)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_surjectivity)
  (libraries ocannl)
  (preprocess
@@ -49,7 +59,9 @@
 (test
  (name test_accumulation_semantics)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_accumulation_semantics)
  (libraries ocannl)
  (preprocess
@@ -59,7 +71,9 @@
  (name einsum_tutorials)
  (package neural_nets_lib)
  (inline_tests
-  (deps ocannl_config))
+  (deps
+   ocannl_config
+   (env_var OCANNL_BACKEND)))
  (libraries base dynlink ocannl)
  (modules einsum_trivia surjectivity)
  (preprocess
@@ -69,6 +83,9 @@
 (test
  (name inline_permuted_view)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules inline_permuted_view)
  (libraries base ocannl)
  (preprocess
@@ -78,6 +95,9 @@
  (alias runtest)
  (package neural_nets_lib)
  (target inline_permuted_view-c_fwd.ll.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (action
   (no-infer
    (progn

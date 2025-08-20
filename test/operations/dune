@@ -15,7 +15,9 @@
  (rule
   (target ocannl_backend.txt)
   (package neural_nets_lib)
-  (deps ocannl_config)
+  (deps
+   ocannl_config
+   (env_var OCANNL_BACKEND))
   (action
    (run %{dep:ocannl_read_config.exe} "--read=backend"))))
 
@@ -25,6 +27,9 @@
 (rule
  (targets micrograd_demo-%{read:config/ocannl_backend.txt}.done)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (action
   (progn
    (run
@@ -75,6 +80,9 @@
 (test
  (name threefry4x32_demo)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules threefry4x32_demo)
  (libraries base ocannl)
  (preprocess
@@ -83,6 +91,9 @@
 (test
  (name top_down_prec)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules top_down_prec)
  (libraries base ocannl)
  (preprocess
@@ -93,6 +104,9 @@
 (rule
  (target n3_fwd_with_prec-unoptimized.ll.actual)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (action
   (no-infer
    (progn
@@ -105,6 +119,9 @@
 (rule
  (target top_down_prec-unoptimized.ll.actual)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (action
   (no-infer
    (progn
@@ -133,6 +150,9 @@
 (test
  (name test_vec_simple)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_vec_simple)
  (libraries base ocannl)
  (preprocess
@@ -141,6 +161,9 @@
 (test
  (name test_uniform_demo)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_uniform_demo)
  (libraries base ocannl)
  (preprocess
@@ -149,6 +172,9 @@
 (test
  (name test_threefry_precision)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_threefry_precision)
  (libraries base ocannl)
  (preprocess
@@ -157,6 +183,9 @@
 (test
  (name test_where_simple)
  (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules test_where_simple)
  (libraries ocannl base stdio)
  (preprocess
@@ -167,7 +196,9 @@
  (name operations_tutorials)
  (package neural_nets_lib)
  (inline_tests
-  (deps ocannl_config))
+  (deps
+   ocannl_config
+   (env_var OCANNL_BACKEND)))
  (libraries base dynlink ocannl)
  (modules hello_world_op zero2hero_1of7 primitive_ops test_threefry4x32)
  (preprocess

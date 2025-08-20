@@ -17,7 +17,7 @@ The project uses Dune for building and testing:
 # Build all packages; this triggers running executables for cram-style tests
 dune build
 
-# Only compile -- do not link nor run any executable
+# Only compile -- do not run any executable
 dune build @check
 
 # Build specific package
@@ -27,8 +27,8 @@ dune build -p arrayjit
 # Run tests
 dune runtest
 
-# Run tests for specific package
-dune runtest -p neural_nets_lib
+# Run tests for a specific backend (bash syntax)
+OCANNL_BACKEND=cuda dune runtest
 
 # Install dependencies
 opam install . --deps-only
@@ -90,9 +90,8 @@ opam install cudajit  # for CUDA backend
 
 ### Configuration
 
-- Copy `ocannl_config.example` to `ocannl_config` to customize settings
+- See `ocannl_config.example` for documentation of all settings
 - Key configs: backend selection, debug logging, optimization levels
-- Config is searched in current and ancestor directories
 
 **Configuration Methods** (in order of precedence):
 1. Command-line flags: `--ocannl_<option>=<value>` (e.g., `--ocannl_backend=cuda`)
@@ -100,17 +99,18 @@ opam install cudajit  # for CUDA backend
 3. Config file: `ocannl_config` in current or ancestor directories
 
 **Testing with Different Configurations**:
-- When using environment variables for test configuration, Dune won't detect changes and may skip tests
+- When using environment variables for test configuration other than OCANNL_CONFIG, Dune won't detect changes and may skip tests
 - **Warning**: `dune test --force` does NOT re-run expect tests (only rules with alias fields)
 - Reliable ways to ensure tests run with new configuration:
   1. Modify `test/config/ocannl_config` directly
   2. Run `dune clean` before testing
   3. Touch/modify test source files
+  4. OCANNL_CONFIG environment variable is an exception (explicit dependency)
 
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation
-- `debug_log_from_routines=true` - enables runtime logging
-- `debug_log_to_stream_files=true` - writes logs to `log_files/<backend>-<device>-<stream>.log`
+- `debug_log_from_routines=true` - enables runtime logging from kernels aka. routines
+- `debug_log_to_stream_files=true` - writes logs from kernels/routines to `log_files/<backend>-<device>-<stream>.log`
 - `clean_up_artifacts_on_startup=false` - preserves debug files between runs
 
 ### Backend Development
@@ -148,10 +148,9 @@ opam install cudajit  # for CUDA backend
 ### Debugging Backend Discrepancies
 
 When outputs differ between backends:
-1. Compare runtime logs in `<backend>-<stream>-<stream>.log` files
-2. Check generated code in `build_files/*.c` vs `*.cu` for differences
+1. Compare runtime logs in `<backend>-<stream>-<stream>.log` files (might require minimizing test tensors)
+2. Check generated code in `build_files/*.c` vs `*.cu` / `*.metal` for differences
 3. Common issues:
-   - Missing builtin function implementations in one backend
    - Incorrect type conversion in `convert_precision` overrides
    - Different numerical precision between CPU and GPU operations
 
@@ -166,15 +165,15 @@ When outputs differ between backends:
 
 1. Modify projection logic in `arrayjit/lib/indexing.ml`
 2. Update shape constraint generation in `lib/shape.ml`
-3. Test with various einsum patterns in `test/einsum_trivia.ml`
+3. Test with various einsum patterns in e.g. `test/einsum_trivia.ml`
 
 ## Debugging and Logging
 
-- Set `debug_log_from_routines=true` in config for routine-level debugging
+- Set `debug_log_from_routines=true` in config for kernel/routine-level debugging
 - Use `log_level=2` for verbose ppx_minidebug output
 - CUDA debugging requires `Utils.capture_stdout_logs` wrapper
 - Debug files generated in `log_files/` directory (cleaned on startup by default)
-- Runtime logs from execution are written to `<backend>-<stream>-<stream>.log` (e.g., `cuda-0-0.log`)
+- Runtime logs from kernel execution are written to `<backend>-<device>-<stream>.log` (e.g., `cuda-0-0.log`)
 - Generated code files in `build_files/` show high-level `.cd`, intermediate `.ll`, and backend-specific `.c`/`.cu` files
 
 ## Performance Considerations

@@ -28,7 +28,9 @@
  (name test_ppx_op)
  (package neural_nets_lib)
  (modules test_ppx_op)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (libraries ocannl)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -37,5 +39,7 @@
  (name test_ppx_op_expected)
  (package neural_nets_lib)
  (modules test_ppx_op_expected)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (libraries ocannl))
