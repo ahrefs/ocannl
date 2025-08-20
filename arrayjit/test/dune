@@ -1,5 +1,7 @@
 (executable
  (name test_numerical_types)
+ (package arrayjit)
+ (public_name arrayjit.test_numerical_types)
  (modules test_numerical_types)
  (libraries base stdio arrayjit.ir)
  (preprocess
@@ -15,5 +17,6 @@
 
 (rule
  (alias runtest)
+ (package arrayjit)
  (action
   (diff test_numerical_types.expected test_numerical_types.output)))

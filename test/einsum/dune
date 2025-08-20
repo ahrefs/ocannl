@@ -3,6 +3,7 @@
 
 (test
  (name moons_demo_variant)
+ (package neural_nets_lib) 
  (deps ocannl_config)
  (modules moons_demo_variant)
  (libraries ocannl datasets)
@@ -11,6 +12,7 @@
 
 (test
  (name einsum_trivia_exec)
+ (package neural_nets_lib)
  (deps ocannl_config)
  (modules einsum_trivia_exec)
  (libraries ocannl)
@@ -19,6 +21,7 @@
 
 (test
  (name test_conv_syntax)
+ (package neural_nets_lib)
  (deps ocannl_config)
  (modules test_conv_syntax)
  (libraries ocannl)
@@ -27,6 +30,7 @@
 
 (test
  (name test_print_style)
+ (package neural_nets_lib)
  (deps ocannl_config)
  (modules test_print_style)
  (libraries ocannl)
@@ -35,6 +39,7 @@
 
 (test
  (name test_surjectivity)
+ (package neural_nets_lib)
  (deps ocannl_config)
  (modules test_surjectivity)
  (libraries ocannl)
@@ -43,6 +48,7 @@
 
 (test
  (name test_accumulation_semantics)
+ (package neural_nets_lib)
  (deps ocannl_config)
  (modules test_accumulation_semantics)
  (libraries ocannl)
@@ -62,6 +68,7 @@
 
 (test
  (name inline_permuted_view)
+ (package neural_nets_lib)
  (modules inline_permuted_view)
  (libraries base ocannl)
  (preprocess
@@ -69,6 +76,7 @@
 
 (rule
  (alias runtest)
+ (package neural_nets_lib)
  (target inline_permuted_view-c_fwd.ll.actual)
  (action
   (no-infer
@@ -80,6 +88,7 @@
 
 (rule
  (alias runtest)
+ (package neural_nets_lib)
  (action
   (diff
    "inline_permuted_view-c_fwd.ll.expected"
