@@ -1,2 +1,9 @@
 (copy_files
  (files ../../config/ocannl_config))
+
+(executable
+ (name ocannl_read_config)
+ (package neural_nets_lib)
+ (public_name ocannl_read_config)
+ (modules ocannl_read_config)
+ (libraries base arrayjit.utils))

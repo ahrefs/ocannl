@@ -16,7 +16,7 @@
   (target ocannl_backend.txt)
   (deps ocannl_config)
   (action
-   (run %{dep:../../../arrayjit/bin/read_config.exe} "--read=backend"))))
+   (run %{dep:ocannl_read_config.exe} "--read=backend"))))
 
 ; Solution: Create intermediate targets that guarantee file generation
 ; Step 1: Run the test and create a backend-specific sentinel file when done
