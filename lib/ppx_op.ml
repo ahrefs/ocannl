@@ -120,11 +120,13 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
           ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
           | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ }
           | { pexp_desc = Pexp_field _; pexp_loc = dims_loc; _ } ) as d]] ->
+      (* String syntax with dimension *)
       let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims:[ d ] ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e? { pexp_desc = Pexp_constant (Pconst_float _); pexp_loc = _; _ } as value]] ->
+      (* String syntax with initial value *)
       let pat, vb = make_vb ~value ~has_config ~loc ~str_loc ~ident s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
@@ -132,16 +134,62 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
         [%e?
           ( { pexp_desc = Pexp_array _; _ }
           | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ) as init_nd]] ->
+      (* String syntax with array initial value *)
       let pat, vb = make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | [%expr
       [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
         [%e? { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ }]] ->
+      (* String syntax with tuple dimensions *)
       let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims ~dims_loc s in
       (Map.singleton (module String) ident vb, pat2expr pat)
   | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
+      (* Basic string syntax for backward compatibility *)
       let pat, vb = make_vb ~has_config ~loc ~str_loc ~ident expr in
       (Map.singleton (module String) ident vb, pat2expr pat)
+  | { pexp_desc = Pexp_record (fields, None); _ } when not (List.is_empty fields) ->
+      (* Record syntax for tensor definitions - simplified for now *)
+      (match fields with
+      | [] -> assert false (* Already checked non-empty *)
+      | [ (label, value) ] -> (
+          match label.txt with
+          | Lident tensor_name -> (
+              (* Handle single field record - treat like string syntax *)
+              match value with
+              | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
+                  (* Simple float value *)
+                  let str_expr = Ast_helper.Exp.constant ~loc:label.loc 
+                    (Pconst_string (tensor_name, label.loc, None)) in
+                  let pat, vb = make_vb ~value ~has_config ~loc ~str_loc:label.loc ~ident:tensor_name str_expr in
+                  (Map.singleton (module String) tensor_name vb, pat2expr pat)
+              | _ ->
+                  (* For now, recursively translate the value as a general expression *)
+                  let init_vbs, init_expr = loop value in
+                  (* Then use it as initialization *)
+                  let str_expr = Ast_helper.Exp.constant ~loc:label.loc 
+                    (Pconst_string (tensor_name, label.loc, None)) in
+                  (* Create the parameter using the translated expression *)
+                  let pat = Ast_helper.Pat.var ~loc:label.loc { loc = label.loc; txt = tensor_name } in
+                  let name_str = Ast_helper.Exp.constant ~loc 
+                    (Pconst_string (tensor_name, label.loc, None)) in
+                  let vb = 
+                    Ast_helper.Vb.mk ~loc pat
+                      [%expr 
+                        let __init = [%e init_expr] in
+                        TDSL.param ?more_label:[%e opt_expr ~loc label] [%e name_str] __init ()
+                      ] in
+                  (Map.add_exn ~key:tensor_name ~data:vb init_vbs, pat2expr pat))
+          | _ -> 
+              ( no_vbs,
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc 
+                     "ppx_ocannl %%op: record field label must be a simple identifier" ))
+      | _ -> 
+          (* Multiple fields not supported yet *)
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc 
+                 "ppx_ocannl %%op: multi-field records not yet supported" ))
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?label expr)

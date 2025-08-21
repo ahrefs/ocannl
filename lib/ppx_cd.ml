@@ -822,6 +822,7 @@ let translate ?ident_label (expr : expression) : result =
           slot = Scalar;
         }
     | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
+        (* String syntax for assignment targets - kept for backward compatibility *)
         let vbs =
           Map.singleton (module String) name
           @@ make_vb ~loc ~name ~name_expr:expr
@@ -834,6 +835,82 @@ let translate ?ident_label (expr : expression) : result =
           array_opt_of_code = None;
           slot = Undet;
         }
+    | { pexp_desc = Pexp_record (fields, None); _ } when not (List.is_empty fields) ->
+        (* Record syntax for tensor definitions *)
+        (match fields with
+        | [] -> assert false (* Already checked non-empty *)
+        | (_, { pexp_desc = Pexp_ident { txt = Lident _; _ }; _ }) :: _ 
+          when List.exists ~f:(fun (_, v) -> phys_equal v expr) fields ->
+            (* Avoid infinite recursion if the record contains itself *)
+            default_result
+        | (first_label, first_value) :: rest_fields -> (
+            match first_label.txt with
+            | Lident tensor_name ->
+                (* Recursively translate the initialization expression *)
+                let init_res = loop ~proj_in_scope first_value in
+                let combined_vbs = ref init_res.vbs in
+                (* Process additional shape argument fields *)
+                if List.is_empty rest_fields then
+                  (* Simple case: just tensor initialization, similar to original string syntax *)
+                  let name_expr = Ast_helper.Exp.constant ~loc:first_label.loc 
+                    (Pconst_string (tensor_name, first_label.loc, None)) in
+                  let vb = make_vb ~loc ~name:tensor_name ~name_expr
+                       ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label) in
+                  combined_vbs := Map.add_exn !combined_vbs ~key:tensor_name ~data:vb;
+                  {
+                    vbs = !combined_vbs;
+                    typ = No_grad_tensor_intro { name = tensor_name; name_expr };
+                    expr = A.Exp.ident ~loc:first_label.loc { txt = Lident tensor_name; loc = first_label.loc };
+                    array_opt_of_code = None;
+                    slot = Undet;
+                  }
+                else
+                  (* Complex case: has additional shape arguments *)
+                  let valid_args = ref true in
+                  let shape_args = List.filter_map rest_fields ~f:(fun (label, value) ->
+                    match label.txt with
+                    | Lident "o" -> Some ("output_dims", value)
+                    | Lident "i" -> Some ("input_dims", value) 
+                    | Lident "b" -> Some ("batch_dims", value)
+                    | Lident name -> Some (name, value)
+                    | _ -> 
+                      valid_args := false;
+                      None
+                  ) in
+                  if not !valid_args then
+                    {
+                      default_result with
+                      expr = Ast_builder.Default.pexp_extension ~loc
+                             @@ Location.error_extensionf ~loc
+                                  "ppx_ocannl %%cd: shape argument labels must be simple identifiers"
+                    }
+                  else
+                    (* Build the function application with shape arguments *)
+                    let name_expr = Ast_helper.Exp.constant ~loc:first_label.loc 
+                      (Pconst_string (tensor_name, first_label.loc, None)) in
+                    let base_call = [%expr NTDSL.term ~label:[ [%e name_expr] ]] in
+                    let with_args = List.fold_left shape_args ~init:base_call ~f:(fun acc (arg_name, arg_value) ->
+                      Ast_helper.Exp.apply ~loc acc [(Labelled arg_name, arg_value)]
+                    ) in
+                    let v = [%expr [%e with_args] ()] in 
+                    let v_with_open = [%expr let open NTDSL in [%e v]] in
+                    let pat = A.Pat.var ~loc:first_label.loc { loc = first_label.loc; txt = tensor_name } in
+                    let vb = A.Vb.mk ~loc pat v_with_open in
+                    combined_vbs := Map.add_exn !combined_vbs ~key:tensor_name ~data:vb;
+                    {
+                      vbs = !combined_vbs;
+                      typ = No_grad_tensor_intro { name = tensor_name; name_expr };
+                      expr = A.Exp.ident ~loc:first_label.loc { txt = Lident tensor_name; loc = first_label.loc };
+                      array_opt_of_code = None;
+                      slot = Undet;
+                    }
+            | _ -> 
+                {
+                  default_result with
+                  expr = Ast_builder.Default.pexp_extension ~loc
+                         @@ Location.error_extensionf ~loc 
+                              "ppx_ocannl %%cd: record field label must be a simple identifier"
+                }))
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
         { default_result with expr = ndarray_op expr }
