@@ -764,16 +764,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ^^ rparen ^^ semi
   end
 
-  let prepend_builtins b =
-    (* Add includes first *)
-    Buffer.add_string b "#include <cuda_fp16.h>\n";
-    Buffer.add_string b "#include <cuda_bf16.h>\n";
-    Buffer.add_string b "\n";
-    if Utils.debug_log_from_routines () then
-      Buffer.add_string b "__device__ int printf (const char * format, ... );\n";
-    Buffer.add_string b "\n\n";
-    Buffer.add_string b Builtins_cuda.source;
-    Buffer.add_string b "\n\n"
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
     (* TODO: The following link seems to claim it's better to expand into loops than use memset.
@@ -782,12 +772,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = [| lowered |]
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let b = Buffer.create 4096 in
-    (* Prepend builtins first *)
-    prepend_builtins b;
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-    PPrint.ToBuffer.pretty 1.0 110 b proc_doc;
-    let ptx = cuda_to_ptx ~name (Buffer.contents b) in
+    let cuda_includes = {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>|} ^
+      (if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );" else "") in
+    let source = Syntax.filter_and_prepend_builtins
+      ~includes:cuda_includes ~builtins:Builtins_cuda.builtins ~proc_doc in
+    let ptx = cuda_to_ptx ~name source in
     { traced_store; ptx; params; bindings; name }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
@@ -795,9 +786,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = Array.filter_opt lowereds
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let b = Buffer.create 4096 in
-    (* Prepend builtins first *)
-    prepend_builtins b;
     let params_and_docs =
       Array.map2_exn names lowereds
         ~f:
@@ -807,14 +795,18 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
-    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
+    let cuda_includes = {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>|} ^
+      (if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );" else "") in
+    let source = Syntax.filter_and_prepend_builtins
+      ~includes:cuda_includes ~builtins:Builtins_cuda.builtins ~proc_doc:final_doc in
 
     let name : string =
       String.(
         strip ~drop:(equal_char '_')
         @@ common_prefix (Array.to_list names |> List.concat_map ~f:Option.to_list))
     in
-    let ptx = cuda_to_ptx ~name (Buffer.contents b) in
+    let ptx = cuda_to_ptx ~name source in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
     let params_and_names = Array.map params_and_docs ~f:(Option.map ~f:fst) in
     { traced_stores; ptx; params_and_names; bindings }

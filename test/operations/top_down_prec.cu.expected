@@ -1,0 +1,16 @@
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+extern "C" __global__ void d_fwd(
+    __half *a,
+    __half *b,
+    __nv_bfloat16 *c,
+    __nv_bfloat16 *d) {
+  /* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; };
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  /* d fwd */
+  d[0] = (((__nv_bfloat16)(a[0]) + (__nv_bfloat16)(b[0])) * c[0]);
+  /* end */
+}
