@@ -360,6 +360,11 @@ type vec_unop =
           pattern, the indices are converted to a byte offset depending on the given precision.
           NOTE: this operation, unlike any others, impacts projections and shape inference (one
           input cell corresponds to a few output cells). *)
+  | Uint4x32_to_prec_uniform1
+      (** Non-vectorized variant that converts the given Uint4x32 to a single value of the output 
+          precision. Less bit-efficient but produces exactly one output value. For random bits, the 
+          result is uniform over the range of the precision for integer precisions, and over the 
+          range \[0.0, 1.0) for floating point precisions. *)
 [@@deriving sexp, compare, equal]
 
 type ternop =
@@ -581,7 +586,9 @@ let unop_cd_syntax = function
   | Tanh_approx -> "tanh"
   | Not -> "not"
 
-let vec_unop_cd_syntax = function Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
+let vec_unop_cd_syntax = function 
+  | Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
+  | Uint4x32_to_prec_uniform1 -> "uint4x32_to_prec_uniform1"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -633,6 +640,9 @@ let vec_unop_c_syntax prec op =
   | Uint4x32_to_prec_uniform, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform not supported for Uint4x32"
   | Uint4x32_to_prec_uniform, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
+  | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
+      invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
+  | Uint4x32_to_prec_uniform1, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"

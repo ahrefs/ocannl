@@ -284,7 +284,6 @@ let%track4_sexp to_low_level code =
           let rhs_idcs = Array.map projections.project_rhs.(0) ~f:subst_index in
           let open Low_level in
           let rhs_ll = get rhs rhs_idcs in
-          (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
           let length =
             match op with
             | Ops.Uint4x32_to_prec_uniform -> (
@@ -298,6 +297,7 @@ let%track4_sexp to_low_level code =
                 | Ops.Double_prec _ | Ops.Int64_prec _ -> 2 (* 64-bit values *)
                 | Ops.Uint4x32_prec _ -> 1 (* 128-bit value *)
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
+            | Ops.Uint4x32_to_prec_uniform1 -> 1 (* Always produces a single value *)
           in
           Set_from_vec
             { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }

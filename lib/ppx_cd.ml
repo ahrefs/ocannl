@@ -463,7 +463,7 @@ let translate ?ident_label (expr : expression) : result =
                Ast_builder.Default.pexp_extension ~loc
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a vector unary operator, one of: \
-                     uint4x32_to_prec_uniform; found: %s"
+                     uint4x32_to_prec_uniform, uint4x32_to_prec_uniform1; found: %s"
                     vec_un_op ))
     in
     let binary_op bin_op =

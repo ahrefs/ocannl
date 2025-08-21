@@ -309,6 +309,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let transpose_op =
     match transpose_op with
     | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.prec
+    | Uint4x32_to_prec1 _ -> Shape.Uint4x32_to_prec1 v.Tn.prec
     | _ -> transpose_op
   in
   let shape_logics = function

@@ -427,9 +427,15 @@ module C_syntax (B : C_syntax_config) = struct
                       (* For non-Fixed_idx (Iterator, etc), add i to the computed offset *)
                       pp_array_offset (idcs, dims) ^^ string (" + " ^ Int.to_string i)
                 in
-                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ vec_var
-                ^^ string (".v[" ^ Int.to_string i ^ "]")
-                ^^ semi)
+                let value_doc =
+                  if length = 1 then
+                    (* When length=1, vec_typ_of_prec returns a scalar type, so no .v[] access *)
+                    vec_var
+                  else
+                    (* When length>1, access the vector element *)
+                    vec_var ^^ string (".v[" ^ Int.to_string i ^ "]")
+                in
+                ident_doc ^^ brackets offset_doc ^^ string " = " ^^ value_doc ^^ semi)
           in
           separate hardline elem_assigns
         in
