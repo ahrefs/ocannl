@@ -30,6 +30,19 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.3.x
+          dune-cache: true
+          allow-prerelease-opam: true
+
+      - name: Setup project
+        run: |
+          # FIXME: We need to pin printbox-text until > 0.12.0 is released.
+          opam pin -n printbox-text https://github.com/c-cube/printbox.git
+          opam pin -n .
+          opam install . -y --deps-only --with-test --with-doc
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@beta
@@ -41,22 +54,21 @@ jobs:
             actions: read
           
           # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4.1)
-          # model: "claude-opus-4-1-20250805"
+          model: "claude-opus-4-1-20250805"
           
           # Optional: Customize the trigger phrase (default: @claude)
-          # trigger_phrase: "/claude"
+          trigger_phrase: "@claude-opus"
           
           # Optional: Trigger when specific user is assigned to an issue
-          # assignee_trigger: "claude-bot"
+          assignee_trigger: "claude-bot"
           
           # Optional: Allow Claude to run specific commands
-          # allowed_tools: "Bash(npm install),Bash(npm run build),Bash(npm run test:*),Bash(npm run lint:*)"
+          allowed_tools: "Bash(opam exec),Bash(dune build),Bash(dune test),Bash(dune exec),Bash(dune runtest)"
           
           # Optional: Add custom instructions for Claude to customize its behavior for your project
-          # custom_instructions: |
-          #   Follow our coding standards
-          #   Ensure all new code has tests
-          #   Use TypeScript for new files
+          custom_instructions: |
+            The OCANNL build system and dependencies are already installed;
+            you can verify this by running `opam switch`, and `dune build @check` or `opam exec -- dune build @check`.
           
           # Optional: Custom environment variables for Claude
           # claude_env: |
