@@ -1,0 +1,17 @@
+#include <metal_stdlib>
+using namespace metal;
+kernel void d_fwd(
+    device bfloat *c [[buffer(0)]],
+    device bfloat *d [[buffer(1)]],
+    device half *a [[buffer(2)]],
+    device half *b [[buffer(3)]],
+    uint3 gid [[threadgroup_position_in_grid]],
+    uint3 lid [[thread_position_in_threadgroup]]) {
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  /* d fwd */
+  d[0] = (((bfloat)(a[0]) + (bfloat)(b[0])) * c[0]);
+  /* end */
+}

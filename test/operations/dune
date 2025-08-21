@@ -161,7 +161,9 @@
 (rule
  (alias runtest)
  (package neural_nets_lib)
- (deps config/ocannl_backend_extension.txt)
+ (deps 
+  config/ocannl_backend_extension.txt
+  (env_var OCANNL_BACKEND))
  (action
   (diff
    "top_down_prec.%{read:config/ocannl_backend_extension.txt}.expected"

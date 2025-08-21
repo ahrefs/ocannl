@@ -651,14 +651,12 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = [| lowered |]
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let b = Buffer.create 4096 in
-    Buffer.add_string b Builtins_metal.source;
-    Buffer.add_string b "\n";
     (* Add Metal address space qualifiers *)
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-    let final_doc = proc_doc in
-    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
-    let source = Buffer.contents b in
+    let metal_includes = {|#include <metal_stdlib>
+using namespace metal;|} in
+    let source = Syntax.filter_and_prepend_builtins 
+      ~includes:metal_includes ~builtins:Builtins_metal.builtins ~proc_doc in
     {
       metal_source = source;
       compiled_code = Array.create ~len:num_devs None;
@@ -674,10 +672,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = Array.filter_opt lowereds
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let b = Buffer.create 4096 in
-    (* Read and prepend the Metal builtins file *)
-    Buffer.add_string b Builtins_metal.source;
-    Buffer.add_string b "\n";
     let funcs_and_docs =
       Array.map2_exn names lowereds
         ~f:
@@ -687,8 +681,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     let all_proc_docs = List.filter_map (Array.to_list funcs_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
-    PPrint.ToBuffer.pretty 1.0 110 b final_doc;
-    let source = Buffer.contents b in
+    let metal_includes = {|#include <metal_stdlib>
+using namespace metal;|} in
+    let source = Syntax.filter_and_prepend_builtins 
+      ~includes:metal_includes ~builtins:Builtins_metal.builtins ~proc_doc:final_doc in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
     let funcs = Array.map funcs_and_docs ~f:(Option.map ~f:fst) in
     {
