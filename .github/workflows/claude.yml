@@ -62,8 +62,8 @@ jobs:
           # Optional: Trigger when specific user is assigned to an issue
           assignee_trigger: "claude-bot"
           
-          # Optional: Allow Claude to run specific commands
-          allowed_tools: "Bash(opam exec),Bash(dune build),Bash(dune test),Bash(dune exec),Bash(dune runtest)"
+          # Allow Claude to run all opam and dune commands
+          allowed_tools: "Bash(opam:*),Bash(dune:*),Bash(git checkout:*),Bash(find:*),Bash(grep:*),Bash(ls:*),Bash(cat:*),Bash(mv:*),Bash(cp:*),Bash(cc:*),Bash(git check-ignore:*),Bash(git config:*)"
           
           # Optional: Add custom instructions for Claude to customize its behavior for your project
           custom_instructions: |
