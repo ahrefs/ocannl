@@ -215,12 +215,18 @@ struct
 
   let binop_syntax prec op v1 v2 =
     match op with
-    | Ops.Threefry4x32 -> (
+    | Ops.Threefry4x32_crypto -> (
         match prec with
         | Ops.Uint4x32_prec _ ->
             let open PPrint in
-            group (string "arrayjit_threefry4x32(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
-        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32 on non-uint4x32 precision")
+            group (string "arrayjit_threefry4x32_crypto(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
+        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32_crypto on non-uint4x32 precision")
+    | Ops.Threefry4x32_light -> (
+        match prec with
+        | Ops.Uint4x32_prec _ ->
+            let open PPrint in
+            group (string "arrayjit_threefry4x32_light(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
+        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32_light on non-uint4x32 precision")
     | _ -> (
         match prec with
         | Ops.Bfloat16_prec _ ->

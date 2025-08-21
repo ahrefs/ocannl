@@ -34,7 +34,7 @@ using namespace metal;|}, []);
     x.w = tmp;
 }|}, ["rotl32"]);
 
-  ("arrayjit_threefry4x32", {|uint4 arrayjit_threefry4x32(uint4 key, uint4 counter) {
+  ("arrayjit_threefry4x32_crypto", {|uint4 arrayjit_threefry4x32_crypto(uint4 key, uint4 counter) {
     uint4 x = counter;
     uint4 k = key;
     
@@ -122,6 +122,38 @@ using namespace metal;|}, []);
 }|}, ["THREEFRY_C240"; "threefry_round"; "THREEFRY_ROTATION_0_0"; "THREEFRY_ROTATION_0_1"; 
       "THREEFRY_ROTATION_0_2"; "THREEFRY_ROTATION_0_3"; "THREEFRY_ROTATION_1_0"; 
       "THREEFRY_ROTATION_1_1"; "THREEFRY_ROTATION_1_2"; "THREEFRY_ROTATION_1_3"]);
+
+  ("arrayjit_threefry4x32_light", {|uint4 arrayjit_threefry4x32_light(uint4 key, uint4 counter) {
+    uint4 x = counter;
+    uint4 k = key;
+    
+    /* Compute ks[4] */
+    uint32_t ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
+    
+    /* Initial key injection */
+    x += k;
+    
+    /* Only 2 rounds for light version */
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, 
+                      THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, 
+                      THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Final key injection after round 2 */
+    x.x += k.y;
+    x.y += k.z;
+    x.z += k.w;
+    x.w += ks4 + 1;
+    
+    return x;
+}|}, ["THREEFRY_C240"; "threefry_round"; "THREEFRY_ROTATION_0_0"; "THREEFRY_ROTATION_0_1"; 
+      "THREEFRY_ROTATION_0_2"; "THREEFRY_ROTATION_0_3"; "THREEFRY_ROTATION_1_0"; 
+      "THREEFRY_ROTATION_1_1"; "THREEFRY_ROTATION_1_2"; "THREEFRY_ROTATION_1_3"]);
+
+  ("arrayjit_threefry4x32", {|uint4 arrayjit_threefry4x32(uint4 key, uint4 counter) {
+    /* Default to light version */
+    return arrayjit_threefry4x32_light(key, counter);
+}|}, ["arrayjit_threefry4x32_light"]);
 
   ("float4_t", {|struct float4_t { float4 v; };|}, []);
   ("float2_t", {|struct float2_t { float2 v; };|}, []);

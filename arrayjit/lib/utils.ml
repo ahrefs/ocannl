@@ -49,6 +49,9 @@ type settings = {
           - When a routine is about to be run, we transfer the routine's inputs from host to the
             routine's context if the host array was not yet transfered since its creation or most
             recent modification. *)
+  mutable default_prng_variant : string;
+      (** The default variant of threefry4x32 PRNG to use. Options: "crypto" (20 rounds) or "light" (2 rounds).
+          Defaults to "light" for better performance. *)
 }
 [@@deriving sexp]
 
@@ -61,6 +64,7 @@ let settings =
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
     automatic_host_transfers = true;
+    default_prng_variant = "light";
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -460,7 +464,9 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.automatic_host_transfers <-
-    get_global_flag ~default:true ~arg_name:"automatic_host_transfers"
+    get_global_flag ~default:true ~arg_name:"automatic_host_transfers";
+  settings.default_prng_variant <-
+    get_global_arg ~default:"light" ~arg_name:"default_prng_variant"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1

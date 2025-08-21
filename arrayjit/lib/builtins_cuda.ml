@@ -248,7 +248,7 @@ let builtins = [
     x.w = tmp;
 }|}, ["rotl32"]);
 
-  ("arrayjit_threefry4x32", {|__device__ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+  ("arrayjit_threefry4x32_crypto", {|__device__ uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
     uint4 x = make_uint4(counter.v[0], counter.v[1], counter.v[2], counter.v[3]);
     uint4 k = make_uint4(key.v[0], key.v[1], key.v[2], key.v[3]);
     
@@ -311,4 +311,42 @@ let builtins = [
     result.v[3] = x.w;
     return result;
 }|}, ["uint4x32_t"; "THREEFRY_C240"; "threefry_round"; "THREEFRY_ROTATION"]);
+
+  ("arrayjit_threefry4x32_light", {|__device__ uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
+    uint4 x = make_uint4(counter.v[0], counter.v[1], counter.v[2], counter.v[3]);
+    uint4 k = make_uint4(key.v[0], key.v[1], key.v[2], key.v[3]);
+    
+    /* Compute ks[4] */
+    unsigned int ks4 = k.x ^ k.y ^ k.z ^ k.w ^ THREEFRY_C240;
+    
+    /* Initial key injection */
+    x.x += k.x;
+    x.y += k.y;
+    x.z += k.z;
+    x.w += k.w;
+    
+    /* Only 2 rounds for light version */
+    threefry_round(x, THREEFRY_ROTATION[0][0], THREEFRY_ROTATION[0][1], 
+                      THREEFRY_ROTATION[0][2], THREEFRY_ROTATION[0][3]);
+    threefry_round(x, THREEFRY_ROTATION[1][0], THREEFRY_ROTATION[1][1], 
+                      THREEFRY_ROTATION[1][2], THREEFRY_ROTATION[1][3]);
+    
+    /* Final key injection after round 2 */
+    x.x += k.y;
+    x.y += k.z;
+    x.z += k.w;
+    x.w += ks4 + 1;
+    
+    uint4x32_t result;
+    result.v[0] = x.x;
+    result.v[1] = x.y;
+    result.v[2] = x.z;
+    result.v[3] = x.w;
+    return result;
+}|}, ["uint4x32_t"; "THREEFRY_C240"; "threefry_round"; "THREEFRY_ROTATION"]);
+
+  ("arrayjit_threefry4x32", {|__device__ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+    /* Default to light version */
+    return arrayjit_threefry4x32_light(key, counter);
+}|}, ["uint4x32_t"; "arrayjit_threefry4x32_light"]);
 ]
