@@ -19,7 +19,16 @@
    ocannl_config
    (env_var OCANNL_BACKEND))
   (action
-   (run %{dep:ocannl_read_config.exe} "--read=backend"))))
+   (run %{dep:ocannl_read_config.exe} "--read=backend")))
+
+ (rule
+  (target ocannl_backend_extension.txt)
+  (package neural_nets_lib)
+  (deps
+   ocannl_config
+   (env_var OCANNL_BACKEND))
+  (action
+   (run %{dep:ocannl_read_config.exe} "--read=backend_extension"))))
 
 ; Solution: Create intermediate targets that guarantee file generation
 ; Step 1: Run the test and create a backend-specific sentinel file when done
@@ -117,9 +126,10 @@
     (copy build_files/n3_fwd-unoptimized.ll %{target})))))
 
 (rule
- (target top_down_prec-unoptimized.ll.actual)
+ (targets top_down_prec-unoptimized.ll.actual top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)
  (package neural_nets_lib)
  (deps
+  config/ocannl_backend_extension.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
  (action
@@ -129,7 +139,8 @@
      %{dep:top_down_prec.exe}
      "--ocannl_output_prec_in_ll_files=true"
      "--ocannl_output_debug_files_in_build_directory=true")
-    (copy build_files/d_fwd-unoptimized.ll %{target})))))
+    (copy build_files/d_fwd-unoptimized.ll top_down_prec-unoptimized.ll.actual)
+    (copy build_files/d_fwd.%{read:config/ocannl_backend_extension.txt} top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)))))
 
 (rule
  (alias runtest)
@@ -146,6 +157,15 @@
   (diff
    "top_down_prec-unoptimized.ll.expected"
    "top_down_prec-unoptimized.ll.actual")))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (deps config/ocannl_backend_extension.txt)
+ (action
+  (diff
+   "top_down_prec.%{read:config/ocannl_backend_extension.txt}.expected"
+   "top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual")))
 
 (test
  (name test_vec_simple)

@@ -105,13 +105,19 @@ opam install cudajit  # for CUDA backend
   1. Modify `test/config/ocannl_config` directly
   2. Run `dune clean` before testing
   3. Touch/modify test source files
-  4. OCANNL_CONFIG environment variable is an exception (explicit dependency)
+  4. OCANNL_BACKEND environment variable is an exception (explicit dependency)
 
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation
 - `debug_log_from_routines=true` - enables runtime logging from kernels aka. routines
 - `debug_log_to_stream_files=true` - writes logs from kernels/routines to `log_files/<backend>-<device>-<stream>.log`
 - `clean_up_artifacts_on_startup=false` - preserves debug files between runs
+
+**Available Backends**:
+- `sync_cc` combines the implementation cc_backend.ml with the scheduler `Sync` in schedulers.ml
+- `multicore_cc` combines the implementation cc_backend.ml with the scheduler `Multicore` in schedulers.ml
+- `cuda` with implementation in cuda_backend.ml
+- `metal` with implementation in metal_backend.ml
 
 ### Backend Development
 

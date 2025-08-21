@@ -303,14 +303,15 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
     let procs = [| lowered |]
   end)) in
-  (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-  let builtins_doc = PPrint.string Builtins_cc.source in
-  let final_doc = PPrint.(builtins_doc ^^ proc_doc) in
+  let filtered_code = Syntax.filter_and_prepend_builtins 
+    ~includes:Builtins_cc.includes 
+    ~builtins:Builtins_cc.builtins 
+    ~proc_doc in
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
-  PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
+  Out_channel.output_string build_file.oc filtered_code;
   build_file.finalize ();
 
   (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
@@ -336,9 +337,12 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
             Syntax.compile_proc ~name idx_params lowered))
   in
   let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
-  let header_doc = PPrint.string Builtins_cc.source in
-  let final_doc = PPrint.(header_doc ^^ separate hardline all_proc_docs) in
-  PPrint.ToChannel.pretty 1.0 110 build_file.oc final_doc;
+  let combined_proc_doc = PPrint.separate PPrint.hardline all_proc_docs in
+  let filtered_code = Syntax.filter_and_prepend_builtins 
+    ~includes:Builtins_cc.includes 
+    ~builtins:Builtins_cc.builtins 
+    ~proc_doc:combined_proc_doc in
+  Out_channel.output_string build_file.oc filtered_code;
   build_file.finalize ();
   let result_library = c_compile_and_load ~f_path:build_file.f_path in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)

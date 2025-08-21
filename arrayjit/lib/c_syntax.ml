@@ -232,6 +232,42 @@ module C_syntax (B : C_syntax_config) = struct
 
   let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
 
+  let filter_and_prepend_builtins ~includes ~builtins ~proc_doc =
+    let doc_buffer = Buffer.create 4096 in
+    PPrint.ToBuffer.pretty 1.0 110 doc_buffer proc_doc;
+    let doc_string = Buffer.contents doc_buffer in
+    let result_buffer = Buffer.create 4096 in
+    Buffer.add_string result_buffer includes;
+    Buffer.add_string result_buffer "\n";
+    
+    (* Collect all needed keys, including dependencies *)
+    let needed_keys = ref (Set.empty (module String)) in
+    List.iter builtins ~f:(fun (key, _, _) ->
+      if String.is_substring doc_string ~substring:key then
+        needed_keys := Set.add !needed_keys key);
+    
+    (* Add dependencies recursively *)
+    let processed_keys = ref (Set.empty (module String)) in
+    let rec add_dependencies key =
+      if not (Set.mem !processed_keys key) then (
+        processed_keys := Set.add !processed_keys key;
+        needed_keys := Set.add !needed_keys key;
+        match List.find builtins ~f:(fun (k, _, _) -> String.equal k key) with
+        | Some (_, _, deps) -> List.iter deps ~f:add_dependencies
+        | None -> ()
+      )
+    in
+    Set.iter !needed_keys ~f:add_dependencies;
+    
+    (* Add the builtins in order *)
+    List.iter builtins ~f:(fun (key, definition, _) ->
+      if Set.mem !needed_keys key then (
+        Buffer.add_string result_buffer definition;
+        Buffer.add_string result_buffer "\n";
+      ));
+    Buffer.add_string result_buffer doc_string;
+    Buffer.contents result_buffer
+
   open Indexing
   open Doc_helpers
 
