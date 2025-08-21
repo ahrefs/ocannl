@@ -320,7 +320,7 @@ let ne ?(label = []) =
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~label:("<>" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
-let threefry4x32 =
+let threefry4x32_crypto =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
@@ -340,12 +340,48 @@ let threefry4x32 =
     ->
       let result =
         Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 t2
-          ~label:("threefry4x32" :: label) ?grad_spec ?batch_dims ?batch_axes ?input_dims
+          ~label:("threefry4x32_crypto" :: label) ?grad_spec ?batch_dims ?batch_axes ?input_dims
           ?output_dims ?input_axes ?output_axes ?deduced ()
       in
       (* Set output precision to uint4x32 *)
       Tn.update_prec result.value Ir.Ops.uint4x32;
       result
+
+let threefry4x32_light =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^ v2 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  fun t1 t2 ->
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
+    fun ?(label = [])
+      ?grad_spec
+      ?batch_dims
+      ?batch_axes
+      ?input_dims
+      ?output_dims
+      ?input_axes
+      ?output_axes
+      ?deduced
+      ()
+    ->
+      let result =
+        Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 t2
+          ~label:("threefry4x32_light" :: label) ?grad_spec ?batch_dims ?batch_axes ?input_dims
+          ?output_dims ?input_axes ?output_axes ?deduced ()
+      in
+      (* Set output precision to uint4x32 *)
+      Tn.update_prec result.value Ir.Ops.uint4x32;
+      result
+
+let threefry4x32 =
+  (* Select based on configuration *)
+  fun t1 t2 ->
+    let variant = Utils.settings.default_prng_variant in
+    if String.equal variant "crypto" then
+      threefry4x32_crypto t1 t2
+    else
+      threefry4x32_light t1 t2
 
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in

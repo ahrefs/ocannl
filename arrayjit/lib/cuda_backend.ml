@@ -625,15 +625,26 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Cmpeq, _ -> f "=="
       | Or, _ -> f "||"
       | And, _ -> f "&&"
-      | Threefry4x32, _ -> (
-          (* Threefry4x32 must output to uint4x32 precision *)
+      | Threefry4x32_crypto, _ -> (
+          (* Threefry4x32_crypto must output to uint4x32 precision *)
           match prec with
-          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32"
+          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32_crypto"
           | _ ->
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "CUDA backend: Threefry4x32 requires target precision to be uint4x32, but \
+                      "CUDA backend: Threefry4x32_crypto requires target precision to be uint4x32, but \
+                       got %s"
+                      (Ops.prec_string prec)))
+      | Threefry4x32_light, _ -> (
+          (* Threefry4x32_light must output to uint4x32 precision *)
+          match prec with
+          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32_light"
+          | _ ->
+              raise
+              @@ Utils.User_error
+                   (Printf.sprintf
+                      "CUDA backend: Threefry4x32_light requires target precision to be uint4x32, but \
                        got %s"
                       (Ops.prec_string prec)))
 
