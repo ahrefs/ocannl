@@ -50,10 +50,14 @@ module No_device_buffer_and_copying () :
     Stdlib.Gc.finalise finalize ptr;
     ptr
 
-  let%track7_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
+  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
       buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    (* FIXME(#344, #355): This is not efficient, but it won't be used for long. *)
+    alloc_impl ~size_in_bytes
+
+  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (() : unit) :
+      buffer_ptr =
+    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let ptr = alloc_impl ~size_in_bytes in
     (* Zero-initialize the allocated memory *)
     (if size_in_bytes > 0 then
@@ -298,6 +302,7 @@ struct
   let alloc_buffer ?old_buffer ~size_in_bytes _stream =
     Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
 
-  let alloc_zero_init_array prec ~dims _stream = Backend.alloc_zero_init_array prec ~dims ()
+  let alloc_array prec ~dims _stream = Backend.alloc_array prec ~dims ()
+  let alloc_zeros prec ~dims _stream = Backend.alloc_zeros prec ~dims ()
   let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
 end

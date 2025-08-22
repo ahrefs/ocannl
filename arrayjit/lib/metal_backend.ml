@@ -82,7 +82,14 @@ module Alloc_buffer = struct
         track_allocation new_buffer_obj;
         { ptr = new_buffer_obj; size_in_bytes }
 
-  let%track7_sexp alloc_zero_init_array (prec : Ops.prec) ~(dims : int array) (stream : stream) =
+  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (stream : stream) =
+    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+    let device = stream.device.dev in
+    let buffer = Me.Buffer.on_device device ~length:size_in_bytes resource_options in
+    track_allocation buffer;
+    buffer
+
+  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (stream : stream) =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let device = stream.device.dev in
     let buffer = Me.Buffer.on_device device ~length:size_in_bytes resource_options in

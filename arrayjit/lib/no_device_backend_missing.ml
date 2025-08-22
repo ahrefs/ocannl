@@ -35,7 +35,10 @@ struct
   let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let alloc_zero_init_array _prec ~dims:_ () =
+  let alloc_array _prec ~dims:_ () =
+    failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
+
+  let alloc_zeros _prec ~dims:_ () =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
   let free_buffer = None

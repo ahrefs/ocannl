@@ -70,7 +70,12 @@ module Alloc_buffer = struct
         set_ctx stream.device.dev.primary_context;
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
 
-  let alloc_zero_init_array prec ~dims stream =
+  let alloc_array prec ~dims stream =
+    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+    set_ctx stream.device.dev.primary_context;
+    Cu.Deviceptr.mem_alloc ~size_in_bytes
+
+  let alloc_zeros prec ~dims stream =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in

@@ -43,7 +43,10 @@ struct
   let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_zero_init_array _prec ~dims:_ _stream =
+  let alloc_array _prec ~dims:_ _stream =
+    failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
+
+  let alloc_zeros _prec ~dims:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let free_buffer = None
