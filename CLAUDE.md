@@ -81,6 +81,16 @@ opam install cudajit  # for CUDA backend
 - The two approaches are exclusive: a test using using `.expected` file target cannot also use `%expect` inline expectations
 - `.expected` tests are easier to debug, `%expect` tests should only be used when the outputs are illustrative
 - Tutorial files, i.e. `%expect` tests, in `test/` serve as both documentation and integration tests
+
+**Running Tests**:
+- `dune runtest` - runs all tests including inline tests and cram-style tests
+- `dune runtest test/operations/` - runs all tests in operations directory
+- `dune exec test/operations/test_name.exe` - ONLY works for standalone tests with `test` stanza and `.expected` files
+- Inline tests (like those in `test_threefry4x32.ml`) are part of library modules and run via `dune runtest`, not `dune exec`
+
+**Test Types**:
+- **Inline tests**: Files included in library `modules` field with `inline_tests` stanza (e.g., `test_threefry4x32.ml` in `operations_tutorials` library)
+- **Standalone tests**: Files with dedicated `test` stanza and corresponding `.expected` files (e.g., `threefry4x32_demo`)
 - Use `dune promote` to accept test output changes
 - **Test Placement Guidelines**:
   * Always add tests under one of the test subdirectories
@@ -88,7 +98,7 @@ opam install cudajit  # for CUDA backend
   * Use `test/einsum` for tests involving complex einsum specifications
   * Use `test/training` for tests involving training loops
   * When adding a test, update the corresponding test stanza
-  * Add an `.expected` file for test results (can initially be empty)
+  * For standalone tests, add an `.expected` file for test results (can initially be empty)
 
 ### Configuration
 

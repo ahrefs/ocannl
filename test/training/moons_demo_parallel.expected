@@ -1,14 +1,16 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 Epoch=0, loss under target 87: true
-Epoch=1, loss under target 32: true
-Epoch=2, loss under target 29: true
-Epoch=3, loss under target 26: true
-Epoch=4, loss under target 23: true
-Epoch=5, loss under target 20: true
-Epoch=6, loss under target 19: true
-Epoch=7, loss under target 17: true
-Epoch=8, loss under target 16: true
-Epoch=9, loss under target 15: true
+Epoch=1, loss under target 16: true
+Epoch=2, loss under target 16: true
+Epoch=3, loss under target 16: true
+Epoch=4, loss under target 16: true
+Epoch=5, loss under target 16: true
+Epoch=6, loss under target 12: true
+Epoch=7, loss under target 12: true
+Epoch=8, loss under target 12: true
+Epoch=9, loss under target 20: true
+Epoch=10, loss under target 16: true
+Epoch=11, loss under target 15: true
 ..........
-Final epoch loss under target 0.002: true
+Final epoch loss under target 0.01: true

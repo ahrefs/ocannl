@@ -539,15 +539,26 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
       | ToPowOf, _ -> func "pow"
-      | Threefry4x32, _ -> (
-          (* Threefry4x32 must output to uint4x32 precision *)
+      | Threefry4x32_crypto, _ -> (
+          (* Threefry4x32_crypto must output to uint4x32 precision *)
           match prec with
-          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32"
+          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32_crypto"
           | _ ->
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "Metal backend: Threefry4x32 requires target precision to be uint4x32, but \
+                      "Metal backend: Threefry4x32_crypto requires target precision to be uint4x32, but \
+                       got %s"
+                      (Ops.prec_string prec)))
+      | Threefry4x32_light, _ -> (
+          (* Threefry4x32_light must output to uint4x32 precision *)
+          match prec with
+          | Ops.Uint4x32_prec _ -> func "arrayjit_threefry4x32_light"
+          | _ ->
+              raise
+              @@ Utils.User_error
+                   (Printf.sprintf
+                      "Metal backend: Threefry4x32_light requires target precision to be uint4x32, but \
                        got %s"
                       (Ops.prec_string prec)))
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
@@ -581,7 +592,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform1, _ ->
-          fun v -> func_doc "uint4x32_to_prec_uniform1" v
+          fun v -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform") v
     (* Logical not *)
 
     (* Keep vec_unop_syntax same as in pure C syntax. *)

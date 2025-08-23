@@ -962,7 +962,7 @@ let simplify_llc llc =
     | Embed_index (Affine _) -> llsc (* Cannot simplify affine expressions to constants *)
     | Binop (Arg1, llv1, _) -> loop_scalar llv1
     | Binop (Arg2, _, llv2) -> loop_scalar llv2
-    | Binop (Threefry4x32, _, _) -> llsc
+    | Binop ((Threefry4x32_crypto | Threefry4x32_light), _, _) -> llsc
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
     | Binop (Add, llsc, Constant 0.)
     | Binop (Sub, llsc, Constant 0.)

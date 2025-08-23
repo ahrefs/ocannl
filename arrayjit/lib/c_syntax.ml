@@ -132,7 +132,8 @@ struct
               Cmpne;
               Or;
               And;
-              Threefry4x32;
+              Threefry4x32_crypto;
+              Threefry4x32_light;
             ]
           ~f:(fun op ->
             let p, _, _ =
