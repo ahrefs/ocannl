@@ -403,6 +403,7 @@ module C_syntax (B : C_syntax_config) = struct
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let prec = Lazy.force tn.prec in
+        (* FIXME: this precision is hardcoded, bad, bad practice. *)
         let arg_prec = Ops.uint4x32 in
         let local_defs, arg_doc = pp_scalar arg_prec arg in
         let local_defs = pp_local_defs local_defs in
@@ -580,7 +581,16 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
     | Unop (op, v) ->
-        let defs, expr_v = pp_scalar prec v in
+        let arg_prec = 
+          match op with
+          | Ops.Uint4x32_to_prec_uniform1 -> 
+            (* The argument to Uint4x32_to_prec_uniform1 must be evaluated with uint4x32 precision,
+               regardless of the target precision. This handles the case where the operation is
+               inlined as part of a scalar expression. *)
+            Ops.uint4x32
+          | _ -> prec
+        in
+        let defs, expr_v = pp_scalar arg_prec v in
         let expr = group (B.unop_syntax prec op expr_v) in
         (defs, expr)
 
