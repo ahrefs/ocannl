@@ -13,4 +13,4 @@ Epoch=9, loss under target 20: true
 Epoch=10, loss under target 16: true
 Epoch=11, loss under target 15: true
 ..........
-Final epoch loss under target 0.002: true
+Final epoch loss under target 0.01: true

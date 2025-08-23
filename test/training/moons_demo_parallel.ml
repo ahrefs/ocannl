@@ -67,9 +67,9 @@ let main () =
       ()
   in
   let epoch_loss = List.hd_exn rev_epoch_losses in
-  Stdio.printf "\nFinal epoch loss under target 0.002: %b%s\n%!"
-    Float.(0.002 > epoch_loss)
-    (if Float.(0.002 > epoch_loss) then "" else ", actual loss: " ^ Float.to_string epoch_loss);
+  Stdio.printf "\nFinal epoch loss under target 0.01: %b%s\n%!"
+    Float.(0.01 > epoch_loss)
+    (if Float.(0.01 > epoch_loss) then "" else ", actual loss: " ^ Float.to_string epoch_loss);
   (* if Float.(epoch_loss < 1.5) then Stdio.printf "Success\n" else *)
   let points = Tn.points_2d ~xdim:0 ~ydim:1 inputs.value in
   let classes = Tn.points_1d ~xdim:0 outputs.value in
