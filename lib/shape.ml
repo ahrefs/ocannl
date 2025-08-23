@@ -98,7 +98,6 @@ type transpose_type =
   | Permute of string
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
-  | Uint4x32_to_prec1 of Ir.Ops.prec Lazy.t
 [@@deriving equal, sexp]
 
 type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
@@ -265,7 +264,6 @@ let logic_to_spec = function
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
-  | Transpose (Uint4x32_to_prec1 _, _) -> "U4x32_1"
   | Terminal _ -> "<terminal>"
 
 module Update_id = struct
@@ -611,17 +609,6 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 Total_elems
                   { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
             };
-        ] )
-  | Transpose (Uint4x32_to_prec1 _target_prec, sh) ->
-      (* Non-vectorized version: preserves shape exactly *)
-      ( Row.dim_map_empty,
-        [
-          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-          Row_ineq { cur = sh.batch; subr = cur_sh.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh.input };
-          Row_ineq { cur = sh.input; subr = cur_sh.input };
-          Row_ineq { cur = cur_sh.output; subr = sh.output };
-          Row_ineq { cur = sh.output; subr = cur_sh.output };
         ] )
   | Broadcast (Einsum spec, sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =

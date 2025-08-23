@@ -298,8 +298,8 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
     ignore (top_down_prec : bool option);
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
-      ~transpose_op:(Uint4x32_to_prec1 (lazy (assert false)))
-      ~op_asn ~grad_asn ?grad_spec (* Modifying the label would cause identifier pollution. *)
+      ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+      ?grad_spec (* Modifying the label would cause identifier pollution. *)
       ?label ~top_down_prec:true t1
 
 let lt ?(label = []) =

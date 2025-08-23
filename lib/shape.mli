@@ -107,9 +107,6 @@ type transpose_type =
       (** Converts precision in a bit-effient way, with a corresponding conversion in total number
           of elements. Currently, assumes the incoming tensor (RHS) has just a single axis to not
           force unnecessary minimum sizes on output axes. *)
-  | Uint4x32_to_prec1 of Ir.Ops.prec Lazy.t
-      (** Non-vectorized variant that converts precision, producing exactly one output element per
-          input element. Less bit-efficient but preserves the tensor shape. *)
 [@@deriving equal, sexp]
 
 (** If you miss expressivity here, leave a note on

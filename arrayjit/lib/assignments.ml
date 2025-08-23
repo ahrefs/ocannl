@@ -297,7 +297,6 @@ let%track4_sexp to_low_level code =
                 | Ops.Double_prec _ | Ops.Int64_prec _ -> 2 (* 64-bit values *)
                 | Ops.Uint4x32_prec _ -> 1 (* 128-bit value *)
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
-            | Ops.Uint4x32_to_prec_uniform1 -> 1 (* Always produces a single value *)
           in
           Set_from_vec
             { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
