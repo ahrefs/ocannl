@@ -592,7 +592,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform1, _ ->
-          fun v -> func_doc "uint4x32_to_prec_uniform1" v
+          fun v -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform") v
     (* Logical not *)
 
     (* Keep vec_unop_syntax same as in pure C syntax. *)
