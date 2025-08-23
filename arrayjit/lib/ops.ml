@@ -350,6 +350,11 @@ type unop =
   | Neg
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
+  | Uint4x32_to_prec_uniform1
+      (** Non-vectorized variant of [Uint4x32_to_prec_uniform] that converts the given Uint4x32 to a
+          single value of the output precision. Less bit-efficient but operates poitwise. For random
+          bits, the result is uniform over the range of the precision for integer precisions, and
+          over the range \[0.0, 1.0) for floating point precisions. *)
 [@@deriving sexp, compare, equal]
 
 type vec_unop =
@@ -431,6 +436,8 @@ let interpret_unop op v =
   | Neg -> ~-.v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
+  | Uint4x32_to_prec_uniform1 ->
+      invalid_arg "Ops.interpret_unop: Uint4x32_to_prec_uniform1 argument outside the domain of float"
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
@@ -580,6 +587,7 @@ let unop_cd_syntax = function
   | Neg -> "neg"
   | Tanh_approx -> "tanh"
   | Not -> "not"
+  | Uint4x32_to_prec_uniform1 -> "uint4x32_to_prec_uniform1"
 
 let vec_unop_cd_syntax = function Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
 
@@ -627,6 +635,9 @@ let unop_c_syntax prec op =
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
+  | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
+      invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
+  | Uint4x32_to_prec_uniform1, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
 
 let vec_unop_c_syntax prec op =
   match (op, prec) with

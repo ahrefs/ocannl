@@ -284,7 +284,6 @@ let%track4_sexp to_low_level code =
           let rhs_idcs = Array.map projections.project_rhs.(0) ~f:subst_index in
           let open Low_level in
           let rhs_ll = get rhs rhs_idcs in
-          (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
           let length =
             match op with
             | Ops.Uint4x32_to_prec_uniform -> (

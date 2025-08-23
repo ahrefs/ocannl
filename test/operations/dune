@@ -20,7 +20,6 @@
    (env_var OCANNL_BACKEND))
   (action
    (run %{dep:ocannl_read_config.exe} "--read=backend")))
-
  (rule
   (target ocannl_backend_extension.txt)
   (package neural_nets_lib)
@@ -126,7 +125,9 @@
     (copy build_files/n3_fwd-unoptimized.ll %{target})))))
 
 (rule
- (targets top_down_prec-unoptimized.ll.actual top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)
+ (targets
+  top_down_prec-unoptimized.ll.actual
+  top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)
  (package neural_nets_lib)
  (deps
   config/ocannl_backend_extension.txt
@@ -139,8 +140,12 @@
      %{dep:top_down_prec.exe}
      "--ocannl_output_prec_in_ll_files=true"
      "--ocannl_output_debug_files_in_build_directory=true")
-    (copy build_files/d_fwd-unoptimized.ll top_down_prec-unoptimized.ll.actual)
-    (copy build_files/d_fwd.%{read:config/ocannl_backend_extension.txt} top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)))))
+    (copy
+     build_files/d_fwd-unoptimized.ll
+     top_down_prec-unoptimized.ll.actual)
+    (copy
+     build_files/d_fwd.%{read:config/ocannl_backend_extension.txt}
+     top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)))))
 
 (rule
  (alias runtest)
@@ -161,7 +166,7 @@
 (rule
  (alias runtest)
  (package neural_nets_lib)
- (deps 
+ (deps
   config/ocannl_backend_extension.txt
   (env_var OCANNL_BACKEND))
  (action
@@ -213,6 +218,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
+
+(test
+ (name test_uniform1)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_uniform1)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (library
  (name operations_tutorials)
