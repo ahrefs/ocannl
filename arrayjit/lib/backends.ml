@@ -482,7 +482,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           match key.array with | (lazy (Some _)) -> true | _ -> false
         in
         let dst_ptr = 
-          if will_copy_from_host || node.Low_level.zero_initialized then
+          if will_copy_from_host || node.Low_level.zero_initialized_by_code then
             alloc_array (Lazy.force key.prec) ~dims stream
           else
             alloc_zeros (Lazy.force key.prec) ~dims stream

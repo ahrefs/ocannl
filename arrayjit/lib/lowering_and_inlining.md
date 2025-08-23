@@ -54,7 +54,7 @@ type traced_array = {
   mutable computations : (Indexing.axis_index array option * t) list;
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
-  mutable zero_initialized : bool;
+  mutable zero_initialized_by_code : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;
   mutable read_only : bool;

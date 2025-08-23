@@ -868,9 +868,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               S.Int !i)
       in
       set_ctx @@ ctx_of prior_context;
-      (* FIXME: this happens inside the kernel. *)
-      (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
-       Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
       [%log "launching the kernel"];
       (* Stdio.printf "launching %s\n" name; *)
       (if Utils.debug_log_from_routines () then
