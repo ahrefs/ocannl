@@ -1,6 +1,6 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Generated 48 uniform random numbers:
+Generated 40 uniform random numbers:
   [0]: 0.04352
   [1]: 0.25
   [2]: 0.3716
@@ -41,11 +41,3 @@ Generated 48 uniform random numbers:
   [37]: 0.09125
   [38]: 0.9067
   [39]: 0.8599
-  [40]: 0.04871
-  [41]: 0.875
-  [42]: 0.8223
-  [43]: 0.03821
-  [44]: 0.04877
-  [45]: 0.09326
-  [46]: 0.03287
-  [47]: 0.9849
