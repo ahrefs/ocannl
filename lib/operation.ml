@@ -368,15 +368,16 @@ let where ?(label = []) ~grad_spec t1 t2 t3 =
   Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3
 
+(** [range] is a 1D tensor of shape [upto], spans [[0, upto)]. *)
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
     Tensor.term ~fetch_op:Range_over_offsets ~grad_spec ~batch_dims:[]
-      ~label:(("0" ^ "..." ^ Int.to_string upto) :: label)
+      ~label:(("0" ^ "..." ^ Int.to_string (upto - 1)) :: label)
       ~input_dims:[]
   in
   match axis_label with
-  | None -> result ~output_dims:[ upto + 1 ] ()
-  | Some l -> result ~output_axes:[ (l, upto + 1) ] ()
+  | None -> result ~output_dims:[ upto ] ()
+  | Some l -> result ~output_axes:[ (l, upto) ] ()
 
 let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims
     ?output_dims ?batch_axes ?input_axes ?output_axes () =
