@@ -768,7 +768,7 @@ module C_syntax (B : C_syntax_config) = struct
                let ident_doc = string (get_ident tn) in
                let num_elems = Tn.num_elems tn in
                let size_doc = OCaml.int num_elems in
-               let init_doc = if node.Low_level.zero_initialized then string " = {0}" else empty in
+               let init_doc = if node.Low_level.zero_initialized_by_code then string " = {0}" else empty in
                typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
              else empty)
            (Hashtbl.to_alist traced_store)

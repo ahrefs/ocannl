@@ -70,7 +70,12 @@ module Alloc_buffer = struct
         set_ctx stream.device.dev.primary_context;
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
 
-  let alloc_zero_init_array prec ~dims stream =
+  let alloc_array prec ~dims stream =
+    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+    set_ctx stream.device.dev.primary_context;
+    Cu.Deviceptr.mem_alloc ~size_in_bytes
+
+  let alloc_zeros prec ~dims stream =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in
@@ -863,9 +868,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               S.Int !i)
       in
       set_ctx @@ ctx_of prior_context;
-      (* FIXME: this happens inside the kernel. *)
-      (* Map.iteri ctx_arrays ~f:(fun ~key ~data:ptr -> if key.Low_level.zero_initialized then
-       Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:(Tn.size_in_bytes key.Low_level.tn)); *)
       [%log "launching the kernel"];
       (* Stdio.printf "launching %s\n" name; *)
       (if Utils.debug_log_from_routines () then

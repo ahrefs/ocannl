@@ -83,7 +83,7 @@ type traced_array = {
   tn : Tnode.t;
   assignments : int array Base.Hash_set.t;
   accesses : (int array, visits) Base.Hashtbl.t;
-  mutable zero_initialized : bool;
+  mutable zero_initialized_by_code : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;
       (** The node is read before it is written (i.e. it is recurrent). *)
