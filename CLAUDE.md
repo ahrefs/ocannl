@@ -77,8 +77,10 @@ opam install cudajit  # for CUDA backend
 
 ### Testing
 
-- Tests are implemented either as inline expectations using `ppx_expect`; or as cram-style tests where an `.ml` file is compiled, executed, and its output compared against an `.expected` file
-- Tutorial files in `test/` serve as both documentation and integration tests
+- Tests are implemented either as inline expectations using `ppx_expect`; or as cram-style tests using Dune's `test` stanza where an `.ml` file is compiled, executed, and its output compared against an `.expected` file
+- The two approaches are exclusive: a test using using `.expected` file target cannot also use `%expect` inline expectations
+- `.expected` tests are easier to debug, `%expect` tests should only be used when the outputs are illustrative
+- Tutorial files, i.e. `%expect` tests, in `test/` serve as both documentation and integration tests
 - Use `dune promote` to accept test output changes
 - **Test Placement Guidelines**:
   * Always add tests under one of the test subdirectories
