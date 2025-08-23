@@ -206,7 +206,7 @@ typedef struct {
 } uint4x32_t;
 |}, []);
 
-  ("arrayjit_threefry4x32_crypto", {|
+  ("threefry_common", {|
 /* Threefry4x32 constants */
 const uint32_t THREEFRY_C240 = 0x1BD11BDA;
 
@@ -241,6 +241,9 @@ void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned in
     x[1] = x[3];
     x[3] = tmp;
 }
+|}, ["uint4x32_t"]);
+
+  ("arrayjit_threefry4x32_crypto", {|
 
 /* Threefry4x32 implementation - 20 rounds (cryptographic version) */
 uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
@@ -329,7 +332,7 @@ uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
     result.v[3] = x[3];
     return result;
 }
-|}, ["uint4x32_t"]);
+|}, ["uint4x32_t"; "threefry_common"]);
 
   ("arrayjit_threefry4x32_light", {|
 /* Threefry4x32 implementation - 2 rounds (light version, as in JAX/XLA) */
@@ -373,8 +376,7 @@ uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
     result.v[3] = x[3];
     return result;
 }
-|}, ["uint4x32_t"; "THREEFRY_C240"; "THREEFRY_ROTATION_0_0"; "THREEFRY_ROTATION_0_1"; "THREEFRY_ROTATION_0_2"; "THREEFRY_ROTATION_0_3";
-     "THREEFRY_ROTATION_1_0"; "THREEFRY_ROTATION_1_1"; "THREEFRY_ROTATION_1_2"; "THREEFRY_ROTATION_1_3"; "rotl32"; "threefry_round"]);
+|}, ["uint4x32_t"; "threefry_common"]);
 
   ("arrayjit_threefry4x32", {|
 /* Default threefry4x32 function - will be configured at runtime */
