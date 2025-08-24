@@ -602,16 +602,10 @@ let consume_forward_code t =
          ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
-  let rec collect_all_descendant_nodes tensor acc =
-    List.fold tensor.children ~init:acc ~f:(fun acc child ->
-        let acc = Set.add acc child.subtensor.value in
-        collect_all_descendant_nodes child.subtensor acc)
-  in
-  let all_descendants = collect_all_descendant_nodes t (Set.empty (module Tn)) in
-  let non_embedded_descendants = Set.diff all_descendants t.forward.embedded_nodes in
-  let other_roots = 
-    Map.data session_state.forward_roots
-    |> List.filter ~f:(fun r -> r.id <> t.id)
+  let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
+  let non_embedded_descendants = Set.diff all_read t.forward.embedded_nodes in
+  let other_roots =
+    Map.data session_state.forward_roots |> List.filter ~f:(fun r -> r.id <> t.id)
   in
   let conflicting_roots =
     List.filter other_roots ~f:(fun root ->
@@ -641,26 +635,17 @@ let consume_backprop_code t =
     @@ Session_error
          ("Tensor.consume_backprop_code: tensor is not a root for tnode: " ^ debug_grad t, Some t);
   (* Check if any non-embedded grad descendants of t are embedded in other roots *)
-  let rec collect_all_descendant_grad_nodes tensor acc =
-    List.fold tensor.children ~init:acc ~f:(fun acc child ->
-        let acc = 
-          match child.subtensor.diff with
-          | Some d -> Set.add acc d.grad
-          | None -> acc
-        in
-        collect_all_descendant_grad_nodes child.subtensor acc)
-  in
-  let all_grad_descendants = collect_all_descendant_grad_nodes t (Set.empty (module Tn)) in
-  let non_embedded_grad_descendants = Set.diff all_grad_descendants diff.backprop.embedded_nodes in
-  let other_roots = 
-    Map.data session_state.backprop_roots
-    |> List.filter ~f:(fun r -> r.id <> t.id)
+  let all_read = fst @@ Asgns.collect_nodes_guess_output diff.backprop.asgns in
+  let non_embedded_grad_descendants = Set.diff all_read diff.backprop.embedded_nodes in
+  let other_roots =
+    Map.data session_state.backprop_roots |> List.filter ~f:(fun r -> r.id <> t.id)
   in
   let conflicting_roots =
     List.filter other_roots ~f:(fun root ->
         match root.diff with
-        | Some rdiff -> 
-            not (Set.is_empty (Set.inter non_embedded_grad_descendants rdiff.backprop.embedded_nodes))
+        | Some rdiff ->
+            not
+              (Set.is_empty (Set.inter non_embedded_grad_descendants rdiff.backprop.embedded_nodes))
         | None -> false)
   in
   if not @@ List.is_empty conflicting_roots then
