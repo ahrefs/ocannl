@@ -560,13 +560,14 @@ module TDSL = struct
   (** The default initialization operation for {!param} calls. *)
   let default_param_init = ref (uniform ~grad_spec:Require_grad)
 
-  let param ?value ?values =
+  let param ?value ?values ?param_init =
     let t =
-      match (value, values) with
-      | Some _, Some _ -> invalid_arg "TDSL.param: both value and values are set"
-      | Some value, None -> Tensor.term_init ~grad_spec:Require_grad [| value |]
-      | None, Some values -> Tensor.term_init ~grad_spec:Require_grad values
-      | None, None -> !default_param_init ()
+      match (value, values, param_init) with
+      | Some value, None, None -> Tensor.term_init ~grad_spec:Require_grad [| value |]
+      | None, Some values, None -> Tensor.term_init ~grad_spec:Require_grad values
+      | None, None, Some param_init -> param_init
+      | None, None, None -> !default_param_init ()
+      | _ -> invalid_arg "TDSL.param: at most one of value, values, and param_init can be set"
     in
     Tensor.param ~t
 

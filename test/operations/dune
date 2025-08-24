@@ -214,6 +214,17 @@
   (pps ppx_here ppx_ocannl))
  (modes exe))
 
+(test
+ (name test_record_syntax)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_record_syntax)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

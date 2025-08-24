@@ -3,23 +3,35 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
-let make_p ~has_config ~loc ?input_dims ?output_dims ?value ?values name =
+let make_p ~has_config ~loc ?value ?values ?param_init ~extra_args name =
   let more_label = if has_config then [%expr Some config.label] else [%expr None] in
-  let input_dims =
-    match input_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
-  in
-  let output_dims =
-    match output_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
-  in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  [%expr
-    TDSL.param ?more_label:[%e more_label] ?input_dims:[%e input_dims] ?output_dims:[%e output_dims]
-      ?value:[%e value] ?values:[%e values] [%e name] ()]
+  let param_init = match param_init with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
+  let extra_args =
+    List.map extra_args ~f:(fun (label, value) ->
+      match label.txt with
+      | Lident arg_name -> (Labelled arg_name, value)
+      | _ ->
+          ( Labelled "syntax_error",
+            Ast_builder.Default.pexp_extension ~loc:label.loc
+            @@ Location.error_extensionf ~loc:label.loc
+                 "inline-definition fields must be simple identifiers" ))
+  in
+  let base_expr = [%expr
+      TDSL.param ?more_label:[%e more_label] ?value:[%e value] ?values:[%e values]
+        ?param_init:[%e param_init] [%e name]] in
+  let with_extra_args = 
+    if List.is_empty extra_args then
+      base_expr
+    else
+      Ast_helper.Exp.apply ~loc base_expr extra_args
+  in
+  [%expr [%e with_extra_args] ()]
 
-let make_vb ?value ~has_config ~loc ~str_loc ~ident string =
+let make_vb ?value ?param_init ~has_config ~loc ~str_loc ~ident string =
   let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let v = make_p ~has_config ~loc ?value string in
+  let v = make_p ~has_config ~loc ?value ?param_init ~extra_args:[] string in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -29,7 +41,8 @@ let make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims ~dims_loc string =
     let loc = dims_loc in
     List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]])
   in
-  let v = make_p ~has_config ~loc ~output_dims:dims string in
+  let extra_args = [ ({ txt = Lident "output_dims"; loc = dims_loc }, dims) ] in
+  let v = make_p ~has_config ~loc ~extra_args string in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
@@ -43,9 +56,13 @@ let make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd string =
            "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
       let edims dims = Ast_builder.Default.elist ~loc dims in
-      let input_dims = edims input_dims in
-      let output_dims = edims output_dims in
-      make_p ~has_config ~loc ~input_dims ~output_dims ~values string
+      let input_dims_expr = edims input_dims in
+      let output_dims_expr = edims output_dims in
+      let extra_args = [
+        ({ txt = Lident "input_dims"; loc }, input_dims_expr);
+        ({ txt = Lident "output_dims"; loc }, output_dims_expr)
+      ] in
+      make_p ~has_config ~loc ~values ~extra_args string
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -147,49 +164,34 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       (* Basic string syntax for backward compatibility *)
       let pat, vb = make_vb ~has_config ~loc ~str_loc ~ident expr in
       (Map.singleton (module String) ident vb, pat2expr pat)
-  | { pexp_desc = Pexp_record (fields, None); _ } when not (List.is_empty fields) ->
-      (* Record syntax for tensor definitions - simplified for now *)
-      (match fields with
-      | [] -> assert false (* Already checked non-empty *)
-      | [ (label, value) ] -> (
-          match label.txt with
-          | Lident tensor_name -> (
-              (* Handle single field record - treat like string syntax *)
-              match value with
-              | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
-                  (* Simple float value *)
-                  let str_expr = Ast_helper.Exp.constant ~loc:label.loc 
-                    (Pconst_string (tensor_name, label.loc, None)) in
-                  let pat, vb = make_vb ~value ~has_config ~loc ~str_loc:label.loc ~ident:tensor_name str_expr in
-                  (Map.singleton (module String) tensor_name vb, pat2expr pat)
-              | _ ->
-                  (* For now, recursively translate the value as a general expression *)
-                  let init_vbs, init_expr = loop value in
-                  (* Then use it as initialization *)
-                  let str_expr = Ast_helper.Exp.constant ~loc:label.loc 
-                    (Pconst_string (tensor_name, label.loc, None)) in
-                  (* Create the parameter using the translated expression *)
-                  let pat = Ast_helper.Pat.var ~loc:label.loc { loc = label.loc; txt = tensor_name } in
-                  let name_str = Ast_helper.Exp.constant ~loc 
-                    (Pconst_string (tensor_name, label.loc, None)) in
-                  let vb = 
-                    Ast_helper.Vb.mk ~loc pat
-                      [%expr 
-                        let __init = [%e init_expr] in
-                        TDSL.param ?more_label:[%e opt_expr ~loc label] [%e name_str] __init ()
-                      ] in
-                  (Map.add_exn ~key:tensor_name ~data:vb init_vbs, pat2expr pat))
-          | _ -> 
-              ( no_vbs,
-                Ast_builder.Default.pexp_extension ~loc
-                @@ Location.error_extensionf ~loc 
-                     "ppx_ocannl %%op: record field label must be a simple identifier" ))
-      | _ -> 
-          (* Multiple fields not supported yet *)
+  | { pexp_desc = Pexp_record ([], _); _ } ->
+      (* Empty record - not a tensor definition *)
+      (no_vbs, expr)
+  | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ } -> (
+      (* Record syntax for tensor definitions *)
+      match first_label.txt with
+      | Lident tensor_name ->
+          (* Process the initialization expression *)
+          let init_vbs, param_init = loop first_value in
+          (* Create the parameter name string *)
+          let name_str =
+            Ast_helper.Exp.constant ~loc:first_label.loc
+              (Pconst_string (tensor_name, first_label.loc, None))
+          in
+          (* Create the pattern for the binding *)
+          let pat = Ast_helper.Pat.var ~loc:first_label.loc { loc = first_label.loc; txt = tensor_name } in
+          (* Build the parameter expression *)
+          let param_expr = make_p ~has_config ~loc ~param_init ~extra_args name_str in
+          (* Create the value binding *)
+          let vb = Ast_helper.Vb.mk ~loc pat param_expr in
+          (* Combine with any bindings from the initialization *)
+          let all_vbs = Map.add_exn init_vbs ~key:tensor_name ~data:vb in
+          (all_vbs, pat2expr pat)
+      | _ ->
           ( no_vbs,
             Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc 
-                 "ppx_ocannl %%op: multi-field records not yet supported" ))
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?label expr)
