@@ -245,7 +245,9 @@ val set_random_seed : ?seed:int -> unit -> unit
 
 val get_random_seed : unit -> t
 (** Returns a tensor with the current random seed. Lazily initialized using {!set_random_seed} and
-    reset when {!unsafe_reinitialize} is called. *)
+    reset when {!unsafe_reinitialize} is called. IMPORTANT: all sites using the same global random
+    seed, e.g. using [get_random_seed ()] not separated by a call to {!unsafe_reinitialize}, must
+    descend from the first caller's optimization context. *)
 
 (** {2 Printing.} *)
 

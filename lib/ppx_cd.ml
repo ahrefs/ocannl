@@ -469,7 +469,7 @@ let translate ?ident_label (expr : expression) : result =
                @@ Location.error_extensionf ~loc
                     "ppx_ocannl %%cd: expected a unary operator, one of: %s"
                     "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, \
-                     neg, tanh" ))
+                     neg, tanh, uint4x32_to_prec_uniform1" ))
     in
     let vec_unary_op vec_un_op =
       loc

@@ -240,13 +240,13 @@ let () =
        and type optimize_ctx = Backend.optimize_ctx)
   in
 
-  let ri = TDSL.range 3 in
+  let ri = TDSL.range 4 in
   let%op ti = ri ++ "i=>i0" in
   (* Write position 2 of ti, otherwise shape inference concludes it's dim-1 and broadcasted. *)
   let%cd _ = ti =: 0 ++ "i=>i2" in
-  let rj = TDSL.range 4 in
+  let rj = TDSL.range 5 in
   let%op tj = rj ++ "j=>j1" in
-  let rk = TDSL.range 5 in
+  let rk = TDSL.range 6 in
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
   Train.set_hosted tk.value;

@@ -206,7 +206,7 @@ typedef struct {
 } uint4x32_t;
 |}, []);
 
-  ("arrayjit_threefry4x32", {|
+  ("threefry_common", {|
 /* Threefry4x32 constants */
 const uint32_t THREEFRY_C240 = 0x1BD11BDA;
 
@@ -241,9 +241,12 @@ void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned in
     x[1] = x[3];
     x[3] = tmp;
 }
+|}, ["uint4x32_t"]);
 
-/* Threefry4x32 implementation - 20 rounds */
-uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+  ("arrayjit_threefry4x32_crypto", {|
+
+/* Threefry4x32 implementation - 20 rounds (cryptographic version) */
+uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
     uint32_t x[4];
     uint32_t ks[5];
     
@@ -329,7 +332,59 @@ uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     result.v[3] = x[3];
     return result;
 }
-|}, ["uint4x32_t"]);
+|}, ["uint4x32_t"; "threefry_common"]);
+
+  ("arrayjit_threefry4x32_light", {|
+/* Threefry4x32 implementation - 2 rounds (light version, as in JAX/XLA) */
+uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
+    uint32_t x[4];
+    uint32_t ks[5];
+    
+    /* Initialize key schedule */
+    ks[0] = key.v[0];
+    ks[1] = key.v[1];
+    ks[2] = key.v[2];
+    ks[3] = key.v[3];
+    ks[4] = ks[0] ^ ks[1] ^ ks[2] ^ ks[3] ^ THREEFRY_C240;
+    
+    /* Initialize state with counter */
+    x[0] = counter.v[0];
+    x[1] = counter.v[1];
+    x[2] = counter.v[2];
+    x[3] = counter.v[3];
+    
+    /* Initial key injection */
+    x[0] += ks[0];
+    x[1] += ks[1];
+    x[2] += ks[2];
+    x[3] += ks[3];
+    
+    /* Only 2 rounds for light version */
+    threefry_round(x, THREEFRY_ROTATION_0_0, THREEFRY_ROTATION_0_1, THREEFRY_ROTATION_0_2, THREEFRY_ROTATION_0_3);
+    threefry_round(x, THREEFRY_ROTATION_1_0, THREEFRY_ROTATION_1_1, THREEFRY_ROTATION_1_2, THREEFRY_ROTATION_1_3);
+    
+    /* Final key injection after round 2 */
+    x[0] += ks[1];
+    x[1] += ks[2];
+    x[2] += ks[3];
+    x[3] += ks[4] + 1;
+    
+    uint4x32_t result;
+    result.v[0] = x[0];
+    result.v[1] = x[1];
+    result.v[2] = x[2];
+    result.v[3] = x[3];
+    return result;
+}
+|}, ["uint4x32_t"; "threefry_common"]);
+
+  ("arrayjit_threefry4x32", {|
+/* Default threefry4x32 function - will be configured at runtime */
+uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+    /* Default to light version */
+    return arrayjit_threefry4x32_light(key, counter);
+}
+|}, ["uint4x32_t"; "arrayjit_threefry4x32_light"]);
 
   (* Vector types with half precision *)
   ("half8_t", {|

@@ -601,18 +601,22 @@ let consume_forward_code t =
     @@ Session_error
          ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
            Some t );
-  (* FIXME(#321): this is too aggressive, instead we should check if the code contains any
-     non-embedded nodes that are embedded nodes of the other roots. *)
-  let unsafe_roots =
-    Map.data session_state.forward_roots
-    |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
+  (* Check if any non-embedded descendants of t are embedded in other roots *)
+  let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
+  let non_embedded_descendants = Set.diff all_read t.forward.embedded_nodes in
+  let other_roots =
+    Map.data session_state.forward_roots |> List.filter ~f:(fun r -> r.id <> t.id)
   in
-  if not @@ List.is_empty unsafe_roots then
+  let conflicting_roots =
+    List.filter other_roots ~f:(fun root ->
+        not (Set.is_empty (Set.inter non_embedded_descendants root.forward.embedded_nodes)))
+  in
+  if not @@ List.is_empty conflicting_roots then
     raise
     @@ Session_error
          ( [%string
              {|Tensor.consume_forward_code for %{debug_name t}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
+found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_name conflicting_roots}|}],
            Some t );
   remove_fwd_root t;
   t.forward
@@ -630,16 +634,26 @@ let consume_backprop_code t =
     raise
     @@ Session_error
          ("Tensor.consume_backprop_code: tensor is not a root for tnode: " ^ debug_grad t, Some t);
-  let unsafe_roots =
-    Map.data session_state.backprop_roots
-    |> List.filter ~f:(fun r -> not (List.is_empty r.children || r.id = t.id))
+  (* Check if any non-embedded grad descendants of t are embedded in other roots *)
+  let all_read = fst @@ Asgns.collect_nodes_guess_output diff.backprop.asgns in
+  let non_embedded_grad_descendants = Set.diff all_read diff.backprop.embedded_nodes in
+  let other_roots =
+    Map.data session_state.backprop_roots |> List.filter ~f:(fun r -> r.id <> t.id)
   in
-  if not @@ List.is_empty unsafe_roots then
+  let conflicting_roots =
+    List.filter other_roots ~f:(fun root ->
+        match root.diff with
+        | Some rdiff ->
+            not
+              (Set.is_empty (Set.inter non_embedded_grad_descendants rdiff.backprop.embedded_nodes))
+        | None -> false)
+  in
+  if not @@ List.is_empty conflicting_roots then
     raise
     @@ Session_error
          ( [%string
              {|Tensor.consume_backprop_code for %{debug_grad t}:
-found potentially unsafe roots: %{String.concat ~sep:", " @@ List.map ~f:debug_name unsafe_roots}|}],
+found conflicting roots with shared non-embedded grad descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_grad conflicting_roots}|}],
            Some t );
   remove_bprop_root t;
   diff.backprop

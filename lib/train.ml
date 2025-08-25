@@ -317,7 +317,7 @@ let to_routine (type buffer_ptr dev runner event optimize_ctx)
        and type event = event
        and type optimize_ctx = optimize_ctx) (context : Backend.context) ?(hosted = true) ?name
     bindings comp =
-  if hosted then Set.iter (Asgns.guess_output_nodes comp.Asgns.asgns) ~f:set_hosted;
+  if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
   Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
 
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from

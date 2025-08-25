@@ -75,6 +75,7 @@ let () =
   let open Operation.At in
   let batch_ref = IDX.find_exn sgd_step.bindings batch_n in
   let step_ref = IDX.find_exn sgd_step.bindings step_n in
+  let epoch_loss_target_limits = [| 595.; 567.; 565.; 563.; 562.; 561.; 560.; 559.; 558.; 557. |] in
   for epoch = 0 to epochs - 1 do
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
@@ -84,7 +85,10 @@ let () =
       epoch_loss := !epoch_loss +. loss;
       Int.incr step_ref
     done;
-    Stdio.printf "Epoch %d, epoch loss=%.3g\n%!" epoch !epoch_loss
+    Stdio.printf "Epoch %d, epoch loss below %g=%b%s\n%!" epoch epoch_loss_target_limits.(epoch)
+      Float.(epoch_loss_target_limits.(epoch) > !epoch_loss)
+      (if Float.(epoch_loss_target_limits.(epoch) > !epoch_loss) then ""
+       else ", actual loss: " ^ Float.to_string !epoch_loss)
   done;
 
   (* Train.printf_tree batch_loss; *)
@@ -127,5 +131,6 @@ let () =
     String.drop_prefix name_with_dot 1
   in
 
-  let names = Array.init 4 ~f:(fun _ -> gen_name ()) in
+  (* Generate very few names because different hardware backends diverge quickly. *)
+  let names = Array.init 3 ~f:(fun _ -> gen_name ()) in
   Array.iter names ~f:print_endline

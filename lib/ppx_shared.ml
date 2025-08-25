@@ -170,8 +170,10 @@ let binary_ops =
       ("max", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Max]));
       ("@-", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Min]));
       ("min", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Min]));
-      ("^^^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32]));
-      ("threefry4x32", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32]));
+      ("^^^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32_crypto]));
+      ("threefry4x32_crypto", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32_crypto]));
+      ("^^", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32_light]));
+      ("threefry4x32_light", fun loc -> ([%expr Shape.Pointwise_bin], [%expr Ir.Ops.Threefry4x32_light]));
     ]
 
 (** Unary primitive ops. *)
@@ -194,6 +196,8 @@ let unary_ops =
       ("neg", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Neg]));
       ("tanh", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Tanh_approx]));
       ("not", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Not]));
+      ( "uint4x32_to_prec_uniform1",
+        fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_uniform1]) );
     ]
 
 (** Vector unary primitive ops. *)

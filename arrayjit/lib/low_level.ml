@@ -123,7 +123,7 @@ type traced_array = {
   tn : Tn.t;
   assignments : int array Hash_set.t;
   accesses : (int array, visits) Hashtbl.t;
-  mutable zero_initialized : bool;
+  mutable zero_initialized_by_code : bool;
   mutable zeroed_out : bool;
   mutable read_before_write : bool;
   mutable read_only : bool;
@@ -154,7 +154,7 @@ let get_node store tn =
         tn;
         assignments = Hash_set.Poly.create ();
         accesses = Hashtbl.Poly.create ();
-        zero_initialized = false;
+        zero_initialized_by_code = false;
         zeroed_out = false;
         read_before_write = false;
         read_only = false;
@@ -260,7 +260,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if Hash_set.is_empty traced.assignments && Hashtbl.is_empty traced.accesses then (
-          traced.zero_initialized <- true;
+          traced.zero_initialized_by_code <- true;
           traced.is_accessing <- false;
           traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
@@ -962,7 +962,7 @@ let simplify_llc llc =
     | Embed_index (Affine _) -> llsc (* Cannot simplify affine expressions to constants *)
     | Binop (Arg1, llv1, _) -> loop_scalar llv1
     | Binop (Arg2, _, llv2) -> loop_scalar llv2
-    | Binop (Threefry4x32, _, _) -> llsc
+    | Binop ((Threefry4x32_crypto | Threefry4x32_light), _, _) -> llsc
     | Binop (op, Constant c1, Constant c2) -> Constant (Ops.interpret_binop op c1 c2)
     | Binop (Add, llsc, Constant 0.)
     | Binop (Sub, llsc, Constant 0.)

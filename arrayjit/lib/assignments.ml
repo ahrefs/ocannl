@@ -113,8 +113,9 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
   in
   loop asgns
 
-(** Returns the nodes that are not read from after being written to. *)
-let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
+(** In the second set, returns the nodes that are not read from after being written to. In the first
+    set, returns the nodes that are ever read from. *)
+let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
   let one = Set.singleton (module Tn) in
@@ -137,7 +138,7 @@ let%debug3_sexp guess_output_nodes (asgns : t) : Tn.t_set =
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
     | Fetch { array; _ } -> (empty, one array)
   in
-  snd @@ loop asgns
+  loop asgns
 
 let sequential l =
   Option.value ~default:Noop @@ List.reduce l ~f:(fun sts another_st -> Seq (sts, another_st))
@@ -284,7 +285,6 @@ let%track4_sexp to_low_level code =
           let rhs_idcs = Array.map projections.project_rhs.(0) ~f:subst_index in
           let open Low_level in
           let rhs_ll = get rhs rhs_idcs in
-          (* For now, we know the only vec_unop is Uint4x32_to_prec_uniform *)
           let length =
             match op with
             | Ops.Uint4x32_to_prec_uniform -> (
