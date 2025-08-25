@@ -29,7 +29,7 @@ let main () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = "w2" * relu ("b1" 16 + ("w1" * x)) in
+  let%op mlp x = { w2 } * relu ({ b1; o = [ 16 ] } + ({ w1 } * x)) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in

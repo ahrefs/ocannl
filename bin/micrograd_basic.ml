@@ -9,7 +9,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let%diagn_sexp () =
   let module Backend = (val Backends.fresh_backend ~backend_name:"multicore_cc" ()) in
-  let%op c = "a" [ -4 ] + "b" [ 2 ] in
+  let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   let%op d = c + c + 1 in
   (* let%op c = c + 1 + c + ~-a in *)
   (* Uncomment just the first "fully on host" line to see which arrays can be virtual, and just the
@@ -25,7 +25,7 @@ let%diagn_sexp () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true b
 
 let%diagn_sexp _suspended () : unit =
-  let%op c = "a" [ -4 ] + "b" [ 2 ] in
+  let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
   let%op c = c + 1 + c + ~-a in

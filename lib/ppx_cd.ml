@@ -862,6 +862,9 @@ let translate ?ident_label (expr : expression) : result =
             in
             let extra_args =
               List.map extra_args ~f:(function
+                | { txt = Lident "o"; _ }, value -> ("output_dims", value)
+                | { txt = Lident "i"; _ }, value -> ("input_dims", value)
+                | { txt = Lident "b"; _ }, value -> ("batch_dims", value)
                 | { txt = Lident label; _ }, value -> (label, value)
                 | { loc; _ }, _ ->
                     ( "syntax_error",

@@ -23,7 +23,7 @@ let hello1 () =
 let hello2 () =
   let module Backend = (val Backends.fresh_backend ()) in
   (* Hey is inferred to be a matrix. *)
-  let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in
+  let%op y = ({ hey } * 'q' 2.0) + 'p' 1.0 in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.every_non_literal_on_host y;
   ignore (Train.forward_once (module Backend) y);
@@ -106,7 +106,7 @@ let hello6 () =
   in
 
   (* "Hey" is inferred to be a scalar. *)
-  let%op y = 2 *. "hey" in
+  let%op y = 2 *. { hey } in
   ignore (Train.forward_once backend y);
   (* Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey; *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y

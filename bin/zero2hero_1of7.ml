@@ -17,7 +17,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 let _suspended () =
   let module Backend = (val Backends.fresh_backend ()) in
-  let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%op v = ({ w = [ (-3, 1) ] } * { x = [ 2; 0 ] }) + { b = [ 6.7 ] } in
   Train.every_non_literal_on_host v;
   let code = Train.grad_update v in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
@@ -131,9 +131,9 @@ let _suspended () =
   ()
 
 let _suspended () =
-  let%op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%op d = e + "c" [ 10 ] in
-  let%op l = d *. "f" [ -2 ] in
+  let%op e = { a = [ 2 ] } *. { b = [ -3 ] } in
+  let%op d = e + { c = [ 10 ] } in
+  let%op l = d *. { f = [ -2 ] } in
   Train.every_non_literal_on_host l;
   let module Backend = (val Backends.fresh_backend ()) in
   let ctx = Train.update_once (module Backend) ~hosted:true l in

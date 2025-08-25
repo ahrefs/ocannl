@@ -51,8 +51,7 @@ let () =
   let%op output_gram = outputs @| batch_n in
 
   let%op mlp input =
-    (* let counts = exp (("w3" + 1) * relu ("b2" 4 + ("w2" * relu ("b1" 8 + ("w1" * input))))) in *)
-    let counts = exp (("w2" + 1) * relu ("b1" 24 + ("w1" * input))) in
+    let counts = exp (({ w2 } + 1) * relu ({ b1; o = [ 24 ] } + ({ w1 } * input))) in
     counts /. (counts ++ "...|... => ...|0")
   in
 
@@ -93,7 +92,7 @@ let () =
   let%cd infer_probs = mlp "cha" in
   let%cd infer_step =
     infer_probs.forward;
-    "dice" =: uniform_at !@counter_n
+    { dice } =: uniform_at !@counter_n
   in
   Train.set_on_host infer_probs.value;
   let infer_step = Train.to_routine (module Backend) sgd_step.context bindings infer_step in

@@ -9,7 +9,7 @@ module Tn = Ir.Tnode
 let () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let%op d = ("a" [ 2 ] + "b" [ 2 ]) *. "c" [ 2 ] in
+  let%op d = ({ a = [ 2 ] } + { b = [ 2 ] }) *. { c = [ 2 ] } in
   Tn.update_prec b.value Ir.Ops.half;
   Tn.update_prec d.value Ir.Ops.bfloat16;
   (* Even when the default precision is single, c is bfloat16 and a is half. *)

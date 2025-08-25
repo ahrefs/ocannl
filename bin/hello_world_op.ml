@@ -27,7 +27,7 @@ let%track2_sexp _Pointwise_multiplication_dims_1 (() : unit) : unit =
   in
 
   (* "Hey" is inferred to be a scalar. *)
-  let%op ya = 2 *. "hey" 7.0 in
+  let%op ya = 2 *. { hey = 7.0 } in
   ignore (Train.forward_once backend ya);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ya
 
@@ -44,7 +44,7 @@ let%track2_sexp _Matrix_multiplication_dims_1x1 (() : unit) : unit =
   in
 
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%op yb = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
+  let%op yb = ({ hey = 7.0 } * 'q' 2.0) + 'p' 1.0 in
   ignore (Train.forward_once backend yb);
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
@@ -172,7 +172,7 @@ let%track2_sexp _Matrix_multiplication_dims_2x3 (() : unit) : unit =
   in
 
   (* Hey is inferred to be a matrix. *)
-  let%op yc = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  let%op yc = ({ hey = 7.0 } * [ 2; 3 ]) + [ 4; 5; 6 ] in
   ignore (Train.forward_once backend yc);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false yc

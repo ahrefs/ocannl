@@ -16,7 +16,7 @@ let benchmark_overhead backend () =
   CDSL.disable_all_debugs ();
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ Backend.name ^ " ******";
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
-  let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  let%op f = (3 *. ({ x; o = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.set_hosted f.value;
 
   (* Train.every_non_literal_on_host f; *)

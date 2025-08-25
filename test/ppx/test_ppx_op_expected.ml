@@ -3,16 +3,16 @@ open Ocannl
 module TDSL = Operation.TDSL
 let y0 =
   let hey1 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey1" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey1") () in
   let open! TDSL.O in
     ((+) ?label:(Some ["y0"]))
       ((( *. ) ?label:None) (TDSL.number (Float.of_int 2)) hey1)
       (TDSL.number (Float.of_int 3))
 let y1 =
   let hey2 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey2" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey2") () in
   let open! TDSL.O in
     fun x ->
       ((+) ?label:(Some
@@ -20,8 +20,8 @@ let y1 =
         ((( * ) ?label:None) hey2 (TDSL.number (Float.of_int 2))) x
 let y2 =
   let hey3 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey3" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey3") () in
   let open! TDSL.O in
     fun x1 x2 ->
       ((+) ?label:(Some
@@ -43,19 +43,19 @@ let b =
        ~label:["b"]) ~batch_dims:[2] ~input_dims:[] ~output_dims:[2] ()
 let y =
   let hey4 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey4" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey4") () in
   let open! TDSL.O in
     ((+) ?label:(Some ["y"]))
       ((( * ) ?label:None) hey4 (TDSL.number ?label:None ~axis_label:"q" 2.0))
       (TDSL.number ?label:None ~axis_label:"p" 1.0)
 let z =
   let hey5 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey5" ()
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey5") ()
   and hey6 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey6" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey6") () in
   let open! TDSL.O in
     ((+) ?label:(Some ["z"]))
       ((( * ) ?label:None) (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
@@ -64,11 +64,11 @@ let stride = 2
 and dilation = 3
 let z2 =
   let hey7 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey7" ()
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey7") ()
   and hey8 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey8" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey8") () in
   let open! TDSL.O in
     einsum ?label:(Some ["z2"])
       (String.concat ~sep:""
@@ -78,11 +78,11 @@ let z3 =
   let s = 2
   and d = 3 in
   let hey10 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey10" ()
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey10") ()
   and hey9 =
-    TDSL.param ?more_label:None ?input_dims:None ?output_dims:None
-      ?value:None ?values:None "hey9" () in
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey9") () in
   let open! TDSL.O in
     einsum ?label:(Some [])
       (String.concat ~sep:""
@@ -96,12 +96,12 @@ let mlp_layer =
   let open! TDSL.O in
     fun ~config ->
       let b =
-        TDSL.param ?more_label:(Some (config.label)) ?input_dims:None
-          ?output_dims:(Some [config.hid_dim]) ?value:None ?values:None "b"
+        ((TDSL.param ?more_label:(Some (config.label)) ?value:None
+            ?values:None ?param_init:None "b") ~output_dims:[config.hid_dim])
           ()
       and w =
-        TDSL.param ?more_label:(Some (config.label)) ?input_dims:None
-          ?output_dims:None ?value:None ?values:None "w" () in
+        (TDSL.param ?more_label:(Some (config.label)) ?value:None
+           ?values:None ?param_init:None "w") () in
       fun x ->
         (relu
            ?label:(Some
