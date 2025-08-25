@@ -24,6 +24,7 @@
 - In a nutshell
   - Syntax extension `%cd` stands for "code", to express assignments and computations: `Assignments.comp`.
   - Syntax extension `%op` stands for "operation", to express tensors: `Tensor.t`.
+  - Both extensions use record syntax `{ tensor_name }` or `{ tensor_name = init_expr }` for inline tensor declarations.
 
 ## Preliminaries
 
@@ -174,7 +175,7 @@ Using [inline declarations](#inline-declarations), this becomes more concise:
 
 ```ocaml
   let hid_dim = 8 in
-  let%op mlp_layer x = relu("w" * x + "b" hid_dim) in
+  let%op mlp_layer x = relu({ w } * x + { b; o = [ hid_dim ] }) in
   ...
 ```
 
@@ -258,16 +259,32 @@ When an extension is over a wildcard (ignore result) binding: `let%cd _ = ...` a
 
 ## Inline declarations
 
-Both `%cd` and `%op` syntaxes support inline declarations of tensors. For `%op` these are differentiable, for `%cd` non-differentiable tensors. A declaration site uses the string syntax, the content of the string is the is bound to the newly created tensor, and the string itself functions equivalently to using the newly introduced identifier. The scope of the binding is the full scope of the extension point, even if the declaring string appeared in the body of a function that's inside the extension point scope (except for `%op` there is a special case of `~config` labeled argument discussed below). The first element of the label of the created tensor is the string that introduced it.
+Both `%cd` and `%op` syntaxes support inline declarations of tensors. For `%op` these are differentiable, for `%cd` non-differentiable tensors.
+
+A declaration site uses the record syntax. The key difference between the two extensions:
+- **`%op`**: `{ tensor_name = init_expr }` allows initialization expressions, or `{ tensor_name }` for default initialization (uniform random)
+- **`%cd`**: `{ tensor_name }` requires self-referential syntax (the field name must match the field value identifier), no separate initialization expressions are allowed
+
+Both syntaxes support additional record fields that map directly to labeled arguments of the tensor creation functions (see `Tensor` module signatures):
+- `output_dims` or shorthand `o`: specifies output dimensions
+- `input_dims` or shorthand `i`: specifies input dimensions  
+- `batch_dims` or shorthand `b`: specifies batch dimensions
+- Any other labeled argument accepted by `TDSL.param` (for `%op`) or `NTDSL.term` (for `%cd`)
+
+Examples:
+- `%op`: `{ x = 5.0 }`, `{ w; o = [hidden_dim] }`, `{ weights = [1.0; 2.0] }`
+- `%cd`: `{ temp }`, `{ result; output_dims = [3; 4] }`, `{ x; o = [10] }`
+
+The tensor name is bound to the newly created tensor, and the record expression itself evaluates to the tensor. The scope of the binding is the full scope of the extension point, even if the declaring record appeared in the body of a function that's inside the extension point scope (except for `%op` there is a special case of `~config` labeled argument discussed below). The first element of the label of the created tensor is the name that introduced it.
 
 For `%cd`, inline declarations are allowed both in the assigned-to position (left-hand side) of assignments and in standalone tensor expressions. When used in assignments, one of the tensors on the right-hand-side is picked to provide additional label information if possible. In particular, tensors that are function parameters inside the scope of the extension point, cannot be picked to provide label information, as they would escape their scope at the point the tensor is created. Inline declarations are still prohibited within the right-hand side of assignments to discourage over-use in locations with less label information. Example showing two tensor nodes declared inline, both of them include the label of the param `p` in their labels:
 
 ```ocaml
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = false) p =
   [%cd
-    "sgd_delta" =: p.grad + (!.weight_decay *. p);
+    { sgd_delta } =: p.grad + (!.weight_decay *. p);
     if Float.(momentum > 0.0) then (
-      "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
+      { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta;
       if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
     p =- learning_rate *. sgd_delta]
 ```
@@ -292,7 +309,7 @@ For `%op`, the declaration is allowed anywhere. If there is a `~config` function
 ```ocaml
 type mlp_layer_config = { label : string list; hid_dim : int }
 
-let%op mlp_layer ~config x = relu ("w" * x + "b" config.hid_dim)
+let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })
 ```
 
 ## Using OCANNL's generalized einsum notation
@@ -408,25 +425,34 @@ Note that we do not include `config.label`, even if `config` is available, becau
 
 ### Configuring inline declarations: inline output dimensions, initial values
 
-In the `%op` syntax, when a tuple follows an inline declaration of a tensor (i.e. a string literal), the tuple is passed to specify the output axes in the tensor definition (via the `~output_dims` argument).
+In the `%op` syntax, inline declarations use record syntax with additional fields to configure the tensor:
 
-When it is an integer, an identifier, or a record field dereference following an inline declaration, this expression specifies the single output axis in the tensor definition. You can see an example above in this document: `let%op mlp_layer ~config x = relu ("w" * x + "b" config.hid_dim)`.
+- **Basic declaration with default initialization**: `{ tensor_name }` uses OCaml's punning syntax and defaults to uniform random initialization
+- **Declaration with value initialization**: `{ tensor_name = value }` where value can be:
+  - A scalar: `{ x = 5.0 }` or `{ y = 42 }`
+  - A list/array: `{ weights = [1.0; 2.0; 3.0] }`
+  - An initialization function: `{ z = uniform () }`
+- **Declaration with dimensions**: Additional fields specify tensor dimensions:
+  - `output_dims` or shorthand `o`: `{ b; output_dims = [ hid_dim ] }` or `{ b; o = [ hid_dim ] }`
+  - `input_dims` or shorthand `i`: `{ w; i = [ 3 ]; o = [ 4 ] }`
+  - `batch_dims` or shorthand `b`: for batch dimensions (rarely used in `%op`)
 
-If it is a list expression following an inline declaration, the expression is parsed as an [N-dimensional array constant](#numeric-and-n-dimensional-array-literals), and used to initialize the value tensor node of the defined tensor. A very simple example from [micrograd_demo: Micrograd README basic example](test/micrograd_demo.ml):
+A very simple example from [micrograd_demo: Micrograd README basic example](test/micrograd_demo.ml):
 
 ```ocaml
-  let%op c = "a" [ -4 ] + "b" [ 2 ] in
+  let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   ...
 ```
 
 ### Lifting of the applications of config arguments: if an error, refactor your code
 
-If you recall, inline declared param tensors get lifted out of functions except for the function `fun ~config ->`, where they get defined. Our example `let%op mlp_layer ~config x = relu ("w" * x + "b" config.hid_dim)` translates as:
+If you recall, inline declared param tensors get lifted out of functions except for the function `fun ~config ->`, where they get defined. Our example `let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })` translates as:
 
 ```ocaml
 let mlp_layer ~config =
-  let w = TDSL.param "w" and b = TDSL.param ~output_dims:[ config.hid_dim ] "b" in
-  fun x -> TDSL.O.(w * x + b)
+  let w = TDSL.param ~more_label:config.label "w" () 
+  and b = TDSL.param ~more_label:config.label ~output_dims:[ config.hid_dim ] "b" () in
+  fun x -> TDSL.O.(relu (w * x + b))
 ```
 
 For this to work properly, when employing such network blocks, their params also need to be introduced at the right moment. Therefore, the `%op` syntax ensures that this example:
