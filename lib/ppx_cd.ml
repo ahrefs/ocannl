@@ -224,9 +224,10 @@ let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
 let empty_comp ~loc =
   [%expr { Ir.Assignments.asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
 
-let setup_array ~punned ~bad_pun_hints ~is_lhs
+let setup_array ~punned ~bad_pun_hints ~for_slot
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   let loc = filler.pexp_loc in
+  let is_lhs = match for_slot with LHS -> true | _ -> false in
   let opt_buffer tn =
     if is_lhs then [%expr Some [%e tn]] else [%expr Some (Ir.Assignments.Node [%e tn])]
   in
@@ -297,11 +298,12 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
   | _, (Tensor | Unknown) ->
       (* Need to bind the expression computing the tensor so we don't recompute it. *)
       let v =
-        match slot with
-        | LHS -> [%pat? nondiff__lhs]
-        | RHS1 -> [%pat? nondiff__rhs1]
-        | RHS2 -> [%pat? nondiff__rhs2]
-        | RHS3 -> [%pat? nondiff__rhs3]
+        (* We must use for_slot rather than slot, because the latter might not be unique. *)
+        match for_slot with
+        | LHS -> [%pat? nondiff__for_lhs]
+        | RHS1 -> [%pat? nondiff__for_rhs1]
+        | RHS2 -> [%pat? nondiff__for_rhs2]
+        | RHS3 -> [%pat? nondiff__for_rhs3]
         | Scalar | Nonslot | Undet -> [%pat? nondiff__tensor]
       in
       let t = pat2expr v in
@@ -503,12 +505,18 @@ let translate ?ident_label (expr : expression) : result =
         () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
       in
       let _, tern_op = ternary_op tern_op in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
-      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
+      let setup_r3 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS3 @@ loop ~proj_in_scope rhs3
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -569,11 +577,15 @@ let translate ?ident_label (expr : expression) : result =
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
       in
       let _, bin_op = binary_op bin_op in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -634,8 +646,8 @@ let translate ?ident_label (expr : expression) : result =
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -691,8 +703,8 @@ let translate ?ident_label (expr : expression) : result =
     let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
       (* Vector unary operations do not have accumulation, they directly set values *)
       let _, op = vec_unary_op vec_un_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let projections_lazy, projections_debug =
         match projections with
         | Some prjs ->
@@ -742,10 +754,16 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
-      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
+      let setup_r3 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS3 @@ loop ~proj_in_scope rhs3
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -763,9 +781,13 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -781,8 +803,8 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
