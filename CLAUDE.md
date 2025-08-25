@@ -141,10 +141,11 @@ opam install cudajit  # for CUDA backend
 - `c_syntax.ml` provides a functor with default C code generation patterns
 - `cc_backend.ml` uses defaults from `c_syntax.ml` with minimal overrides
 - `cuda_backend.ml` overrides more functions for CUDA-specific syntax (e.g., `__float2half`)
-- Both backends must provide `convert_precision` for type conversions
+- `metal_backend.ml` overrides using MSL-specific syntax
+- Backends must provide `convert_precision` for type conversions
 - Builtin functions (e.g., type conversions) must be implemented in:
   - `builtins.c` for C backends
-  - `builtins_cuda_small.ml` for CUDA backend
+  - `builtins_cuda.ml` for CUDA backend, `builtins_metal.ml` form Metal backend
 - When adding new precision types, ensure conversion functions exist in all backend builtins
 
 ### Syntax Extensions
@@ -166,7 +167,7 @@ opam install cudajit  # for CUDA backend
 
 ## Common Development Tasks
 
-### Adding New Operations
+### Adding New Primitive Operations
 
 1. Add primitive operation to `arrayjit/lib/ops.ml`
 2. Implement interpretation in the same file
@@ -176,7 +177,7 @@ opam install cudajit  # for CUDA backend
 ### Debugging Backend Discrepancies
 
 When outputs differ between backends:
-1. Compare runtime logs in `<backend>-<stream>-<stream>.log` files (might require minimizing test tensors)
+1. Compare runtime logs in `<backend>-<device>-<stream>.log` files (might require minimizing test tensors)
 2. Check generated code in `build_files/*.c` vs `*.cu` / `*.metal` for differences
 3. Common issues:
    - Incorrect type conversion in `convert_precision` overrides
@@ -209,4 +210,3 @@ When outputs differ between backends:
 - Virtual nodes are inlined automatically (controlled by `virtualize_max_visits`)
 - Scalar constants can be inlined via `inline_scalar_constexprs=true`
 - Memory sharing optimizations through cross-stream tensor nodes
-- Backend-specific optimization levels configurable per backend
