@@ -48,7 +48,7 @@ let () =
   let%op output_gram = outputs @| batch_n in
 
   let%op mlp input =
-    let counts = exp (("w" + 1) * input) in
+    let counts = exp (({ w } + 1) * input) in
     counts /. (counts ++ "...|... => ...|0")
   in
 
@@ -86,10 +86,10 @@ let () =
 
   (* Train.printf_tree batch_loss; *)
   let counter_n, bindings = IDX.get_static_symbol IDX.empty in
-  let%cd infer_probs = mlp "cha" in
+  let%cd infer_probs = mlp { cha } in
   let%cd infer_step =
     infer_probs.forward;
-    "dice" =: uniform_at !@counter_n
+    { dice } =: uniform_at !@counter_n
   in
   Train.set_on_host infer_probs.value;
   let infer_step = Train.to_routine (module Backend) sgd_step.context bindings infer_step in

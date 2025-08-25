@@ -29,7 +29,7 @@ let main () =
   let step_n, bindings = IDX.get_static_symbol bindings in
   let moons_flat = TDSL.rebatch ~l:"moons_flat" moons_flat_ndarray () in
   let moons_classes = TDSL.rebatch ~l:"moons_classes" moons_classes_ndarray () in
-  let%op mlp x = "w2" * relu ("b1" 16 + ("w1" * x)) in
+  let%op mlp x = { w2 } * relu ({ b1; o = [ 16 ] } + ({ w1 } * x)) in
   (* Don't decay the learning rate too quickly, it behaves better than in the original. *)
   let%op moons_input = moons_flat @| batch_n in
   let%op moons_class = moons_classes @| batch_n in
@@ -69,7 +69,7 @@ let main () =
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* %cd instead of %op to not get complaints about point being uninitialized. *)
-  let%cd mlp_result = mlp "point" in
+  let%cd mlp_result = mlp { point } in
   Train.set_on_host mlp_result.value;
   let result_routine =
     Train.to_routine

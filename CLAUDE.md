@@ -151,8 +151,18 @@ opam install cudajit  # for CUDA backend
 
 - `%cd` requires `NTDSL` module in scope (from `Operation.NTDSL`)
 - `%op` requires `TDSL` module in scope (from `Operation.TDSL`)
-- Inline tensor declarations using string literals
+- Record syntax for inline tensor declarations: `{ tensor_name }` or `{ tensor_name = init_expr }`
 - Generalized einsum notation for complex tensor operations
+
+**Key differences between %op and %cd**:
+- `%op` allows initialization expressions (`{ x = uniform () }`), used for model parameters
+- `%cd` is self-referential only (`{ x }`), used in computation graphs where tensors are defined by operations
+
+**Record syntax features**:
+- OCaml punning: `{ x }` expands to default initialization (uniform() for parameters in %op)
+- Shorthand field names: `o` → `output_dims`, `i` → `input_dims`, `b` → `batch_dims`
+- Additional fields map to labeled arguments of tensor creation functions
+- Dimension specification: lists `[...]` for output, tuples `(...)` for input, arrays `[|...|]` for batch
 
 ## Common Development Tasks
 

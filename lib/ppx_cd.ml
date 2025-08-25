@@ -13,7 +13,11 @@ type expr_type =
   | Unknown
   | Merge_value of expression
   | Merge_grad of expression
-  | No_grad_tensor_intro of { name : string; name_expr : expression }
+  | No_grad_tensor_intro of {
+      name : string;
+      name_expr : expression;
+      extra_args : (string * expression) list;
+    }
   | Function
 
 let is_unknown = function Unknown -> true | _ -> false
@@ -54,13 +58,20 @@ type array_setup = {
           quality) guess. *)
 }
 
-let make_vb ~loc ~name ~name_expr ~hint_label =
+let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
   let pat = A.Pat.var ~loc { loc = name_expr.pexp_loc; txt = name } in
-  let v =
+  let label_arg =
     match hint_label with
-    | None -> [%expr NTDSL.term ~label:[ [%e name_expr] ] ()]
-    | Some hint_label -> [%expr NTDSL.term ~label:([%e name_expr] :: [%e hint_label]) ()]
+    | None -> (Labelled "label", [%expr [ [%e name_expr] ]])
+    | Some hint_label -> (Labelled "label", [%expr [%e name_expr] :: [%e hint_label]])
   in
+  let term_args =
+    label_arg
+    :: (Optional "fetch_op", [%expr None])
+    :: List.map extra_args ~f:(fun (label, arg) -> (Labelled label, arg))
+  in
+  let term_call = A.Exp.apply ~loc [%expr NTDSL.term] term_args in
+  let v = [%expr [%e term_call] ()] in
   let vb = A.Vb.mk ~loc pat v in
   vb
 
@@ -79,13 +90,16 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   let forward_args = List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop) in
   let vbs, body =
     match lhs.filler_typ with
-    | No_grad_tensor_intro { name; name_expr } -> (
+    | No_grad_tensor_intro { name; name_expr; extra_args } -> (
         let good_hints, bad_hints =
           List.partition_tf ~f:snd @@ List.filter_map rhses ~f:(fun sup -> sup.pun_hint_tnode)
         in
         let hint_data = Option.first_some (List.hd good_hints) (List.hd bad_hints) in
         let hint_label = Option.map ~f:fst hint_data in
-        let vbs = Map.singleton (module String) name @@ make_vb ~loc ~name ~name_expr ~hint_label in
+        let vbs =
+          Map.singleton (module String) name
+          @@ make_vb ~loc ~name ~name_expr ~hint_label ~extra_args
+        in
         match hint_data with
         | None -> (vbs, body)
         | Some data -> (
@@ -210,9 +224,10 @@ let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
 let empty_comp ~loc =
   [%expr { Ir.Assignments.asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
 
-let setup_array ~punned ~bad_pun_hints ~is_lhs
+let setup_array ~punned ~bad_pun_hints ~for_slot
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
   let loc = filler.pexp_loc in
+  let is_lhs = match for_slot with LHS -> true | _ -> false in
   let opt_buffer tn =
     if is_lhs then [%expr Some [%e tn]] else [%expr Some (Ir.Assignments.Node [%e tn])]
   in
@@ -283,11 +298,12 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
   | _, (Tensor | Unknown) ->
       (* Need to bind the expression computing the tensor so we don't recompute it. *)
       let v =
-        match slot with
-        | LHS -> [%pat? nondiff__lhs]
-        | RHS1 -> [%pat? nondiff__rhs1]
-        | RHS2 -> [%pat? nondiff__rhs2]
-        | RHS3 -> [%pat? nondiff__rhs3]
+        (* We must use for_slot rather than slot, because the latter might not be unique. *)
+        match for_slot with
+        | LHS -> [%pat? nondiff__for_lhs]
+        | RHS1 -> [%pat? nondiff__for_rhs1]
+        | RHS2 -> [%pat? nondiff__for_rhs2]
+        | RHS3 -> [%pat? nondiff__for_rhs3]
         | Scalar | Nonslot | Undet -> [%pat? nondiff__tensor]
       in
       let t = pat2expr v in
@@ -308,8 +324,7 @@ let setup_array ~punned ~bad_pun_hints ~is_lhs
         tensor = Some t;
       }
   | _, No_grad_tensor_intro _ ->
-      (* Inline tensors are guaranteed to be leaf tensors, so they don't have forward code, but they
-         are embedded. *)
+      (* Inline tensors are not allowed to have forward code, but they are embedded. *)
       let fwd_code_or_noop =
         Some
           [%expr
@@ -490,12 +505,18 @@ let translate ?ident_label (expr : expression) : result =
         () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
       in
       let _, tern_op = ternary_op tern_op in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
-      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
+      let setup_r3 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS3 @@ loop ~proj_in_scope rhs3
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -556,11 +577,15 @@ let translate ?ident_label (expr : expression) : result =
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
       let setup_l =
-        setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope:true lhs
+        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
       in
       let _, bin_op = binary_op bin_op in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -621,8 +646,8 @@ let translate ?ident_label (expr : expression) : result =
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
         match projections with
@@ -678,8 +703,8 @@ let translate ?ident_label (expr : expression) : result =
     let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
       (* Vector unary operations do not have accumulation, they directly set values *)
       let _, op = vec_unary_op vec_un_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let projections_lazy, projections_debug =
         match projections with
         | Some prjs ->
@@ -729,10 +754,16 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
-      let setup_r3 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs3 in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
+      let setup_r3 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS3 @@ loop ~proj_in_scope rhs3
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -750,9 +781,13 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r1 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs1 in
-      let setup_r2 = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs2 in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r1 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
+      in
+      let setup_r2 =
+        setup_array ~punned ~bad_pun_hints ~for_slot:RHS2 @@ loop ~proj_in_scope rhs2
+      in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs1_is_grad, rhs1_is_merge = args_for ~loc setup_r1 in
@@ -768,8 +803,8 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~is_lhs:true @@ loop ~proj_in_scope lhs in
-      let setup_r = setup_array ~punned ~bad_pun_hints ~is_lhs:false @@ loop ~proj_in_scope rhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let t_expr, lhs_is_grad, _ = args_for ~loc setup_l in
       let t1_expr, rhs_is_grad, rhs_is_merge = args_for ~loc setup_r in
@@ -821,19 +856,62 @@ let translate ?ident_label (expr : expression) : result =
           expr = [%expr NTDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])];
           slot = Scalar;
         }
-    | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
-        let vbs =
-          Map.singleton (module String) name
-          @@ make_vb ~loc ~name ~name_expr:expr
-               ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
-        in
-        {
-          vbs;
-          typ = No_grad_tensor_intro { name; name_expr = expr };
-          expr = A.Exp.ident ~loc:str_loc { txt = Lident name; loc = str_loc };
-          array_opt_of_code = None;
-          slot = Undet;
-        }
+    | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ } -> (
+        (* Record syntax for tensor definitions *)
+        match (first_label.txt, first_value.pexp_desc) with
+        | Lident tensor_name, Pexp_ident { txt = Lident name_expr; _ }
+          when String.equal name_expr tensor_name ->
+            (* Simple case: just tensor initialization, similar to original string syntax *)
+            let name_expr =
+              Ast_helper.Exp.constant ~loc:first_label.loc
+                (Pconst_string (tensor_name, first_label.loc, None))
+            in
+            let extra_args =
+              List.map extra_args ~f:(function
+                | { txt = Lident "o"; _ }, value -> ("output_dims", value)
+                | { txt = Lident "i"; _ }, value -> ("input_dims", value)
+                | { txt = Lident "b"; _ }, value -> ("batch_dims", value)
+                | { txt = Lident label; _ }, value -> (label, value)
+                | { loc; _ }, _ ->
+                    ( "syntax_error",
+                      Ast_builder.Default.pexp_extension ~loc
+                      @@ Location.error_extensionf ~loc
+                           "inline-definition fields must be function argument labels" ))
+            in
+            (* NOTE: this binding is not used in assignments therefore is very unlikely to be used.
+               But it's needed for code expressions or standalone non-diff tensor expressions. *)
+            let vbs =
+              Map.singleton (module String) tensor_name
+              @@ make_vb ~loc ~name:tensor_name ~name_expr
+                   ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
+                   ~extra_args
+            in
+            {
+              vbs;
+              typ = No_grad_tensor_intro { name = tensor_name; name_expr; extra_args };
+              expr =
+                A.Exp.ident ~loc:first_label.loc { txt = Lident tensor_name; loc = first_label.loc };
+              array_opt_of_code = None;
+              slot = Undet;
+            }
+        | Lident _tensor_name, _ ->
+            {
+              default_result with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: tensors inline-defined in code cannot have initializers, \
+                      but you can use an init_data field";
+            }
+        | _ ->
+            {
+              default_result with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: for inline-defined tensors, record field label must be a \
+                      simple identifier";
+            })
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
         { default_result with expr = ndarray_op expr }

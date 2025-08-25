@@ -23,7 +23,7 @@ let%expect_test "Graph drawing recompile" =
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
   let open Operation.At in
-  let%op f_nd = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  let%op f_nd = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.set_hosted x.value;
   ignore (Train.forward_once backend f_nd);
   Train.printf_tree ~with_grad:true ~depth:9 f_nd;
@@ -50,7 +50,7 @@ let%expect_test "Graph drawing recompile" =
                  │#1 grad_x Local/26030│            │            │      │
                  │<void>               │            │            │      │
     |}];
-  let%op f = (3 *. ("x" [ 5 ] **. 2)) - (4 *. x) + 5 in
+  let%op f = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_on_host f;
   let f_upd = Train.grad_update f in
   let ctx = Train.init_params (module Backend) ~ctx IDX.empty f in
@@ -255,9 +255,9 @@ let%expect_test "Simple gradients hosted" =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  let%op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%op d = e + "c" [ 10 ] in
-  let%op l = d *. "f" [ -2 ] in
+  let%op e = { a = [ 2 ] } *. { b = [ -3 ] } in
+  let%op d = e + { c = [ 10 ] } in
+  let%op l = d *. { f = [ -2 ] } in
   (* We need to either call `grad_update` before introducing `learning_rate`, or disable the
      rootness check. *)
   let grad = Train.grad_update l in
@@ -347,9 +347,9 @@ let%expect_test "Simple gradients virtual" =
   let module Backend = (val Backends.fresh_backend ()) in
   let stream = Backend.(new_stream @@ get_device ~ordinal:0) in
   let ctx = Backend.make_context stream in
-  let%op e = "a" [ 2 ] *. "b" [ -3 ] in
-  let%op d = e + "c" [ 10 ] in
-  let%op l = d *. "f" [ -2 ] in
+  let%op e = { a = [ 2 ] } *. { b = [ -3 ] } in
+  let%op d = e + { c = [ 10 ] } in
+  let%op l = d *. { f = [ -2 ] } in
   (* We pretend this is for parallel updates, to force materializing gradients, because our SGD
      update is compiled separately from our gradient update. Alternatively we could compile
      grad_update and sgd_update together.*)
@@ -462,7 +462,7 @@ let%expect_test "tanh plot" =
 let%expect_test "2D neuron hosted" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%op v = ({ w = [ (-3, 1) ] } * { x = [ 2; 0 ] }) + { b = [ 6.7 ] } in
   Train.every_non_literal_on_host v;
   let update = Train.grad_update v in
   let ctx = Train.init_params (module Backend) IDX.empty v in
@@ -488,7 +488,7 @@ let%expect_test "2D neuron hosted" =
 let%expect_test "2D neuron virtual" =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let%op v = ("w" [ (-3, 1) ] * "x" [ 2; 0 ]) + "b" [ 6.7 ] in
+  let%op v = ({ w = [ (-3, 1) ] } * { x = [ 2; 0 ] }) + { b = [ 6.7 ] } in
   let update = Train.grad_update v in
   let ctx = Train.init_params (module Backend) IDX.empty v in
   let routine = Train.to_routine (module Backend) ctx IDX.empty update in

@@ -3,38 +3,47 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
-let make_p ~has_config ~loc ?input_dims ?output_dims ?value ?values name =
+let make_p ~has_config ~loc ?value ?values ?param_init ~extra_args name =
   let more_label = if has_config then [%expr Some config.label] else [%expr None] in
-  let input_dims =
-    match input_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
-  in
-  let output_dims =
-    match output_dims with Some dims -> [%expr Some [%e dims]] | None -> [%expr None]
-  in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
-  [%expr
-    TDSL.param ?more_label:[%e more_label] ?input_dims:[%e input_dims] ?output_dims:[%e output_dims]
-      ?value:[%e value] ?values:[%e values] [%e name] ()]
-
-let make_vb ?value ~has_config ~loc ~str_loc ~ident string =
-  let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let v = make_p ~has_config ~loc ?value string in
-  let vb = Ast_helper.Vb.mk ~loc pat v in
-  (pat, vb)
-
-let make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims ~dims_loc string =
-  let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
-  let dims =
-    let loc = dims_loc in
-    List.fold_right dims ~init:[%expr []] ~f:(fun d ds -> [%expr [%e d] :: [%e ds]])
+  let param_init =
+    match param_init with
+    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function c "TDSL"]]
+    | None -> [%expr None]
   in
-  let v = make_p ~has_config ~loc ~output_dims:dims string in
+  let extra_args =
+    List.map extra_args ~f:(fun (label, value) ->
+        match label.txt with
+        | Lident "o" -> (Labelled "output_dims", value)
+        | Lident "i" -> (Labelled "input_dims", value)
+        | Lident "b" -> (Labelled "batch_dims", value)
+        | Lident arg_name -> (Labelled arg_name, value)
+        | _ ->
+            ( Labelled "syntax_error",
+              Ast_builder.Default.pexp_extension ~loc:label.loc
+              @@ Location.error_extensionf ~loc:label.loc
+                   "inline-definition fields must be simple identifiers" ))
+  in
+  let name = Ast_helper.Exp.constant ~loc (Pconst_string (name.txt, name.loc, None)) in
+  let base_expr =
+    [%expr
+      TDSL.param ?more_label:[%e more_label] ?value:[%e value] ?values:[%e values]
+        ?param_init:[%e param_init] [%e name]]
+  in
+  let with_extra_args =
+    if List.is_empty extra_args then base_expr else Ast_helper.Exp.apply ~loc base_expr extra_args
+  in
+  [%expr [%e with_extra_args] ()]
+
+let make_vb ~has_config ?value ?param_init ~extra_args ~loc name =
+  let pat = Ast_helper.Pat.var ~loc:name.loc name in
+  let v = make_p ~has_config ~loc ?value ?param_init ~extra_args name in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd string =
-  let pat = Ast_helper.Pat.var ~loc { loc = str_loc; txt = ident } in
+let make_vb_nd ~has_config ~init_nd ~extra_args ~loc name =
+  let pat = Ast_helper.Pat.var ~loc:name.loc name in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
     if not @@ List.is_empty batch_dims then
@@ -43,9 +52,14 @@ let make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd string =
            "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
       let edims dims = Ast_builder.Default.elist ~loc dims in
-      let input_dims = edims input_dims in
-      let output_dims = edims output_dims in
-      make_p ~has_config ~loc ~input_dims ~output_dims ~values string
+      let input_dims_expr = edims input_dims in
+      let output_dims_expr = edims output_dims in
+      let extra_args =
+        ({ txt = Lident "input_dims"; loc }, input_dims_expr)
+        :: ({ txt = Lident "output_dims"; loc }, output_dims_expr)
+        :: extra_args
+      in
+      make_p ~has_config ~loc ~values ~extra_args name
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -114,34 +128,91 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       let vbs1, e1 = loop expr1 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       (vbs1, [%expr einsum1 ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e?
-          ( { pexp_desc = Pexp_constant (Pconst_integer _); pexp_loc = dims_loc; _ }
-          | { pexp_desc = Pexp_ident _; pexp_loc = dims_loc; _ }
-          | { pexp_desc = Pexp_field _; pexp_loc = dims_loc; _ } ) as d]] ->
-      let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims:[ d ] ~dims_loc s in
-      (Map.singleton (module String) ident vb, pat2expr pat)
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e? { pexp_desc = Pexp_constant (Pconst_float _); pexp_loc = _; _ } as value]] ->
-      let pat, vb = make_vb ~value ~has_config ~loc ~str_loc ~ident s in
-      (Map.singleton (module String) ident vb, pat2expr pat)
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e?
-          ( { pexp_desc = Pexp_array _; _ }
-          | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ) as init_nd]] ->
-      let pat, vb = make_vb_nd ~has_config ~loc ~str_loc ~ident ~init_nd s in
-      (Map.singleton (module String) ident vb, pat2expr pat)
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } as s]
-        [%e? { pexp_desc = Pexp_tuple dims; pexp_loc = dims_loc; _ }]] ->
-      let pat, vb = make_vb_dims ~has_config ~loc ~str_loc ~ident ~dims ~dims_loc s in
-      (Map.singleton (module String) ident vb, pat2expr pat)
-  | { pexp_desc = Pexp_constant (Pconst_string (ident, str_loc, _)); _ } ->
-      let pat, vb = make_vb ~has_config ~loc ~str_loc ~ident expr in
-      (Map.singleton (module String) ident vb, pat2expr pat)
+  | { pexp_desc = Pexp_record ([], _); _ } ->
+      (* Empty record - not a tensor definition *)
+      (no_vbs, expr)
+  | {
+   pexp_desc =
+     Pexp_record
+       ( (first_label, ({ pexp_desc = Pexp_constant (Pconst_float _); _ } as value)) :: extra_args,
+         None );
+   _;
+  } -> (
+      match first_label.txt with
+      | Lident tensor_name ->
+          let name = { loc = first_label.loc; txt = tensor_name } in
+          let pat, vb = make_vb ~has_config ~value ~extra_args ~loc name in
+          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+      | _ ->
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
+  | {
+   pexp_desc =
+     Pexp_record
+       ( (first_label, ({ pexp_desc = Pexp_constant (Pconst_integer (_, None)); _ } as int_val))
+         :: extra_args,
+         None );
+   _;
+  } -> (
+      match first_label.txt with
+      | Lident tensor_name ->
+          let value = [%expr Float.of_int [%e int_val]] in
+          let name = { loc = first_label.loc; txt = tensor_name } in
+          let pat, vb = make_vb ~has_config ~value ~extra_args ~loc name in
+          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+      | _ ->
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
+  | {
+   pexp_desc =
+     Pexp_record
+       ( ( first_label,
+           (( { pexp_desc = Pexp_array _; _ }
+            | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ) as init_nd) )
+         :: extra_args,
+         None );
+   _;
+  } -> (
+      (* Record syntax with array/list initialization *)
+      match first_label.txt with
+      | Lident tensor_name ->
+          let name = { loc = first_label.loc; txt = tensor_name } in
+          let pat, vb = make_vb_nd ~has_config ~init_nd ~extra_args ~loc name in
+          (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
+          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+      | _ ->
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
+  | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ } -> (
+      (* Record syntax for tensor definitions *)
+      match first_label.txt with
+      | Lident tensor_name ->
+          (* Process the initialization expression *)
+          let init_vbs, param_init =
+            match first_value with
+            | { pexp_desc = Pexp_ident { txt = Lident val_ident; _ }; _ }
+              when String.equal val_ident tensor_name ->
+                (no_vbs, None)
+            | _ ->
+                let vbs, e = loop first_value in
+                (vbs, Some e)
+          in
+          let name = { loc = first_label.loc; txt = tensor_name } in
+          let pat, vb = make_vb ~has_config ?param_init ~extra_args ~loc name in
+          (* Combine with any bindings from the initialization *)
+          let all_vbs = Map.add_exn init_vbs ~key:tensor_name ~data:vb in
+          (all_vbs, pat2expr pat)
+      | _ ->
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%op: record field label must be a simple identifier" ))
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
       (no_vbs, ndarray_op ?label expr)

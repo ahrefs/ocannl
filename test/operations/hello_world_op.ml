@@ -25,7 +25,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   in
 
   (* "Hey" is inferred to be a scalar. *)
-  let%op y = 2 *. "hey" 7.0 in
+  let%op y = 2 *. { hey = 7.0 } in
   ignore (Train.forward_once backend y);
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
@@ -55,7 +55,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   in
 
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
-  let%op y = ("hey" 7.0 * 'q' 2.0) + 'p' 1.0 in
+  let%op y = ({ hey = 7.0 } * 'q' 2.0) + 'p' 1.0 in
   ignore (Train.forward_once backend y);
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
@@ -515,7 +515,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   in
 
   (* Hey is inferred to be a matrix. *)
-  let%op y = ("hey" 7.0 * [ 2; 3 ]) + [ 4; 5; 6 ] in
+  let%op y = ({ hey = 7.0 } * [ 2; 3 ]) + [ 4; 5; 6 ] in
   ignore (Train.forward_once backend y);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
