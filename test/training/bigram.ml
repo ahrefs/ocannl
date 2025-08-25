@@ -86,7 +86,7 @@ let () =
 
   (* Train.printf_tree batch_loss; *)
   let counter_n, bindings = IDX.get_static_symbol IDX.empty in
-  let%cd infer_probs = mlp "cha" in
+  let%cd infer_probs = mlp { cha } in
   let%cd infer_step =
     infer_probs.forward;
     { dice } =: uniform_at !@counter_n

@@ -104,9 +104,9 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
     raise @@ Tensor.Session_error ("Train.sgd_one: not differentiable", Some p);
   [%cd
     ~~(p "param sgd step";
-       "sgd_delta" =: p.grad + (!.weight_decay *. p);
+       { sgd_delta } =: p.grad + (!.weight_decay *. p);
        if Float.(momentum > 0.0) then (
-         "sgd_momentum" =: (!.momentum *. sgd_momentum) + sgd_delta;
+         { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta;
          if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
        p =- learning_rate * sgd_delta ~logic:".")]
 
@@ -454,7 +454,7 @@ let example_train_loop ~seed ~batch_size ~init_lr ?lr_schedule ?(copy_to_merge =
     (* if per_epoch_debug_streams then _debug_at "after sync" *)
   done;
   (* Using %cd instead of %op to avoid being asked to initialize [infer]. *)
-  let%cd model_result = model "infer_input" in
+  let%cd model_result = model { infer_input } in
   Tensor.remove_bprop_root model_result;
   set_on_host model_result.Tensor.value;
   (* By using sgd_update.context, maybe we don't need to copy the parameters back to the host. *)

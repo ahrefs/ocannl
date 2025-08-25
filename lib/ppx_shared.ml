@@ -6,7 +6,7 @@ type li = longident
 
 let string_expr ~loc s = Ast_helper.Exp.constant @@ Pconst_string (s, loc, None)
 
-let pat2string pat =
+let string_of_pat pat =
   let rec lident = function Lident s | Ldot (_, s) -> s | Lapply (_, i) -> lident i in
   let rec loop pat =
     match pat.ppat_desc with
@@ -29,7 +29,11 @@ let pat2string pat =
     | Ppat_type _ | Ppat_unpack _ | Ppat_exception _ | Ppat_extension _ ->
         ""
   in
-  string_expr ~loc:pat.ppat_loc @@ loop pat
+  loop pat
+
+let pat2string pat =
+  let loc = pat.ppat_loc in
+  string_expr ~loc @@ string_of_pat pat
 
 let collect_pat_idents pat =
   let one = Set.singleton (module String) in

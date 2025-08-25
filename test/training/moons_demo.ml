@@ -76,7 +76,7 @@ let main () =
   let classes = Tn.points_1d ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* %cd instead of %op to not get complaints about point being uninitialized. *)
-  let%cd mlp_result = mlp "point" in
+  let%cd mlp_result = mlp { point } in
   Train.set_on_host mlp_result.value;
   let result_routine =
     Train.to_routine

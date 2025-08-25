@@ -856,22 +856,6 @@ let translate ?ident_label (expr : expression) : result =
           expr = [%expr NTDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])];
           slot = Scalar;
         }
-    | { pexp_desc = Pexp_constant (Pconst_string (name, str_loc, _)); _ } ->
-        (* String syntax for assignment targets - kept for backward compatibility *)
-        (* FIXME: either here or in [assignments], this looks to me like it's defining the tensor twice. *)
-        let vbs =
-          Map.singleton (module String) name
-          @@ make_vb ~loc ~name ~name_expr:expr
-               ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
-               ~extra_args:[]
-        in
-        {
-          vbs;
-          typ = No_grad_tensor_intro { name; name_expr = expr; extra_args = [] };
-          expr = A.Exp.ident ~loc:str_loc { txt = Lident name; loc = str_loc };
-          array_opt_of_code = None;
-          slot = Undet;
-        }
     | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ } -> (
         (* Record syntax for tensor definitions *)
         match (first_label.txt, first_value.pexp_desc) with
@@ -894,15 +878,16 @@ let translate ?ident_label (expr : expression) : result =
                       @@ Location.error_extensionf ~loc
                            "inline-definition fields must be function argument labels" ))
             in
-            (* FIXME: either here or in [assignments], this looks to me like it's defining the
-               tensor twice. *)
-            let vb =
-              make_vb ~loc ~name:tensor_name ~name_expr
-                ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
-                ~extra_args
+            (* NOTE: this binding is not used in assignments therefore is very unlikely to be used.
+               But it's needed for code expressions or standalone non-diff tensor expressions. *)
+            let vbs =
+              Map.singleton (module String) tensor_name
+              @@ make_vb ~loc ~name:tensor_name ~name_expr
+                   ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
+                   ~extra_args
             in
             {
-              vbs = Map.singleton (module String) tensor_name vb;
+              vbs;
               typ = No_grad_tensor_intro { name = tensor_name; name_expr; extra_args };
               expr =
                 A.Exp.ident ~loc:first_label.loc { txt = Lident tensor_name; loc = first_label.loc };
