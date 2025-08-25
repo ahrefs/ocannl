@@ -262,16 +262,19 @@ When an extension is over a wildcard (ignore result) binding: `let%cd _ = ...` a
 Both `%cd` and `%op` syntaxes support inline declarations of tensors. For `%op` these are differentiable, for `%cd` non-differentiable tensors.
 
 A declaration site uses the record syntax. The key difference between the two extensions:
+
 - **`%op`**: `{ tensor_name = init_expr }` allows initialization expressions, or `{ tensor_name }` for default initialization (uniform random)
 - **`%cd`**: `{ tensor_name }` requires self-referential syntax (the field name must match the field value identifier), no separate initialization expressions are allowed
 
 Both syntaxes support additional record fields that map directly to labeled arguments of the tensor creation functions (see `Tensor` module signatures):
+
 - `output_dims` or shorthand `o`: specifies output dimensions
 - `input_dims` or shorthand `i`: specifies input dimensions  
 - `batch_dims` or shorthand `b`: specifies batch dimensions
 - Any other labeled argument accepted by `TDSL.param` (for `%op`) or `NTDSL.term` (for `%cd`)
 
 Examples:
+
 - `%op`: `{ x = 5.0 }`, `{ w; o = [hidden_dim] }`, `{ weights = [1.0; 2.0] }`
 - `%cd`: `{ temp }`, `{ result; output_dims = [3; 4] }`, `{ x; o = [10] }`
 
