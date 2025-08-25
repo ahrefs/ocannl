@@ -474,18 +474,17 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       [%log (key : Tnode.t)];
       let default () =
         let dims = Lazy.force key.dims in
-        (* Use alloc_array when zero initialization is not needed:
-           - When copying from host immediately after allocation
-           - When the node has explicit Zero_out operations in the lowered code *)
-        let will_copy_from_host = 
-          Utils.settings.automatic_host_transfers && Tn.known_constant key &&
-          match key.array with | (lazy (Some _)) -> true | _ -> false
+        (* Use alloc_array when zero initialization is not needed: - When copying from host
+           immediately after allocation - When the node has explicit Zero_out operations in the
+           lowered code *)
+        let will_copy_from_host =
+          Utils.settings.automatic_host_transfers && Tn.known_constant key
+          && match key.array with (lazy (Some _)) -> true | _ -> false
         in
-        let dst_ptr = 
+        let dst_ptr =
           if will_copy_from_host || node.Low_level.zero_initialized_by_code then
             alloc_array (Lazy.force key.prec) ~dims stream
-          else
-            alloc_zeros (Lazy.force key.prec) ~dims stream
+          else alloc_zeros (Lazy.force key.prec) ~dims stream
         in
         (if will_copy_from_host then
            match key.array with

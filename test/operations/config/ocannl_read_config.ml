@@ -11,7 +11,8 @@ let () =
   match config_opt with
   | Some "backend_extension" -> (
       let backend = Utils.get_global_arg ~default:"" ~arg_name:"backend" in
-      let extension = match backend with
+      let extension =
+        match backend with
         | "multicore_cc" | "sync_cc" -> "c"
         | "cuda" -> "cu"
         | "metal" -> "metal"

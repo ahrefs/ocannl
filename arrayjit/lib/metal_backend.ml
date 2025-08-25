@@ -547,8 +547,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "Metal backend: Threefry4x32_crypto requires target precision to be uint4x32, but \
-                       got %s"
+                      "Metal backend: Threefry4x32_crypto requires target precision to be \
+                       uint4x32, but got %s"
                       (Ops.prec_string prec)))
       | Threefry4x32_light, _ -> (
           (* Threefry4x32_light must output to uint4x32 precision *)
@@ -558,8 +558,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "Metal backend: Threefry4x32_light requires target precision to be uint4x32, but \
-                       got %s"
+                      "Metal backend: Threefry4x32_light requires target precision to be uint4x32, \
+                       but got %s"
                       (Ops.prec_string prec)))
       | Arg1, _ | Arg2, _ -> invalid_arg "Metal C_syntax_config: Arg1/Arg2 not operators"
 
@@ -675,8 +675,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let metal_includes = {|#include <metal_stdlib>
 using namespace metal;|} in
-    let source = Syntax.filter_and_prepend_builtins 
-      ~includes:metal_includes ~builtins:Builtins_metal.builtins ~proc_doc in
+    let source =
+      Syntax.filter_and_prepend_builtins ~includes:metal_includes ~builtins:Builtins_metal.builtins
+        ~proc_doc
+    in
     {
       metal_source = source;
       compiled_code = Array.create ~len:num_devs None;
@@ -703,8 +705,10 @@ using namespace metal;|} in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
     let metal_includes = {|#include <metal_stdlib>
 using namespace metal;|} in
-    let source = Syntax.filter_and_prepend_builtins 
-      ~includes:metal_includes ~builtins:Builtins_metal.builtins ~proc_doc:final_doc in
+    let source =
+      Syntax.filter_and_prepend_builtins ~includes:metal_includes ~builtins:Builtins_metal.builtins
+        ~proc_doc:final_doc
+    in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
     let funcs = Array.map funcs_and_docs ~f:(Option.map ~f:fst) in
     {

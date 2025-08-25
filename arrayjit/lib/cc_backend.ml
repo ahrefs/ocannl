@@ -220,13 +220,17 @@ struct
         | Ops.Uint4x32_prec _ ->
             let open PPrint in
             group (string "arrayjit_threefry4x32_crypto(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
-        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32_crypto on non-uint4x32 precision")
+        | _ ->
+            invalid_arg
+              "CC_syntax_config.binop_syntax: Threefry4x32_crypto on non-uint4x32 precision")
     | Ops.Threefry4x32_light -> (
         match prec with
         | Ops.Uint4x32_prec _ ->
             let open PPrint in
             group (string "arrayjit_threefry4x32_light(" ^^ v1 ^^ string ", " ^^ v2 ^^ string ")")
-        | _ -> invalid_arg "CC_syntax_config.binop_syntax: Threefry4x32_light on non-uint4x32 precision")
+        | _ ->
+            invalid_arg
+              "CC_syntax_config.binop_syntax: Threefry4x32_light on non-uint4x32 precision")
     | _ -> (
         match prec with
         | Ops.Bfloat16_prec _ ->
@@ -312,10 +316,10 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-  let filtered_code = Syntax.filter_and_prepend_builtins 
-    ~includes:Builtins_cc.includes 
-    ~builtins:Builtins_cc.builtins 
-    ~proc_doc in
+  let filtered_code =
+    Syntax.filter_and_prepend_builtins ~includes:Builtins_cc.includes ~builtins:Builtins_cc.builtins
+      ~proc_doc
+  in
   (* Use ribbon = 1.0 for usual code formatting, width 110 *)
   Out_channel.output_string build_file.oc filtered_code;
   build_file.finalize ();
@@ -344,10 +348,10 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
   in
   let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
   let combined_proc_doc = PPrint.separate PPrint.hardline all_proc_docs in
-  let filtered_code = Syntax.filter_and_prepend_builtins 
-    ~includes:Builtins_cc.includes 
-    ~builtins:Builtins_cc.builtins 
-    ~proc_doc:combined_proc_doc in
+  let filtered_code =
+    Syntax.filter_and_prepend_builtins ~includes:Builtins_cc.includes ~builtins:Builtins_cc.builtins
+      ~proc_doc:combined_proc_doc
+  in
   Out_channel.output_string build_file.oc filtered_code;
   build_file.finalize ();
   let result_library = c_compile_and_load ~f_path:build_file.f_path in

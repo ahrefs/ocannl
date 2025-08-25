@@ -240,13 +240,13 @@ module C_syntax (B : C_syntax_config) = struct
     let result_buffer = Buffer.create 4096 in
     Buffer.add_string result_buffer includes;
     Buffer.add_string result_buffer "\n";
-    
+
     (* Collect all needed keys, including dependencies *)
     let needed_keys = ref (Set.empty (module String)) in
     List.iter builtins ~f:(fun (key, _, _) ->
-      if String.is_substring doc_string ~substring:key then
-        needed_keys := Set.add !needed_keys key);
-    
+        if String.is_substring doc_string ~substring:key then
+          needed_keys := Set.add !needed_keys key);
+
     (* Add dependencies recursively *)
     let processed_keys = ref (Set.empty (module String)) in
     let rec add_dependencies key =
@@ -255,17 +255,15 @@ module C_syntax (B : C_syntax_config) = struct
         needed_keys := Set.add !needed_keys key;
         match List.find builtins ~f:(fun (k, _, _) -> String.equal k key) with
         | Some (_, _, deps) -> List.iter deps ~f:add_dependencies
-        | None -> ()
-      )
+        | None -> ())
     in
     Set.iter !needed_keys ~f:add_dependencies;
-    
+
     (* Add the builtins in order *)
     List.iter builtins ~f:(fun (key, definition, _) ->
-      if Set.mem !needed_keys key then (
-        Buffer.add_string result_buffer definition;
-        Buffer.add_string result_buffer "\n";
-      ));
+        if Set.mem !needed_keys key then (
+          Buffer.add_string result_buffer definition;
+          Buffer.add_string result_buffer "\n"));
     Buffer.add_string result_buffer doc_string;
     Buffer.contents result_buffer
 
@@ -582,13 +580,13 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
     | Unop (op, v) ->
-        let arg_prec = 
+        let arg_prec =
           match op with
-          | Ops.Uint4x32_to_prec_uniform1 -> 
-            (* The argument to Uint4x32_to_prec_uniform1 must be evaluated with uint4x32 precision,
-               regardless of the target precision. This handles the case where the operation is
-               inlined as part of a scalar expression. *)
-            Ops.uint4x32
+          | Ops.Uint4x32_to_prec_uniform1 ->
+              (* The argument to Uint4x32_to_prec_uniform1 must be evaluated with uint4x32
+                 precision, regardless of the target precision. This handles the case where the
+                 operation is inlined as part of a scalar expression. *)
+              Ops.uint4x32
           | _ -> prec
         in
         let defs, expr_v = pp_scalar arg_prec v in
@@ -785,7 +783,9 @@ module C_syntax (B : C_syntax_config) = struct
                let ident_doc = string (get_ident tn) in
                let num_elems = Tn.num_elems tn in
                let size_doc = OCaml.int num_elems in
-               let init_doc = if node.Low_level.zero_initialized_by_code then string " = {0}" else empty in
+               let init_doc =
+                 if node.Low_level.zero_initialized_by_code then string " = {0}" else empty
+               in
                typ_doc ^^ space ^^ ident_doc ^^ brackets size_doc ^^ init_doc ^^ semi ^^ hardline
              else empty)
            (Hashtbl.to_alist traced_store)

@@ -633,8 +633,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "CUDA backend: Threefry4x32_crypto requires target precision to be uint4x32, but \
-                       got %s"
+                      "CUDA backend: Threefry4x32_crypto requires target precision to be uint4x32, \
+                       but got %s"
                       (Ops.prec_string prec)))
       | Threefry4x32_light, _ -> (
           (* Threefry4x32_light must output to uint4x32 precision *)
@@ -644,8 +644,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
               raise
               @@ Utils.User_error
                    (Printf.sprintf
-                      "CUDA backend: Threefry4x32_light requires target precision to be uint4x32, but \
-                       got %s"
+                      "CUDA backend: Threefry4x32_light requires target precision to be uint4x32, \
+                       but got %s"
                       (Ops.prec_string prec)))
 
     let unop_syntax prec v =
@@ -780,7 +780,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       ^^ rparen ^^ semi
   end
 
-
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
     (* TODO: The following link seems to claim it's better to expand into loops than use memset.
        https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
@@ -789,11 +788,18 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
-    let cuda_includes = {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>|} ^
-      (if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );" else "") in
-    let source = Syntax.filter_and_prepend_builtins
-      ~includes:cuda_includes ~builtins:Builtins_cuda.builtins ~proc_doc in
+    let cuda_includes =
+      {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>|}
+      ^
+      if Utils.debug_log_from_routines () then
+        "\n__device__ int printf (const char * format, ... );"
+      else ""
+    in
+    let source =
+      Syntax.filter_and_prepend_builtins ~includes:cuda_includes ~builtins:Builtins_cuda.builtins
+        ~proc_doc
+    in
     let ptx = cuda_to_ptx ~name source in
     { traced_store; ptx; params; bindings; name }
 
@@ -811,11 +817,18 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
-    let cuda_includes = {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>|} ^
-      (if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );" else "") in
-    let source = Syntax.filter_and_prepend_builtins
-      ~includes:cuda_includes ~builtins:Builtins_cuda.builtins ~proc_doc:final_doc in
+    let cuda_includes =
+      {|#include <cuda_fp16.h>
+#include <cuda_bf16.h>|}
+      ^
+      if Utils.debug_log_from_routines () then
+        "\n__device__ int printf (const char * format, ... );"
+      else ""
+    in
+    let source =
+      Syntax.filter_and_prepend_builtins ~includes:cuda_includes ~builtins:Builtins_cuda.builtins
+        ~proc_doc:final_doc
+    in
 
     let name : string =
       String.(

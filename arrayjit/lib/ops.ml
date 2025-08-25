@@ -329,11 +329,11 @@ type binop =
   | Or
   | And
   | Threefry4x32_crypto
-      (** 4x32-bit Threefry PRNG, 20-round cryptographic version. Requires a 128-bit key and a 
+      (** 4x32-bit Threefry PRNG, 20-round cryptographic version. Requires a 128-bit key and a
           128-bit counter and outputs a 128-bit value (precision [Uint4x32]). *)
   | Threefry4x32_light
-      (** 4x32-bit Threefry PRNG, 2-round light version (as in JAX/XLA). Requires a 128-bit key 
-          and a 128-bit counter and outputs a 128-bit value (precision [Uint4x32]). *)
+      (** 4x32-bit Threefry PRNG, 2-round light version (as in JAX/XLA). Requires a 128-bit key and
+          a 128-bit counter and outputs a 128-bit value (precision [Uint4x32]). *)
 [@@deriving sexp, compare, equal]
 
 type unop =
@@ -390,7 +390,9 @@ let neutral_elem = function
   | Min -> Float.infinity
   | And -> 1.
   | Or -> 0.
-  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq | Cmpne | Threefry4x32_crypto | Threefry4x32_light (* | Shl | Shr *) -> 0.
+  | Arg2 | Arg1 | Mod | Cmplt | Cmpeq | Cmpne | Threefry4x32_crypto
+  | Threefry4x32_light (* | Shl | Shr *) ->
+      0.
 
 let interpret_binop op v1 v2 =
   let open Float in
@@ -415,7 +417,7 @@ let interpret_binop op v1 v2 =
   (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
   | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
   | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
-  | Threefry4x32_crypto | Threefry4x32_light -> 
+  | Threefry4x32_crypto | Threefry4x32_light ->
       invalid_arg "Ops.interpret_binop: Threefry4x32 operations are outside the domain of float"
 
 let interpret_unop op v =
@@ -440,7 +442,8 @@ let interpret_unop op v =
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
   | Uint4x32_to_prec_uniform1 ->
-      invalid_arg "Ops.interpret_unop: Uint4x32_to_prec_uniform1 argument outside the domain of float"
+      invalid_arg
+        "Ops.interpret_unop: Uint4x32_to_prec_uniform1 argument outside the domain of float"
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
@@ -541,11 +544,12 @@ let binop_c_syntax prec v =
   | Threefry4x32_crypto, _ ->
       (* This corresponds to the pure C implementation in builtins.c. *)
       ("arrayjit_threefry4x32_crypto(", ",", ")")
-  | Threefry4x32_light, _ ->
-      ("arrayjit_threefry4x32_light(", ",", ")")
+  | Threefry4x32_light, _ -> ("arrayjit_threefry4x32_light(", ",", ")")
 
 let is_assign_op = function
-  | Arg1 | Mod | Threefry4x32_crypto | Threefry4x32_light (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne -> false
+  | Arg1 | Mod | Threefry4x32_crypto | Threefry4x32_light (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne
+    ->
+      false
   | Add | Sub | Mul | Div | ToPowOf | Relu_gate | Satur01_gate | Arg2 | Max | Min | Or | And -> true
 
 let assign_op_cd_syntax ~initialize_neutral = function
@@ -572,7 +576,8 @@ let assign_op_cd_syntax ~initialize_neutral = function
   | Min -> "=@-"
   | Or -> "=||"
   | And -> "=&&"
-  | Arg1 | Mod | Threefry4x32_crypto | Threefry4x32_light (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne ->
+  | Arg1 | Mod | Threefry4x32_crypto | Threefry4x32_light (* | Shl | Shr *) | Cmplt | Cmpeq | Cmpne
+    ->
       invalid_arg "Ops.assign_op_cd_syntax: not an assignment op"
 
 (** Note: currently we do not support unary prefix symbols. *)
@@ -756,10 +761,12 @@ external copy_with_padding_c :
   axis_padding array ->
   unit = "arrayjit_copy_with_padding"
 
-external threefry4x32_crypto : int array -> int array -> int array = "arrayjit_threefry4x32_crypto_ocaml"
+external threefry4x32_crypto : int array -> int array -> int array
+  = "arrayjit_threefry4x32_crypto_ocaml"
 (** Threefry4x32 PRNG - 20 round cryptographic version *)
 
-external threefry4x32_light : int array -> int array -> int array = "arrayjit_threefry4x32_light_ocaml"
+external threefry4x32_light : int array -> int array -> int array
+  = "arrayjit_threefry4x32_light_ocaml"
 (** Threefry4x32 PRNG - 2 round light version *)
 
 external threefry4x32 : int array -> int array -> int array = "arrayjit_threefry4x32_ocaml"

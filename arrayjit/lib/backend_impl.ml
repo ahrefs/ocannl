@@ -50,13 +50,11 @@ module No_device_buffer_and_copying () :
     Stdlib.Gc.finalise finalize ptr;
     ptr
 
-  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (() : unit) :
-      buffer_ptr =
+  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (() : unit) : buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     alloc_impl ~size_in_bytes
 
-  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (() : unit) :
-      buffer_ptr =
+  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (() : unit) : buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let ptr = alloc_impl ~size_in_bytes in
     (* Zero-initialize the allocated memory *)

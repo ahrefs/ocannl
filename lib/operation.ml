@@ -375,13 +375,10 @@ let threefry4x32_light =
       result
 
 let threefry4x32 =
-  (* Select based on configuration *)
-  fun t1 t2 ->
-    let variant = Utils.settings.default_prng_variant in
-    if String.equal variant "crypto" then
-      threefry4x32_crypto t1 t2
-    else
-      threefry4x32_light t1 t2
+ (* Select based on configuration *)
+ fun t1 t2 ->
+  let variant = Utils.settings.default_prng_variant in
+  if String.equal variant "crypto" then threefry4x32_crypto t1 t2 else threefry4x32_light t1 t2
 
 let fma ?(label = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
