@@ -21,10 +21,13 @@ let () =
   Tn.update_prec else_val.value Ir.Ops.bfloat16;
   (* else branch is bfloat16 *)
   Tn.update_prec result.value Ir.Ops.single;
-
   (* result is single *)
 
+  (* Initialize on host (rather than on device). *)
+  Tn.set_values cond.value [| 0.0 |];
+  Tn.set_values a.value [| 1.0 |];
+  Tn.set_values b.value [| 2.0 |];
+
   (* Set up values and run computation *)
-  Train.set_hosted result.value;
   ignore (Train.forward_once (module Backend) result);
   Train.printf_tree result

@@ -222,6 +222,8 @@ let compute_end_idx ?padding dims axis =
   | Some _ -> dims.(axis) - 1
 
 let set_from_float ?padding arr idx v =
+  (* NOTE: Bigarray requires the length of indices to be the same as the number of dimensions. *)
+  let idx = if Array.is_empty (dims arr) then [||] else idx in
   let adjusted_idx = adjust_idx_for_padding ?padding idx in
   match arr with
   | Byte_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Int.of_float v
@@ -388,7 +390,7 @@ let retrieve_flat_values ?padding arr =
 
 let set_flat_values ?padding arr values =
   let dims = dims arr in
-  if Array.is_empty dims then set_from_float ?padding arr [| 0 |] values.(0)
+  if Array.is_empty dims then set_from_float ?padding arr [||] values.(0)
   else
     let n_axes = Array.length dims in
     let idx = Array.create ~len:n_axes 0 in
