@@ -416,7 +416,9 @@ This syntax used to be very important, because comments in assignments are used 
 
 ### Name from binding
 
-When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~label () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
+When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
+
+The example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })` also illustrates providing additional string list to populate the label of the tensor: `label` must be of type `string list`.
 
 ### Label from function argument
 
@@ -451,8 +453,8 @@ If you recall, inline declared param tensors get lifted out of functions to be d
 
 ```ocaml
 let mlp_layer ~label ~hid_dim () =
-  let w = TDSL.param ~more_label:(Some label) "w" () 
-  and b = TDSL.param ~more_label:(Some label) ~output_dims:[ hid_dim ] "b" () in
+  let w = TDSL.param ~more_label:label "w" () 
+  and b = TDSL.param ~more_label:label ~output_dims:[ hid_dim ] "b" () in
   fun x -> TDSL.O.(relu (w * x + b))
 ```
 
