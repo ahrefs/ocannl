@@ -21,6 +21,7 @@ let () =
   Tn.update_prec else_val.value Ir.Ops.bfloat16;
   (* else branch is bfloat16 *)
   Tn.update_prec result.value Ir.Ops.single;
+
   (* result is single *)
 
   (* Initialize on host (rather than on device). *)
