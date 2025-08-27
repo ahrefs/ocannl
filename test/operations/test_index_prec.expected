@@ -1,0 +1,5 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+With big_models=false, index precision: uint32
+With big_models=true, index precision: uint64
+Index precision tests passed!

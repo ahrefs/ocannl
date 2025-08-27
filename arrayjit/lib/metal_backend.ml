@@ -433,7 +433,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let main_kernel_prefix = "kernel"
     let buffer_prefix = "device "
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
-    let arg_int_prefix = "const int& "
+    let arg_int_prefix = if Utils.settings.big_models then "const uint64_t& " else "const uint32_t& "
 
     let extra_args =
       [
@@ -446,6 +446,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> "uchar"
       | Ops.Uint16_prec _ -> "ushort"
       | Ops.Int32_prec _ -> "int"
+      | Ops.Uint32_prec _ -> "uint"
       | Ops.Uint4x32_prec _ -> "uint4" (* Metal's uint4 type - 128-bit *)
       | Ops.Half_prec _ -> "half"
       | Ops.Bfloat16_prec _ -> "bfloat" (* Metal supports bfloat16 natively *)
@@ -454,6 +455,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Double_prec _ ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Int64_prec _ -> "long"
+      | Ops.Uint64_prec _ -> "ulong"
       | Ops.Void_prec -> "void"
 
     let vec_typ_of_prec ~length prec =
@@ -462,6 +464,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Double_prec _, 2 ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Int32_prec _, 4 -> "int32x4_t"
+      | Ops.Uint32_prec _, 4 -> "uint32x4_t"
+      | Ops.Int64_prec _, 2 -> "int64x2_t"
+      | Ops.Uint64_prec _, 2 -> "uint64x2_t"
       | (Ops.Byte_prec _ | Ops.Fp8_prec _), 16 -> "int8x16_t"
       | (Ops.Uint16_prec _ | Ops.Bfloat16_prec _), 8 -> "uint16x8_t"
       | Ops.Half_prec _, 8 -> "half8_t"
@@ -472,6 +477,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _ -> ""
       | Ops.Uint16_prec _ -> ""
       | Ops.Int32_prec _ -> ""
+      | Ops.Uint32_prec _ -> ""
       | Ops.Uint4x32_prec _ -> "" (* No specific suffix for uint4 *)
       | Ops.Half_prec _ -> "h"
       | Ops.Bfloat16_prec _ -> "bf" (* TODO: Verify actual Metal suffix for bfloat16 *)
@@ -480,6 +486,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Double_prec _ ->
           raise @@ Utils.User_error "Metal backend does not support double precision"
       | Ops.Int64_prec _ -> "l"
+      | Ops.Uint64_prec _ -> "ul"
       | Ops.Void_prec -> ""
 
     let ternop_syntax _prec op =
@@ -605,6 +612,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Byte_prec _, Ops.Byte_prec _
       | Ops.Uint16_prec _, Ops.Uint16_prec _
       | Ops.Int32_prec _, Ops.Int32_prec _
+      | Ops.Uint32_prec _, Ops.Uint32_prec _
+      | Ops.Int64_prec _, Ops.Int64_prec _
+      | Ops.Uint64_prec _, Ops.Uint64_prec _
       | Ops.Uint4x32_prec _, Ops.Uint4x32_prec _
       | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
       | Ops.Fp8_prec _, Ops.Fp8_prec _

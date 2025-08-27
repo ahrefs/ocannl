@@ -294,8 +294,8 @@ let%track4_sexp to_low_level code =
                 match target_prec with
                 | Ops.Byte_prec _ | Ops.Fp8_prec _ -> 16 (* 8-bit values *)
                 | Ops.Uint16_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ -> 8 (* 16-bit values *)
-                | Ops.Int32_prec _ | Ops.Single_prec _ -> 4 (* 32-bit values *)
-                | Ops.Double_prec _ | Ops.Int64_prec _ -> 2 (* 64-bit values *)
+                | Ops.Int32_prec _ | Ops.Uint32_prec _ | Ops.Single_prec _ -> 4 (* 32-bit values *)
+                | Ops.Double_prec _ | Ops.Int64_prec _ | Ops.Uint64_prec _ -> 2 (* 64-bit values *)
                 | Ops.Uint4x32_prec _ -> 1 (* 128-bit value *)
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
           in

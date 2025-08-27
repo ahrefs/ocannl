@@ -90,7 +90,7 @@ struct
   let kernel_prep_line = ""
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
-  let arg_int_prefix = "const int "
+  let arg_int_prefix = if Utils.settings.big_models then "const uint64_t " else "const uint32_t "
   let extra_args = []
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
@@ -311,7 +311,8 @@ module C_syntax (B : C_syntax_config) = struct
         if PPrint.is_empty d1 then d2 else if PPrint.is_empty d2 then d1 else d1 ^^ hardline ^^ d2
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         let header =
-          string "for (int " ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi
+          let idx_type = if Utils.settings.big_models then "uint64_t " else "uint32_t " in
+          string ("for (" ^ idx_type) ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi
           ^^ space ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space
           ^^ string "++" ^^ pp_symbol i ^^ string ")"
         in
@@ -562,7 +563,7 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = string prefix ^^ string (Printf.sprintf "%LdLL" i) ^^ string postfix in
         ([], expr)
     | Embed_index idx ->
-        let from_prec = Ops.int32 in
+        let from_prec = Ops.index_prec () in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
         let idx_doc = pp_axis_index idx in
         let idx_doc = if PPrint.is_empty idx_doc then string "0" else idx_doc in

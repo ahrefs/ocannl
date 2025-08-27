@@ -74,7 +74,7 @@ let scalar_precision = function
       (* Single is the most widely supported precision, so we use it as the default. *)
       Ops.single
   | Constant_bits _ -> Ops.int64
-  | Embed_index _ -> Ops.int32
+  | Embed_index _ -> Ops.index_prec ()
   | Ternop (_, (_, prec), _, _) -> prec
   | Binop (_, (_, prec), _) -> prec
   | Unop (_, (_, prec)) -> prec
