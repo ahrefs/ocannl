@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+                 #3 where
+                 scalar 0.00
+#0 cond_condition│#1 a_then_val│#2 b_else_val
+scalar 0.00      │scalar 0.00  │scalar 0.00

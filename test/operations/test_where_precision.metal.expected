@@ -1,0 +1,17 @@
+#include <metal_stdlib>
+using namespace metal;
+kernel void where_fwd(
+    device bfloat *b_else_val [[buffer(0)]],
+    device float *where [[buffer(1)]],
+    device half *a_then_val [[buffer(2)]],
+    device uchar *cond_condition [[buffer(3)]],
+    uint3 gid [[threadgroup_position_in_grid]],
+    uint3 lid [[thread_position_in_threadgroup]]) {
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  /* where fwd */
+  where[0] = select((float)(b_else_val[0]), (float)(a_then_val[0]), cond_condition[0]);
+  /* end */
+}
