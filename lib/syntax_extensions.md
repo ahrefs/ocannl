@@ -251,7 +251,7 @@ N-dimensional array literals combine the list, tuple and array syntaxes to stric
 
 For example, `[ (1, 2, 3); (4, 5, 6) ]` is a mathematical matrix converting 3D vectors into 2D vectors.
 
-OCANNL supports dimension labels. The syntax for number allows prefixing a number by a character that stands for the dimension label of the resulting output dimension 1. These labels can then propagate to specify labels of other dimensions in other tensors, via shape inference. Example: `let%op y = ("hey" * 'q' 2.0) + 'p' 1.0 in ...`
+OCANNL supports dimension labels. The syntax for number allows prefixing a number by a character that stands for the dimension label of the resulting output dimension 1. These labels can then propagate to specify labels of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * 'q' 2.0) + 'p' 1.0 in ...`
 
 ## Wildcard bindings
 
@@ -295,7 +295,7 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
 Inline declarations can also be used outside of assignments for creating non-differentiable tensors, to mimic the behavior of `%op` but without the burden of initialization that a parameter would introduce:
 
 ```ocaml
-  let%cd mlp_result = mlp "point" in
+  let%cd mlp_result = mlp { point } in
   let result_routine =
     Train.to_routine (module Backend) sgd_routine.context IDX.empty
       [%cd ~~("mlp infer"; mlp_result.forward)]
@@ -418,7 +418,7 @@ This syntax used to be very important, because comments in assignments are used 
 
 ### Name from binding
 
-When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~config x = relu ("w" * x + "b" config.hid_dim)`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
+When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
 
 ### Label from function argument
 
