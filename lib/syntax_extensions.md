@@ -307,12 +307,10 @@ Inline declarations can also be used outside of assignments for creating non-dif
   in
 ```
 
-For `%op`, the declaration is allowed anywhere. If there is a unit `()` parameter in the function, the scope of inline-declared tensors is delimited at that parameter. The tensors are defined right after the unit parameter. If there is a labeled parameter with label `label` before the unit parameter (e.g., `~label:config`), the inline-declared tensors will use that parameter's `.label` field to enrich their labels. The value passed to such a parameter must be a record with at least a field `label : string list`. Example showing two param tensors declared inline, with scope delimited by `()` and labels enriched by the `label` parameter:
+For `%op`, the declaration is allowed anywhere. If there is a unit `()` parameter in the function, the scope of inline-declared tensors is delimited at that parameter. The tensors are defined right after the unit parameter. If there is a labeled parameter with label `label` before the unit parameter (e.g., `~label`), the inline-declared tensors will use that parameter (which should be of type `string list`) to enrich their labels. Example showing two param tensors declared inline, with scope delimited by `()` and labels enriched by the `label` parameter:
 
 ```ocaml
-type mlp_layer_config = { label : string list; hid_dim : int }
-
-let%op mlp_layer ~(label : mlp_layer_config) () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })
+let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })
 ```
 
 ## Using OCANNL's generalized einsum notation
@@ -424,7 +422,7 @@ When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~lab
 
 The resulting (primary) tensor's label will also have incorporated the label of the input argument, if any. In our example, the resulting `mlp_layer` tensor will also include the label of the actually applied `x`.
 
-Note that we do not include `config.label`, even if `config` is available, because the actually applied input argument will typically have more specific information.
+Note that we do not include separate config labels, because the actually applied input argument will typically have more specific information.
 
 ### Configuring inline declarations: inline output dimensions, initial values
 
@@ -449,57 +447,49 @@ A very simple example from [micrograd_demo: Micrograd README basic example](test
 
 ### Lifting of the applications of config arguments: if an error, refactor your code
 
-If you recall, inline declared param tensors get lifted out of functions to be defined at the point of a unit `()` parameter. Our example `let%op mlp_layer ~(label : mlp_layer_config) () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })` translates as:
+If you recall, inline declared param tensors get lifted out of functions to be defined at the point of a unit `()` parameter. Our example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })` translates as:
 
 ```ocaml
-let mlp_layer ~(label : mlp_layer_config) () =
-  let w = TDSL.param ~more_label:(Some label.label) "w" () 
-  and b = TDSL.param ~more_label:(Some label.label) ~output_dims:[ label.hid_dim ] "b" () in
+let mlp_layer ~label ~hid_dim () =
+  let w = TDSL.param ~more_label:(Some label) "w" () 
+  and b = TDSL.param ~more_label:(Some label) ~output_dims:[ hid_dim ] "b" () in
   fun x -> TDSL.O.(relu (w * x + b))
 ```
 
 For this to work properly, when employing such network blocks, their params also need to be introduced at the right moment. Therefore, the `%op` syntax ensures that this example:
 
 ```ocaml
-type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
-
-let%op three_layer_perceptron ~(label : tlp_config) () x =
-  mlp_layer ~label:{ label = [ "L3" ]; hid_dim = label.dim3 } ()
-    (mlp_layer ~label:{ label = [ "L2" ]; hid_dim = label.dim2 } ()
-       (mlp_layer ~label:{ label = [ "L1" ]; hid_dim = label.dim1 } () x))
+let%op three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =
+  mlp_layer ~label:[ "L3" ] ~hid_dim:dim3 ()
+    (mlp_layer ~label:[ "L2" ] ~hid_dim:dim2 ()
+       (mlp_layer ~label:[ "L1" ] ~hid_dim:dim1 () x))
 ```
 
 gets expanded to:
 
 ```ocaml
-type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
-
-let three_layer_perceptron ~(label : tlp_config) () =
-  let config_block__1 = mlp_layer ~label:{ label = [ "L3" ]; hid_dim = label.dim3 } ()
-  and config_block__2 = mlp_layer ~label:{ label = [ "L2" ]; hid_dim = label.dim2 } ()
-  and config_block__3 = mlp_layer ~label:{ label = [ "L1" ]; hid_dim = label.dim1 } () in
+let three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =
+  let config_block__1 = mlp_layer ~label:[ "L3" ] ~hid_dim:dim3 ()
+  and config_block__2 = mlp_layer ~label:[ "L2" ] ~hid_dim:dim2 ()
+  and config_block__3 = mlp_layer ~label:[ "L1" ] ~hid_dim:dim1 () in
   fun x -> config_block__1 (config_block__2 (config_block__3 x))
 ```
 
 However, this raises a concern for more complex situations. Consider this code that fails to compile:
 
 ```ocaml
-type mlp_config = { label : string list; hid_dims : int list }
-
-let%op mlp ~(label : mlp_config) () x =
-  List.foldi label.hid_dims ~init:x ~f:(fun i x hid_dim ->
-      mlp_layer ~label:{ label = [ "L" ^ Int.to_string i ]; hid_dim } () x)
+let%op mlp ~label ~hid_dims () x =
+  List.foldi hid_dims ~init:x ~f:(fun i x hid_dim ->
+      mlp_layer ~label:[ "L" ^ Int.to_string i ] ~hid_dim () x)
 ```
 
 The attempted lifting breaks because of the escaping variables `i` and `hid_dim`. This reminds us to rewrite the example, ensuring the proper introduction of params:
 
 ```ocaml
-type mlp_config = { label : string list; hid_dims : int list }
-
-let mlp ~(label : mlp_config) =
+let mlp ~label ~hid_dims =
   let layers =
-    List.mapi label.hid_dims ~f:(fun i hid_dim ->
-        mlp_layer ~label:{ label = [ "L" ^ Int.to_string i ]; hid_dim } ())
+    List.mapi hid_dims ~f:(fun i hid_dim ->
+        mlp_layer ~label:[ "L" ^ Int.to_string i ] ~hid_dim ())
   in
   fun () x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
 ```

@@ -5,7 +5,7 @@ open Ppx_shared
 
 let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let more_label = match opt_label with 
-    | Some (_label_name, label_pat) -> [%expr Some [%e pat2expr label_pat].label]
+    | Some (_label_name, label_pat) -> [%expr Some [%e pat2expr label_pat]]
     | None -> [%expr None] in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
