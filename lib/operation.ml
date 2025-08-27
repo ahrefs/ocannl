@@ -401,7 +401,7 @@ let where ?(label = []) ~grad_spec t1 t2 t3 =
   Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3
 
-(** [range] is a 1D tensor of shape [upto], spans [[0, upto)]. *)
+(** [range] is a 1D tensor of shape [upto], spans [0] inclusive, [upto] exclusive. *)
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
     Tensor.term ~fetch_op:Range_over_offsets ~grad_spec ~batch_dims:[]

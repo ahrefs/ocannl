@@ -398,12 +398,16 @@ module C_syntax (B : C_syntax_config) = struct
             ~args_docs:[]
         else string "/* " ^^ string message ^^ string " */"
     | Staged_compilation callback -> callback ()
-    | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
+    | Set_from_vec { tn; idcs; length; vec_unop; arg = arg, arg_prec; debug } ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
         let prec = Lazy.force tn.prec in
-        (* FIXME: this precision is hardcoded, bad, bad practice. *)
-        let arg_prec = Ops.uint4x32 in
+        (* Determine argument precision based on operation homogeneity *)
+        let arg_prec =
+          if Ops.is_homogeneous_prec_vec_unop vec_unop then prec
+            (* Homogeneous: argument uses result precision *)
+          else arg_prec
+        in
         let local_defs, arg_doc = pp_scalar arg_prec arg in
         let local_defs = pp_local_defs local_defs in
         (* Generate the function call *)
@@ -564,30 +568,62 @@ module C_syntax (B : C_syntax_config) = struct
         let idx_doc = if PPrint.is_empty idx_doc then string "0" else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
-    | Binop (Arg1, v1, _v2) -> pp_scalar prec v1
-    | Binop (Arg2, _v1, v2) -> pp_scalar prec v2
-    | Ternop (op, v1, v2, v3) ->
-        let d1, e1 = pp_scalar prec v1 in
-        let d2, e2 = pp_scalar prec v2 in
-        let d3, e3 = pp_scalar prec v3 in
+    | Binop (Arg1, (v1, _), _v2) -> pp_scalar prec v1
+    | Binop (Arg2, _v1, (v2, _)) -> pp_scalar prec v2
+    | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
+        let d1, e1, d2, e2, d3, e3 =
+          if Ops.is_homogeneous_prec_ternop op then
+            (* Homogeneous: all arguments use result precision *)
+            let d1, e1 = pp_scalar prec v1 in
+            let d2, e2 = pp_scalar prec v2 in
+            let d3, e3 = pp_scalar prec v3 in
+            (d1, e1, d2, e2, d3, e3)
+          else
+            (* Heterogeneous: arguments keep their natural precision *)
+            match op with
+            | Ops.Where ->
+                (* For Where: condition keeps its precision, then/else use result precision *)
+                (* Note: we evaluate condition without precision conversion, but then/else
+                   need to match the result precision for the final assignment *)
+                let d1, e1 = pp_scalar v1_prec v1 in
+                (* condition: no conversion *)
+                let d2, e2 = pp_scalar prec v2 in
+                (* then: result precision *)
+                let d3, e3 = pp_scalar prec v3 in
+                (* else: result precision *)
+                (d1, e1, d2, e2, d3, e3)
+            | _ ->
+                (* Other heterogeneous ternary ops would go here *)
+                let d1, e1 = pp_scalar v1_prec v1 in
+                let d2, e2 = pp_scalar v2_prec v2 in
+                let d3, e3 = pp_scalar v3_prec v3 in
+                (d1, e1, d2, e2, d3, e3)
+        in
         let defs = List.concat [ d1; d2; d3 ] in
         let expr = group (B.ternop_syntax prec op e1 e2 e3) in
         (defs, expr)
-    | Binop (op, v1, v2) ->
-        let d1, e1 = pp_scalar prec v1 in
-        let d2, e2 = pp_scalar prec v2 in
+    | Binop (op, (v1, v1_prec), (v2, v2_prec)) ->
+        let d1, e1, d2, e2 =
+          if Ops.is_homogeneous_prec_binop op then
+            (* Homogeneous: both arguments use result precision *)
+            let d1, e1 = pp_scalar prec v1 in
+            let d2, e2 = pp_scalar prec v2 in
+            (d1, e1, d2, e2)
+          else
+            (* Heterogeneous: arguments keep their natural precision *)
+            (* Currently all binops are homogeneous, but this is here for future extension *)
+            let d1, e1 = pp_scalar v1_prec v1 in
+            let d2, e2 = pp_scalar v2_prec v2 in
+            (d1, e1, d2, e2)
+        in
         let defs = List.concat [ d1; d2 ] in
         let expr = group (B.binop_syntax prec op e1 e2) in
         (defs, expr)
-    | Unop (op, v) ->
+    | Unop (op, (v, v_prec)) ->
         let arg_prec =
-          match op with
-          | Ops.Uint4x32_to_prec_uniform1 ->
-              (* The argument to Uint4x32_to_prec_uniform1 must be evaluated with uint4x32
-                 precision, regardless of the target precision. This handles the case where the
-                 operation is inlined as part of a scalar expression. *)
-              Ops.uint4x32
-          | _ -> prec
+          if Ops.is_homogeneous_prec_unop op then prec
+            (* Homogeneous: argument uses result precision *)
+          else v_prec
         in
         let defs, expr_v = pp_scalar arg_prec v in
         let expr = group (B.unop_syntax prec op expr_v) in
@@ -651,19 +687,55 @@ module C_syntax (B : C_syntax_config) = struct
     | Embed_index idx ->
         let idx_doc = pp_axis_index idx in
         ((if PPrint.is_empty idx_doc then string "0" else idx_doc), [])
-    | Binop (Arg1, v1, _v2) -> debug_float prec v1
-    | Binop (Arg2, _v1, v2) -> debug_float prec v2
-    | Ternop (op, v1, v2, v3) ->
-        let v1_doc, idcs1 = debug_float prec v1 in
-        let v2_doc, idcs2 = debug_float prec v2 in
-        let v3_doc, idcs3 = debug_float prec v3 in
+    | Binop (Arg1, (v1, _), _v2) -> debug_float prec v1
+    | Binop (Arg2, _v1, (v2, _)) -> debug_float prec v2
+    | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
+        let v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3 =
+          if Ops.is_homogeneous_prec_ternop op then
+            (* Homogeneous: all arguments use result precision *)
+            let v1_doc, idcs1 = debug_float prec v1 in
+            let v2_doc, idcs2 = debug_float prec v2 in
+            let v3_doc, idcs3 = debug_float prec v3 in
+            (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
+          else
+            (* Heterogeneous: handle based on operation *)
+            match op with
+            | Ops.Where ->
+                let v1_doc, idcs1 = debug_float v1_prec v1 in
+                (* condition: no conversion *)
+                let v2_doc, idcs2 = debug_float prec v2 in
+                (* then: result precision *)
+                let v3_doc, idcs3 = debug_float prec v3 in
+                (* else: result precision *)
+                (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
+            | _ ->
+                let v1_doc, idcs1 = debug_float v1_prec v1 in
+                let v2_doc, idcs2 = debug_float v2_prec v2 in
+                let v3_doc, idcs3 = debug_float v3_prec v3 in
+                (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
+        in
         (B.ternop_syntax prec op v1_doc v2_doc v3_doc, idcs1 @ idcs2 @ idcs3)
-    | Binop (op, v1, v2) ->
-        let v1_doc, idcs1 = debug_float prec v1 in
-        let v2_doc, idcs2 = debug_float prec v2 in
+    | Binop (op, (v1, v1_prec), (v2, v2_prec)) ->
+        let v1_doc, idcs1, v2_doc, idcs2 =
+          if Ops.is_homogeneous_prec_binop op then
+            (* Homogeneous: both arguments use result precision *)
+            let v1_doc, idcs1 = debug_float prec v1 in
+            let v2_doc, idcs2 = debug_float prec v2 in
+            (v1_doc, idcs1, v2_doc, idcs2)
+          else
+            (* Heterogeneous: arguments keep their natural precision *)
+            let v1_doc, idcs1 = debug_float v1_prec v1 in
+            let v2_doc, idcs2 = debug_float v2_prec v2 in
+            (v1_doc, idcs1, v2_doc, idcs2)
+        in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
-    | Unop (op, v) ->
-        let v_doc, idcs = debug_float prec v in
+    | Unop (op, (v, v_prec)) ->
+        let arg_prec =
+          if Ops.is_homogeneous_prec_unop op then prec
+            (* Homogeneous: argument uses result precision *)
+          else v_prec
+        in
+        let v_doc, idcs = debug_float arg_prec v in
         (B.unop_syntax prec op v_doc, idcs)
 
   let compile_main llc : PPrint.document = pp_ll llc

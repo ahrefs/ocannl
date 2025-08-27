@@ -148,6 +148,29 @@
      top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)))))
 
 (rule
+ (targets
+  test_where_precision-unoptimized.ll.actual
+  test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual)
+ (package neural_nets_lib)
+ (deps
+  config/ocannl_backend_extension.txt
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:test_where_precision.exe}
+     "--ocannl_output_prec_in_ll_files=true"
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy
+     build_files/where_fwd-unoptimized.ll
+     test_where_precision-unoptimized.ll.actual)
+    (copy
+     build_files/where_fwd.%{read:config/ocannl_backend_extension.txt}
+     test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual)))))
+
+(rule
  (alias runtest)
  (package neural_nets_lib)
  (action
@@ -173,6 +196,25 @@
   (diff
    "top_down_prec.%{read:config/ocannl_backend_extension.txt}.expected"
    "top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual")))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "test_where_precision-unoptimized.ll.expected"
+   "test_where_precision-unoptimized.ll.actual")))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (deps
+  config/ocannl_backend_extension.txt
+  (env_var OCANNL_BACKEND))
+ (action
+  (diff
+   "test_where_precision.%{read:config/ocannl_backend_extension.txt}.expected"
+   "test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual")))
 
 (test
  (name test_vec_simple)
@@ -218,6 +260,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
+
+(test
+ (name test_where_precision)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_where_precision)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name test_uniform1)

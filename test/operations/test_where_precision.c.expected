@@ -1,0 +1,87 @@
+
+#include <stdio.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* No longer need export macros since we're using textual prepending */
+
+
+#ifdef __FLT16_MAX__
+  #define HAS_NATIVE_FLOAT16 1
+#else
+  #define HAS_NATIVE_FLOAT16 0
+#endif
+
+
+#if HAS_NATIVE_FLOAT16
+  #define HALF_T _Float16
+#else
+  #define HALF_T uint16_t
+#endif
+
+
+#if HAS_NATIVE_FLOAT16
+  #define HALF_TO_FLOAT(x) ((float)(x))
+#else
+  #define HALF_TO_FLOAT(x) half_to_float_emulated(x)
+#endif
+
+
+#if !HAS_NATIVE_FLOAT16
+/* Convert IEEE 754 half precision (stored as uint16_t) to float */
+static float half_to_float_emulated(uint16_t h) {
+    uint32_t sign = (h >> 15) & 0x1;
+    uint32_t exponent = (h >> 10) & 0x1F;
+    uint32_t mantissa = h & 0x3FF;
+    
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            /* Zero */
+            return sign ? -0.0f : 0.0f;
+        } else {
+            /* Subnormal */
+            float result = ldexpf(mantissa / 1024.0f, -14);
+            return sign ? -result : result;
+        }
+    } else if (exponent == 31) {
+        if (mantissa == 0) {
+            /* Infinity */
+            return sign ? -INFINITY : INFINITY;
+        } else {
+            /* NaN */
+            return NAN;
+        }
+    } else {
+        /* Normal number */
+        float result = ldexpf(1.0f + mantissa / 1024.0f, exponent - 15);
+        return sign ? -result : result;
+    }
+}
+#endif
+
+
+/* BFloat16 to Float conversion (C function) */
+float bfloat16_to_single(uint16_t bf16)
+{
+  /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
+     To convert to float32, we shift left by 16 bits */
+  uint32_t f32 = ((uint32_t)bf16) << 16;
+  return *((float *)&f32);
+}
+
+ void where_fwd(
+    HALF_T *a_then_val,
+    float *where,
+    unsigned char *cond_condition,
+    unsigned short *b_else_val) {
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  /* where fwd */
+  where[0] =
+      ((cond_condition[0]) != 0.0 ? ( HALF_TO_FLOAT(a_then_val[0])) : ( bfloat16_to_single(b_else_val[0])));
+  /* end */
+}

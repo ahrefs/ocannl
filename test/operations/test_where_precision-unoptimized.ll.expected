@@ -1,0 +1,5 @@
+
+where_fwd (): /* where fwd */
+
+  where<single>[] := where(cond_condition<byte>[], a_then_val<half>[], b_else_val<bfloat16>[]);
+  /* end */
