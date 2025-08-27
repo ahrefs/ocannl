@@ -5,15 +5,11 @@ open! Base
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
 
-type mlp_layer_config = { label : string list; hid_dim : int }
+let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
 
-let%op mlp_layer ~config x = relu (({ w = uniform () } * x) + { b = 0.; o = [ config.hid_dim ] })
-
-type mlp_config = { label : string list; hid_dims : int list }
-
-let mlp ~config =
+let mlp ~hid_dims =
   let layers =
-    List.mapi config.hid_dims ~f:(fun i hid_dim ->
-        mlp_layer ~config:{ label = [ "L" ^ Int.to_string i ]; hid_dim })
+    List.mapi hid_dims ~f:(fun i hid_dim ->
+        mlp_layer ~label:[ "L" ^ Int.to_string i ] ~hid_dim ())
   in
   fun x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)

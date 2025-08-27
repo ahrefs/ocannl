@@ -89,52 +89,30 @@ let z3 =
          ["i"; Int.to_string s; "*a+"; Int.to_string d; "*bc;b=>iac"]) hey9
       hey10
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
-type mlp_layer_config = {
-  label: string list ;
-  hid_dim: int }
 let mlp_layer =
   let open! TDSL.O in
-    fun ~config ->
+    fun ~label ~hid_dim () ->
       let b =
-        ((TDSL.param ?more_label:(Some (config.label)) ?value:None
-            ?values:None ?param_init:None "b") ~output_dims:[config.hid_dim])
-          ()
+        ((TDSL.param ?more_label:(Some label) ?value:None ?values:None
+            ?param_init:None "b") ~output_dims:[hid_dim]) ()
       and w =
-        (TDSL.param ?more_label:(Some (config.label)) ?value:None
-           ?values:None ?param_init:None "w") () in
+        (TDSL.param ?more_label:(Some label) ?value:None ?values:None
+           ?param_init:None "w") () in
       fun x ->
-        (relu
-           ?label:(Some
-                     (List.concat
-                        [["mlp_layer"]; (x.Tensor.value).Ir.Tnode.label])))
+        (relu ?label:(Some ["mlp_layer"]))
           (((+) ?label:None) ((( * ) ?label:None) w x) b)
 let _use_layer =
-  let config_block__0 = mlp_layer ~config:{ label = ["L2"]; hid_dim = 3 }
-  and config_block__1 = mlp_layer ~config:{ label = ["L"]; hid_dim = 3 } in
-  let open! TDSL.O in fun x -> config_block__1 (config_block__0 x)
+  let open! TDSL.O in
+    fun x ->
+      mlp_layer ~label:["L"] ~hid_dim:3 ()
+        (mlp_layer ~label:["L2"] ~hid_dim:3 () x)
 let _config_layer =
   let open! TDSL.O in
-    fun ~config:_ ->
-      let config_block__0 = mlp_layer ~config:{ label = ["L"]; hid_dim = 3 } in
-      fun x -> config_block__0 x
-type tlp_config = {
-  label: string list ;
-  dim1: int ;
-  dim2: int ;
-  dim3: int }
+    fun ~config:_ x -> mlp_layer ~label:["L"] ~hid_dim:3 () x
 let _three_layer_perceptron =
   let open! TDSL.O in
-    fun ~config:(config : tlp_config) ->
-      let config_block__0 =
-        mlp_layer
-          ~config:{ label = ("L1" :: (config.label)); hid_dim = (config.dim1)
-                  }
-      and config_block__1 =
-        mlp_layer
-          ~config:{ label = ("L2" :: (config.label)); hid_dim = (config.dim2)
-                  }
-      and config_block__2 =
-        mlp_layer
-          ~config:{ label = ("L3" :: (config.label)); hid_dim = (config.dim3)
-                  } in
-      fun x -> config_block__2 (config_block__1 (config_block__0 x))
+    fun ~label ~dim1 ~dim2 ~dim3 () ->
+      fun x ->
+        mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 ()
+          (mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 ()
+             (mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 () x))

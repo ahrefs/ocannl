@@ -21,21 +21,17 @@ let z3 =
 
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 
-type mlp_layer_config = { label : string list; hid_dim : int }
-
-let%op mlp_layer ~config x = relu (({ w } * x) + { b; o = [ config.hid_dim ] })
+let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b; o = [ hid_dim ] })
 
 let%op _use_layer x =
-  mlp_layer ~config:{ label = [ "L" ]; hid_dim = 3 }
-    (mlp_layer ~config:{ label = [ "L2" ]; hid_dim = 3 } x)
+  mlp_layer ~label:[ "L" ] ~hid_dim:3 ()
+    (mlp_layer ~label:[ "L2" ] ~hid_dim:3 () x)
 
-let%op _config_layer ~config:_ x = mlp_layer ~config:{ label = [ "L" ]; hid_dim = 3 } x
+let%op _config_layer ~config:_ x = mlp_layer ~label:[ "L" ] ~hid_dim:3 () x
 
-type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
-
-let%op _three_layer_perceptron ~(config : tlp_config) x =
+let%op _three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =
   mlp_layer
-    ~config:{ label = "L3" :: config.label; hid_dim = config.dim3 }
+    ~label:(label @ [ "L3" ]) ~hid_dim:dim3 ()
     (mlp_layer
-       ~config:{ label = "L2" :: config.label; hid_dim = config.dim2 }
-       (mlp_layer ~config:{ label = "L1" :: config.label; hid_dim = config.dim1 } x))
+       ~label:(label @ [ "L2" ]) ~hid_dim:dim2 ()
+       (mlp_layer ~label:(label @ [ "L1" ]) ~hid_dim:dim1 () x))

@@ -3,8 +3,10 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
-let make_p ~has_config ~loc ?value ?values ?param_init ~extra_args name =
-  let more_label = if has_config then [%expr Some config.label] else [%expr None] in
+let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
+  let more_label = match opt_label with 
+    | Some (_label_name, label_pat) -> [%expr Some [%e pat2expr label_pat]]
+    | None -> [%expr None] in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
@@ -36,13 +38,13 @@ let make_p ~has_config ~loc ?value ?values ?param_init ~extra_args name =
   in
   [%expr [%e with_extra_args] ()]
 
-let make_vb ~has_config ?value ?param_init ~extra_args ~loc name =
+let make_vb ~opt_label ?value ?param_init ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
-  let v = make_p ~has_config ~loc ?value ?param_init ~extra_args name in
+  let v = make_p ~opt_label ~loc ?value ?param_init ~extra_args name in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~has_config ~init_nd ~extra_args ~loc name =
+let make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
@@ -59,7 +61,7 @@ let make_vb_nd ~has_config ~init_nd ~extra_args ~loc name =
         :: ({ txt = Lident "output_dims"; loc }, output_dims_expr)
         :: extra_args
       in
-      make_p ~has_config ~loc ~values ~extra_args name
+      make_p ~opt_label ~loc ~values ~extra_args name
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -80,9 +82,9 @@ let lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr arg_exprs =
     | [ e2; e3 ] -> [%expr [%e pat2expr pat] [%e e2] [%e e3]]
     | _ -> assert false )
 
-let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
+let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~num_configs ~is_toplevel:false ~has_config in
+  let loop = translate ~num_configs ~is_toplevel:false ~opt_label in
   match expr with
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] [%e expr]])
@@ -141,7 +143,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~has_config ~value ~extra_args ~loc name in
+          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -160,7 +162,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       | Lident tensor_name ->
           let value = [%expr Float.of_int [%e int_val]] in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~has_config ~value ~extra_args ~loc name in
+          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -181,7 +183,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb_nd ~has_config ~init_nd ~extra_args ~loc name in
+          let pat, vb = make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name in
           (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
@@ -204,7 +206,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
                 (vbs, Some e)
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~has_config ?param_init ~extra_args ~loc name in
+          let pat, vb = make_vb ~opt_label ?param_init ~extra_args ~loc name in
           (* Combine with any bindings from the initialization *)
           let all_vbs = Map.add_exn init_vbs ~key:tensor_name ~data:vb in
           (all_vbs, pat2expr pat)
@@ -258,29 +260,44 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
       let vbs1, e1 = loop ?label expr1 in
       let vbs2, e2 = loop expr2 in
       (reduce_vbss [ vbs1; vbs2 ], [%expr [%e e1] [%e e2]])
-  | {
-   pexp_desc =
-     Pexp_function
-       ( ({ pparam_desc = Pparam_val (Labelled "config", c_e, c_pat); _ } as arg) :: args,
-         constr,
-         body );
-   _;
-  } ->
-      let vbs, body =
-        translate ~num_configs ~is_toplevel:true ~has_config:true ?label
-          { expr with pexp_desc = Pexp_function (args, constr, body) }
+  | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel -> (
+      (* Check if there's a unit parameter or a labeled parameter with label "label" *)
+      let rec find_unit_pos idx = function
+        | [] -> None
+        | { pparam_desc = Pparam_val (Nolabel, _, pat); _ } :: _ 
+          when match pat.ppat_desc with
+               | Ppat_construct ({ txt = Lident "()"; _ }, None) -> true
+               | _ -> false ->
+            Some idx
+        | _ :: rest -> find_unit_pos (idx + 1) rest
       in
-      let body = let_opt ~loc vbs body in
-      ( no_vbs,
-        {
-          expr with
-          pexp_desc =
-            Pexp_function
-              ( [ { arg with pparam_desc = Pparam_val (Labelled "config", c_e, c_pat) } ],
-                constr,
-                Pfunction_body body );
-        } )
-  | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel ->
+      let rec find_label_param = function
+        | [] -> None
+        | { pparam_desc = Pparam_val (Labelled "label", _, pat); _ } :: _ -> Some ("label", pat)
+        | _ :: rest -> find_label_param rest
+      in
+      match find_unit_pos 0 args with
+      | Some unit_idx ->
+          (* Split args at unit parameter *)
+          let before_unit, unit_and_after = List.split_n args unit_idx in
+          let unit_param, after_unit = match unit_and_after with
+            | unit :: rest -> (unit, rest)
+            | [] -> failwith "Internal error: unit_and_after should not be empty" in
+          let opt_label = find_label_param before_unit in
+          let vbs, inner_body =
+            translate ~num_configs ~is_toplevel:false ~opt_label ?label
+              { expr with pexp_desc = Pexp_function (after_unit, constr, body) }
+          in
+          let inner_body = let_opt ~loc vbs inner_body in
+          (* The inner_body already has after_unit parameters processed, so use it directly *)
+          let new_body = inner_body in
+          ( no_vbs,
+            if List.is_empty before_unit then
+              { expr with pexp_desc = Pexp_function ([unit_param], constr, Pfunction_body new_body) }
+            else
+              { expr with pexp_desc = Pexp_function (before_unit @ [unit_param], constr, Pfunction_body new_body) } )
+      | None ->
+      (* No unit parameter, normal processing *)
       let labels =
         Option.to_list label
         @ List.filter_map args ~f:(function
@@ -323,7 +340,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
                 ~f:(fun acc vbs -> Map.merge_disjoint_exn acc vbs),
               Pfunction_cases (cases, loc, attrs) )
       in
-      (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) })
+      (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) }) )
   | { pexp_desc = Pexp_function (args, constr, body); _ } ->
       let vbs, body =
         match body with
@@ -422,7 +439,7 @@ let rec translate ~num_configs ~is_toplevel ~has_config ?label expr =
 
 let translate ?ident_label expr =
   let vbs, expr =
-    translate ~num_configs:(ref 0) ~is_toplevel:true ~has_config:false
+    translate ~num_configs:(ref 0) ~is_toplevel:true ~opt_label:None
       ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
       expr
   in
