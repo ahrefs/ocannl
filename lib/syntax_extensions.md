@@ -307,12 +307,12 @@ Inline declarations can also be used outside of assignments for creating non-dif
   in
 ```
 
-For `%op`, the declaration is allowed anywhere. If there is a `~config` function parameter used inside the extension scope, for example as `fun ~config ... -> ...` or a more specific example `let%op mlp ~config x = ...`, the scope of an inline-declared tensor is no longer the full scope of the extension point. Instead, the tensor is defined right underneath the introduction of the `~config` parameter: `fun ~config -> let <definitions of the inline-declared tensors> in ...`. The config value passed to the generated code must be a record with at least a field `label : string list`. The inline-declared tensor that's defined under a `~config` parameter is defined as `TDSL.param ~more_label:config.label ...` Example showing two param tensors declared inline, including `config.label` in their labels:
+For `%op`, the declaration is allowed anywhere. If there is a unit `()` parameter in the function, the scope of inline-declared tensors is delimited at that parameter. The tensors are defined right after the unit parameter. If there is a labeled parameter with label `label` before the unit parameter (e.g., `~label:config`), the inline-declared tensors will use that parameter's `.label` field to enrich their labels. The value passed to such a parameter must be a record with at least a field `label : string list`. Example showing two param tensors declared inline, with scope delimited by `()` and labels enriched by the `label` parameter:
 
 ```ocaml
 type mlp_layer_config = { label : string list; hid_dim : int }
 
-let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })
+let%op mlp_layer ~(label : mlp_layer_config) () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })
 ```
 
 ## Using OCANNL's generalized einsum notation
@@ -418,7 +418,7 @@ This syntax used to be very important, because comments in assignments are used 
 
 ### Name from binding
 
-When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
+When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~label () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
 
 ### Label from function argument
 
@@ -449,12 +449,12 @@ A very simple example from [micrograd_demo: Micrograd README basic example](test
 
 ### Lifting of the applications of config arguments: if an error, refactor your code
 
-If you recall, inline declared param tensors get lifted out of functions except for the function `fun ~config ->`, where they get defined. Our example `let%op mlp_layer ~config x = relu ({ w } * x + { b; o = [ config.hid_dim ] })` translates as:
+If you recall, inline declared param tensors get lifted out of functions to be defined at the point of a unit `()` parameter. Our example `let%op mlp_layer ~(label : mlp_layer_config) () x = relu ({ w } * x + { b; o = [ label.hid_dim ] })` translates as:
 
 ```ocaml
-let mlp_layer ~config =
-  let w = TDSL.param ~more_label:config.label "w" () 
-  and b = TDSL.param ~more_label:config.label ~output_dims:[ config.hid_dim ] "b" () in
+let mlp_layer ~(label : mlp_layer_config) () =
+  let w = TDSL.param ~more_label:(Some label.label) "w" () 
+  and b = TDSL.param ~more_label:(Some label.label) ~output_dims:[ label.hid_dim ] "b" () in
   fun x -> TDSL.O.(relu (w * x + b))
 ```
 
@@ -463,10 +463,10 @@ For this to work properly, when employing such network blocks, their params also
 ```ocaml
 type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
 
-let%op three_layer_perceptron ~config x =
-  mlp_layer ~config:{ label = [ "L3" ]; hid_dim = config.dim3 }
-    (mlp_layer ~config:{ label = [ "L2" ]; hid_dim = config.dim2 }
-       (mlp_layer ~config:{ label = [ "L1" ]; hid_dim = config.dim1 } x))
+let%op three_layer_perceptron ~(label : tlp_config) () x =
+  mlp_layer ~label:{ label = [ "L3" ]; hid_dim = label.dim3 } ()
+    (mlp_layer ~label:{ label = [ "L2" ]; hid_dim = label.dim2 } ()
+       (mlp_layer ~label:{ label = [ "L1" ]; hid_dim = label.dim1 } () x))
 ```
 
 gets expanded to:
@@ -474,10 +474,10 @@ gets expanded to:
 ```ocaml
 type tlp_config = { label : string list; dim1 : int; dim2 : int; dim3 : int }
 
-let three_layer_perceptron ~config =
-  let config_block__1 = mlp_layer ~config:{ label = [ "L3" ]; hid_dim = config.dim3 }
-  and config_block__2 = mlp_layer ~config:{ label = [ "L2" ]; hid_dim = config.dim2 }
-  and config_block__3 = mlp_layer ~config:{ label = [ "L1" ]; hid_dim = config.dim1 } in
+let three_layer_perceptron ~(label : tlp_config) () =
+  let config_block__1 = mlp_layer ~label:{ label = [ "L3" ]; hid_dim = label.dim3 } ()
+  and config_block__2 = mlp_layer ~label:{ label = [ "L2" ]; hid_dim = label.dim2 } ()
+  and config_block__3 = mlp_layer ~label:{ label = [ "L1" ]; hid_dim = label.dim1 } () in
   fun x -> config_block__1 (config_block__2 (config_block__3 x))
 ```
 
@@ -486,9 +486,9 @@ However, this raises a concern for more complex situations. Consider this code t
 ```ocaml
 type mlp_config = { label : string list; hid_dims : int list }
 
-let%op mlp ~config x =
-  List.foldi config.hid_dims ~init:x ~f:(fun i x hid_dim ->
-      mlp_layer ~config:{ label = [ "L" ^ Int.to_string i ]; hid_dim } x)
+let%op mlp ~(label : mlp_config) () x =
+  List.foldi label.hid_dims ~init:x ~f:(fun i x hid_dim ->
+      mlp_layer ~label:{ label = [ "L" ^ Int.to_string i ]; hid_dim } () x)
 ```
 
 The attempted lifting breaks because of the escaping variables `i` and `hid_dim`. This reminds us to rewrite the example, ensuring the proper introduction of params:
@@ -496,12 +496,12 @@ The attempted lifting breaks because of the escaping variables `i` and `hid_dim`
 ```ocaml
 type mlp_config = { label : string list; hid_dims : int list }
 
-let mlp ~config =
+let mlp ~(label : mlp_config) =
   let layers =
-    List.mapi config.hid_dims ~f:(fun i hid_dim ->
-        mlp_layer ~config:{ label = [ "L" ^ Int.to_string i ]; hid_dim })
+    List.mapi label.hid_dims ~f:(fun i hid_dim ->
+        mlp_layer ~label:{ label = [ "L" ^ Int.to_string i ]; hid_dim } ())
   in
-  fun x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
+  fun () x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
 ```
 
 Unfortunately, we need to be mindful to introduce params at the right times.
