@@ -811,27 +811,27 @@ external fp8_to_uint4x32 : int -> int array = "arrayjit_fp8_to_uint4x32_ocaml"
 
 (** {2 *** Precision homogeneity classification ***} *)
 
-(** Returns true if the unary operation is homogeneous in precision, meaning
-    its argument should be converted to the result precision. *)
+(** Returns true if the unary operation is homogeneous in precision, meaning its argument should be
+    converted to the result precision. *)
 let is_homogeneous_prec_unop = function
-  | Uint4x32_to_prec_uniform1 -> false  (* Heterogeneous: argument must be uint4x32 *)
-  | _ -> true  (* All other unary operations are homogeneous *)
+  | Uint4x32_to_prec_uniform1 -> false (* Heterogeneous: argument must be uint4x32 *)
+  | _ -> true (* All other unary operations are homogeneous *)
 
-(** Returns true if the vec_unop operation is homogeneous in precision, meaning
-    its argument should be converted to the result precision. *)
+(** Returns true if the vec_unop operation is homogeneous in precision, meaning its argument should
+    be converted to the result precision. *)
 let is_homogeneous_prec_vec_unop = function
-  | Uint4x32_to_prec_uniform -> false  (* Heterogeneous: argument must be uint4x32 *)
+  | Uint4x32_to_prec_uniform -> false (* Heterogeneous: argument must be uint4x32 *)
 
-(** Returns true if the binary operation is homogeneous in precision, meaning
-    its arguments should be converted to the result precision. *)
+(** Returns true if the binary operation is homogeneous in precision, meaning its arguments should
+    be converted to the result precision. *)
 let is_homogeneous_prec_binop = function
-  | _ -> true  (* All binary operations are currently homogeneous *)
+  | _ -> true (* All binary operations are currently homogeneous *)
 
-(** Returns true if the ternary operation is homogeneous in precision, meaning
-    its arguments should be converted to the result precision. *)
+(** Returns true if the ternary operation is homogeneous in precision, meaning its arguments should
+    be converted to the result precision. *)
 let is_homogeneous_prec_ternop = function
-  | Where -> false  (* Heterogeneous: condition can have different precision *)
-  | FMA -> true     (* FMA is homogeneous *)
+  | Where -> false (* Heterogeneous: condition can have different precision *)
+  | FMA -> true (* FMA is homogeneous *)
 
 let () =
   (* Ensure that the functions are linked in *)

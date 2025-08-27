@@ -1106,25 +1106,26 @@ let simplify_llc llc =
           | Constant c, _ when Float.is_integer c ->
               loop_scalar (unroll_pow ~base:v1_scalar ~exp:(Float.to_int c), prec)
           | _ -> result)
-    | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3) | Binop (Add, llv3, (Binop (Mul, llv1, llv2), prec12)) ->
+    | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3)
+    | Binop (Add, llv3, (Binop (Mul, llv1, llv2), prec12)) ->
         (* TODO: this is tentative. *)
         loop_scalar @@ (Ternop (FMA, llv1, llv2, llv3), Ops.promote_prec prec12 prec)
     | Binop (op, llv1, llv2) ->
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
-        let result = Binop (op, v1, v2), prec in
+        let result = (Binop (op, v1, v2), prec) in
         if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then result else loop_scalar result
     | Ternop (op, llv1, llv2, llv3) ->
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let v3 = loop_scalar llv3 in
-        let result = Ternop (op, v1, v2, v3), prec in
+        let result = (Ternop (op, v1, v2, v3), prec) in
         if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then result else loop_scalar result
     | Unop (Identity, llsc) -> loop_scalar llsc
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->
         let v = loop_scalar llsc in
-        let result = Unop (op, v), prec in
+        let result = (Unop (op, v), prec) in
         if equal_scalar_arg llsc v then result else loop_scalar result
   in
   let check_constant tn c =
