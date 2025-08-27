@@ -52,6 +52,11 @@ check_half_prec_constants_cutoff=16384.0
 #   recent modification.
 automatic_host_transfers=true
 
+# If true, use uint64 for indexing arithmetic. If false (default), use uint32 for indexing arithmetic.
+# This affects all backends' kernel index parameters and local index variables.
+# Set to true for models with tensors larger than 2^32 elements.
+big_models=false
+
 # If true, the build_files directory is deleted on startup.
 clean_up_build_files_on_startup=true
 

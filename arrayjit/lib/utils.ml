@@ -52,6 +52,9 @@ type settings = {
   mutable default_prng_variant : string;
       (** The default variant of threefry4x32 PRNG to use. Options: "crypto" (20 rounds) or "light"
           (2 rounds). Defaults to "light" for better performance. *)
+  mutable big_models : bool;
+      (** If true, use uint64 for indexing arithmetic. If false, use uint32 for indexing arithmetic.
+          This affects all backends' kernel index parameters and local index variables. *)
 }
 [@@deriving sexp]
 
@@ -65,6 +68,7 @@ let settings =
     check_half_prec_constants_cutoff = Some (2. **. 14.);
     automatic_host_transfers = true;
     default_prng_variant = "light";
+    big_models = false;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -465,7 +469,8 @@ let restore_settings () =
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.automatic_host_transfers <-
     get_global_flag ~default:true ~arg_name:"automatic_host_transfers";
-  settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant"
+  settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant";
+  settings.big_models <- get_global_flag ~default:false ~arg_name:"big_models"
 
 let () = restore_settings ()
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
