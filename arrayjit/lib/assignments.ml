@@ -300,7 +300,7 @@ let%track4_sexp to_low_level code =
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
           in
           Set_from_vec
-            { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = rhs_ll; debug = "" }
+            { tn = lhs; idcs = lhs_idcs; length; vec_unop = op; arg = (rhs_ll, Low_level.scalar_precision rhs_ll); debug = "" }
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters

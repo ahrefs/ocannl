@@ -35,7 +35,7 @@ type t =
       idcs : Indexing.axis_index array;
       length : int;
       vec_unop : Ops.vec_unop;
-      arg : scalar_t;
+      arg : scalar_arg;
       mutable debug : string;
     }
   | Set_local of scope_id * scalar_t
@@ -46,14 +46,19 @@ and scalar_t =
   | Get_local of scope_id
   | Get of Tnode.t * Indexing.axis_index array
   | Get_merge_buffer of Tnode.t * Indexing.axis_index array
-  | Ternop of Ops.ternop * scalar_t * scalar_t * scalar_t
-  | Binop of Ops.binop * scalar_t * scalar_t
-  | Unop of Ops.unop * scalar_t
+  | Ternop of Ops.ternop * scalar_arg * scalar_arg * scalar_arg
+  | Binop of Ops.binop * scalar_arg * scalar_arg
+  | Unop of Ops.unop * scalar_arg
   | Constant of float
   | Constant_bits of int64  (** Direct bit representation, primarily for uint4x32 *)
   | Embed_index of Indexing.axis_index
 [@@deriving sexp_of, equal, compare]
 
+and scalar_arg = scalar_t * Ops.prec [@@deriving sexp_of, equal, compare]
+(** The argument precision is preserved in heterogeneous precision operation arguments, and is
+    ignored (overridden) in homogeneous precision operations. *)
+
+val scalar_precision : scalar_t -> Ops.prec
 val apply_op : Ops.op -> scalar_t array -> scalar_t
 val flat_lines : t list -> t list
 val unflat_lines : t list -> t
