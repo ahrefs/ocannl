@@ -439,6 +439,13 @@ let stop_gradient ?(label = []) =
   Tensor.unop ~label:("stop_grad" :: label) ~transpose_op:Pointwise_un ~op_asn ~grad_asn
     ~grad_spec:Prohibit_grad
 
+(** Softmax operation along the last axis *)
+let softmax_last_axis ?(label = []) =
+  fun ?grad_spec t1 ->
+    let exp_t = exp ~grad_spec:Tensor.Prohibit_grad t1 () in
+    let sum_exp = einsum1 "...|... => ...|...1" exp_t ~grad_spec:Tensor.Prohibit_grad () in
+    pointdiv ?grad_spec ~label:("softmax" :: label) exp_t sum_exp ()
+
 let slice (batch_idx : Idx.static_symbol) =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~v ~t1 ~projections =
@@ -498,6 +505,20 @@ let uniform_at1 ?grad_spec counter =
           ~label:[ "range_over_offsets" ] ())
        ())
 
+(** Dropout operation with given dropout rate (probability of dropping) *)
+let dropout ?(label = []) ~rate =
+  fun ?grad_spec t1 ->
+    if Float.(rate <= 0.) then t1
+    else if Float.(rate >= 1.) then
+      Tensor.number ?grad_spec 0.
+    else
+      let keep_prob = 1. -. rate in
+      let mask_val = uniform1 ~grad_spec:Tensor.Prohibit_grad () () in
+      let mask = lt ~grad_spec:Tensor.Prohibit_grad mask_val (Tensor.number ~grad_spec:Tensor.Prohibit_grad keep_prob) () in
+      let scaled_mask = pointdiv ~grad_spec:Tensor.Prohibit_grad mask 
+                          (Tensor.number ~grad_spec:Tensor.Prohibit_grad keep_prob) () in
+      pointmul ?grad_spec ~label:("dropout" :: label) t1 scaled_mask ()
+
 module DO = struct
   let ( * ) ?label t1 t2 = matmul ~grad_spec:If_needed ?label t1 t2 ()
   let ( *. ) ?label t1 t2 = pointmul ~grad_spec:If_needed ?label t1 t2 ()
@@ -548,6 +569,8 @@ module DO = struct
   let uniform_at ?label counter = uniform_at ~grad_spec:Require_grad ?label counter ()
   let uniform1 ?label () = uniform1 ~grad_spec:Require_grad () ?label ()
   let uniform_at1 ?label counter = uniform_at1 ~grad_spec:Require_grad ?label counter ()
+  let softmax_last_axis ?label t = softmax_last_axis ?label ~grad_spec:If_needed t
+  let dropout ?label ~rate t = dropout ?label ~rate ~grad_spec:If_needed t
 end
 
 module NDO = struct
@@ -658,6 +681,8 @@ module TDSL = struct
   let wrap_padded = wrap_padded ~grad_spec:If_needed
   let rebatch = rebatch ~grad_spec:If_needed
   let uniform = uniform ~grad_spec:Require_grad
+  let softmax_last_axis ?label t = softmax_last_axis ?label ~grad_spec:If_needed t
+  let dropout ?label ~rate t = dropout ?label ~rate ~grad_spec:If_needed t
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =

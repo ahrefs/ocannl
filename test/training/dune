@@ -57,3 +57,15 @@
  (libraries ocannl datasets)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name transformer)
+ (package neural_nets_lib)
+ (modules transformer)
+ (deps
+  ../../datasets/names.txt
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl datasets)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
