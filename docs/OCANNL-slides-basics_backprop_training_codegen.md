@@ -1,70 +1,45 @@
 # OCANNL: Mysteries of NN Training Unveiled
 
-## Slide 1
-
-OCANNL
-Mysteries of NN training unveiled
-
----
-
-## Slide 2
+{pause}
 
 My work on OCANNL is sponsored by **ahrefs**
 
----
+{pause}
 
-## Slide 3
-
-### OCaml Compiles Algorithms for Neural Network Learning
+{#ocannl-intro .definition}
+## OCaml Compiles Algorithms for Neural Network Learning
 
 * OCANNL is distributed as two opam packages:
   * **arrayjit**: a backend for compilers for numerical array programming,
   * **neural\_nets\_lib**: a neural networks (Deep Learning) framework.
 * You express numerical computations at runtime, OCANNL will optimize them for the runtime-dependent shape of your data, compile and dynamically load them using one of its backends.
 
----
+{pause}
 
-## Slide 4
-
-### OCaml Compiles Algorithms for Neural Network Learning
-
-* OCANNL is distributed as two opam packages:
-  * **arrayjit**: a backend for compilers for numerical array programming languages,
-  * **neural\_nets\_lib**: a neural networks (Deep Learning) framework.
-* You express numerical computations at runtime, OCANNL will compile them.
 * There are startups doing it in other languages, so it must be worth it!
   * In Python: **tinygrad** - democratizing DL - at home or on premise training of large models.
   * In Rust: **Luminal** - simplifies deployment of large models with on-device inference.
 * There are many optimization / NN frameworks in Rust, but few in OCaml! (e.g., Luminal, Candle, Cubecl, Burn)
 
----
+{pause}
 
-## Slide 5
+{.block title="Value added"}
+> * OCaml is a good fit for writing optimizing compilers.
+> * OCANNL has concise notation thanks to better shape inference (i.e. type inference for the data and transformation matrices).
+> * OCANNL might be a good fit for heterogeneous computing (e.g. combining GPUs from different companies), it is explicit about the backends (and devices) used.
 
-### OCaml Compiles Algorithms for Neural Network Learning
+{pause}
 
-**Value added**:
-
-* OCaml is a good fit for writing optimizing compilers.
-* OCANNL has concise notation thanks to better shape inference (i.e. type inference for the data and transformation matrices).
-* OCANNL might be a good fit for heterogeneous computing (e.g. combining GPUs from different companies), it is explicit about the backends (and devices) used.
-
----
-
-## Slide 6
-
+{.alert}
 OCANNL is still at a **proof-of-concept stage**, but it will grow and evolve.
 
----
-
-## Slide 7
+{pause}
 
 Let's train a feed-forward neural network with 2 hidden layers (aka. a 3-layer MLP) to classify points on a plane.
 
----
+{pause}
 
-## Slide 8
-
+{#tensorflow-example}
 > A screenshot from TensorFlow Playground is shown, illustrating a 3-layer Multi-Layer Perceptron (MLP) configured to classify the "moons" dataset.
 >
 > * **Data & Features**: The input data is the "moons" dataset, with a 50% training-to-test ratio, zero noise, and a batch size of 20. The input features are $x_1$, $x_2$, $x_1^2$, $x_2^2$, $x_1x_2$, $\sin(x_1)$, and $\sin(x_2)$.
@@ -78,146 +53,100 @@ Let's train a feed-forward neural network with 2 hidden layers (aka. a 3-layer M
 >   * Regularization: L2 with a rate of 0.003 [weight decay](cite: 54).
 > * **Output**: The output plot shows the model has learned to separate the two half-moon-shaped clusters of data points (blue and orange). The test loss is 0.462 and the training loss is 0.358 after 1,025 epochs.
 
----
+{pause up=ocannl-intro}
 
-## Slide 9
+{#training-overview .definition title="Training NNs is first-order (i.e. gradient based) optimization"}
+> * Collect examples to learn from.
+>   * *a dataset*
+> * Express a solution as a parameterized differentiable computation.
+>   * *a model*
+> * Figure out a formula for how bad the solution is on a datapoint.
+>   * *a loss function*
+> * For each datapoint in the dataset:
+>   * Compute the direction for parameters to make them better/worse.
+>         * *a gradient*
+>   * Update parameters to make them better.
+>         * *Stochastic Gradient Descent (SGD)*
 
-### Training NNs is first-order (i.e. gradient based) optimization
+{pause}
 
-* Collect examples to learn from.
-  * *a dataset*
-* Express a solution as a parameterized differentiable computation.
-  * *a model*
-* Figure out a formula for how bad the solution is on a datapoint.
-  * *a loss function*
-* For each datapoint in the dataset:
-  * Compute the direction for parameters to make them better/worse.
-        * *a gradient*
-  * Update parameters to make them better.
-        * *Stochastic Gradient Descent (SGD)*
+> * For each (mini-)batch of data points in the dataset:
+>   * For each datapoint in the batch, compute the direction for parameters to make them better/worse → **datapoint gradient**.
+>   * Add up the batch datapoint gradients.
+>   * Update parameters to make them better.
+>         * *Stochastic Gradient Descent (SGD)*
 
----
-
-## Slide 10
-
-### Training NNs is first-order (i.e. gradient based) optimization
-
-* Collect examples to learn from.
-  * *a dataset*
-* Express a solution as a parameterized differentiable computation.
-  * *a model*
-* Figure out a formula for how bad the solution is on a datapoint.
-  * *a loss function*
-* For each (mini-)batch of data points in the dataset:
-  * For each datapoint in the batch, compute the direction for parameters to make them better/worse → **datapoint gradient**.
-  * Add up the batch datapoint gradients.
-  * Update parameters to make them better.
-        * *Stochastic Gradient Descent (SGD)*
-
----
-
-## Slide 11
+{pause}
 
 (Mini-)Batches are equal-sized subsets of the dataset. Main options for defining a batch:
 
 * An element of a (fixed but random) partition of the dataset. **We'll use this.**
 * A random subset of the dataset.
 
----
+{pause}
 
-## Slide 12
-
-### Half-moons toy dataset
-
+{#half-moons .example title="Half-moons toy dataset"}
 > The slide shows a scatterplot of the half-moons dataset, where two classes of points form two interleaving crescent shapes. One class is marked with '#' and the other with '+'.
 
 ```ocaml
-  let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
-  let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in
-  let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates in
-  let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_labels in
+let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
+let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in
+let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates in
+let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_labels in
 ```
 
-## Slide 13
-
-### Half-moons toy dataset
-
-> This slide shows the same half-moons scatterplot as the previous one, along with the OCaml code used to generate the plot using the `PrintBox_utils` library.
+{pause}
 
 ```ocaml
-  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
-  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
-  let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
-  let%cd mlp_result = mlp { point } in
-  Train.set_on_host mlp_result.value;
-  let result_routine =
-    Train.to_routine (module Backend) sgd_routine.context IDX.empty
-      [%cd ~~("moons infer"; mlp_result.forward)]
-  in
-  let callback (x, y) =
-    Tn.set_values point.value [| x; y |];
-    Train.run result_routine;
-    Float.(mlp_result.@[0] >= 0.)
-  in
-  let plot_moons =
-    PrintBox_utils.plot ~as_canvas:true
-      [
-        Scatterplot { points = points1; content = PrintBox.line "#" };
-        Scatterplot { points = points2; content = PrintBox.line "%" };
-        Boundary_map
-          { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_moons;
+let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
+let classes = Tn.points_1d ~xdim:0 moons_classes.value in
+let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
+let%cd mlp_result = mlp { point } in
+Train.set_on_host mlp_result.value;
+let result_routine =
+  Train.to_routine (module Backend) sgd_routine.context IDX.empty
+    [%cd ~~("moons infer"; mlp_result.forward)]
+in
+let callback (x, y) =
+  Tn.set_values point.value [| x; y |];
+  Train.run result_routine;
+  Float.(mlp_result.@[0] >= 0.)
+in
+let plot_moons =
+  PrintBox_utils.plot ~as_canvas:true
+    [
+      Scatterplot { points = points1; content = PrintBox.line "#" };
+      Scatterplot { points = points2; content = PrintBox.line "%" };
+      Boundary_map
+        { content_false = PrintBox.line "."; content_true = PrintBox.line "*"; callback };
+    ]
+in
+PrintBox_text.output Stdio.stdout plot_moons;
 ```
 
----
+{pause up=training-overview}
 
-## Slide 14
-
-### Tensors as "differentiable" multidimensional matrices
-
+{#tensors-intro .definition title="Tensors as \"differentiable\" multidimensional matrices"}
 > A diagram illustrates the forward pass of a 3-layer MLP as a composition of tensor operations. It uses a visual notation where blue downward arrows represent **output axes** and orange rightward arrows represent **input axes**. The overall computation is:
 > $$b_3 + w_3 \cdot f(b_2 + w_2 \cdot f(b_1 + w_1 \cdot x))$$
 > where $f$ is an activation function.
 
----
-
-## Slide 15
-
-### Tensors as "differentiable" multidimensional matrices
+{pause}
 
 > This diagram is identical to the one on the previous slide, but adds a third type of axis: a red diagonal arrow representing **batch axes**. This is shown on the input tensor $x$.
 
----
+{pause}
 
-## Slide 16
-
-### Multi Layer Perceptron in one line of code
-
+{#mlp-code .example title="Multi Layer Perceptron in one line of code"}
 > **ReLU function:** A graph shows the Rectified Linear Unit (ReLU) function, which is $f(x) = \max(0, x)$. The function is zero for all negative inputs and increases linearly for positive inputs.
 
 ```ocaml
-  let%op mlp x =
-    { w3 } * relu ({ b2; o = [ 16 ] } + ({ w2 } * relu ({ b1; o = [ 16 ] } + ({ w1 } * x))))
-  in
+let%op mlp x =
+  { w3 } * relu ({ b2; o = [ 16 ] } + ({ w2 } * relu ({ b1; o = [ 16 ] } + ({ w1 } * x))))
+in
 ```
 
-
-
----
-
-## Slide 17
-
-### Multi Layer Perceptron in one line of code
-
-```ocaml
-  let%op mlp x =
-    { w3 } * relu ({ b2; o = [ 16 ] } + ({ w2 } * relu ({ b1; o = [ 16 ] } + ({ w1 } * x))))
-  in
-```
-
-
+{pause}
 
 * `{ w1 } * x`: Tensor (e.g. matrix) multiplication.
 * `{ w1 }`: Introduces identifier `w1` for a parameter tensor.
@@ -225,12 +154,9 @@ Let's train a feed-forward neural network with 2 hidden layers (aka. a 3-layer M
 * `relu`: "Rectified Linear Unit" unary operation.
 * `let%op mlp x = ...`: Declarative expressions for differentiable tensor operations. This is a tensor function that expands to: `let w1 = ... in let b1 = ... in let mlp in ...`.
 
----
+{pause}
 
-## Slide 18
-
-### Hinge loss function: maximum margin classification
-
+{#hinge-loss .definition title="Hinge loss function: maximum margin classification"}
 > **Left Image:** Shows a Support Vector Machine (SVM) separating two classes of data points with a hyperplane. The goal is to find the plane that has the **maximum margin** between the two classes.
 
 > **Right Image:** A graph of the Hinge Loss function. For correct classifications with a margin greater than 1, the loss is 0. For incorrect or insufficiently confident classifications, the loss increases linearly.
@@ -247,54 +173,41 @@ let%op margin_loss = relu (1. - (moons_class *. mlp moons_input)) in
 let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 ```
 
+{pause}
 
+{#regularization .block title="Regularization - weight decay"}
+> * **Regularization**: keep models simple to be less accidentally wrong and to stabilize training.
+> * You can add a regularizer to the loss function or modify the SGD update step—we'll do the latter.
+> * **Weight decay** is L2 regularization because the gradient of $p^2$ is $2p$.
+>
+> <table align="center">
+>   <tr>
+>     <th style="text-align:left;">L1 Regularization</th>
+>     <th style="text-align:left;">L2 Regularization</th>
+>   </tr>
+>   <tr>
+>     <td>1. L1 penalizes the sum of <strong>absolute</strong> values of weights.</td>
+>     <td>1. L2 penalizes the sum of <strong>square</strong> values of weights.</td>
+>   </tr>
+>   <tr>
+>     <td>2. L1 generates a model that is simple and interpretable.</td>
+>     <td>2. L2 regularization is able to learn complex data patterns.</td>
+>   </tr>
+>   <tr>
+>     <td>3. L1 is robust to outliers.</td>
+>     <td>3. L2 is not robust to outliers.</td>
+>   </tr>
+> </table>
 
----
+{pause up=tensors-intro}
 
-## Slide 19
+{#backprop-intro .definition title="Backprop: compositionally deriving gradient computations"}
+> * Backprop is a special case of **reverse mode automatic differentiation** and is limited to first-order derivatives [it cannot compute Hessians, for example](cite: 336).
+> * It generalizes the chain rule: $\frac{df}{dx} = \frac{df}{dy} \cdot \frac{dy}{dx}$.
+> * A **forward pass** involves computing a tensor's value from the tensors in its definition.
+> * A **backward pass** computes the gradient of a value (like loss) with respect to a tensor $x$ ($\frac{df}{dx} = x.\text{grad}$) by summing contributions from every place $x$ appears.
 
-### Regularization - weight decay
-
-* **Regularization**: keep models simple to be less accidentally wrong and to stabilize training.
-* You can add a regularizer to the loss function or modify the SGD update step—we'll do the latter.
-* **Weight decay** is L2 regularization because the gradient of $p^2$ is $2p$.
-
-<br/>
-<table align="center">
-  <tr>
-    <th style="text-align:left;">L1 Regularization</th>
-    <th style="text-align:left;">L2 Regularization</th>
-  </tr>
-  <tr>
-    <td>1. L1 penalizes the sum of <strong>absolute</strong> values of weights.</td>
-    <td>1. L2 penalizes the sum of <strong>square</strong> values of weights.</td>
-  </tr>
-  <tr>
-    <td>2. L1 generates a model that is simple and interpretable.</td>
-    <td>2. L2 regularization is able to learn complex data patterns.</td>
-  </tr>
-  <tr>
-    <td>3. L1 is robust to outliers.</td>
-    <td>3. L2 is not robust to outliers.</td>
-  </tr>
-</table>
-
----
-
-## Slide 20
-
-### Backprop: compositionally deriving gradient computations
-
-* Backprop is a special case of **reverse mode automatic differentiation** and is limited to first-order derivatives [it cannot compute Hessians, for example](cite: 336).
-* It generalizes the chain rule: $\frac{df}{dx} = \frac{df}{dy} \cdot \frac{dy}{dx}$.
-* A **forward pass** involves computing a tensor's value from the tensors in its definition.
-* A **backward pass** computes the gradient of a value (like loss) with respect to a tensor $x$ ($\frac{df}{dx} = x.\text{grad}$) by summing contributions from every place $x$ appears.
-
----
-
-## Slide 21
-
-### Backprop: compositionally deriving gradient computations
+{pause}
 
 * **Forward pass**: computing the value of a tensor from the values of tensors in its definition.
 * **Backward pass**: computing the gradient of the value of interest $f$ (e.g. loss) with respect to a tensor $x$: $\frac{df}{dx} = x.\text{grad}$, by adding up contribution from each place in which $x$ appears.
@@ -302,34 +215,28 @@ let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   * The order of computation is reversed: $x \rightarrow y(x) \rightarrow f(y(x))$ but $df \rightarrow \frac{df}{dy} \rightarrow \frac{df}{dx}$.
   * The composition order remains bottom-up; we prepend the $\frac{df}{dy}$ code to the backward code of $y$ to build the backward code for $f$.
 
----
+{pause}
 
-## Slide 22
+{#backprop-example .example}
+> **Example**: For $f(t(t_1, t_2))$ where $t = t_1 \cdot t_2$, let $g = \frac{df}{dt}$ be the incoming gradient.
+>   * $\frac{dt}{dt_1} = t_2$, therefore $\frac{df}{dt_1} = \frac{df}{dt} \cdot \frac{dt}{dt_1} = g \cdot t_2$.
+>   * $\frac{dt}{dt_2} = t_1$, therefore $\frac{df}{dt_2} = \frac{df}{dt} \cdot \frac{dt}{dt_2} = g \cdot t_1$.
+>   * At the node $t = t_1 \cdot t_2$, we back-propagate $g \cdot t_2$ toward $t_1$ and $g \cdot t_1$ toward $t_2$.
 
-### Backprop: compositionally deriving gradient computations
+{pause}
 
-* **Example**: For $f(t(t_1, t_2))$ where $t = t_1 \cdot t_2$, let $g = \frac{df}{dt}$ be the incoming gradient.
-  * $\frac{dt}{dt_1} = t_2$, therefore $\frac{df}{dt_1} = \frac{df}{dt} \cdot \frac{dt}{dt_1} = g \cdot t_2$.
-  * $\frac{dt}{dt_2} = t_1$, therefore $\frac{df}{dt_2} = \frac{df}{dt} \cdot \frac{dt}{dt_2} = g \cdot t_1$.
-  * At the node $t = t_1 \cdot t_2$, we back-propagate $g \cdot t_2$ toward $t_1$ and $g \cdot t_1$ toward $t_2$.
+{#code-computation .definition title="Interlude: what is code / computation?"}
+> * In OCANNL, a tensor is associated with a **value** node and, optionally, a **gradient** node.
+> * High-level numeric code primarily consists of sequences of **accumulating assignments**.
+> * The most common accumulation operators are "don't accumulate" (i.e., overwrite) and addition.
+> * The assignment can optionally reset the left-hand-side tensor to the operator's neutral element.
+> * The `%cd` syntax extension manages all of this.
 
----
+{pause up=backprop-intro}
 
-## Slide 23
+{#backprop-examples .example title="Backprop by example"}
 
-### Interlude: what is code / computation?
-
-* In OCANNL, a tensor is associated with a **value** node and, optionally, a **gradient** node.
-* High-level numeric code primarily consists of sequences of **accumulating assignments**.
-* The most common accumulation operators are "don't accumulate" (i.e., overwrite) and addition.
-* The assignment can optionally reset the left-hand-side tensor to the operator's neutral element.
-* The `%cd` syntax extension manages all of this.
-
----
-
-## Slide 24-27
-
-### Backprop by example: Addition
+## Addition
 
 The derivative of $t_1+t_2$ with respect to $t_1$ is 1, i.e., $\frac{d(t_1+t_2)}{dt_1} = 1$. Thus, both `t1.grad` and `t2.grad` increase by the incoming gradient `t.grad`.
 
@@ -349,19 +256,15 @@ let add ?(label = []) =
   Tensor.binop ~label:("+" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 ```
 
-
-
 **Annotations:**
 
 * `v =: v1 + v2` is shorthand for `t.value =: t1.value + t2.value`. The `=:` operator sets the LHS tensor.
 * `g1 =+ g` is shorthand for `t1.grad =+ t.grad`. The `=+` operator adds to the LHS tensor without resetting it.
 * `g1` is shorthand for `t1.grad`, `g` is shorthand for `t.grad`, `v2` is shorthand for `t2.value`, etc..
 
----
+{pause}
 
-## Slide 28
-
-### Backprop by example: Subtraction
+## Subtraction
 
 The gradient of `t1.grad` increases and `t2.grad` decreases by `t.grad` because $\frac{d(t_1-t_2)}{dt_2} = -1$.
 
@@ -379,13 +282,9 @@ let sub ?(label = []) =
   Tensor.binop ~label:("-" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 ```
 
+{pause}
 
-
----
-
-## Slide 29-30
-
-### Backprop by example: Multiplication
+## Multiplication
 
 For both pointwise and tensor multiplication, gradient propagation follows the chain rule: multiply the incoming gradient by the *other* term from the forward pass.
 
@@ -413,13 +312,9 @@ let matmul ?(label = []) =
   mul Compose ~op_asn ~label:("*" :: label)
 ```
 
+{pause}
 
-
----
-
-## Slide 31
-
-### Backprop by example: Pointwise Power
+## Pointwise Power
 
 This code defines pointwise power, $t_1^p$. The gradient is derived from the power rule, $(x^n)' = nx^{n-1}$.
 
@@ -438,13 +333,9 @@ let rec pointpow ?(label : string list = []) ~grad_spec p (t1 : Tensor.t) =
   Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
 ```
 
+{pause}
 
-
----
-
-## Slide 32
-
-### Backprop by example: Pointwise Division
+## Pointwise Division
 
 This code defines pointwise division, $t_1/t_2$. The gradient is derived from the quotient rule: $\nabla\left(\frac{t_1}{t_2}\right) = \frac{\nabla(t_1)t_2 - t_1\nabla(t_2)}{t_2^2}$.
 
@@ -459,13 +350,9 @@ let rec pointdiv ?(label: string list = []) ~grad_spec t1 t2 =
   Tensor.binop ~label:("/." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 t2
 ```
 
+{pause}
 
-
----
-
-## Slide 33
-
-### Putting the forward and backward passes together
+## Putting the forward and backward passes together
 
 This function constructs the full computation graph for a gradient update step.
 
@@ -489,26 +376,18 @@ let grad_update_nochecks loss =
   { loss; params; fwd_bprop }
 ```
 
+{pause up=code-computation}
 
+{#sgd-intro .definition title="Stochastic Gradient Descent with Momentum"}
+> * Vanilla SGD subtracts scaled gradients from parameters: `p =- learning_rate * p.grad`.
+> * This can be slow in regions where loss differences are small.
+> * SGD with momentum accelerates training by accumulating gradients using a form of exponential smoothing. It sums gradients, where the weight for a gradient from $i$ steps back is $\text{momentum}^i$.
+>     `"sgd_momentum" =: (!.momentum * sgd_momentum) + p.grad;`
+>     `p =- learning_rate * sgd_momentum`
 
----
+{pause}
 
-## Slide 34
-
-### Stochastic Gradient Descent with Momentum
-
-* Vanilla SGD subtracts scaled gradients from parameters: `p =- learning_rate * p.grad`.
-* This can be slow in regions where loss differences are small.
-* SGD with momentum accelerates training by accumulating gradients using a form of exponential smoothing. It sums gradients, where the weight for a gradient from $i$ steps back is $\text{momentum}^i$.
-    `"sgd_momentum" =: (!.momentum * sgd_momentum) + p.grad;`
-    `p =- learning_rate * sgd_momentum`
-
----
-
-## Slide 35
-
-### Stochastic Gradient Descent with apx. Nesterov Momentum
-
+{#nesterov .block title="Stochastic Gradient Descent with apx. Nesterov Momentum"}
 > An image shows the path of an optimizer on a contour plot. The path (in green) oscillates back and forth across a narrow valley (or "canyon") instead of moving directly towards the minimum, which is a common issue for standard SGD with momentum.
 
 * To avoid this oscillation, **Nesterov Accelerated Gradient** computes the gradient at a "lookahead" point, which is estimated using the current momentum.
@@ -518,11 +397,7 @@ let grad_update_nochecks loss =
     `sgd_delta =+ !.momentum * sgd_momentum;`
     `p =- learning_rate * sgd_delta`
 
----
-
-## Slide 36-37
-
-### Stochastic Gradient Descent with apx. Nesterov Momentum
+{pause}
 
 The OCANNL code for a single parameter update step, including options for weight decay, momentum, and Nesterov acceleration.
 
@@ -546,13 +421,9 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
   ]
 ```
 
+{pause up=sgd-intro}
 
-
----
-
-## Slide 38
-
-### Compilation illustrated by running `bin/moons_demo.ml`
+{#compilation .example title="Compilation illustrated by running bin/moons_demo.ml"}
 
 This snippet from the demo script shows how the backpropagation and SGD update computations are combined and compiled into a single routine.
 
@@ -574,58 +445,44 @@ let ctx = Backend.init device in
 let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
 ```
 
+{pause}
 
+{#compilation-stages .block title="Compilation Stages"}
 
----
-
-## Slide 39
-
-### Compilation assignments: `scalar_loss_gradient_then_sgd_update.cd`
+## Assignments: `scalar_loss_gradient_then_sgd_update.cd`
 
 > This slide displays a high-level, intermediate representation of the computation graph. It's a sequence of assignments for the forward pass (calculating `mlp_moons_input` and `scalar_loss`) followed by the SGD update step for each parameter (`b3`, `w1`, `w2`, `w3`). This file is for debugging and doesn't include indexing information.
 
----
+{pause}
 
-## Slide 40
-
-### Compilation low level: `scalar_loss_gradient_then_sgd_update-unoptimized.ll`
+## Low level: `scalar_loss_gradient_then_sgd_update-unoptimized.ll`
 
 > This slide shows a lower-level representation of the computation before optimization. The high-level operations from the previous slide have been translated into explicit `for` loops that iterate over the dimensions of the tensors. For example, the matrix multiplication `w1 * moons_input` is now a set of three nested loops.
 
----
+{pause}
 
-## Slide 41
-
-### Compilation - optimized: `scalar_loss_gradient_then_sgd_update.ll`
+## Optimized: `scalar_loss_gradient_then_sgd_update.ll`
 
 > This slide presents the low-level code after optimization. The key improvement highlighted is that inlining has reduced multiple loops for the SGD update into a single loop, making the computation more efficient.
 
----
+{pause}
 
-## Slide 42
-
-### Compilation - C code: `scalar_loss_gradient_then_sgd_update.c`
+## C code: `scalar_loss_gradient_then_sgd_update.c`
 
 > This slide shows the final output of the compilation process: a C code file. The tensor operations have been converted into C loops and array manipulations. Pointers are defined for each tensor (`w1`, `b3`, etc.), and local arrays are declared for intermediate values and gradients. An optimization is noted: the step for zeroing out gradients was removed by the compiler.
 
----
+{pause}
 
-## Slide 43
-
-### Running `bin/moons_demo.ml`
-
+{#demo-output .example title="Running bin/moons_demo.ml"}
 > This slide shows the terminal output from running the compiled demo.
 >
 > 1.  The program starts, indicating it's loading the OCANNL configuration.
 > 2.  It prints the training progress, showing the loss decreasing over epochs (e.g., `Epoch 74, lr=0.000042, epoch loss=0.006639`).
 > 3.  Finally, it displays a text-based scatterplot of the result. The plot shows the half-moons dataset points (`#` and `+`) along with the decision boundary learned by the model (represented by `*`). The clear separation of the `*` symbols between the two moons indicates successful classification.
 
----
+{pause}
 
-## Slide 44
-
-### `cuda-gdb` session, including CUDA source position
-
+{#debugging .example title="cuda-gdb session, including CUDA source position"}
 > This slide demonstrates debugging the generated code using `cuda-gdb`.
 >
 > 1.  The user starts `cuda-gdb` with the compiled executable.
@@ -633,57 +490,43 @@ let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd)
 > 3.  The program is run, and it hits the breakpoint within a CUDA thread.
 > 4.  The user then inspects the values of variables on the GPU at that point in execution, printing the values of `b3_grad[0]` ($0.50000006$) and `learning_rate[0]` [$0.09899999995$](cite: 978, 979). This shows OCANNL's ability to generate debuggable code for different backends.
 
----
+{pause}
 
-## Slide 45
-
-### Debug Logs
-
+{#debug-logs .example title="Debug Logs"}
 > This slide shows a detailed, tree-structured log trace generated by OCANNL's debugging utilities.
 > It visualizes the execution flow of the training loop, including:
 > *The call stack (`train loop` -> `for epoch` -> `for batch`).
 > * The sequence of high-level operations (`scalar_loss_fwd`, `scalar_loss_bprop`, `scalar_loss_sgd_update`).
 > * A detailed view of a single parameter update (`b1 param sgd step`), showing the exact C code line being executed and the values of the variables (`b1[0]`, `learning_rate[0]`, `b1.grad[0]`) before and after the update. This provides deep insight into the training process.
 
----
+{pause up=compilation}
 
-## Slide 46
+{#parallel-training .definition title="Data parallel training"}
+> 1. Subdivide a batch into mini-batches for each device.
+> 2. Schedule copying the data to each device.
+> 3. Schedule updating gradients (running `fwd_bprop`) on each device.
+> 4. Pairwise merge the gradients by repeatedly adding gradients from the second half of the devices to the first half, until all gradients are accumulated on device 0.
+> 5. Run the SGD update on device 0.
+> 6. Schedule copying the updated parameters from device 0 back to all other devices.
 
-### Data parallel training
+{pause}
 
-1. Subdivide a batch into mini-batches for each device.
-2. Schedule copying the data to each device.
-3. Schedule updating gradients (running `fwd_bprop`) on each device.
-4. Pairwise merge the gradients by repeatedly adding gradients from the second half of the devices to the first half, until all gradients are accumulated on device 0.
-5. Run the SGD update on device 0.
-6. Schedule copying the updated parameters from device 0 back to all other devices.
+{#multi-stream .block title="Multi-stream computations in OCANNL"}
+> * OCANNL has a loose notion of a stream, which can represent entities like CPU cores or CUDA streams.
+> * Code can be compiled for a backend independently of a device, but it is linked with a device-specific context for execution.
+> * The hierarchy is Context → stream → device.
+> * Tensor nodes are represented as arrays on the device as needed for computation.
 
----
+{pause}
 
-## Slide 47
+{#multi-device .block title="Multi-device computations in OCANNL (design might likely change)"}
+> * Each stream has a **merge buffer** to hold an array coming from another device.
+> * Data can arrive in this buffer via copying, direct pointing (for CPUs or devices on the same GPU), or potentially streaming in the future.
+> * Unlike a regular device-to-device transfer that writes to a tensor's destination array, a transfer into the merge buffer does not.
 
-### Multi-stream computations in OCANNL
+{pause}
 
-* OCANNL has a loose notion of a stream, which can represent entities like CPU cores or CUDA streams.
-* Code can be compiled for a backend independently of a device, but it is linked with a device-specific context for execution.
-* The hierarchy is Context → stream → device.
-* Tensor nodes are represented as arrays on the device as needed for computation.
-
----
-
-## Slide 48
-
-### Multi-device computations in OCANNL (design might likely change)
-
-* Each stream has a **merge buffer** to hold an array coming from another device.
-* Data can arrive in this buffer via copying, direct pointing (for CPUs or devices on the same GPU), or potentially streaming in the future.
-* Unlike a regular device-to-device transfer that writes to a tensor's destination array, a transfer into the merge buffer does not.
-
----
-
-## Slide 49
-
-### Data parallel training: merging gradients in OCANNL
+{#gradient-merging .example title="Data parallel training: merging gradients in OCANNL"}
 
 ```ocaml
 (* Define the merge operation: p.grad =+ p.grad.merge *)
@@ -713,27 +556,22 @@ let merge_grads ~(from: int) ~(to_: int) : unit =
 in
 ```
 
+{pause up=parallel-training}
 
+{#features .definition title="OCANNL Features"}
+> * **Declarative** differentiable tensors.
+> * **Imperative** array manipulation language.
+> * Flexibly combines these two layers.
+> * Very **concise** notations.
+> * Powerful **shape inference** integrated with expressive "generalized einsum" indexing.
+> * **Backprop** is handled automatically.
+> * **Generates optimized code**.
+> * Very little abstraction fluff, **close to the metal**.
+> * **Debuggable**.
 
----
+{pause}
 
-## Slide 50
-
-### OCANNL Features
-
-* **Declarative** differentiable tensors.
-* **Imperative** array manipulation language.
-* Flexibly combines these two layers.
-* Very **concise** notations.
-* Powerful **shape inference** integrated with expressive "generalized einsum" indexing.
-* **Backprop** is handled automatically.
-* **Generates optimized code**.
-* Very little abstraction fluff, **close to the metal**.
-* **Debuggable**.
-
----
-
-### Thank you! Questions?
+## Thank you! Questions?
 
 * "Is it functional?"
   * tl;dr: no, not like JAX, and less so than OWL.
