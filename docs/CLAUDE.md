@@ -6,14 +6,20 @@ Slipshow is a text-based presentation engine that compiles Markdown to interacti
 
 - **Markdown base**: Uses CommonMark with extensions (tables, math, strikethrough)
 - **Metadata**: Enclosed in `{...}` - can be standalone or attached to blocks/inlines
+  - Metadata of the same block can be combined e.g. `{pause up}` instead of `{pause} {up}`
 - **Pauses**: Use `{pause}` to create presentation steps
-- **Blocks**: Use classes like `{.definition}`, `{.theorem}`, `{.example}`, `{.block}`, `{.alert}` with optional `title="..."`
+  - `{pause}` does not advance the presentation, use navigation to prevent slide overflow
+- **Blocks**: Use classes like `{.definition}`, `{.theorem}`, `{.example}`, `{.block}`, `{.remark}` with optional `title="..."`
 
 ## Key Features
 
 ### Navigation
 - **Scrolling presentation**: Content flows like a papyrus, not discrete slides
 - **Window movement**: `{up=id}`, `{down=id}`, `{center=id}` to control viewport
+  - `{up=id}` puts the element at the **top** of screen, revealing content **below** it
+  - `{down=id}` puts the element at the **bottom** of screen, revealing content **above** it
+  - `{center=id}` centers the element on screen
+  - Must be used with pause e.g. `{pause down=id}` or with duration e.g. `{center="~duration:3 id"}` to take effect
 - **IDs**: Assign with `{#my-id}` to reference elements
 
 ### Grouping Content
@@ -57,7 +63,9 @@ More content that scrolls to show the definition at top.
 When converting traditional slide presentations to slipshow:
 
 - Use `{pause}` to break content into presentation steps
-- Use `{pause up=id}` to scroll back to important context when needed
+- Use `{pause up=id}` to reveal content below an element (element at top)
+- Use `{pause down=id}` to reveal content above an element (element at bottom)  
+- Use `{pause center=id}` to focus attention on a specific element
 - Group related content logically rather than by slide boundaries
 - Eliminate duplicate content by leveraging scrolling navigation
 

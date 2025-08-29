@@ -2,11 +2,11 @@
 
 {pause}
 
-My work on OCANNL is sponsored by **ahrefs**
+My work on OCANNL is sponsored by **[a]{style="color:red"}[hrefs]{style="color:blue"}**
 
 {pause}
 
-{#ocannl-intro .definition}
+{#ocannl-intro .definition title="OCANNL"}
 ## OCaml Compiles Algorithms for Neural Network Learning
 
 * OCANNL is distributed as two opam packages:
@@ -21,14 +21,12 @@ My work on OCANNL is sponsored by **ahrefs**
   * In Rust: **Luminal** - simplifies deployment of large models with on-device inference.
 * There are many optimization / NN frameworks in Rust, but few in OCaml! (e.g., Luminal, Candle, Cubecl, Burn)
 
-{pause}
-
-{.block title="Value added"}
+{#value-added .block title="Value added"}
 > * OCaml is a good fit for writing optimizing compilers.
 > * OCANNL has concise notation thanks to better shape inference (i.e. type inference for the data and transformation matrices).
 > * OCANNL might be a good fit for heterogeneous computing (e.g. combining GPUs from different companies), it is explicit about the backends (and devices) used.
 
-{pause}
+{pause up=value-added}
 
 {.alert}
 OCANNL is still at a **proof-of-concept stage**, but it will grow and evolve.
@@ -83,7 +81,7 @@ Let's train a feed-forward neural network with 2 hidden layers (aka. a 3-layer M
 * An element of a (fixed but random) partition of the dataset. **We'll use this.**
 * A random subset of the dataset.
 
-{pause}
+{pause up=half-moons}
 
 {#half-moons .example title="Half-moons toy dataset"}
 > The slide shows a scatterplot of the half-moons dataset, where two classes of points form two interleaving crescent shapes. One class is marked with '#' and the other with '+'.
@@ -135,7 +133,7 @@ PrintBox_text.output Stdio.stdout plot_moons;
 
 > This diagram is identical to the one on the previous slide, but adds a third type of axis: a red diagonal arrow representing **batch axes**. This is shown on the input tensor $x$.
 
-{pause}
+{pause up=mlp-code}
 
 {#mlp-code .example title="Multi Layer Perceptron in one line of code"}
 > **ReLU function:** A graph shows the Rectified Linear Unit (ReLU) function, which is $f(x) = \max(0, x)$. The function is zero for all negative inputs and increases linearly for positive inputs.
@@ -154,7 +152,7 @@ in
 * `relu`: "Rectified Linear Unit" unary operation.
 * `let%op mlp x = ...`: Declarative expressions for differentiable tensor operations. This is a tensor function that expands to: `let w1 = ... in let b1 = ... in let mlp in ...`.
 
-{pause}
+{pause up=hinge-loss}
 
 {#hinge-loss .definition title="Hinge loss function: maximum margin classification"}
 > **Left Image:** Shows a Support Vector Machine (SVM) separating two classes of data points with a hyperplane. The goal is to find the plane that has the **maximum margin** between the two classes.
@@ -173,7 +171,7 @@ let%op margin_loss = relu (1. - (moons_class *. mlp moons_input)) in
 let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 ```
 
-{pause}
+{pause up=regularization}
 
 {#regularization .block title="Regularization - weight decay"}
 > * **Regularization**: keep models simple to be less accidentally wrong and to stabilize training.
@@ -215,7 +213,7 @@ let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   * The order of computation is reversed: $x \rightarrow y(x) \rightarrow f(y(x))$ but $df \rightarrow \frac{df}{dy} \rightarrow \frac{df}{dx}$.
   * The composition order remains bottom-up; we prepend the $\frac{df}{dy}$ code to the backward code of $y$ to build the backward code for $f$.
 
-{pause}
+{pause up=backprop-example}
 
 {#backprop-example .example}
 > **Example**: For $f(t(t_1, t_2))$ where $t = t_1 \cdot t_2$, let $g = \frac{df}{dt}$ be the incoming gradient.
@@ -223,7 +221,7 @@ let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 >   * $\frac{dt}{dt_2} = t_1$, therefore $\frac{df}{dt_2} = \frac{df}{dt} \cdot \frac{dt}{dt_2} = g \cdot t_1$.
 >   * At the node $t = t_1 \cdot t_2$, we back-propagate $g \cdot t_2$ toward $t_1$ and $g \cdot t_1$ toward $t_2$.
 
-{pause}
+{pause up=code-computation}
 
 {#code-computation .definition title="Interlude: what is code / computation?"}
 > * In OCANNL, a tensor is associated with a **value** node and, optionally, a **gradient** node.
@@ -236,6 +234,7 @@ let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
 
 {#backprop-examples .example title="Backprop by example"}
 
+{#addition-example}
 ## Addition
 
 The derivative of $t_1+t_2$ with respect to $t_1$ is 1, i.e., $\frac{d(t_1+t_2)}{dt_1} = 1$. Thus, both `t1.grad` and `t2.grad` increase by the incoming gradient `t.grad`.
@@ -262,8 +261,9 @@ let add ?(label = []) =
 * `g1 =+ g` is shorthand for `t1.grad =+ t.grad`. The `=+` operator adds to the LHS tensor without resetting it.
 * `g1` is shorthand for `t1.grad`, `g` is shorthand for `t.grad`, `v2` is shorthand for `t2.value`, etc..
 
-{pause}
+{pause up=subtraction-example}
 
+{#subtraction-example}
 ## Subtraction
 
 The gradient of `t1.grad` increases and `t2.grad` decreases by `t.grad` because $\frac{d(t_1-t_2)}{dt_2} = -1$.
@@ -282,8 +282,9 @@ let sub ?(label = []) =
   Tensor.binop ~label:("-" :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 ```
 
-{pause}
+{pause up=multiplication-example}
 
+{#multiplication-example}
 ## Multiplication
 
 For both pointwise and tensor multiplication, gradient propagation follows the chain rule: multiply the incoming gradient by the *other* term from the forward pass.
@@ -312,8 +313,9 @@ let matmul ?(label = []) =
   mul Compose ~op_asn ~label:("*" :: label)
 ```
 
-{pause}
+{pause up=power-example}
 
+{#power-example}
 ## Pointwise Power
 
 This code defines pointwise power, $t_1^p$. The gradient is derived from the power rule, $(x^n)' = nx^{n-1}$.
@@ -333,8 +335,9 @@ let rec pointpow ?(label : string list = []) ~grad_spec p (t1 : Tensor.t) =
   Tensor.binop ~label:("**." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t
 ```
 
-{pause}
+{pause up=division-example}
 
+{#division-example}
 ## Pointwise Division
 
 This code defines pointwise division, $t_1/t_2$. The gradient is derived from the quotient rule: $\nabla\left(\frac{t_1}{t_2}\right) = \frac{\nabla(t_1)t_2 - t_1\nabla(t_2)}{t_2^2}$.
@@ -350,8 +353,9 @@ let rec pointdiv ?(label: string list = []) ~grad_spec t1 t2 =
   Tensor.binop ~label:("/." :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 t2
 ```
 
-{pause}
+{pause up=forward-backward}
 
+{#forward-backward}
 ## Putting the forward and backward passes together
 
 This function constructs the full computation graph for a gradient update step.
@@ -445,33 +449,37 @@ let ctx = Backend.init device in
 let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd))) in
 ```
 
-{pause}
+{pause up=compilation-stages}
 
 {#compilation-stages .block title="Compilation Stages"}
 
+{#assignments-stage}
 ## Assignments: `scalar_loss_gradient_then_sgd_update.cd`
 
 > This slide displays a high-level, intermediate representation of the computation graph. It's a sequence of assignments for the forward pass (calculating `mlp_moons_input` and `scalar_loss`) followed by the SGD update step for each parameter (`b3`, `w1`, `w2`, `w3`). This file is for debugging and doesn't include indexing information.
 
-{pause}
+{pause up=lowlevel-stage}
 
+{#lowlevel-stage}
 ## Low level: `scalar_loss_gradient_then_sgd_update-unoptimized.ll`
 
 > This slide shows a lower-level representation of the computation before optimization. The high-level operations from the previous slide have been translated into explicit `for` loops that iterate over the dimensions of the tensors. For example, the matrix multiplication `w1 * moons_input` is now a set of three nested loops.
 
-{pause}
+{pause up=optimized-stage}
 
+{#optimized-stage}
 ## Optimized: `scalar_loss_gradient_then_sgd_update.ll`
 
 > This slide presents the low-level code after optimization. The key improvement highlighted is that inlining has reduced multiple loops for the SGD update into a single loop, making the computation more efficient.
 
-{pause}
+{pause up=c-code-stage}
 
+{#c-code-stage}
 ## C code: `scalar_loss_gradient_then_sgd_update.c`
 
 > This slide shows the final output of the compilation process: a C code file. The tensor operations have been converted into C loops and array manipulations. Pointers are defined for each tensor (`w1`, `b3`, etc.), and local arrays are declared for intermediate values and gradients. An optimization is noted: the step for zeroing out gradients was removed by the compiler.
 
-{pause}
+{pause up=demo-output}
 
 {#demo-output .example title="Running bin/moons_demo.ml"}
 > This slide shows the terminal output from running the compiled demo.
@@ -480,7 +488,7 @@ let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd)
 > 2.  It prints the training progress, showing the loss decreasing over epochs (e.g., `Epoch 74, lr=0.000042, epoch loss=0.006639`).
 > 3.  Finally, it displays a text-based scatterplot of the result. The plot shows the half-moons dataset points (`#` and `+`) along with the decision boundary learned by the model (represented by `*`). The clear separation of the `*` symbols between the two moons indicates successful classification.
 
-{pause}
+{pause up=debugging}
 
 {#debugging .example title="cuda-gdb session, including CUDA source position"}
 > This slide demonstrates debugging the generated code using `cuda-gdb`.
@@ -490,7 +498,7 @@ let routine = Backend.(link ctx @@ compile bindings (Seq (update.fwd_bprop, sgd)
 > 3.  The program is run, and it hits the breakpoint within a CUDA thread.
 > 4.  The user then inspects the values of variables on the GPU at that point in execution, printing the values of `b3_grad[0]` ($0.50000006$) and `learning_rate[0]` [$0.09899999995$](cite: 978, 979). This shows OCANNL's ability to generate debuggable code for different backends.
 
-{pause}
+{pause up=debug-logs}
 
 {#debug-logs .example title="Debug Logs"}
 > This slide shows a detailed, tree-structured log trace generated by OCANNL's debugging utilities.
@@ -569,7 +577,7 @@ in
 > * Very little abstraction fluff, **close to the metal**.
 > * **Debuggable**.
 
-{pause}
+{pause center}
 
 ## Thank you! Questions?
 
