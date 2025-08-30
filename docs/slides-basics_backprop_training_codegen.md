@@ -918,15 +918,7 @@ Update this before release
 {pause down=data-parallel-code}
 
 {pause up .block title="OCANNL Features"}
-> * **Declarative** differentiable tensors.
-> * **Imperative** array manipulation language.
-> * Flexibly combines these two layers.
-> * Very **concise** notations.
-> * Powerful **shape inference** integrated with expressive "generalized einsum" indexing.
-> * **Backprop** is handled automatically.
-> * **Generates optimized code**.
-> * Very little abstraction fluff, **close to the metal**.
-> * **Debuggable**.
+![two layers, little abstraction fluff, powerful shape inference](OCANNL-features.svg)
 
 {pause .remark title="Thank You!"}
 OCANNL is available at [github.com/ahrefs/ocannl](https://github.com/ahrefs/ocannl)  
