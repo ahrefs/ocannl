@@ -39,8 +39,7 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
   for i = 0 to len - 1 do
     let v = Float.of_int i *. Float.pi /. Float.of_int len in
     let c = Float.cos v and s = Float.sin v in
-    let x = c +. noise () in
-    let y = s +. noise () in
+    let x = c +. noise () and y = s +. noise () in
     let idx = i * 2 in
     Genarray.set coordinates [| idx; 0 |] x;
     Genarray.set coordinates [| idx; 1 |] y;
@@ -51,8 +50,7 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
   for i = 0 to len - 1 do
     let v = Float.of_int i *. Float.pi /. Float.of_int len in
     let c = Float.cos v and s = Float.sin v in
-    let x = 1.0 -. c +. noise () in
-    let y = 0.5 -. s +. noise () in
+    let x = 1.0 -. c +. noise () and y = 0.5 -. s +. noise () in
     let idx = (i * 2) + 1 in
     Genarray.set coordinates [| idx; 0 |] x;
     Genarray.set coordinates [| idx; 1 |] y;

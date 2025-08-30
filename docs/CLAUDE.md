@@ -26,6 +26,22 @@ Slipshow is a text-based presentation engine that compiles Markdown to interacti
 - **Quote style**: Use `>` to group blocks together
 - **Horizontal rules**: Use `---` to separate sections
 
+Standalone navigation action can be combined witth the following block metadata:
+
+```markdown
+{pause up=block-id}
+
+{#block-id}
+```
+
+is equivalent to:
+
+```markdown
+{pause up #block-id}
+```
+
+and the latter is preferred.
+
 ### Interactive Elements
 - **Drawing mode**: Press `w` to write, `h` to highlight, `e` to erase
 - **Speaker view**: Press `s` for notes and timing
