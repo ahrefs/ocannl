@@ -111,9 +111,9 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        p =- learning_rate * sgd_delta ~logic:".")]
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss =
-  loss.Tensor.params |> Set.to_list
-  |> List.map ~f:(sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov)
-  |> Asgns.sequence
+  let f = sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov in
+  let comp = Set.to_list loss.Tensor.params |> List.map ~f |> Asgns.sequence in
+  {comp with asgns = Asgns.Block_comment ("sgd_update", comp.asgns)}
 
 (** All and only bindings with associated ranges are iterated, with the binding's initial value
     lost. Bindings without ranges remain at their initial values. *)
