@@ -42,8 +42,8 @@ Starting from OCANNL 0.5.2, the CUDA backend requires at least CUDA version 12.8
 
 A possible route to learning OCANNL:
 
-1. Read [the introductory slides](docs/OCANNL-slides-basics_backprop_training_loop_codegen.pdf).
-2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/) and [bin/](bin/).
+1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
+2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/).
 3. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
 4. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
 5. Read the configuration documentation [ocannl_config.example](ocannl_config.example).

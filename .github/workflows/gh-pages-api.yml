@@ -1,0 +1,44 @@
+name: github pages api
+
+on:
+  push:
+    branches:
+      - master  # Set a branch name to trigger deployment
+    paths-ignore:
+      - "docs/**"
+      - "test/**"
+
+jobs:
+  deploy:
+    # Avoid Ubuntu 24.04, see: https://github.com/ocaml/opam/issues/5968
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@main
+
+      - name: Cache opam
+        id: cache-opam
+        uses: actions/cache@v4
+        with:
+          path: ~/.opam
+          key: opam-ubuntu-22.04-5.3.0
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3.0'
+
+      - name: Pin
+        run: opam pin -n .
+
+      - name: Deps
+        run: opam install -ydt . --deps-only
+
+      - name: Build
+        run: opam exec -- dune build @doc
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_build/default/_doc/_html/
+          destination_dir: dev
+          enable_jekyll: true
