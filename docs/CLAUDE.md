@@ -10,6 +10,7 @@ Slipshow is a text-based presentation engine that compiles Markdown to interacti
 - **Pauses**: Use `{pause}` to create presentation steps
   - `{pause}` does not advance the presentation, use navigation to prevent slide overflow
 - **Blocks**: Use classes like `{.definition}`, `{.theorem}`, `{.example}`, `{.block}`, `{.remark}` with optional `title="..."`
+- **Differences from Markdown**: for horizontal lines, must use the asterisk syntax `***`, because `---` is interpreted as a block separator
 
 ## Key Features
 
