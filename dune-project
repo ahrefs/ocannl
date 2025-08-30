@@ -134,7 +134,8 @@
   (ppx_minidebug
    (>= 2.3.0))
   (odoc :with-doc)
-  (md2mld :with-doc))
+  (md2mld :with-doc)
+  (slipshow :with-doc))
  (tags
   (deeplearning tensor backprop jit CUDA Metal)))
 
