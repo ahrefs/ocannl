@@ -657,10 +657,12 @@ let grad_update ?(setup_for_parallel = false) loss =
 The OCANNL code for a single parameter update step, including options for weight decay and momentum:
 
 ```ocaml
-let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) p =
+let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0)
+    p =
   [%cd
   ~~(p "param sgd step";
-    (* Instead of adding a regularizer to the loss tensor, regularize here. *)
+    (* Instead of adding a regularizer to the loss tensor,
+       regularize here. *)
     {sgd_delta} =: p.grad + (!.weight_decay *. p);
     if Float.(momentum > 0.0) then
       (* Inline declarations of (non-differentiable) tensors. *)
@@ -881,35 +883,39 @@ Update this before release
 > * Data can arrive in this buffer via copying, direct pointing (for CPUs or devices on the same GPU), or potentially streaming in the future.
 > * Unlike a regular device-to-device transfer that writes to a tensor's destination buffer, a transfer into the merge buffer does not.
 
-{pause up .example title="Data parallel training: merging gradients in OCANNL"}
+{pause up .example #data-parallel-code title="Data parallel training: merging gradients in OCANNL"}
+> ```ocaml
+> (* Define the merge operation: p.grad =+ p.grad.merge *)
+> let grad_merges : Asgns.t array =
+>   Array.map all_params ~f:(fun p ->
+>      [%cd p.grad =+ p.grad.merge])
+> in
+> 
+> (* Compile the merge operation for all needed device pairs *)
+> let grad_merges_to : Backend.routine option array array =
+>   Array.mapi ctxs ~f:(fun dst_n ctx ->
+>     if occupancy_dst ~dst_n then
+>       snd @@ Backend.link_batch ctx
+>       @@ Backend.compile_batch ~shared:true
+>            ~occupancy:Idx.Empty grad_merges
+>     else [||]
+>   )
+> in
+> 
+> let merge_grads ~(from: int) ~(to_: int) : unit =
+>   Array.iteri all_params ~f:(fun i p ->
+>     let grad_merge =
+>       Option.value_exn grad_merges_to.(to_).(i) in
+>     (* Fill the merge buffer before running merging. *)
+>     assert (
+>       Backend.device_to_device (Option.value_exn p.diff).grad
+>         ~into_merge_buffer:BT.Copy
+>         ~dst:grad_merge.context ~src:ctxs.(from));
+>     Task.run grad_merge.schedule )
+> in
+> ```
 
-```ocaml
-(* Define the merge operation: p.grad =+ p.grad.merge *)
-let grad_merges : Asgns.t array =
-  Array.map all_params ~f:(fun p -> [%cd p.grad =+ p.grad.merge])
-in
-
-(* Compile the merge operation for all necessary device pairs *)
-let grad_merges_to : Backend.routine option array array =
-  Array.mapi ctxs ~f:(fun dst_n ctx ->
-    if occupancy_dst ~dst_n then
-      snd @@ Backend.link_batch ctx
-      @@ Backend.compile_batch ~shared:true ~occupancy:Idx.Empty grad_merges
-    else [||]
-  )
-in
-
-let merge_grads ~(from: int) ~(to_: int) : unit =
-  Array.iteri all_params ~f:(fun i p ->
-    let grad_merge = Option.value_exn grad_merges_to.(to_).(i) in
-    (* Fill the merge buffer before running merging. *)
-    assert (
-      Backend.device_to_device (Option.value_exn p.diff).grad ~into_merge_buffer:BT.Copy
-        ~dst:grad_merge.context ~src:ctxs.(from));
-    (* Synchronization now happens automatically. *)
-    Task.run grad_merge.schedule )
-in
-```
+{pause down=data-parallel-code}
 
 {pause up .block title="OCANNL Features"}
 > * **Declarative** differentiable tensors.
