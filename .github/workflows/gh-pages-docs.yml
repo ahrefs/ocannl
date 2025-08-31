@@ -6,6 +6,7 @@ on:
       - master  # Set a branch name to trigger deployment
     paths:
       - "docs/**"
+      - ".github/workflows/gh-pages-docs.yml"
 
 jobs:
   deploy:
