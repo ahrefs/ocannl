@@ -3,6 +3,86 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
+let operators =
+  (* TODO: Auto-generate this list from Operation.Make_DSL.O. *)
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("*", "matmul");
+      ("*.", "pointmul");
+      ("+", "add");
+      ("threefry4x32", "threefry4x32");
+      ("uint4x32_to_prec_uniform", "uint4x32_to_prec_uniform");
+      ("uint4x32_to_prec_uniform1", "uint4x32_to_prec_uniform1");
+      ("**.", "pointpow");
+      ("relu", "relu");
+      ("sat01", "sat01");
+      ("fma", "fma");
+      ("!.", "number");
+      ("!..", "number_int");
+      ("!%", "bits");
+      ("!@", "embed_symbol");
+      ("-", "sub");
+      ("~-", "num_neg");
+      ("/.", "pointdiv");
+      ("@|", "slice");
+      ("exp", "exp");
+      ("log", "log");
+      ("log2", "log2");
+      ("sin", "sin");
+      ("cos", "cos");
+      ("neg", "neg");
+      ("not", "not");
+      ("sqrt", "sqrt");
+      ("recip", "recip");
+      ("recip_sqrt", "recip_sqrt");
+      ("tanh", "tanh");
+      ("where", "where");
+      ("<", "lt");
+      ("=", "eq");
+      ("<>", "ne");
+      ("embed_self_id", "embed_self_id");
+      ("einsum", "einsum");
+      ("einsum1", "einsum1");
+      ("ndarray", "ndarray");
+      ("uniform", "uniform");
+      ("uniform_at", "uniform_at");
+      ("uniform1", "uniform1");
+      ("uniform_at1", "uniform_at1");
+    ]
+
+let add_module_qualifier_to_applied_function expr =
+  let qualify_if_needed fn =
+    match fn.pexp_desc with
+    | Pexp_ident { txt = Lident name; loc } when Hashtbl.mem operators name ->
+        Ast_builder.Default.pexp_ident ~loc
+          { txt = Ldot (Lident "PDSL", Hashtbl.find_exn operators name); loc }
+    | _ -> fn
+  in
+  let rec decompose_app expr acc =
+    match expr.pexp_desc with
+    | Pexp_apply (fn, args) -> decompose_app fn (args @ acc)
+    | _ -> (expr, acc)
+  in
+  let rec process_expr expr =
+    let loc = expr.pexp_loc in
+    match expr.pexp_desc with
+    | Pexp_apply (_, _) ->
+        let fn, args = decompose_app expr [] in
+        let qualified_fn = qualify_if_needed fn in
+        let processed_args = List.map args ~f:(fun (label, arg) -> (label, process_expr arg)) in
+        Ast_builder.Default.pexp_apply ~loc qualified_fn processed_args
+    | Pexp_ifthenelse (cond, then_expr, else_expr) ->
+        let processed_then = process_expr then_expr in
+        let processed_else = Option.map else_expr ~f:process_expr in
+        Ast_builder.Default.pexp_ifthenelse ~loc cond processed_then processed_else
+    | Pexp_sequence (expr1, expr2) ->
+        let processed_expr2 = process_expr expr2 in
+        Ast_builder.Default.pexp_sequence ~loc expr1 processed_expr2
+    | _ -> expr
+  in
+  process_expr expr
+
 let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let more_label =
     match opt_label with
@@ -13,7 +93,7 @@ let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
     match param_init with
-    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function c "TDSL"]]
+    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function c]]
     | None -> [%expr None]
   in
   let extra_args =

@@ -319,34 +319,3 @@ let ndarray_op ?axis_labels ?label expr =
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] ()]
-
-let add_module_qualifier_to_applied_function expr module_name =
-  let qualify_if_needed fn =
-    match fn.pexp_desc with
-    | Pexp_ident { txt = Lident name; loc } ->
-        Ast_builder.Default.pexp_ident ~loc { txt = Ldot (Lident module_name, name); loc }
-    | _ -> fn
-  in
-  let rec decompose_app expr acc =
-    match expr.pexp_desc with
-    | Pexp_apply (fn, args) -> decompose_app fn (args @ acc)
-    | _ -> (expr, acc)
-  in
-  let rec process_expr expr =
-    let loc = expr.pexp_loc in
-    match expr.pexp_desc with
-    | Pexp_apply (_, _) ->
-        let fn, args = decompose_app expr [] in
-        let qualified_fn = qualify_if_needed fn in
-        let processed_args = List.map args ~f:(fun (label, arg) -> (label, process_expr arg)) in
-        Ast_builder.Default.pexp_apply ~loc qualified_fn processed_args
-    | Pexp_ifthenelse (cond, then_expr, else_expr) ->
-        let processed_then = process_expr then_expr in
-        let processed_else = Option.map else_expr ~f:process_expr in
-        Ast_builder.Default.pexp_ifthenelse ~loc cond processed_then processed_else
-    | Pexp_sequence (expr1, expr2) ->
-        let processed_expr2 = process_expr expr2 in
-        Ast_builder.Default.pexp_sequence ~loc expr1 processed_expr2
-    | _ -> expr
-  in
-  process_expr expr

@@ -6,6 +6,7 @@ module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module PDSL = Operation.PDSL
 module CDSL = Train.CDSL
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime

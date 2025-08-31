@@ -34,9 +34,10 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 
 - `%cd` assumes that any extension point will be in the scope of a module `NTDSL` that provides at least the functionality of `Operation.NTDSL`.
 - `%op` assumes that any extension point will be in the scope of a module `TDSL` that provides at least the functionality of `Operation.TDSL`.
+- `%op` with inline definitions with inintialization expressions assumes that a module `PDSL` is in scope with at least the functionality of `Operation.PDSL`.
 - Both extensions assume `Tensor` (from the `Ocannl` wrapper) is in scope.
 
-Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`.
+Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`. Functions inside `Operation.PDSL` use `~grad_spec:Require_grad`.
 
 The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding operators.
 
@@ -272,6 +273,8 @@ Both syntaxes support additional record fields that map directly to labeled argu
 - `input_dims` or shorthand `i`: specifies input dimensions  
 - `batch_dims` or shorthand `b`: specifies batch dimensions
 - Any other labeled argument accepted by `TDSL.param` (for `%op`) or `NTDSL.term` (for `%cd`)
+
+Note: for the `%op` declarations, if the root operation comes from `TDSL.O` and is not qualified with a module name, it becomes qualified with `PDSL` which ensures that the created tensor will be differentiable (will have gradients), and will be able to take the additional argumetns. There are also special cases for literal constants to ensure the resulting tensor is initialized with these constants but is differentiable.
 
 Examples:
 

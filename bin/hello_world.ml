@@ -4,6 +4,7 @@ module Tn = Ir.Tnode
 module IDX = Train.IDX
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module PDSL = Operation.PDSL
 module CDSL = Train.CDSL
 
 module type Backend = Ir.Backend_intf.Backend

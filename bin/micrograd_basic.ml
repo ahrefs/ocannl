@@ -4,6 +4,7 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 module TDSL = Operation.TDSL
 module NTDSL = Operation.NTDSL
+module PDSL = Operation.PDSL
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
