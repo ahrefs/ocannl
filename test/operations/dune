@@ -33,7 +33,7 @@
 ; Step 1: Run the test and create a backend-specific sentinel file when done
 
 (rule
- (targets micrograd_demo-%{read:config/ocannl_backend.txt}.done)
+ (targets micrograd_demo-logs.done)
  (package neural_nets_lib)
  (deps
   ocannl_config
@@ -53,8 +53,8 @@
 ; Step 2: Process the log file, depending on the backend-specific sentinel
 
 (rule
- (deps micrograd_demo-%{read:config/ocannl_backend.txt}.done)
- (target "%{read:config/ocannl_backend.txt}-0-0.log.actual")
+ (deps micrograd_demo-logs.done)
+ (target "backend-0-0.log.actual")
  (package neural_nets_lib)
  (action
   (progn
@@ -83,7 +83,7 @@
  (action
   (diff
    "micrograd_demo_logging-%{read:config/ocannl_backend.txt}-0-0.log.expected"
-   "%{read:config/ocannl_backend.txt}-0-0.log.actual")))
+   "backend-0-0.log.actual")))
 
 (test
  (name threefry4x32_demo)
@@ -125,9 +125,7 @@
     (copy build_files/n3_fwd-unoptimized.ll %{target})))))
 
 (rule
- (targets
-  top_down_prec-unoptimized.ll.actual
-  top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)
+ (targets top_down_prec-unoptimized.ll.actual top_down_prec.extension.actual)
  (package neural_nets_lib)
  (deps
   config/ocannl_backend_extension.txt
@@ -145,12 +143,12 @@
      top_down_prec-unoptimized.ll.actual)
     (copy
      build_files/d_fwd.%{read:config/ocannl_backend_extension.txt}
-     top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual)))))
+     top_down_prec.extension.actual)))))
 
 (rule
  (targets
   test_where_precision-unoptimized.ll.actual
-  test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual)
+  test_where_precision.extension.actual)
  (package neural_nets_lib)
  (deps
   config/ocannl_backend_extension.txt
@@ -168,7 +166,7 @@
      test_where_precision-unoptimized.ll.actual)
     (copy
      build_files/where_fwd.%{read:config/ocannl_backend_extension.txt}
-     test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual)))))
+     test_where_precision.extension.actual)))))
 
 (rule
  (alias runtest)
@@ -195,7 +193,7 @@
  (action
   (diff
    "top_down_prec.%{read:config/ocannl_backend_extension.txt}.expected"
-   "top_down_prec.%{read:config/ocannl_backend_extension.txt}.actual")))
+   "top_down_prec.extension.actual")))
 
 (rule
  (alias runtest)
@@ -214,7 +212,7 @@
  (action
   (diff
    "test_where_precision.%{read:config/ocannl_backend_extension.txt}.expected"
-   "test_where_precision.%{read:config/ocannl_backend_extension.txt}.actual")))
+   "test_where_precision.extension.actual")))
 
 (test
  (name test_vec_simple)
