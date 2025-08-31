@@ -22,15 +22,8 @@ jobs:
           path: ~/.opam
           key: opam-ubuntu-22.04-5.3.0
 
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: '5.3.0'
-
-      - name: Pin
-        run: opam pin -n .
-
-      - name: Deps
-        run: opam install -ydt . --deps-only
+      - name: slipshow
+        run: opam install slipshow
 
       - name: Introductory slides
         run: opam exec -- slipshow compile docs/slides-basics_backprop_training_codegen.md -o docs/html/basics_backprop_training_codegen.html
