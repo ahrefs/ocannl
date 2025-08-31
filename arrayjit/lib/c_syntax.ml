@@ -312,9 +312,10 @@ module C_syntax (B : C_syntax_config) = struct
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         let header =
           let idx_type = if Utils.settings.big_models then "uint64_t " else "uint32_t " in
-          string ("for (" ^ idx_type) ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi
-          ^^ space ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space
-          ^^ string "++" ^^ pp_symbol i ^^ string ")"
+          string ("for (" ^ idx_type)
+          ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space ^^ pp_symbol i
+          ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space ^^ string "++" ^^ pp_symbol i
+          ^^ string ")"
         in
         let body_doc = ref (pp_ll body) in
         (if Utils.debug_log_from_routines () then

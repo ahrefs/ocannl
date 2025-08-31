@@ -4,9 +4,11 @@ open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
 let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
-  let more_label = match opt_label with 
+  let more_label =
+    match opt_label with
     | Some (_label_name, label_pat) -> [%expr Some [%e pat2expr label_pat]]
-    | None -> [%expr None] in
+    | None -> [%expr None]
+  in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
@@ -264,7 +266,7 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       (* Check if there's a unit parameter or a labeled parameter with label "label" *)
       let rec find_unit_pos idx = function
         | [] -> None
-        | { pparam_desc = Pparam_val (Nolabel, _, pat); _ } :: _ 
+        | { pparam_desc = Pparam_val (Nolabel, _, pat); _ } :: _
           when match pat.ppat_desc with
                | Ppat_construct ({ txt = Lident "()"; _ }, None) -> true
                | _ -> false ->
@@ -280,9 +282,11 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       | Some unit_idx ->
           (* Split args at unit parameter *)
           let before_unit, unit_and_after = List.split_n args unit_idx in
-          let unit_param, after_unit = match unit_and_after with
+          let unit_param, after_unit =
+            match unit_and_after with
             | unit :: rest -> (unit, rest)
-            | [] -> failwith "Internal error: unit_and_after should not be empty" in
+            | [] -> failwith "Internal error: unit_and_after should not be empty"
+          in
           let opt_label = find_label_param before_unit in
           let vbs, inner_body =
             translate ~num_configs ~is_toplevel:false ~opt_label ?label
@@ -293,54 +297,61 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
           let new_body = inner_body in
           ( no_vbs,
             if List.is_empty before_unit then
-              { expr with pexp_desc = Pexp_function ([unit_param], constr, Pfunction_body new_body) }
+              {
+                expr with
+                pexp_desc = Pexp_function ([ unit_param ], constr, Pfunction_body new_body);
+              }
             else
-              { expr with pexp_desc = Pexp_function (before_unit @ [unit_param], constr, Pfunction_body new_body) } )
+              {
+                expr with
+                pexp_desc =
+                  Pexp_function (before_unit @ [ unit_param ], constr, Pfunction_body new_body);
+              } )
       | None ->
-      (* No unit parameter, normal processing *)
-      let labels =
-        Option.to_list label
-        @ List.filter_map args ~f:(function
-            | { pparam_desc = Pparam_val (_, _, pat); _ } ->
-                let loc = pat.ppat_loc in
-                Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
-            | _ -> None)
-      in
-      let label_locs = List.map labels ~f:(fun label -> label.pexp_loc) in
-      let label_starts = List.map label_locs ~f:(fun l -> l.loc_start) in
-      let label_ends = List.map label_locs ~f:(fun l -> l.loc_end) in
-      let label_loc =
-        if List.is_empty labels then loc
-        else
-          Location.
-            {
-              loc_start = List.reduce_exn label_starts ~f:min_pos;
-              loc_end = List.reduce_exn label_ends ~f:max_pos;
-              loc_ghost = false;
-            }
-      in
-      let label =
-        let loc = label_loc in
-        [%expr List.concat [%e Ast_builder.Default.elist ~loc labels]]
-      in
-      let vbs, body =
-        match body with
-        | Pfunction_body body ->
-            let vbs, body = loop ~label body in
-            (vbs, Pfunction_body body)
-        | Pfunction_cases (cases, loc, attrs) ->
-            let vbs, cases =
-              List.unzip
-              @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                     let vbs, pc_rhs = loop ~label pc_rhs in
-                     (vbs, { c with pc_rhs }))
-            in
-            ( List.fold vbs
-                ~init:(Map.empty (module String))
-                ~f:(fun acc vbs -> Map.merge_disjoint_exn acc vbs),
-              Pfunction_cases (cases, loc, attrs) )
-      in
-      (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) }) )
+          (* No unit parameter, normal processing *)
+          let labels =
+            Option.to_list label
+            @ List.filter_map args ~f:(function
+                | { pparam_desc = Pparam_val (_, _, pat); _ } ->
+                    let loc = pat.ppat_loc in
+                    Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
+                | _ -> None)
+          in
+          let label_locs = List.map labels ~f:(fun label -> label.pexp_loc) in
+          let label_starts = List.map label_locs ~f:(fun l -> l.loc_start) in
+          let label_ends = List.map label_locs ~f:(fun l -> l.loc_end) in
+          let label_loc =
+            if List.is_empty labels then loc
+            else
+              Location.
+                {
+                  loc_start = List.reduce_exn label_starts ~f:min_pos;
+                  loc_end = List.reduce_exn label_ends ~f:max_pos;
+                  loc_ghost = false;
+                }
+          in
+          let label =
+            let loc = label_loc in
+            [%expr List.concat [%e Ast_builder.Default.elist ~loc labels]]
+          in
+          let vbs, body =
+            match body with
+            | Pfunction_body body ->
+                let vbs, body = loop ~label body in
+                (vbs, Pfunction_body body)
+            | Pfunction_cases (cases, loc, attrs) ->
+                let vbs, cases =
+                  List.unzip
+                  @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
+                         let vbs, pc_rhs = loop ~label pc_rhs in
+                         (vbs, { c with pc_rhs }))
+                in
+                ( List.fold vbs
+                    ~init:(Map.empty (module String))
+                    ~f:(fun acc vbs -> Map.merge_disjoint_exn acc vbs),
+                  Pfunction_cases (cases, loc, attrs) )
+          in
+          (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) }))
   | { pexp_desc = Pexp_function (args, constr, body); _ } ->
       let vbs, body =
         match body with

@@ -17,9 +17,11 @@ type ('ocaml, 'impl) precision =
   | Byte : (char, uint8_elt) precision
   | Uint16 : (int, uint16_elt) precision
   | Int32 : (int32, int32_elt) precision
-  | Uint32 : (int32, int32_elt) precision  (** Using int32_elt representation but treating as unsigned *)
+  | Uint32 : (int32, int32_elt) precision
+      (** Using int32_elt representation but treating as unsigned *)
   | Int64 : (int64, int64_elt) precision
-  | Uint64 : (int64, int64_elt) precision  (** Using int64_elt representation but treating as unsigned *)
+  | Uint64 : (int64, int64_elt) precision
+      (** Using int64_elt representation but treating as unsigned *)
   | Uint4x32 : (Stdlib.Complex.t, Bigarray.complex64_elt) precision
       (** A 128-bit value that corresponds to e.g. CUDA's uint4 type. Luckily, the OCaml Bigarray
           library supports complex64_elt which is a 128-bit value, so we avoid dims conversions. *)
@@ -563,21 +565,32 @@ let binop_c_syntax prec v =
   | Mul, _ -> ("(", " *", ")")
   | Div, _ -> ("(", " /", ")")
   | ToPowOf, Double_prec _ -> ("pow(", ",", ")")
-  | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( ToPowOf,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       invalid_arg "Ops.binop_c_syntax: ToPowOf not supported for integer precisions"
   | ToPowOf, _ -> ("powf(", ",", ")")
-  | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("(", " > 0 ?", " : 0)")
+  | ( Relu_gate,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
+      ("(", " > 0 ?", " : 0)")
   | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
-  | Satur01_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Satur01_gate,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       ("(abs(", " ) > 0 ? 0 : (", "))")
   | Satur01_gate, Single_prec _ ->
       (* This disagrees at 0 with the semantics. *)
       ("(fabsf(floorf(", ")) > 0.0 ? 0.0 : (", "))")
   | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
-  | Max, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Max,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
       ("fmax(", ",", ")")
   | Max, _ -> ("fmaxf(", ",", ")")
-  | Min, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Min,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
       ("fmin(", ",", ")")
   | Min, _ -> ("fminf(", ",", ")")
   | Mod, _ -> ("(", " %", ")")
@@ -654,43 +667,80 @@ let unop_c_syntax prec op =
   let fmax () =
     (* See: https://en.cppreference.com/w/c/numeric/math/fmax option (4) *)
     match prec with
-    | Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _ -> "fmax"
+    | Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+    | Uint64_prec _ | Fp8_prec _ ->
+        "fmax"
     | _ -> "fmaxf"
   in
   let fmin () =
     match prec with
-    | Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _ -> "fmin"
+    | Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+    | Uint64_prec _ | Fp8_prec _ ->
+        "fmin"
     | _ -> "fminf"
   in
   match (op, prec) with
   | Identity, _ -> ("", "")
-  | Relu, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("fmax(0, ", ")")
+  | ( Relu,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
+      ("fmax(0, ", ")")
   | Relu, _ -> (fmax () ^ "(0.0, ", ")")
-  | Satur01, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("fmax(0, fmin(1, ", "))")
+  | ( Satur01,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
+      ("fmax(0, fmin(1, ", "))")
   | Satur01, _ -> (fmax () ^ "(0.0, " ^ fmin () ^ "(1.0, ", "))")
-  | Exp, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("exp(", ")")
+  | ( Exp,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("exp(", ")")
   | Exp, _ -> ("expf(", ")")
-  | Log, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("log(", ")")
+  | ( Log,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("log(", ")")
   | Log, _ -> ("logf(", ")")
-  | Exp2, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("exp2(", ")")
+  | ( Exp2,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("exp2(", ")")
   | Exp2, _ -> ("exp2f(", ")")
-  | Log2, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("log2(", ")")
+  | ( Log2,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("log2(", ")")
   | Log2, _ -> ("log2f(", ")")
-  | Sin, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("sin(", ")")
+  | ( Sin,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("sin(", ")")
   | Sin, _ -> ("sinf(", ")")
-  | Cos, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("cos(", ")")
+  | ( Cos,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("cos(", ")")
   | Cos, _ -> ("cosf(", ")")
-  | Sqrt, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) -> ("sqrt(", ")")
+  | ( Sqrt,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
+      ("sqrt(", ")")
   | Sqrt, _ -> ("sqrtf(", ")")
-  | Recip, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Recip,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Recip not supported for integer precisions"
   | Recip, _ -> ("(1.0 / (", "))")
-  | Recip_sqrt, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Recip_sqrt,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Recip_sqrt not supported for integer precisions"
   | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
   | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
   | Neg, _ -> ("(-(", "))")
-  | Tanh_approx, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Tanh_approx,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
@@ -709,10 +759,14 @@ let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
 
 let ternop_c_syntax prec op =
   match (op, prec) with
-  | Where, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( Where,
+      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
+      | Fp8_prec _ ) ) ->
       ("((", ") != 0 ? (", ") : (", "))")
   | Where, _ -> ("((", ") != 0.0 ? (", ") : (", "))")
-  | FMA, (Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ | Fp8_prec _) ->
+  | ( FMA,
+      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+      | Uint64_prec _ | Fp8_prec _ ) ) ->
       ("fma(", ",", ",", ")")
   | FMA, _ -> ("fmaf(", ",", ",", ")")
 
@@ -745,16 +799,22 @@ let c_convert_precision ~from ~to_ =
   (* Conversions involving BFloat16 and other types *)
   | Bfloat16_prec _, Half_prec _ -> ("FLOAT_TO_HALF(bfloat16_to_single(", "))")
   | Half_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(HALF_TO_FLOAT(", "))")
-  | Bfloat16_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) ->
+  | ( Bfloat16_prec _,
+      (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
+    ->
       ("(" ^ c_typ_of_prec to_ ^ ")bfloat16_to_single(", ")")
-  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _), Bfloat16_prec _ ->
+  | ( (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _),
+      Bfloat16_prec _ ) ->
       ("single_to_bfloat16((float)", ")")
   (* Conversions involving FP8 and other types *)
   | Fp8_prec _, Half_prec _ -> ("FLOAT_TO_HALF(fp8_to_single(", "))")
   | Half_prec _, Fp8_prec _ -> ("single_to_fp8(HALF_TO_FLOAT(", "))")
-  | Fp8_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) ->
+  | ( Fp8_prec _,
+      (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
+    ->
       ("(" ^ c_typ_of_prec to_ ^ ")fp8_to_single(", ")")
-  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _), Fp8_prec _ ->
+  | ( (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _),
+      Fp8_prec _ ) ->
       ("single_to_fp8((float)", ")")
   (* BFloat16 <-> FP8 conversions *)
   | Bfloat16_prec _, Fp8_prec _ -> ("single_to_fp8(bfloat16_to_single(", "))")
@@ -764,9 +824,12 @@ let c_convert_precision ~from ~to_ =
   | Single_prec _, Half_prec _ -> ("FLOAT_TO_HALF(", ")")
   | Half_prec _, Double_prec _ -> ("(double)HALF_TO_FLOAT(", ")")
   | Double_prec _, Half_prec _ -> ("FLOAT_TO_HALF((float)", ")")
-  | Half_prec _, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) ->
+  | ( Half_prec _,
+      (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
+    ->
       ("(" ^ c_typ_of_prec to_ ^ ")HALF_TO_FLOAT(", ")")
-  | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _), Half_prec _ ->
+  | ( (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _),
+      Half_prec _ ) ->
       ("FLOAT_TO_HALF((float)", ")")
   (* Uint4x32 conversions - special handling *)
   | Uint4x32_prec _, _ -> ("uint4x32_to_" ^ prec_string to_ ^ "(", ")")

@@ -20,18 +20,14 @@ let z3 =
   [%op { hey9 } *+ "is*a+d*bc;b=>iac" { hey10 }]
 
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
-
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b; o = [ hid_dim ] })
 
 let%op _use_layer x =
-  mlp_layer ~label:[ "L" ] ~hid_dim:3 ()
-    (mlp_layer ~label:[ "L2" ] ~hid_dim:3 () x)
+  mlp_layer ~label:[ "L" ] ~hid_dim:3 () (mlp_layer ~label:[ "L2" ] ~hid_dim:3 () x)
 
 let%op _config_layer ~config:_ x = mlp_layer ~label:[ "L" ] ~hid_dim:3 () x
 
 let%op _three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =
-  mlp_layer
-    ~label:(label @ [ "L3" ]) ~hid_dim:dim3 ()
-    (mlp_layer
-       ~label:(label @ [ "L2" ]) ~hid_dim:dim2 ()
+  mlp_layer ~label:(label @ [ "L3" ]) ~hid_dim:dim3 ()
+    (mlp_layer ~label:(label @ [ "L2" ]) ~hid_dim:dim2 ()
        (mlp_layer ~label:(label @ [ "L1" ]) ~hid_dim:dim1 () x))

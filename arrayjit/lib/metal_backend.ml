@@ -433,7 +433,9 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let main_kernel_prefix = "kernel"
     let buffer_prefix = "device "
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
-    let arg_int_prefix = if Utils.settings.big_models then "const uint64_t& " else "const uint32_t& "
+
+    let arg_int_prefix =
+      if Utils.settings.big_models then "const uint64_t& " else "const uint32_t& "
 
     let extra_args =
       [
