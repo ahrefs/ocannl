@@ -353,18 +353,241 @@ REINFORCE with baseline is a simple actor-critic method:
 {pause up=summary}
 ### Next Steps
 
-- Implement REINFORCE on a simple environment
-- Experiment with different baseline functions  
-- Explore more advanced policy gradient methods (PPO, A3C)
-- Consider trust region methods for more stable updates
-
-{pause down=refs-sutton-barto}
-
-**You now have the foundation to start learning policies through interaction!**
+- Implement the Sokoban environment
+- Implement a policy network model
+- Implement REINFORCE
+- Enhance with the constant baseline
 
 ***
+
+{pause center #policy-ratios}
+## Policy Ratios and Importance Sampling
+
+REINFORCE has a fundamental limitation: it can only use data from the **current** policy.
+
+{pause up=policy-ratios}
+### The Problem with Policy Updates
+
+After each gradient step, our policy π(a|s,θ) changes. But what about all that expensive experience we just collected?
+
+{.example title="Sokoban Training Reality"}
+- Collect 1000 episodes with current policy → expensive!
+- Update policy weights θ → policy changes
+- Old episodes are now **off-policy** → can't use them directly
+
+{pause center #importance-sampling}
+> ### Solution: Importance Sampling
+> 
+> **Key insight**: We can reuse off-policy data by weighting it appropriately.
+
+{pause}
+
+{.definition title="Policy Ratio"}
+$$\text{ratio}_{t} = \frac{\pi_{\theta_{new}}(a_t|s_t)}{\pi_{\theta_{old}}(a_t|s_t)}$$
+
+This tells us how much more (or less) likely the action was under the new policy vs. old policy.
+
+{pause down}
+**Importance-weighted REINFORCE update**:
+$$\theta \leftarrow \theta + \alpha \cdot \text{ratio}_t \cdot G_t \cdot \nabla_\theta \ln \pi(a_t|s_t,\theta)$$
+
+{pause up=importance-sampling}
+{.example title="Policy Ratio Interpretation"}
+- `ratio = 2.0`: New policy twice as likely to take this action
+- `ratio = 0.5`: New policy half as likely to take this action  
+- `ratio = 1.0`: No change in action probability
+
+***
+
+{pause center #clipping}
+## The Problem: Unbounded Policy Updates
+
+Importance sampling allows off-policy learning, but creates a new problem: **unbounded ratios**.
+
+{pause up=clipping}
+
+{.example title="When Ratios Explode"}
+If old policy had π_old(action) = 0.01 and new policy has π_new(action) = 0.9:
+
+**ratio = 0.9 / 0.01 = 90**
+
+With a high return G_t = +10: **update = 90 × 10 = 900**
+
+This massive update can destabilize training!
+
+{pause}
+
+### Solution: Clipped Policy Updates
+
+**PPO-style clipping** limits how much the policy can change in one update:
+
+$$L^{CLIP}(\theta) = \min\left(\text{ratio}_t \cdot A_t, \; \text{clip}(\text{ratio}_t, 1-\epsilon, 1+\epsilon) \cdot A_t\right)$$
+
+{pause}
+
+{.definition title="Clipping Parameters"}
+- **ε = 0.2** (typical): Allow 20% change in action probabilities
+- **clip(x, 1-ε, 1+ε)**: Forces ratio to stay in [0.8, 1.2] range
+- **min(...)**: Takes the more conservative update
+
+
+{pause down .example title="Clipping in Action (ε = 0.2)"}
+- `ratio = 90` → clipped to `1.2` → much smaller update
+- `ratio = 0.01` → clipped to `0.8` → prevents tiny updates too
+- `ratio = 1.1` → no clipping needed, within [0.8, 1.2]
+
+***
+
+{pause center #kl-penalty}
+## KL Divergence: Keeping Policies Close
+
+Even with clipping, we want an additional safety mechanism to prevent the policy from changing too drastically.
+
+{pause up=kl-penalty}
+
+{.definition title="KL Divergence Penalty"}
+$$D_{KL}[\pi_{old} \| \pi_{new}] = \sum_a \pi_{old}(a|s) \log \frac{\pi_{old}(a|s)}{\pi_{new}(a|s)}$$
+
+**Measures how different two probability distributions are.**
+
+{pause #kl-objective}
+### KL-Regularized Objective
+
+$$L_{total}(\theta) = L_{policy}(\theta) - \beta \cdot D_{KL}[\pi_{old} \| \pi_{new}]$$
+
+{pause}
+
+{.definition title="KL Penalty Parameters"}
+- **β**: Controls penalty strength (e.g., 0.01, 0.04)
+- **Higher β**: Keeps policy very close to old policy (stable but slow learning)
+- **Lower β**: Allows more exploration (faster learning but less stable)
+
+
+{pause down .example title="KL Penalty in Practice"}
+> If policy changes dramatically → high KL divergence → large penalty  
+> → discourages big changes
+> 
+> The penalty acts like a "trust region" - we trust small changes more than large ones.
+
+{pause up=kl-objective}
+> ### Why Both Clipping AND KL Penalty?
+> 
+> **Clipping**: Hard constraint on individual action probabilities  
+> **KL Penalty**: Soft constraint on overall policy distribution
+> 
+> Together they provide robust stability for policy optimization.
+
+***
+
+{pause center #grpo-algorithm}
+## Group Relative Policy Optimization (GRPO)
+
+Now we can understand GRPO: **REINFORCE + GRPO Innovation + Clipping + KL Penalty**
+
+{pause up=grpo-algorithm}
+
+{.definition title="GRPO: The Complete Picture"}
+> GRPO combines all the techniques we've learned:
+> 1. **Group baselines** - Compare responses to the **same query** (GRPO's key innovation)
+> 2. **Policy ratios** for off-policy learning
+> 3. **Clipping** for stable updates  
+> 4. **KL penalties** for additional safety
+
+{pause}
+
+{.definition title="Group Baselines: The Key Innovation"}
+> Instead of comparing to historical episodes from different queries:
+> - Generate **G responses** to the **same query**
+> - Compute advantages relative to **this group**: $A_i = (r_i - \text{mean}_\text{group}) / (\text{std}_\text{group} + ε)$
+> - Much better signal: "How good was this response compared to other attempts at the same problem?"
+
+{pause center #grpo-steps}
+### GRPO Algorithm Steps
+
+{.block title="GRPO for LLM Fine-tuning"}
+1. **Sample G responses** per query from current policy π_θ_old
+2. **Evaluate rewards** r_i for each response using reward model
+3. **Compute group advantages**: A_i = (r_i - mean_group) / (std_group + ε)
+4. **Calculate clipped loss**: 
+   - ratio_i = π_θ(response_i) / π_θ_old(response_i)
+   - L_i = min(ratio_i × A_i, clip(ratio_i, 1-ε, 1+ε) × A_i)
+5. **Add KL penalty**: L_total = L_policy - β × KL[π_θ_old || π_θ]
+6. **Update policy**: θ ← θ - α ∇L_total
+
+{pause up=grpo-steps}
+### Why GRPO Works for LLMs
+
+{.example title="GRPO vs REINFORCE Comparison" #grpo-for-llms}
+> 
+> **REINFORCE with constant baseline**:
+> - Baseline: Average of past episodes (different queries)
+> - No clipping → unstable updates
+> - No policy ratios → must stay on-policy
+> 
+> **GRPO**:
+> - **Better baseline**: Compare within responses to **same query**
+> - **Clipped updates**: Stable learning with large batches
+> - **Policy ratios**: Can reuse data across updates
+
+{pause down=grpo-for-llms}
+
+{#grpo-implementation}
+### GRPO Implementation Reality
+
+```python
+# For each query, generate G=4 responses
+responses = model.generate(query, num_return_sequences=4)
+
+# Compute group-relative advantages  
+rewards = [reward_model(r) for r in responses]
+advantages = (rewards - np.mean(rewards)) / (np.std(rewards) + 1e-8)
+
+# Clipped policy gradient update
+ratios = new_probs / old_probs
+clipped_loss = min(ratios * advantages, 
+                  clip(ratios, 0.8, 1.2) * advantages)
+```
+
+***
+
+{pause up=grpo-implementation #grpo-summary}
+## GRPO: Why It Works
+
+{.block title="Key Insights"}
+> 
+> > ✓ **Group baselines are better** - Compare responses to the same query, not different queries
+> > 
+> > ✓ **Clipping prevents instability** - Large policy updates are dangerous
+> > 
+> > ✓ **KL penalties add safety** - Trust regions keep learning stable
+> > 
+> > ✓ **Perfect for LLM fine-tuning** - Generate multiple responses easily
+
+{pause up=grpo-summary}
+
+### The Evolution: REINFORCE → GRPO
+
+1. **REINFORCE**: Basic policy gradients with historical baselines
+2. **+ Clipping**: Stable updates with policy ratios  
+3. **+ KL Penalty**: Additional safety through regularization
+4. **+ Group Baselines**: Better comparisons for LLM setting
+5. **= GRPO**: Industrial-strength policy optimization for LLMs
+
+{pause}
+
+**GRPO doesn't replace REINFORCE - it's REINFORCE evolved for modern LLM training.**
+
+**You now understand the complete journey from REINFORCE to GRPO!**
+
+***
+
+{pause down=fin}
 
 ## References
 
 {#refs-sutton-barto}
 Sutton, R. S., & Barto, A. G. (2018). *Reinforcement learning: An introduction* (2nd ed.). MIT Press.
+
+Skiredj, A. (2025). *The Illustrated GRPO: A Detailed and Pedagogical Explanation of GRPO Algorithm*. OCP Solutions & Mohammed VI Polytechnic University, Morocco.
+
+{#fin}
