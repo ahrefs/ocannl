@@ -1,4 +1,45 @@
-## [0.6.0]  -- 2025-08-19
+## [0.6.1] -- current
+
+### Added
+
+- Record-based syntax for inline tensor definitions in `%op` and `%cd` expressions
+- `uniform1` variants for non-vectorized random number generation (`Uint4x32_to_prec_uniform1`)
+- Support for uint32/uint64 precisions and `big_models` flag for indexing arithmetic
+- Created docs landing page with automatic publishing action
+- Group Relative Policy Optimization (GRPO) documentation in RL slides
+- Counter-based randomness with lightweight (2-round) Threefry variant as default
+- Claude GitHub Actions for automated code review and PR assistance
+- Heterogeneous precision support for primitive operations
+- Both zero-initialized and undefined-initialization buffer creation options
+- More output options for `ocannl_read_config` utility
+- Added comprehensive RL/REINFORCE tutorial slides with concrete examples
+- Added clear explanations of slipshow navigation semantics to CLAUDE.md
+
+### Changed
+
+- Major fix to tensor initialization handling with uniform generation across TDSL, NTDSL, PDSL
+- `%op` scope delimiting changed from `~config` to unit parameters for cleaner syntax
+- Renamed `zero_initialized` to `zero_initialized_by_code` for clarity
+- Split Threefry4x32 into crypto (20-round) and light (2-round) variants
+- Changed `Operation.range` semantics to match Python's `range` function
+- Improved precision handling in low-level operations with bidirectional inference
+- Enhanced record syntax with field shortcuts (`o` → `output_dims`, `i` → `input_dims`, `b` → `batch_dims`)
+- More precise and thus more lenient rootness checks in `Tensor.consume_` functions
+- Generalized `guess_output_nodes` to `collect_nodes_guess_output` for more reuse
+- Converted documentation slides to use slipshow for better updatability and navigation
+- Updated CLAUDE.md with record syntax documentation and testing guidelines
+
+### Fixed
+
+- Unnecessary dune rules triggering issue
+- Precision handling for `Uint4x32_to_prec_uniform1` in scalar computations
+- CUDA, Metal, and C backend fixes for various precision and initialization issues
+- Zero-dimensional Bigarray indexing
+- Test dependency on `OCANNL_BACKEND` environment variable
+- Build setup for `ocannl_read_config` utility needed for tests
+- Missing package dependencies and assignments in dune configuration
+
+## [0.6.0] -- 2025-08-19
 
 ### Added
 
