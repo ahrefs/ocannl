@@ -70,9 +70,8 @@ This is very tentative.
   * New syntax for inline parameter definitions; record-based syntax instead of string-based.
   * Add convnet building blocks and corresponding examples starting with MNIST.
   * Add transformer building blocks.
-  * Integrate with huggingface-tokenizers.
-  * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c).
 * **0.7: CPU-style performance and memory efficiency.**
+  * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c). Tokenization via Raven's library Sage.
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
 * **0.7.1: HIP backend (AMD hardware) and WebGPU backend.**
 * **0.8: GPU-style performance -- low hanging fruit.**
