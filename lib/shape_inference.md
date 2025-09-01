@@ -104,20 +104,28 @@ type compose_type =
       (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape
           of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix
           multiply). *)
-  | Einsum of string
+  | Einsum of string * Ir.Indexing.variable_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
           Since OCANNL's extended einsum notation supports both axis variables and row variables, it
           makes other compose types redundant. The [axis_labels] use pseudo-labels local to the
           notation, to line up the axes and row variables. The symmetric difference / disjunctive
           union of RHS1 and RHS2's pseudo-labels should be equal to LHS pseudo-labels.
 
+          The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
+          corresponding to the specification labels equal to [ref_label] of a reference.
+
           Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs",
           "rhs1;rhs2=>lhs". *)
+[@@deriving sexp, equal]
 
 type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
-  | Permute of string  (** The unary "einsum" syntax: RHS1=>LHS. *)
+  | Permute of string * Ir.Indexing.variable_ref list
+      (** The unary "einsum" syntax: RHS1=>LHS.
+
+          The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
+          corresponding to the specification labels equal to [ref_label] of a reference. *)
   | Batch_slice of Ir.Indexing.static_symbol  (** Removes the leftmost batch axis. *)
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
       (** Converts precision in a bit-effient way, with a corresponding conversion in total number

@@ -302,6 +302,9 @@ let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
          | Sub_axis -> (stride * dim, symbols, offset))
   |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
+type variable_ref = { ref_label : string; mutable solved_dim : int option }
+[@@deriving sexp_of, equal]
+
 module Doc_helpers = struct
   let ( ^^ ) = PPrint.( ^^ )
   let ( !^ ) = PPrint.( !^ )

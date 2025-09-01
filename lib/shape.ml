@@ -27,7 +27,9 @@ module AxisKey = struct
 
     type t = {
       in_axes : kind;
-      pos : int;  (** Indices start at [1], counted from the end if [from_end] is true. *)
+      pos : int;
+          (** Indices start at [1] (note this is axis index, dimension indices are always 0-based),
+              counted from the end if [from_end] is true. *)
       from_end : bool;
           (** Axes are indexed from the front (rarely) or from the end (typically), to avoid
               reindexing when broadcasting. *)
@@ -90,15 +92,16 @@ let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
 type deduce_within_shape = Not_constrained | Input_equals_output
 [@@deriving compare, sexp, variants]
 
-type compose_type = Pointwise_bin | Compose | Einsum of string [@@deriving sexp, equal]
+type compose_type = Pointwise_bin | Compose | Einsum of string * Idx.variable_ref list
+[@@deriving sexp_of, equal]
 
 type transpose_type =
   | Transpose
   | Pointwise_un
-  | Permute of string
+  | Permute of string * Idx.variable_ref list
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
-[@@deriving equal, sexp]
+[@@deriving equal, sexp_of]
 
 type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
 [@@deriving equal, sexp_of]
@@ -260,7 +263,7 @@ let logic_to_spec = function
   | Broadcast_tern (Pointwise_tern, _, _, _) ->
       "."
   | Broadcast (Compose, _, _) | Broadcast_tern (Compose_accumulate, _, _, _) -> "@"
-  | Broadcast (Einsum spec, _, _) | Transpose (Permute spec, _) -> spec
+  | Broadcast (Einsum (spec, _), _, _) | Transpose (Permute (spec, _), _) -> spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
@@ -470,6 +473,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
+  | Terminal (Fetch (Embed_dim _)) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch Embed_self_id) -> (Row.dim_map_empty, mark_terminal ())
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
@@ -560,7 +564,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_eq { r1 = cur_sh.input; r2 = sh.input };
             Row_eq { r1 = cur_sh.output; r2 = sh.output };
           ] )
-  | Transpose (Permute spec, sh) ->
+  | Transpose (Permute (spec, _dim_refs), sh) ->
+      (* FIXME: support dim_refs *)
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
@@ -610,7 +615,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
             };
         ] )
-  | Broadcast (Einsum spec, sh1, sh2) ->
+  | Broadcast (Einsum (spec, _dim_refs), sh1, sh2) ->
+      (* FIXME: support dim_refs *)
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)

@@ -85,35 +85,37 @@ let matmul ?(label = []) =
 
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the
     input and the output axes. *)
-let einsum ?(label = []) spec =
+let einsum ?(label = []) ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
-  Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
+  Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
 
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
-let outer_sum ?(label = []) spec =
+let outer_sum ?(label = []) ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g;
     g2 =+ g
   in
-  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum spec) ~op_asn ~grad_asn
+  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
     diagonals, compute traces etc.
 
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the
     input and the output axes. *)
-let einsum1 ?(label = []) spec =
+let einsum1 ?(label = []) ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~transpose_op:(Shape.Permute spec) ~op_asn ~grad_asn ~label:("=>" :: label)
+  Tensor.unop
+    ~transpose_op:(Shape.Permute (spec, capture_dims))
+    ~op_asn ~grad_asn ~label:("=>" :: label)
 
 module NDO_before_pow = struct
   let ( * ) t1 t2 = matmul ~grad_spec:Prohibit_grad t1 t2 ()
@@ -455,11 +457,15 @@ let slice (batch_idx : Idx.static_symbol) =
     Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~label:("@|" :: label)
 
 let embed_symbol ?grad_spec ?(label = []) static_sym =
-  Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label)
-    ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
+  Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label) ~batch_dims:[]
+    ~input_dims:[] ~output_dims:[ 1 ] ()
 
 let embed_self_id ?grad_spec ?(label = []) () =
-  Tensor.term ~fetch_op:Embed_self_id ?grad_spec ~label:("!@self_id" :: label)
+  Tensor.term ~fetch_op:Embed_self_id ?grad_spec ~label:("!@self_id" :: label) ~batch_dims:[]
+    ~input_dims:[] ~output_dims:[ 1 ] ()
+
+let embed_dim ?grad_spec ?(label = []) variable_ref =
+  Tensor.term ~fetch_op:(Embed_dim variable_ref) ?grad_spec ~label:("!@self_id" :: label)
     ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
 let uniform ?grad_spec () =
@@ -590,6 +596,7 @@ struct
     Tensor.number ?label ?axis_label ~grad_spec:Grad_spec.grad_spec (Float.of_int i)
 
   let embed_symbol = embed_symbol ~grad_spec:Grad_spec.grad_spec
+  let embed_dim = embed_dim ~grad_spec:Grad_spec.grad_spec
   let sub = sub ~grad_spec:Grad_spec.grad_spec
   let pointdiv = pointdiv ~grad_spec:Grad_spec.grad_spec
   let slice = slice ~grad_spec:Grad_spec.grad_spec
@@ -627,6 +634,7 @@ struct
     let ( !.. ) ?label i = number ?label @@ Float.of_int i
     let ( !% ) ?label i = bits ?label i
     let ( !@ ) = embed_symbol
+    let dim = embed_dim
     let ( - ) ?label t1 t2 = sub ?label t1 t2 ()
     let ( ~- ) ?label t = pointmul ?label (number (-1.)) t ()
     let ( /. ) ?label t1 t2 = pointdiv ?label t1 t2 ()

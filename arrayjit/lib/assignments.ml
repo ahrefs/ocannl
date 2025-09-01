@@ -37,6 +37,7 @@ type fetch_op =
   | Slice of { batch_idx : Indexing.static_symbol; sliced : Tn.t }
   | Embed_symbol of Indexing.static_symbol
   | Embed_self_id  (** Embeds the id of the [array] field of the [Fetch] constructor. *)
+  | Embed_dim of Indexing.variable_ref
 [@@deriving sexp_of, equal]
 
 type accum_rhs =
@@ -345,6 +346,10 @@ let%track4_sexp to_low_level code =
     | Fetch { array; fetch_op = Embed_self_id; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits (Int64.of_int array.id))
+    | Fetch { array; fetch_op = Embed_dim variable_ref; dims } ->
+        (* Note: we are guaranteed all shape inference is forced before we access variable_ref. *)
+        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            set array idcs @@ Constant (Float.of_int @@ Option.value_exn variable_ref.solved_dim))
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
         Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
@@ -443,6 +448,7 @@ let to_doc ?name ?static_indices () c =
     | Embed_symbol { static_symbol; static_range = _ } ->
         string ("!@" ^ Indexing.symbol_ident static_symbol)
     | Embed_self_id -> string "!@self_id"
+    | Embed_dim { ref_label; _ } -> string ("(dim " ^ ref_label ^ ")")
   in
 
   let rec doc_of_code = function

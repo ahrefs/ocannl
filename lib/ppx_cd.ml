@@ -1292,7 +1292,7 @@ let translate ?ident_label (expr : expression) : result =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_bin]
           else if String.equal spec "@" then [%expr Shape.Compose]
-          else [%expr Shape.Einsum [%e logic]]
+          else [%expr Shape.Einsum ([%e logic], [])]
         in
         let _, bin_op = binary_op bin_op in
         process_raw_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ~logic
@@ -1348,7 +1348,7 @@ let translate ?ident_label (expr : expression) : result =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_un]
           else if String.equal spec "T" then [%expr Shape.Transpose]
-          else [%expr Shape.Permute [%e logic]]
+          else [%expr Shape.Permute ([%e logic], [])]
         in
         let _, un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         process_raw_unop ~accu_op ~lhs ~un_op ~rhs ~logic

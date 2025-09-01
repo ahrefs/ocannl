@@ -482,7 +482,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
     match fetch_op with
     | None -> Asgns.empty_comp
     | Some
-        (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_self_id
+        (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_dim _ | Embed_self_id
          | Range_over_offsets | Constant_fill _ ) as fetch_op) ->
         Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
   in
