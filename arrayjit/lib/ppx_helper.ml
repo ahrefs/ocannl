@@ -6,7 +6,13 @@ type li = longident
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd :: accu) tl
   | [%expr []] -> List.rev accu
-  | expr -> List.rev (expr :: accu)
+  | expr ->
+      let error_expr =
+        Ast_builder.Default.pexp_extension ~loc:expr.pexp_loc
+        @@ Location.error_extensionf ~loc:expr.pexp_loc
+             "Arrayjit: expected a list literal, cannot parse a non-literal list value"
+      in
+      List.rev (error_expr :: accu)
 
 let dim_spec_to_string = function
   | `Input_dims dim -> "input (tuple) of dim " ^ Int.to_string dim
