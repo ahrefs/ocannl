@@ -80,6 +80,12 @@ type t = {
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp]
 
+type delayed_var_ref = {
+  var_ref : Ir.Indexing.variable_ref;
+  mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+}
+[@@deriving equal, sexp_of]
+
 type compose_type =
   | Pointwise_bin
       (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)
@@ -87,7 +93,7 @@ type compose_type =
       (** Compose the outputs of the second shape with the inputs of the first shape, i.e. the shape
           of [fun x -> s1(s2(x))], or [s1 * s2] where [*] is the inner product (e.g. matrix
           multiply). *)
-  | Einsum of string * Ir.Indexing.variable_ref list
+  | Einsum of string * delayed_var_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
           Since OCANNL's extended einsum notation supports both axis variables and row variables, it
           makes other compose types redundant. The [axis_labels] use pseudo-labels local to the
@@ -104,7 +110,7 @@ type compose_type =
 type transpose_type =
   | Transpose  (** Swaps inputs and outputs of a shape, preserves batch axes. *)
   | Pointwise_un  (** Preserves the shape. *)
-  | Permute of string * Ir.Indexing.variable_ref list
+  | Permute of string * delayed_var_ref list
       (** The unary "einsum" syntax: RHS1=>LHS.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions

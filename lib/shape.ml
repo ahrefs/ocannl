@@ -92,13 +92,19 @@ let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
 type deduce_within_shape = Not_constrained | Input_equals_output
 [@@deriving compare, sexp, variants]
 
-type compose_type = Pointwise_bin | Compose | Einsum of string * Idx.variable_ref list
+type delayed_var_ref = {
+  var_ref : Ir.Indexing.variable_ref;
+  mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+}
+[@@deriving equal, sexp_of]
+
+type compose_type = Pointwise_bin | Compose | Einsum of string * delayed_var_ref list
 [@@deriving sexp_of, equal]
 
 type transpose_type =
   | Transpose
   | Pointwise_un
-  | Permute of string * Idx.variable_ref list
+  | Permute of string * delayed_var_ref list
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
 [@@deriving equal, sexp_of]
@@ -705,6 +711,7 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
+  (* FIXME: call apply_env_step instead *)
   iter_shapes update_step ~f:(apply_env_t env);
   state := env
 
@@ -725,6 +732,7 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
   assert (List.is_empty unsolved);
   let _active_update_steps : update_step list = !active_update_steps in
+  (* FIXME: call apply_env_step instead *)
   List.iter ~f:(iter_shapes ~f:(apply_env_t env)) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
   active_constraints := [];
