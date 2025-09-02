@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module TDSL = Operation.TDSL
+open Operation.DSL_modules
 let y0 =
   let hey1 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None

@@ -2,8 +2,7 @@ open Base
 open Ocannl
 module Tn = Ir.Tnode
 module IDX = Train.IDX
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
+open Operation.DSL_modules
 module Asgns = Ir.Assignments
 
 let main () =

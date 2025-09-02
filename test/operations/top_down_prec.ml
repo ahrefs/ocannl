@@ -3,7 +3,7 @@
 open Base
 module Tensor = Ocannl.Tensor
 module Train = Ocannl.Train
-module TDSL = Ocannl.Operation.TDSL
+open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 
 let () =

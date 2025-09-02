@@ -2,18 +2,18 @@ open Base
 open Ocannl
 module Tn = Ir.Tnode
 module IDX = Train.IDX
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
-module PDSL = Operation.PDSL
+open Operation.DSL_modules
 module CDSL = Train.CDSL
 
 module type Backend = Ir.Backend_intf.Backend
 
 let hello1 () =
   let module Backend = (val Backends.fresh_backend ()) in
-  let open Operation.TDSL in
+  let open Ocannl.Operation.DSL_modules in
   (* Hey is inferred to be a matrix. *)
-  let hey = range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] () in
+  let hey =
+    TDSL.range_of_shape ~batch_dims:[ 7 ] ~input_dims:[ 9; 10; 11 ] ~output_dims:[ 13; 14 ] ()
+  in
   let%op hoo = ((1 + 1) * hey) - 10 in
   (* For convenience, Train.forward will set hoo.value as fully on host. *)
   ignore (Train.forward_once (module Backend) hoo);

@@ -1008,8 +1008,8 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr
         [%e? expr1]
         *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
-           [%e? expr2]]
+             ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
+             [%e? expr2]]
       when String.contains spec_str '>' ->
         let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
         let res1 = loop ~proj_in_scope expr1 in
@@ -1020,7 +1020,9 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs; capture_vbs ];
           typ = Tensor;
           slot;
-          expr = [%expr einsum ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+          expr =
+            [%expr
+              einsum ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
@@ -1031,7 +1033,7 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr
         [%e? expr1]
         ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])]
+             ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])]
       when String.contains spec_str '>' ->
         let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
         let res1 = loop ~proj_in_scope expr1 in

@@ -2,7 +2,7 @@
 
 open Base
 module Tensor = Ocannl.Tensor
-module TDSL = Ocannl.Operation.TDSL
+open Ocannl.Operation.DSL_modules
 module O = TDSL.O
 
 let () =

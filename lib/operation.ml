@@ -671,14 +671,16 @@ struct
   end
 end
 
-module TDSL = Make_DSL (struct
-  let grad_spec = Tensor.If_needed
-end)
+module DSL_modules = struct
+  module TDSL = Make_DSL (struct
+    let grad_spec = Tensor.If_needed
+  end)
 
-module NTDSL = Make_DSL (struct
-  let grad_spec = Tensor.Prohibit_grad
-end)
+  module NTDSL = Make_DSL (struct
+    let grad_spec = Tensor.Prohibit_grad
+  end)
 
-module PDSL = Make_DSL (struct
-  let grad_spec = Tensor.Require_grad
-end)
+  module PDSL = Make_DSL (struct
+    let grad_spec = Tensor.Require_grad
+  end)
+end

@@ -4,8 +4,7 @@ open Stdio
 open Bigarray
 module Tn = Ir.Tnode
 module IDX = Train.IDX
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
+open Operation.DSL_modules
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
 

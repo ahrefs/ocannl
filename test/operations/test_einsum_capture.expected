@@ -1,10 +1,12 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
 Dimension a: 2
 Dimension b: 3
 Dimension c: 4
 Dimension i: 5
 Dimension j: 7
 Row variable r (product of dims): 12
-HERE: test/operations/test_einsum_capture.ml:51:21
+HERE: test/operations/test_einsum_capture.ml:50:21
 ┌───────────────────────────┐
 │[41]: +_dim_calc shape 0:1 │
 │┌┬─────────┐               │

@@ -591,16 +591,14 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       (* Bind delayed_var_refs to the variables after they are created *)
       List.iter dim_refs ~f:(fun delayed_ref ->
-        let label = delayed_ref.var_ref.ref_label in
-        (* Check if it's in one of the environments *)
-        match Hashtbl.find dim_var_env label with
-        | Some var -> delayed_ref.var <- `Dim var
-        | None -> (
-            match Hashtbl.find row_var_env label with
-            | Some var -> delayed_ref.var <- `Row var
-            | None -> ()
-          )
-      );
+          let label = delayed_ref.var_ref.ref_label in
+          (* Check if it's in one of the environments *)
+          match Hashtbl.find dim_var_env label with
+          | Some var -> delayed_ref.var <- `Dim var
+          | None -> (
+              match Hashtbl.find row_var_env label with
+              | Some var -> delayed_ref.var <- `Row var
+              | None -> ()));
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
@@ -655,16 +653,14 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       (* Bind delayed_var_refs to the variables after they are created *)
       List.iter dim_refs ~f:(fun delayed_ref ->
-        let label = delayed_ref.var_ref.ref_label in
-        (* Check if it's in one of the environments *)
-        match Hashtbl.find dim_var_env label with
-        | Some var -> delayed_ref.var <- `Dim var
-        | None -> (
-            match Hashtbl.find row_var_env label with
-            | Some var -> delayed_ref.var <- `Row var
-            | None -> ()
-          )
-      );
+          let label = delayed_ref.var_ref.ref_label in
+          (* Check if it's in one of the environments *)
+          match Hashtbl.find dim_var_env label with
+          | Some var -> delayed_ref.var <- `Dim var
+          | None -> (
+              match Hashtbl.find row_var_env label with
+              | Some var -> delayed_ref.var <- `Row var
+              | None -> ()));
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs1
@@ -727,42 +723,36 @@ let rec compute_row_product env (row : Row.t) : int =
   match row.dims with
   | [] -> 1
   | dim :: rest ->
-      let dim_val = 
+      let dim_val =
         match dim with
         | Row.Dim { d; _ } -> d
         | Row.Var v -> (
             match Row.get_dim_from_env env v with
             | Some d -> d
-            | None -> 1  (* Variable not yet resolved *)
-          )
-        | Row.Conv_input _ -> 1  (* TODO: handle convolution input dimensions *)
+            | None -> 1 (* Variable not yet resolved *))
+        | Row.Conv_input _ -> 1 (* TODO: handle convolution input dimensions *)
       in
       dim_val * compute_row_product env { row with dims = rest }
 
 let update_delayed_var_refs env update_step =
   let update_var_ref_list var_refs =
     List.iter var_refs ~f:(fun delayed_ref ->
-      match delayed_ref.var with
-      | `Not_set_yet -> ()  (* Variable not bound yet, will be set later *)
-      | `Dim dim_var -> (
-          match Row.get_dim_from_env env dim_var with
-          | Some d -> delayed_ref.var_ref.solved_dim <- Some d
-          | None -> ()  (* Not yet resolved *)
-        )
-      | `Row row_var -> (
-          match Row.get_row_from_env env row_var with
-          | Some row ->
-              let product = compute_row_product env row in
-              delayed_ref.var_ref.solved_dim <- Some product
-          | None -> ()  (* Not yet resolved *)
-        )
-    )
+        match delayed_ref.var with
+        | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
+        | `Dim dim_var -> (
+            match Row.get_dim_from_env env dim_var with
+            | Some d -> delayed_ref.var_ref.solved_dim <- Some d
+            | None -> () (* Not yet resolved *))
+        | `Row row_var -> (
+            match Row.get_row_from_env env row_var with
+            | Some row ->
+                let product = compute_row_product env row in
+                delayed_ref.var_ref.solved_dim <- Some product
+            | None -> () (* Not yet resolved *)))
   in
   match update_step.logic with
-  | Transpose (Permute (_, var_refs), _) -> 
-      update_var_ref_list var_refs
-  | Broadcast (Einsum (_, var_refs), _, _) -> 
-      update_var_ref_list var_refs
+  | Transpose (Permute (_, var_refs), _) -> update_var_ref_list var_refs
+  | Broadcast (Einsum (_, var_refs), _, _) -> update_var_ref_list var_refs
   | _ -> ()
 
 let apply_env_step env update_step =

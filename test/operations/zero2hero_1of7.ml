@@ -4,8 +4,7 @@ module Nd = Ir.Ndarray
 module Asgns = Ir.Assignments
 module IDX = Train.IDX
 module CDSL = Train.CDSL
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
+open Operation.DSL_modules
 
 module type Backend = Ir.Backend_intf.Backend
 

@@ -2,7 +2,7 @@ Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 
 Testing diagonal tensor initialization:
-HERE: test/einsum/test_surjectivity.ml:23:21
+HERE: test/einsum/test_surjectivity.ml:22:21
 ┌───────────────────────────────────────┐
 │[1]: =>_diagonal shape 0:5,1:5         │
 │┌──────┬──────────────────────────────┐│
@@ -18,7 +18,7 @@ HERE: test/einsum/test_surjectivity.ml:23:21
 
 
 Testing sparse assignment with fixed index:
-HERE: test/einsum/test_surjectivity.ml:37:21
+HERE: test/einsum/test_surjectivity.ml:36:21
 ┌─────────────────────────────┐
 │[1]: =>_sparse shape 0:4,1:1 │
 │┌──────┬──────┐              │
@@ -33,7 +33,7 @@ HERE: test/einsum/test_surjectivity.ml:37:21
 
 
 Testing multiple sparse axes:
-HERE: test/einsum/test_surjectivity.ml:51:21
+HERE: test/einsum/test_surjectivity.ml:50:21
 ┌───────────────────────────────────────┐
 │[1]: =>_result shape 0:3,1:2,2:4       │
 │┌──────┬──────────────────────────────┐│

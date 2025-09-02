@@ -1,8 +1,7 @@
 open Base
 open Ocannl
 module IDX = Train.IDX
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
+open Operation.DSL_modules
 module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
 module Tn = Ir.Tnode

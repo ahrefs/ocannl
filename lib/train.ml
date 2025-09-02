@@ -2,7 +2,7 @@ open Base
 module Ops = Ir.Ops
 module Tn = Ir.Tnode
 module Nd = Ir.Ndarray
-module NTDSL = Operation.NTDSL
+open Operation.DSL_modules
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Task = Ir.Task
@@ -363,9 +363,7 @@ let example_train_loop ~seed ~batch_size ~init_lr ?lr_schedule ?(copy_to_merge =
     ?max_num_streams ~data_len ~epochs ~inputs ~outputs ~model ~loss_fn ~weight_decay
     ?per_batch_callback ?per_epoch_callback ?(per_epoch_debug_streams = false)
     (module Backend : Backend) () =
-  let module TDSL = Operation.TDSL in
-  let module NTDSL = Operation.NTDSL in
-  let module PDSL = Operation.PDSL in
+  let open Operation.DSL_modules in
   let devices, streams = get_all_suggested_streams ?max_num_streams (module Backend) in
   let num_streams = Array.length streams in
   let contexts = Array.map streams ~f:(Backend.make_context ?ctx_arrays:None ?optimize_ctx:None) in

@@ -135,7 +135,6 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
-
 val get_dim_from_env : environment -> dim_var -> int option
 val get_row_from_env : environment -> row_var -> t option
 

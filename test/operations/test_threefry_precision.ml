@@ -4,7 +4,7 @@ open Ocannl
 let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.log_level <- 1;
-  let module TDSL = Operation.TDSL in
+  let open Operation.DSL_modules in
   (* Create a simple Threefry4x32 operation *)
   let key = TDSL.number ~label:[ "key" ] 42.0 in
   let counter = TDSL.number ~label:[ "counter" ] 1.0 in

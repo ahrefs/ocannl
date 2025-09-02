@@ -2,7 +2,7 @@ open Base
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 module Ndarray = Ir.Ndarray
-module TDSL = Ocannl.Operation.TDSL
+open Ocannl.Operation.DSL_modules
 module O = TDSL.O
 
 let%expect_test "threefry4x32 basic test" =

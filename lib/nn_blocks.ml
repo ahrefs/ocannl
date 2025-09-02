@@ -1,7 +1,5 @@
 open! Base
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
-module PDSL = Operation.PDSL
+open Operation.DSL_modules
 
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
 

@@ -1,8 +1,6 @@
 open Ocannl
 module Tensor = Tensor
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
-module PDSL = Operation.PDSL
+open Operation.DSL_modules
 
 (* Test %op record syntax with different initialization patterns *)
 

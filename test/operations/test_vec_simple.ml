@@ -1,5 +1,5 @@
 open Base
-module TDSL = Ocannl.Operation.TDSL
+open Ocannl.Operation.DSL_modules
 module Tensor = Ocannl.Tensor
 
 let () =

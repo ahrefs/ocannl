@@ -7,7 +7,7 @@ module Tensor = Ocannl.Tensor
 let uniform1_basic_test () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let module TDSL = Ocannl.Operation.TDSL in
+  let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Create a simple 1D range tensor to use as input *)
   let range_tensor = TDSL.range 10 in
@@ -64,7 +64,7 @@ let uniform1_basic_test () =
 let uniform_at1_test () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let module TDSL = Ocannl.Operation.TDSL in
+  let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Create a counter tensor *)
   let counter = TDSL.range 5 in
@@ -92,7 +92,7 @@ let uniform_at1_test () =
 let uniform1_shape_preservation_test () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let module TDSL = Ocannl.Operation.TDSL in
+  let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Test that uniform1 preserves shape (1:1 mapping) *)
   let input_size = 24 in

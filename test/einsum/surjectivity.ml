@@ -2,9 +2,7 @@ open Base
 open Ocannl
 module IDX = Train.IDX
 module CDSL = Train.CDSL
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
-module PDSL = Operation.PDSL
+open Operation.DSL_modules
 
 module type Backend = Ir.Backend_intf.Backend
 
@@ -32,7 +30,7 @@ let%expect_test "diagonal_tensor_initialization" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false diagonal;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:32:21
+    HERE: test/einsum/surjectivity.ml:30:21
     ┌───────────────────────────────────────┐
     │[1]: =>_diagonal shape 0:5,1:5         │
     │┌──────┬──────────────────────────────┐│
@@ -69,7 +67,7 @@ let%expect_test "sparse_assignment_with_fixed_indices" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:69:21
+    HERE: test/einsum/surjectivity.ml:67:21
     ┌─────────────────────────────────┐
     │[1]: =>_sparse shape 0:4,1:1,2:1 │
     │┌──────┬──────┐                  │
@@ -112,7 +110,7 @@ let%expect_test "multiple_sparse_axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse_multi;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:112:21
+    HERE: test/einsum/surjectivity.ml:110:21
     ┌───────────────────────────────────────────┐
     │[1]: =>_sparse_multi shape 0:3,1:2,2:4,3:3 │
     │┌──────┬──────────────────┐                │

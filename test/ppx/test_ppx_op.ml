@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-module TDSL = Operation.TDSL
+open Operation.DSL_modules
 
 let%op y0 = (2 *. { hey1 }) + 3
 let%op y1 x = ({ hey2 } * 2) + x
