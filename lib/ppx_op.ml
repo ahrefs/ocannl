@@ -216,26 +216,31 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   | [%expr
       [%e? expr1]
       *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-           [%e? { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }]
+           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
            [%e? expr2]]
     when String.contains spec_str '>' ->
-      (* FIXME: introduce inline definitions for new Indexing.variable_ref objects corresponding to
-         the strings in the list, and pass them as ~capture_dims *)
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
       let vbs1, e1 = loop expr1 in
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-      ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr einsum ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+      let combined_vbs = reduce_vbss [ vbs1; vbs2; capture_vbs ] in
+      ( combined_vbs,
+        [%expr
+          einsum ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
+            [%e e1] [%e e2]] )
   | [%expr
       [%e? expr1]
       ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-           [%e? { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }]]
+           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])]
     when String.contains spec_str '>' ->
-      (* FIXME: introduce inline definitions for new Indexing.variable_ref objects corresponding to
-         the strings in the list, and pass them as ~capture_dims *)
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
       let vbs1, e1 = loop expr1 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-      (vbs1, [%expr einsum1 ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]])
+      let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in
+      ( combined_vbs,
+        [%expr
+          einsum1 ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
+            [%e e1]] )
   | { pexp_desc = Pexp_record ([], _); _ } ->
       (* Empty record - not a tensor definition *)
       (no_vbs, expr)

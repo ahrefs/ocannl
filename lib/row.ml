@@ -220,6 +220,11 @@ type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp_of]
 let get_dim_val env var =
   match Map.find env.dim_env var with Some (Solved_dim (Dim { d; _ })) -> Some d | _ -> None
 
+let get_dim_from_env env var = get_dim_val env var
+
+let get_row_from_env env var =
+  match Map.find env.row_env var with Some (Solved_row row) -> Some row | _ -> None
+
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
   | Row_eq of { r1 : t; r2 : t }

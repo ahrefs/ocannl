@@ -570,8 +570,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_eq { r1 = cur_sh.input; r2 = sh.input };
             Row_eq { r1 = cur_sh.output; r2 = sh.output };
           ] )
-  | Transpose (Permute (spec, _dim_refs), sh) ->
-      (* FIXME: support dim_refs *)
+  | Transpose (Permute (spec, dim_refs), sh) ->
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
@@ -590,6 +589,18 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
+      (* Bind delayed_var_refs to the variables after they are created *)
+      List.iter dim_refs ~f:(fun delayed_ref ->
+        let label = delayed_ref.var_ref.ref_label in
+        (* Check if it's in one of the environments *)
+        match Hashtbl.find dim_var_env label with
+        | Some var -> delayed_ref.var <- `Dim var
+        | None -> (
+            match Hashtbl.find row_var_env label with
+            | Some var -> delayed_ref.var <- `Row var
+            | None -> ()
+          )
+      );
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
@@ -621,8 +632,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
             };
         ] )
-  | Broadcast (Einsum (spec, _dim_refs), sh1, sh2) ->
-      (* FIXME: support dim_refs *)
+  | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
@@ -643,6 +653,18 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
         einsum_slot_spec_to_dims_bio ~generative ~sh_id:cur_sh.id ~row_var_env ~dim_var_env ls_lhs
       in
+      (* Bind delayed_var_refs to the variables after they are created *)
+      List.iter dim_refs ~f:(fun delayed_ref ->
+        let label = delayed_ref.var_ref.ref_label in
+        (* Check if it's in one of the environments *)
+        match Hashtbl.find dim_var_env label with
+        | Some var -> delayed_ref.var <- `Dim var
+        | None -> (
+            match Hashtbl.find row_var_env label with
+            | Some var -> delayed_ref.var <- `Row var
+            | None -> ()
+          )
+      );
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs1
@@ -701,6 +723,52 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
+let rec compute_row_product env (row : Row.t) : int =
+  match row.dims with
+  | [] -> 1
+  | dim :: rest ->
+      let dim_val = 
+        match dim with
+        | Row.Dim { d; _ } -> d
+        | Row.Var v -> (
+            match Row.get_dim_from_env env v with
+            | Some d -> d
+            | None -> 1  (* Variable not yet resolved *)
+          )
+        | Row.Conv_input _ -> 1  (* TODO: handle convolution input dimensions *)
+      in
+      dim_val * compute_row_product env { row with dims = rest }
+
+let update_delayed_var_refs env update_step =
+  let update_var_ref_list var_refs =
+    List.iter var_refs ~f:(fun delayed_ref ->
+      match delayed_ref.var with
+      | `Not_set_yet -> ()  (* Variable not bound yet, will be set later *)
+      | `Dim dim_var -> (
+          match Row.get_dim_from_env env dim_var with
+          | Some d -> delayed_ref.var_ref.solved_dim <- Some d
+          | None -> ()  (* Not yet resolved *)
+        )
+      | `Row row_var -> (
+          match Row.get_row_from_env env row_var with
+          | Some row ->
+              let product = compute_row_product env row in
+              delayed_ref.var_ref.solved_dim <- Some product
+          | None -> ()  (* Not yet resolved *)
+        )
+    )
+  in
+  match update_step.logic with
+  | Transpose (Permute (_, var_refs), _) -> 
+      update_var_ref_list var_refs
+  | Broadcast (Einsum (_, var_refs), _, _) -> 
+      update_var_ref_list var_refs
+  | _ -> ()
+
+let apply_env_step env update_step =
+  iter_shapes update_step ~f:(apply_env_t env);
+  update_delayed_var_refs env update_step
+
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
@@ -711,8 +779,7 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
-  (* FIXME: call apply_env_step instead *)
-  iter_shapes update_step ~f:(apply_env_t env);
+  apply_env_step env update_step;
   state := env
 
 let%debug4_sexp finish_inference (() : unit) : unit =
@@ -732,8 +799,7 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
   assert (List.is_empty unsolved);
   let _active_update_steps : update_step list = !active_update_steps in
-  (* FIXME: call apply_env_step instead *)
-  List.iter ~f:(iter_shapes ~f:(apply_env_t env)) !active_update_steps;
+  List.iter ~f:(apply_env_step env) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
   active_constraints := [];
   active_update_steps := [];

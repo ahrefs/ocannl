@@ -319,3 +319,36 @@ let ndarray_op ?axis_labels ?label expr =
   [%expr
     [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
       ~output_dims:[%e edims output_dims] ()]
+
+let collect_capture_labels ~loc head rest =
+  let capture_labels = head :: collect_list [] rest in
+  let capture_labels, errors =
+    List.partition_map capture_labels ~f:(function
+      | { pexp_desc = Pexp_constant (Pconst_string (label, _, _)); pexp_loc; _ } ->
+          Either.First (pexp_loc, label)
+      | expr ->
+          Either.Second
+            (Ast_builder.Default.pexp_extension ~loc:expr.pexp_loc
+            @@ Location.error_extensionf ~loc:expr.pexp_loc
+                 "ppx_ocannl %%op: expected a string literal"))
+  in
+  let capture_refs, capture_bindings =
+    List.map capture_labels ~f:(fun (loc, label) ->
+        let ref_expr =
+          [%expr
+            {
+              Ir.Indexing.ref_label = [%e Ast_builder.Default.estring ~loc label];
+              solved_dim = None;
+            }]
+        in
+        let binding =
+          Ast_builder.Default.value_binding ~loc
+            ~pat:(Ast_builder.Default.pvar ~loc label)
+            ~expr:ref_expr
+        in
+        (Ast_builder.Default.evar ~loc label, (label, binding)))
+    |> List.unzip
+  in
+  let capture_dims_expr = Ast_builder.Default.elist ~loc (errors @ capture_refs) in
+  let capture_vbs = Map.of_alist_exn (module String) capture_bindings in
+  (capture_vbs, capture_dims_expr)

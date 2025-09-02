@@ -661,8 +661,8 @@ struct
     let ( = ) ?label t1 t2 = eq ?label t1 t2 ()
     let ( <> ) ?label t1 t2 = ne ?label t1 t2 ()
     let embed_self_id = embed_self_id
-    let einsum ?label spec t1 t2 = einsum ?label spec t1 t2 ()
-    let einsum1 ?label spec t1 = einsum1 ?label spec t1 ()
+    let einsum ?label ?capture_dims spec t1 t2 = einsum ?label ?capture_dims spec t1 t2 ()
+    let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
     let ndarray = ndarray
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()

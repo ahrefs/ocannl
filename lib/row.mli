@@ -136,6 +136,9 @@ val subst_row : environment -> t -> t
 val unify_row : stage:stage -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
 
+val get_dim_from_env : environment -> dim_var -> int option
+val get_row_from_env : environment -> row_var -> t option
+
 val solve_inequalities :
   stage:stage -> constraint_ list -> environment -> constraint_ list * environment
 
