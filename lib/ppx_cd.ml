@@ -1005,11 +1005,44 @@ let translate ?ident_label (expr : expression) : result =
           expr = [%expr einsum [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
+    | [%expr
+        [%e? expr1]
+        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
+           [%e? expr2]]
+      when String.contains spec_str '>' ->
+        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+        let res1 = loop ~proj_in_scope expr1 in
+        let res2 = loop ~proj_in_scope expr2 in
+        let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
+        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot ] ~compare:compare_slots in
+        {
+          vbs = reduce_vbss [ res1.vbs; res2.vbs; capture_vbs ];
+          typ = Tensor;
+          slot;
+          expr = [%expr einsum ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+          array_opt_of_code = None;
+        }
     | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
         { res1 with typ = Tensor; expr = [%expr einsum1 [%e spec] [%e res1.expr]] }
+    | [%expr
+        [%e? expr1]
+        ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])]
+      when String.contains spec_str '>' ->
+        let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+        let res1 = loop ~proj_in_scope expr1 in
+        let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
+        {
+          vbs = reduce_vbss [ res1.vbs; capture_vbs ];
+          typ = Tensor;
+          slot = res1.slot;
+          expr = [%expr einsum1 ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
+          array_opt_of_code = None;
+        }
     | [%expr [%e? expr1].grad] -> (
         let res1 = loop ~proj_in_scope expr1 in
         match res1.typ with

@@ -33,7 +33,19 @@ let () =
   Stdio.printf "Dimension j: %s\n"
     (match j.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
-  let%op dim_calc = dim a + dim j in
+  (* Test capturing row variables *)
+  let%op x3 = { x3 = uniform1 (); o = [ 2; 3; 4 ] } in
+  let%op y3 = { y3 = uniform1 (); o = [ 3; 4; 5 ] } in
+  let%op z3 = x3 *+ "a..r..;..r..b=>ab" [ "r" ] y3 in
+  
+  (* Trigger shape inference *)
+  let ctx = Train.forward_once (module Backend) ~ctx z3 in
+  
+  (* Check if row variable was captured *)
+  Stdio.printf "Row variable r (product of dims): %s\n"
+    (match r.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+  
+  let%op dim_calc = dim a + dim j + dim r in
   let _ctx = Train.forward_once (module Backend) ~ctx dim_calc in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false dim_calc
