@@ -1,6 +1,5 @@
 open Base
 open Ocannl.Operation.DSL_modules
-module Tensor = Ocannl.Tensor
 
 let () =
   let module Backend = (val Backends.fresh_backend ()) in

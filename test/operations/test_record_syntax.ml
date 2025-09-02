@@ -1,6 +1,4 @@
-open Ocannl
-module Tensor = Tensor
-open Operation.DSL_modules
+open Ocannl.Operation.DSL_modules
 
 (* Test %op record syntax with different initialization patterns *)
 

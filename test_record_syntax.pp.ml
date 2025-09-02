@@ -17,11 +17,7 @@
   cookies = [];
 }]
 
-open Ocannl
-module Tensor = Tensor
-module TDSL = Operation.TDSL
-module NTDSL = Operation.NTDSL
-module PDSL = Operation.PDSL
+open Ocannl.Operation.DSL_modules
 
 let _test_op_uniform =
   let x =

@@ -2,12 +2,11 @@ open Base
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 module Ndarray = Ir.Ndarray
-module Tensor = Ocannl.Tensor
+open Ocannl.Operation.DSL_modules
 
 let uniform1_basic_test () =
   Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
-  let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Create a simple 1D range tensor to use as input *)
   let range_tensor = TDSL.range 10 in

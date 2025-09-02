@@ -1,7 +1,6 @@
 (* A simple demo of using the Threefry4x32 PRNG in OCANNL *)
 
 open Base
-module Tensor = Ocannl.Tensor
 module Train = Ocannl.Train
 open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode

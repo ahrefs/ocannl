@@ -672,6 +672,8 @@ struct
 end
 
 module DSL_modules = struct
+  module Shape = Shape
+  module Tensor = Tensor
   module TDSL = Make_DSL (struct
     let grad_spec = Tensor.If_needed
   end)

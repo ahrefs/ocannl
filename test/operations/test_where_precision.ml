@@ -1,5 +1,4 @@
 open Base
-module Tensor = Ocannl.Tensor
 module Train = Ocannl.Train
 open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
