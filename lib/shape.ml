@@ -614,11 +614,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         extras_rhs @ extras_lhs
         @ [
             Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_ineq { cur = b_rhs; subr = sh.batch };
+            Row_eq { r1 = b_rhs; r2 = sh.batch };
             Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_ineq { cur = i_rhs; subr = sh.input };
+            Row_eq { r1 = i_rhs; r2 = sh.input };
             Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_ineq { cur = o_rhs; subr = sh.output };
+            Row_eq { r1 = o_rhs; r2 = sh.output };
           ] )
   | Transpose (Uint4x32_to_prec target_prec, sh) ->
       let var = get_var () in
@@ -682,14 +682,14 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
             Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_ineq { cur = b_rhs1; subr = sh1.batch };
-            Row_ineq { cur = b_rhs2; subr = sh2.batch };
+            Row_eq { r1 = b_rhs1; r2 = sh1.batch };
+            Row_eq { r1 = b_rhs2; r2 = sh2.batch };
             Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_ineq { cur = i_rhs1; subr = sh1.input };
-            Row_ineq { cur = i_rhs2; subr = sh2.input };
+            Row_eq { r1 = i_rhs1; r2 = sh1.input };
+            Row_eq { r1 = i_rhs2; r2 = sh2.input };
             Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_ineq { cur = o_rhs1; subr = sh1.output };
-            Row_ineq { cur = o_rhs2; subr = sh2.output };
+            Row_eq { r1 = o_rhs1; r2 = sh1.output };
+            Row_eq { r1 = o_rhs2; r2 = sh2.output };
           ] )
 
 let state = ref Row.empty_env
