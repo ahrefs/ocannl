@@ -723,18 +723,60 @@ let set_dim delayed_var_ref dim =
         :: !active_constraints
 
 let set_equal delayed_ref1 delayed_ref2 =
-  match delayed_ref1, delayed_ref2 with
-  | { var_ref = { solved_dim = Some dim1; _ }; _ },
-    { var_ref = { solved_dim = Some dim2; _ }; _ } ->
+  match (delayed_ref1, delayed_ref2) with
+  | { var_ref = { solved_dim = Some dim1; _ }; _ }, { var_ref = { solved_dim = Some dim2; _ }; _ }
+    ->
       if dim1 = dim2 then ()
       else
         raise
         @@ Row.Shape_error
              ( "Cannot set equal dimensions for variable references with different values",
                [ Row.Dim_mismatch [ Row.get_dim ~d:dim1 (); Row.get_dim ~d:dim2 () ] ] )
-  | _ -> 
-    (* FIXME: NOT IMPLEMENTED YET *)
-    ()
+  | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
+      (* First is solved, second is not - set the second to match the first *)
+      set_dim delayed_ref2 dim
+  | delayed_ref1, { var_ref = { solved_dim = Some dim; _ }; _ } ->
+      (* Second is solved, first is not - set the first to match the second *)
+      set_dim delayed_ref1 dim
+  | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = _ },
+      { var_ref = { solved_dim = None; ref_label = ref_label2; _ }; var = `Not_set_yet } )
+  | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = `Not_set_yet },
+      { var_ref = { solved_dim = None; ref_label = ref_label2; _ }; var = _ } ) ->
+      raise
+      @@ Row.Shape_error
+           ( "set_equal: insufficient information between labels " ^ ref_label1 ^ " and "
+             ^ ref_label2,
+             [] )
+  | { var = `Dim dim_var1; _ }, { var = `Dim dim_var2; _ } ->
+      (* Both are dimension variables - create equality constraint *)
+      active_constraints :=
+        Row.Dim_eq { d1 = Row.Var dim_var1; d2 = Row.Var dim_var2 } :: !active_constraints
+  | { var = `Row row_var1; _ }, { var = `Row row_var2; _ } ->
+      (* Both are row variables - create row equality constraint *)
+      active_constraints :=
+        Row.Row_eq { r1 = Row.get_row_for_var row_var1; r2 = Row.get_row_for_var row_var2 }
+        :: !active_constraints
+  | { var = `Dim dim_var; _ }, { var = `Row row_var; _ }
+  | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
+      (* One is dim var, one is row var - equality via Total_elems constraint *)
+      active_constraints :=
+        Row.Rows_constr
+          {
+            r = [ Row.get_row_for_var row_var ];
+            constr =
+              Total_elems
+                {
+                  numerator =
+                    Strided_var
+                      {
+                        coeff = Utils.safe_lazy "set_equal_dim_row" (fun () -> 1);
+                        var = dim_var;
+                        denom = 1;
+                      };
+                  divided_by = [];
+                };
+          }
+        :: !active_constraints
 
 let unsafe_reinitialize () =
   update_uid := 0;

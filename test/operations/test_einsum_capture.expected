@@ -6,7 +6,7 @@ Dimension c: 4
 Dimension i: 5
 Dimension j: 7
 Row variable r (product of dims): 12
-HERE: test/operations/test_einsum_capture.ml:50:21
+HERE: test/operations/test_einsum_capture.ml:51:21
 ┌───────────────────────────┐
 │[41]: +_dim_calc shape 0:1 │
 │┌┬─────────┐               │
@@ -15,3 +15,74 @@ HERE: test/operations/test_einsum_capture.ml:50:21
 │││ 2.10e+1 │               │
 │└┴─────────┘               │
 └───────────────────────────┘
+
+=== Testing set_dim and set_equal functionality ===
+Test 1 - set_dim: var1 set to 42: 42
+Test 2 - set_equal (one solved): var2 should now be 42: 42
+Test 3 - set_equal (both solved, equal): Success - no exception
+Test 4 - set_equal error case: Correctly caught exception: Cannot set equal dimensions for variable references with different values
+Test 5 - einsum variable capture:
+  Dimension p: 3
+  Dimension q: 4
+  Dimension r: 5
+  Expected dimensions (p=3, q=4, r=5): p=3, q=4, r=5
+Test 6 - row-dimension equality:
+  Row variable s (product): 6
+  Dimension variable test_dim: 6
+  s == test_dim constraint satisfied: true (both should be 6)
+=== All tests completed ===
+
+=== Testing shape validation integration with equality constraints ===
+Test 1 - Constraint i=k in matrix multiply:
+  Input a1 shape: 4,6
+  Input b1 shape: 6,4
+  Output c1 shape: 4,4
+  Dimension i: 4, k: 4 (should be equal)
+
+Test 2 - Multiple constraints (a=d, c=7):
+  Input x2 shape: 3,5,7
+  Input y2 shape: 5,7,3
+  Output z2 shape: 3,3
+  Dimensions: a=3, b=5, c=7, d=3
+
+Test 3 - Row variable constraints (row1=row2 total elements):
+  Input r1 shape: 2,3,4
+  Input r2 shape: 3,5
+  Output r3 shape: 2,3,5
+  Row1 total: 3, Row2 total: 3 (should be equal)
+
+Test 5 - Constraint propagation across operations:
+  Chain1 shape: 4,5
+  Chain2 shape: 5,4
+  Chain3 shape: 5,6
+  Chain4 shape: 4,6
+  Variables: a=4, b=5, a_chain=4, b_chain=5, c_chain=6
+=== Shape inference integration tests completed ===
+
+=== Testing pure shape inference with equality constraints ===
+Test 1 - Matrix multiply with constraint-driven shapes:
+  m1 inferred shape: 3,4
+  m2 inferred shape: 4,5
+  result1 inferred shape: 3,5
+  Captured dimensions: i=3, j=4, k=5
+
+Test 2 - Chain operations with constraint propagation:
+  base inferred shape: 1,1
+  transposed inferred shape: 8,6
+  multiplied inferred shape: 8,10
+  final inferred shape: 6,10
+  Constraint propagation: a=6, b=8, c=10
+
+Test 3 - Simple 3-tensor einsum with pure inference:
+  tensor1 inferred shape: 7,8
+  tensor2 inferred shape: 8,9
+  result3 inferred shape: 7,9
+  Constraints: x=7, y=8, z=9
+
+Test 4 - Complex interdependent constraints:
+  complex1 inferred shape: 4,5,6
+  complex2 inferred shape: 6,5,4
+  complex_result inferred shape: 4,5,5,4
+  Constraint resolution: p=4, q=5, r=6, s=5, t=4
+  Expected: p=4, q=5, r=6, s=5, t=4 (with q=s and p=t constraints satisfied)
+=== Pure shape inference tests completed ===
