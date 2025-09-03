@@ -253,6 +253,16 @@ let assignment_ops =
       ("=:^^^^", fun loc -> (true, [%expr Ir.Ops.Threefry4x32]));
     ]
 
+let einsum_binary_ops =
+  Hashtbl.of_alist_exn
+    (module String)
+    [ ("+*", fun loc -> [%expr einsum]); ("@^+", fun loc -> [%expr tropical]) ]
+
+let einsum_unary_ops =
+      Hashtbl.of_alist_exn
+        (module String)
+        [ ("++", fun loc -> [%expr einsum1]); ("@^^", fun loc -> [%expr einmax1]) ]
+    
 let is_primitive_op op_ident =
   List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
 

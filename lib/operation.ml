@@ -597,6 +597,8 @@ struct
   let einsum = einsum ~grad_spec:Grad_spec.grad_spec
   let outer_sum = outer_sum ~grad_spec:Grad_spec.grad_spec
   let einsum1 = einsum1 ~grad_spec:Grad_spec.grad_spec
+  let einmax1 = einmax1 ~grad_spec:Grad_spec.grad_spec
+  let tropical = tropical ~grad_spec:Grad_spec.grad_spec
   let range = range ~grad_spec:Grad_spec.grad_spec
   let range_of_shape = range_of_shape ~grad_spec:Grad_spec.grad_spec
   let stop_gradient = stop_gradient
@@ -691,6 +693,8 @@ struct
     let embed_self_id = embed_self_id
     let einsum ?label ?capture_dims spec t1 t2 = einsum ?label ?capture_dims spec t1 t2 ()
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
+    let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims spec t1 ()
+    let tropical ?label ?capture_dims spec t1 t2 = tropical ?label ?capture_dims spec t1 t2 ()
     let ndarray = ndarray
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()

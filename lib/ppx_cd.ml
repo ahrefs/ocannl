@@ -991,9 +991,10 @@ let translate ?ident_label (expr : expression) : result =
         let res1 = loop ~proj_in_scope expr1 in
         { res1 with typ = Tensor; expr = [%expr NTDSL.O.( **. ) [%e res1.expr] [%e expr2]] }
     | [%expr
-        [%e? expr1]
-        +* [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2]]
-      when String.contains spec_str '>' ->
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
+          ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2])]
+      when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -1002,15 +1003,19 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Tensor;
           slot;
-          expr = [%expr einsum [%e spec] [%e res1.expr] [%e res2.expr]];
+          expr =
+            [%expr
+              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
-        [%e? expr1]
-        +* [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
+          ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
              ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
-             [%e? expr2]]
-      when String.contains spec_str '>' ->
+             [%e? expr2])]
+      when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
         let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
@@ -1022,19 +1027,29 @@ let translate ?ident_label (expr : expression) : result =
           slot;
           expr =
             [%expr
-              einsum ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-    | [%expr [%e? expr1] ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
-      when String.contains spec_str '>' ->
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
+          [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
+      when String.contains spec_str '>' && Hashtbl.mem einsum_unary_ops op_ident ->
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-        { res1 with typ = Tensor; expr = [%expr einsum1 [%e spec] [%e res1.expr]] }
+        {
+          res1 with
+          typ = Tensor;
+          expr =
+            [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
+        }
     | [%expr
-        [%e? expr1]
-        ++ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
-             ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])]
-      when String.contains spec_str '>' ->
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
+          ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+             ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
+      when String.contains spec_str '>' && Hashtbl.mem einsum_unary_ops op_ident ->
         let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
         let res1 = loop ~proj_in_scope expr1 in
         let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
@@ -1042,7 +1057,10 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; capture_vbs ];
           typ = Tensor;
           slot = res1.slot;
-          expr = [%expr einsum1 ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
+          expr =
+            [%expr
+              [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1].grad] -> (
