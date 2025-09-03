@@ -87,7 +87,7 @@ let add_module_qualifier_to_applied_function expr =
 let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let more_label =
     match opt_label with
-    | Some (_label_name, label_pat) -> [%expr Some [%e pat2expr label_pat]]
+    | Some label_pat -> [%expr Some [%e pat2expr label_pat]]
     | None -> [%expr None]
   in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
@@ -148,22 +148,6 @@ let make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name =
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
-
-let lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr arg_exprs =
-  let vbs1, e1 = loop ?label expr1 in
-  let vbss, es = List.unzip @@ List.map arg_exprs ~f:loop in
-  let ident = "config_block__" ^ Int.to_string !num_configs in
-  Int.incr num_configs;
-  let loc = expr1.pexp_loc in
-  let pat = Ast_helper.Pat.var ~loc { loc = c_expr.pexp_loc; txt = ident } in
-  let v = [%expr [%e e1] ~config:[%e c_expr]] in
-  let vb = Ast_helper.Vb.mk ~loc pat v in
-  ( Map.add_exn ~key:ident ~data:vb @@ reduce_vbss (vbs1 :: vbss),
-    match es with
-    | [] -> [%expr [%e pat2expr pat]]
-    | [ e2 ] -> [%expr [%e pat2expr pat] [%e e2]]
-    | [ e2; e3 ] -> [%expr [%e pat2expr pat] [%e e2] [%e e3]]
-    | _ -> assert false )
 
 let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
@@ -340,12 +324,6 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
-  | [%expr [%e? expr1] ~config:[%e? c_expr] [%e? expr2] [%e? expr3]] ->
-      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr [ expr2; expr3 ]
-  | [%expr [%e? expr1] ~config:[%e? c_expr] [%e? expr2]] ->
-      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr [ expr2 ]
-  | [%expr [%e? expr1] ~config:[%e? c_expr]] ->
-      lift_config_vb ~loop ~num_configs ?label ~expr1 ~c_expr []
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
     when Hashtbl.mem binary_ops op_ident ->
@@ -373,51 +351,44 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       (reduce_vbss [ vbs1; vbs2 ], [%expr [%e e1] [%e e2]])
   | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel -> (
       (* Check if there's a unit parameter or a labeled parameter with label "label" *)
-      let rec find_unit_pos idx = function
+      let rec find_unit acc = function
         | [] -> None
-        | { pparam_desc = Pparam_val (Nolabel, _, pat); _ } :: _
-          when match pat.ppat_desc with
-               | Ppat_construct ({ txt = Lident "()"; _ }, None) -> true
-               | _ -> false ->
-            Some idx
-        | _ :: rest -> find_unit_pos (idx + 1) rest
+        | ({
+             pparam_desc =
+               Pparam_val
+                 (Nolabel, _, { ppat_desc = Ppat_construct ({ txt = Lident "()"; _ }, None); _ });
+             _;
+           } as unit_param)
+          :: rest ->
+            Some (List.rev acc, unit_param, rest)
+        | hd :: rest -> find_unit (hd :: acc) rest
       in
       let rec find_label_param = function
         | [] -> None
-        | { pparam_desc = Pparam_val (Labelled "label", _, pat); _ } :: _ -> Some ("label", pat)
+        | { pparam_desc = Pparam_val (Labelled "label", _, pat); _ } :: _ -> Some pat
         | _ :: rest -> find_label_param rest
       in
-      match find_unit_pos 0 args with
-      | Some unit_idx ->
-          (* Split args at unit parameter *)
-          let before_unit, unit_and_after = List.split_n args unit_idx in
-          let unit_param, after_unit =
-            match unit_and_after with
-            | unit :: rest -> (unit, rest)
-            | [] -> failwith "Internal error: unit_and_after should not be empty"
-          in
+      match find_unit [] args with
+      | Some (before_unit, unit_param, after_unit) ->
+          (* With a unit parameter, always bind the collected inline definitions. *)
           let opt_label = find_label_param before_unit in
           let vbs, inner_body =
-            translate ~num_configs ~is_toplevel:false ~opt_label ?label
-              { expr with pexp_desc = Pexp_function (after_unit, constr, body) }
+            let body =
+              match (after_unit, body) with
+              | [], Pfunction_body body -> body
+              | _ -> { expr with pexp_desc = Pexp_function (after_unit, constr, body) }
+            in
+            translate ~num_configs ~is_toplevel:false ~opt_label ?label body
           in
           let inner_body = let_opt ~loc vbs inner_body in
-          (* The inner_body already has after_unit parameters processed, so use it directly *)
-          let new_body = inner_body in
           ( no_vbs,
-            if List.is_empty before_unit then
-              {
-                expr with
-                pexp_desc = Pexp_function ([ unit_param ], constr, Pfunction_body new_body);
-              }
-            else
-              {
-                expr with
-                pexp_desc =
-                  Pexp_function (before_unit @ [ unit_param ], constr, Pfunction_body new_body);
-              } )
+            {
+              expr with
+              pexp_desc =
+                Pexp_function (before_unit @ [ unit_param ], constr, Pfunction_body inner_body);
+            } )
       | None ->
-          (* No unit parameter, normal processing *)
+          (* No unit parameter, everything is "after_unit" *)
           let labels =
             Option.to_list label
             @ List.filter_map args ~f:(function

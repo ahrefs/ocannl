@@ -103,16 +103,16 @@ let mlp_layer =
           (((+) ?label:None) ((( * ) ?label:None) w x) b)
 let _use_layer =
   let open! TDSL.O in
-    fun x ->
-      mlp_layer ~label:["L"] ~hid_dim:3 ()
-        (mlp_layer ~label:["L2"] ~hid_dim:3 () x)
+    let l1 = mlp_layer ~label:["L"] ~hid_dim:3 () in
+    let l2 = mlp_layer ~label:["L2"] ~hid_dim:3 () in fun x -> l1 (l2 x)
 let _config_layer =
   let open! TDSL.O in
-    fun ~config:_ x -> mlp_layer ~label:["L"] ~hid_dim:3 () x
+    fun ~label () ->
+      let l = mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 () in fun x -> l x
 let _three_layer_perceptron =
   let open! TDSL.O in
     fun ~label ~dim1 ~dim2 ~dim3 () ->
-      fun x ->
-        mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 ()
-          (mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 ()
-             (mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 () x))
+      let l1 = mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 () in
+      let l2 = mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 () in
+      let l3 = mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 () in
+      fun x -> l3 (l2 (l1 x))
