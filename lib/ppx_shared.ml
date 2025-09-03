@@ -334,13 +334,7 @@ let collect_capture_labels ~loc head rest =
   in
   let capture_refs, capture_bindings =
     List.map capture_labels ~f:(fun (loc, label) ->
-        let ref_expr =
-          [%expr
-            {
-              Ir.Indexing.ref_label = [%e Ast_builder.Default.estring ~loc label];
-              solved_dim = None;
-            }]
-        in
+        let ref_expr = [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]] in
         let binding =
           Ast_builder.Default.value_binding ~loc
             ~pat:(Ast_builder.Default.pvar ~loc label)

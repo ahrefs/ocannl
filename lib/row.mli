@@ -61,6 +61,7 @@ type bcast =
 type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
 
 val dims_label_assoc : t -> (string * dim) list
+val get_row_for_var : ?row_id:row_id -> row_var -> t
 
 type environment [@@deriving sexp_of]
 type error_trace = ..

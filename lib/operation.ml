@@ -80,8 +80,6 @@ let matmul ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   mul Compose ~op_asn ~label:("*" :: label)
 
-let capture_dims_to_refs = List.map ~f:(fun var_ref -> { Shape.var_ref; var = `Not_set_yet })
-
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
 
@@ -94,9 +92,7 @@ let einsum ?(label = []) ?(capture_dims = []) spec =
     g1 =+ g * v2;
     g2 =+ v1 * g
   in
-  Tensor.binop ~label:(";=>" :: label)
-    ~compose_op:(Einsum (spec, capture_dims_to_refs capture_dims))
-    ~op_asn ~grad_asn
+  Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
 
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
 let outer_sum ?(label = []) ?(capture_dims = []) spec =
@@ -106,9 +102,7 @@ let outer_sum ?(label = []) ?(capture_dims = []) spec =
     g1 =+ g;
     g2 =+ g
   in
-  Tensor.binop ~label:(";=>+" :: label)
-    ~compose_op:(Einsum (spec, capture_dims_to_refs capture_dims))
-    ~op_asn ~grad_asn
+  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
     diagonals, compute traces etc.
@@ -120,7 +114,7 @@ let einsum1 ?(label = []) ?(capture_dims = []) spec =
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop
-    ~transpose_op:(Shape.Permute (spec, capture_dims_to_refs capture_dims))
+    ~transpose_op:(Shape.Permute (spec, capture_dims))
     ~op_asn ~grad_asn ~label:("=>" :: label)
 
 module NDO_before_pow = struct
@@ -471,8 +465,8 @@ let embed_self_id ?grad_spec ?(label = []) () =
     ~input_dims:[] ~output_dims:[ 1 ] ()
 
 let embed_dim ?grad_spec ?(label = []) variable_ref =
-  Tensor.term ~fetch_op:(Embed_dim variable_ref) ?grad_spec ~label:("!@self_id" :: label)
-    ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
+  Tensor.term ~fetch_op:(Embed_dim variable_ref.Shape.var_ref) ?grad_spec
+    ~label:("!@self_id" :: label) ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
 
 let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec
@@ -674,6 +668,7 @@ end
 module DSL_modules = struct
   module Shape = Shape
   module Tensor = Tensor
+
   module TDSL = Make_DSL (struct
     let grad_spec = Tensor.If_needed
   end)

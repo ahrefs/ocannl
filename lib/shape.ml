@@ -98,6 +98,9 @@ type delayed_var_ref = {
 }
 [@@deriving equal, sexp_of]
 
+let get_variable_ref ref_label =
+  { var_ref = Ir.Indexing.{ ref_label; solved_dim = None }; var = `Not_set_yet }
+
 type compose_type = Pointwise_bin | Compose | Einsum of string * delayed_var_ref list
 [@@deriving sexp_of, equal]
 
@@ -684,6 +687,46 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
 let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
+
+let set_dim delayed_var_ref dim =
+  match delayed_var_ref with
+  | { var_ref = { solved_dim = Some dim2; _ }; _ } when dim2 = dim -> ()
+  | { var_ref = { solved_dim = Some dim2; ref_label; _ }; _ } ->
+      raise
+      @@ Row.Shape_error
+           ( "Cannot set dimension for variable reference with label " ^ ref_label,
+             [ Row.Dim_mismatch [ Row.get_dim ~d:dim2 (); Row.get_dim ~d:dim () ] ] )
+  | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet } ->
+      delayed_var_ref.var_ref.solved_dim <- Some dim
+  | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var } ->
+      delayed_var_ref.var_ref.solved_dim <- Some dim;
+      active_constraints :=
+        Row.Dim_eq { d1 = Row.Var dim_var; d2 = Row.get_dim ~d:dim () } :: !active_constraints
+  | { var_ref = { solved_dim = None; _ }; var = `Row row_var } ->
+      delayed_var_ref.var_ref.solved_dim <- Some dim;
+      active_constraints :=
+        Row.Rows_constr
+          {
+            (* TODO: actually, the Row.row_id should be the one of the shape that the row variable
+               is in, should be stored in `Row and in env_row_var. *)
+            r = [ Row.get_row_for_var row_var ];
+            constr = Total_elems { numerator = Num_elems dim; divided_by = [] };
+          }
+        :: !active_constraints
+
+let set_equal delayed_ref1 delayed_ref2 =
+  match delayed_ref1, delayed_ref2 with
+  | { var_ref = { solved_dim = Some dim1; _ }; _ },
+    { var_ref = { solved_dim = Some dim2; _ }; _ } ->
+      if dim1 = dim2 then ()
+      else
+        raise
+        @@ Row.Shape_error
+             ( "Cannot set equal dimensions for variable references with different values",
+               [ Row.Dim_mismatch [ Row.get_dim ~d:dim1 (); Row.get_dim ~d:dim2 () ] ] )
+  | _ -> 
+    (* FIXME: NOT IMPLEMENTED YET *)
+    ()
 
 let unsafe_reinitialize () =
   update_uid := 0;

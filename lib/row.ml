@@ -169,6 +169,9 @@ let phantom_row_id = row_id ~sh_id:(-1) ~kind:`Output
 type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
 type row = t [@@deriving equal, sexp]
 
+let get_row_for_var ?(row_id = phantom_row_id) v =
+  { dims = []; bcast = Row_var { v; beg_dims = [] }; id = row_id }
+
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
   List.filter_map dims.dims ~f

@@ -86,6 +86,24 @@ type delayed_var_ref = {
 }
 [@@deriving equal, sexp_of]
 
+val get_variable_ref : string -> delayed_var_ref
+(** Returns a fully unset variable reference with the given label. *)
+
+val set_dim : delayed_var_ref -> int -> unit
+(** Sets the dimension resp. total elements of the dim resp. row variable reference to the given
+    value. This will propagate through shape inference.
+
+    For row variables, this means the product of the dimensions, via the [Total_elems] constraint.
+*)
+
+val set_equal : delayed_var_ref -> delayed_var_ref -> unit
+(** Sets the two variable references to be equal (in some sense). This will propagate through shape
+    inference.
+
+    When both references are dimension variables or both are row variables, this means they are
+    precisely equal. When one is a dimension variable and the other is a row variable, this means
+    they have the same number of total elements. *)
+
 type compose_type =
   | Pointwise_bin
       (** NumPy-style broadcast matching batch, input and output axes, e.g. as in [s1 + s2]. *)

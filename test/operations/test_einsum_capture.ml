@@ -13,11 +13,11 @@ let () =
 
   (* Check if dimensions were captured *)
   Stdio.printf "Dimension a: %s\n"
-    (match a.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match a.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
   Stdio.printf "Dimension b: %s\n"
-    (match b.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match b.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
   Stdio.printf "Dimension c: %s\n"
-    (match c.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match c.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
   let%op x2 = { x2 = uniform1 (); o = [ 5; 7 ] } in
   (* Manually call einsum1 with capture_dims for now *)
@@ -28,9 +28,9 @@ let () =
 
   (* Check if dimensions were captured *)
   Stdio.printf "Dimension i: %s\n"
-    (match i.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match i.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
   Stdio.printf "Dimension j: %s\n"
-    (match j.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match j.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
   (* Test capturing row variables *)
   let%op x3 = { x3 = uniform1 (); o = [ 2; 3; 4 ] } in
@@ -42,7 +42,7 @@ let () =
 
   (* Check if row variable was captured *)
   Stdio.printf "Row variable r (product of dims): %s\n"
-    (match r.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
+    (match r.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
   let%op dim_calc = dim a + dim j + dim r in
   let _ctx = Train.forward_once (module Backend) ~ctx dim_calc in
