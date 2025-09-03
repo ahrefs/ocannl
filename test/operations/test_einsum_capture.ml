@@ -3,6 +3,7 @@ open Ocannl
 
 let () =
   let open Operation.DSL_modules in
+  Tensor.unsafe_reinitialize ();
   let module Backend = (val Backends.fresh_backend ()) in
   let%op x = { x = uniform1 (); o = [ 2; 3 ] } in
   let%op y = { y = uniform1 (); o = [ 3; 4 ] } in

@@ -233,8 +233,7 @@ val iter_embedded : f:(tn -> unit) -> t -> unit
 
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
-    and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode},
-    {!Ir.Rand.Random_for_tests}.
+    and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode}.
 
     While this function is intended for testing, using it can prevent unintentional session state
     pollution errors. *)
