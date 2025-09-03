@@ -33,7 +33,7 @@ let () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
-  let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in
+  let%op c = a +* "...|i->1; ...|...->i => ...|i" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c
 
@@ -76,12 +76,12 @@ let () =
 
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
-  let%op c = (a + 1) *+ "i; j => i->j" b in
+  let%op c = (a + 1) +* "i; j => i->j" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
-  let%op c = a *+ "i|j->k; l|m->n => il|jm->kn" b in
+  let%op c = a +* "i|j->k; l|m->n => il|jm->kn" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c
 
@@ -99,15 +99,15 @@ let () =
 
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
-  let%op a2 = a *+ "b|i->o; b|i->o => b|i->o" a in
+  let%op a2 = a +* "b|i->o; b|i->o => b|i->o" a in
   let ctx = Train.forward_once backend a2 in
-  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
+  let%op c = b +* "b|h->o; b|i->h => b|i->o" a in
   let ctx = Train.forward_once backend ~ctx c in
-  let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in
+  let%op d = a +* "a|i->h; b|h->o => ab|i->o" b in
   ignore (Train.forward_once backend ~ctx d);
-  let%op e = a *+ "b|i->h; b|h->o => i->o" b in
+  let%op e = a +* "b|i->h; b|h->o => i->o" b in
   ignore (Train.forward_once backend ~ctx e);
-  let%op f = a *+ "a|i->h; b|h->o => i->o" b in
+  let%op f = a +* "a|i->h; b|h->o => i->o" b in
   ignore (Train.forward_once backend ~ctx f);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false a2;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
@@ -171,13 +171,13 @@ let () =
 
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
-  let%op c = a *+ "...|i->...; ...|...->i => ...|i" b in
+  let%op c = a +* "...|i->...; ...|...->i => ...|i" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   (* Broadcast with a shift. *)
   let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
-  let%op f = d *+ "i->...;j->... => ...ij" e in
+  let%op f = d +* "i->...;j->... => ...ij" e in
   ignore (Train.forward_once backend f);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false f
 
@@ -223,7 +223,7 @@ let () =
 
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
-  let%op c = a *+ "...|i->1; ...|...->i => ...|i" b in
+  let%op c = a +* "...|i->1; ...|...->i => ...|i" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c
 
@@ -272,7 +272,7 @@ let () =
   let b =
     TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] ()
   in
-  let%op c = a *+ "...|i->1; ...|j...->i => ...|ij" b in
+  let%op c = a +* "...|i->1; ...|j...->i => ...|ij" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c
 
@@ -290,6 +290,6 @@ let () =
 
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
-  let%op c = a *+ "i->1; ij...->0 => ...->ji" b in
+  let%op c = a +* "i->1; ij...->0 => ...->ji" b in
   ignore (Train.forward_once backend c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c

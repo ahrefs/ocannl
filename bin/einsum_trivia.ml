@@ -10,7 +10,7 @@ let _suspended () =
   let module Backend = (val Backends.fresh_backend ()) in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
-  let%op c = a *+ "i->1; ij...->0 => ...->ji" b in
+  let%op c = a +* "i->1; ij...->0 => ...->ji" b in
   ignore (Train.forward_once (module Backend) c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   Stdio.printf "\n%!"
@@ -50,12 +50,12 @@ let _suspended () =
 
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
-  let%op _ = a *+ "b|i->o; b|i->o => b|i->o" a in
-  let%op c = b *+ "b|h->o; b|i->h => b|i->o" a in
+  let%op _ = a +* "b|i->o; b|i->o => b|i->o" a in
+  let%op c = b +* "b|h->o; b|i->h => b|i->o" a in
   Utils.capture_stdout_logs (fun () -> ignore (Train.forward_once backend c));
-  (* let%op d = a *+ "a|i->h; b|h->o => ab|i->o" b in Utils.capture_stdout_logs (fun () ->
-     ignore (Train.forward_once backend d)); let%op e = a *+ "b|i->h; b|h->o => i->o" b in
-     Utils.capture_stdout_logs (fun () -> ignore (Train.forward_once backend e)); let%op f = a *+
+  (* let%op d = a +* "a|i->h; b|h->o => ab|i->o" b in Utils.capture_stdout_logs (fun () ->
+     ignore (Train.forward_once backend d)); let%op e = a +* "b|i->h; b|h->o => i->o" b in
+     Utils.capture_stdout_logs (fun () -> ignore (Train.forward_once backend e)); let%op f = a +*
      "a|i->h; b|h->o => i->o" b in Utils.capture_stdout_logs (fun () -> ignore (Train.forward_once backend f)); *)
   (* Train.printf ~here:[%here] ~with_code:false ~with_grad:false a2; *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c

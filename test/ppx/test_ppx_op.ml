@@ -13,11 +13,11 @@ let%op z = ('q' 2.0 * { hey5 }) + ({ hey6 } * 'p' 1.0)
 let stride = 2
 and dilation = 3
 
-let%op z2 = { hey7 } *+ "stride*a+dilation*b,;b=>a," { hey8 }
+let%op z2 = { hey7 } +* "stride*a+dilation*b,;b=>a," { hey8 }
 
 let z3 =
   let s = 2 and d = 3 in
-  [%op { hey9 } *+ "is*a+d*bc;b=>iac" { hey10 }]
+  [%op { hey9 } +* "is*a+d*bc;b=>iac" { hey10 }]
 
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b; o = [ hid_dim ] })

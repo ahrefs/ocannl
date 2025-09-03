@@ -7,7 +7,7 @@ let capture_for_computation () =
   let module Backend = (val Backends.fresh_backend ()) in
   let%op x = { x = uniform1 (); o = [ 2; 3 ] } in
   let%op y = { y = uniform1 (); o = [ 3; 4 ] } in
-  let%op z = x *+ "ab;bc=>ac" [ "a"; "b"; "c" ] y in
+  let%op z = x +* "ab;bc=>ac" [ "a"; "b"; "c" ] y in
 
   (* Trigger shape inference by accessing the tensor node *)
   let ctx = Train.forward_once (module Backend) z in
@@ -36,7 +36,7 @@ let capture_for_computation () =
   (* Test capturing row variables *)
   let%op x3 = { x3 = uniform1 (); o = [ 2; 3; 4 ] } in
   let%op y3 = { y3 = uniform1 (); o = [ 3; 4; 5 ] } in
-  let%op z3 = x3 *+ "a..r..;..r..b=>ab" [ "r" ] y3 in
+  let%op z3 = x3 +* "a..r..;..r..b=>ab" [ "r" ] y3 in
 
   (* Trigger shape inference *)
   let ctx = Train.forward_once (module Backend) ~ctx z3 in
@@ -93,7 +93,7 @@ let test_set_dim_and_set_equal () =
   let module Backend = (val Backends.fresh_backend ()) in
   let%op x_test = { x_test = uniform1 (); o = [ 3; 4 ] } in
   let%op y_test = { y_test = uniform1 (); o = [ 4; 5 ] } in
-  let%op z_test = x_test *+ "pq;qr=>pr" [ "p"; "q"; "r" ] y_test in
+  let%op z_test = x_test +* "pq;qr=>pr" [ "p"; "q"; "r" ] y_test in
 
   (* Don't set equality constraint - just test capturing works *)
   let ctx = Train.forward_once (module Backend) z_test in
@@ -115,7 +115,7 @@ let test_set_dim_and_set_equal () =
   (* Test 6: Row variable test with set_equal *)
   let%op x_row = { x_row = uniform1 (); o = [ 2; 6 ] } in
   let%op y_row = { y_row = uniform1 (); o = [ 6; 3 ] } in
-  let%op z_row = x_row *+ "a..s..;..s..b=>ab" [ "s" ] y_row in
+  let%op z_row = x_row +* "a..s..;..s..b=>ab" [ "s" ] y_row in
 
   (* Create a dimension variable and set it equal to the row variable *)
   let dim_var = Shape.get_variable_ref "test_dim" in
@@ -149,7 +149,7 @@ let capture_for_shape_validation () =
   let%op a1 = { a1 = uniform1 (); o = [ 4; 6 ] } in
   let%op b1 = { b1 = uniform1 (); o = [ 6; 4 ] } in
   (* Make k=4 so i=k constraint can work *)
-  let%op c1 = a1 *+ "ij;jk=>ik" [ "i"; "j"; "k" ] b1 in
+  let%op c1 = a1 +* "ij;jk=>ik" [ "i"; "j"; "k" ] b1 in
 
   (* Add constraint that i should equal k - this should work since both are 4 *)
   Shape.set_equal i k;
@@ -168,7 +168,7 @@ let capture_for_shape_validation () =
   let%op x2 = { x2 = uniform1 (); o = [ 3; 5; 7 ] } in
   let%op y2 = { y2 = uniform1 (); o = [ 5; 7; 3 ] } in
   (* Make d=3 so a=d constraint can work *)
-  let%op z2 = x2 *+ "abc;bcd=>ad" [ "a"; "b"; "c"; "d" ] y2 in
+  let%op z2 = x2 +* "abc;bcd=>ad" [ "a"; "b"; "c"; "d" ] y2 in
 
   (* Add constraints: a should equal d, and c should have specific value *)
   Shape.set_equal a d;
@@ -191,7 +191,7 @@ let capture_for_shape_validation () =
   (* Test 3: Row variables with constraints *)
   let%op r1 = { r1 = uniform1 (); o = [ 2; 3; 4 ] } in
   let%op r2 = { r2 = uniform1 (); o = [ 3; 5 ] } in
-  let%op r3 = r1 *+ "a, ..row1.., b; ..row2.., c => a, ..row1.., c" [ "row1"; "row2" ] r2 in
+  let%op r3 = r1 +* "a, ..row1.., b; ..row2.., c => a, ..row1.., c" [ "row1"; "row2" ] r2 in
 
   (* Constraint: row1 and row2 should have same total elements *)
   Shape.set_equal row1 row2;
@@ -226,7 +226,7 @@ let capture_for_shape_validation () =
   let%op chain1 = { chain1 = uniform1 (); o = [ 4; 5 ] } in
   let%op chain2 = chain1 ++ "a, b => b, a" [ "a"; "b" ] in
   let%op chain3 = { chain3 = uniform1 (); o = [ 5; 6 ] } in
-  let%op chain4 = chain2 *+ "e, d; e, f => d, f" [ "d"; "e"; "f" ] chain3 in
+  let%op chain4 = chain2 +* "e, d; e, f => d, f" [ "d"; "e"; "f" ] chain3 in
 
   (* Link variables across operations *)
   Shape.set_equal a d;
@@ -264,7 +264,7 @@ let capture_for_shape_inference () =
   (* No shape specified *)
   let%op m2 = { m2 = uniform1 () } in
   (* No shape specified *)
-  let%op result1 = m1 *+ "ij;jk=>ik" [ "i"; "j"; "k" ] m2 in
+  let%op result1 = m1 +* "ij;jk=>ik" [ "i"; "j"; "k" ] m2 in
 
   (* Set constraints to drive shape inference *)
   let i_size = Shape.get_variable_ref "i_size" in
@@ -295,7 +295,7 @@ let capture_for_shape_inference () =
   let%op transposed = base ++ "ab=>ba" [ "a"; "b" ] in
   let%op multiplied = { mult_input = uniform1 () } in
   (* No shape specified *)
-  let%op final = transposed *+ "ba;bc=>ac" [ "a"; "b"; "c" ] multiplied in
+  let%op final = transposed +* "ba;bc=>ac" [ "a"; "b"; "c" ] multiplied in
 
   (* Set dimensions directly on the captured variables *)
   let base_height = Shape.get_variable_ref "base_height" in
@@ -329,7 +329,7 @@ let capture_for_shape_inference () =
   (* No shape specified *)
   let%op tensor2 = { tensor2 = uniform1 () } in
   (* No shape specified *)
-  let%op result3 = tensor1 *+ "xy;yz=>xz" [ "x"; "y"; "z" ] tensor2 in
+  let%op result3 = tensor1 +* "xy;yz=>xz" [ "x"; "y"; "z" ] tensor2 in
 
   (* Set up constraints for shape inference *)
   let x_size = Shape.get_variable_ref "x_size" in
@@ -360,7 +360,7 @@ let capture_for_shape_inference () =
   (* No shape specified *)
   let%op complex2 = { complex2 = uniform1 () } in
   (* No shape specified *)
-  let%op complex_result = complex1 *+ "pqr;rst=>pqst" [ "p"; "q"; "r"; "s"; "t" ] complex2 in
+  let%op complex_result = complex1 +* "pqr;rst=>pqst" [ "p"; "q"; "r"; "s"; "t" ] complex2 in
 
   (* Set up interdependent constraints *)
   let size_constraint = Shape.get_variable_ref "size_constraint" in

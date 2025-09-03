@@ -992,7 +992,7 @@ let translate ?ident_label (expr : expression) : result =
         { res1 with typ = Tensor; expr = [%expr NTDSL.O.( **. ) [%e res1.expr] [%e expr2]] }
     | [%expr
         [%e? expr1]
-        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2]]
+        +* [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2]]
       when String.contains spec_str '>' ->
         let res1 = loop ~proj_in_scope expr1 in
         let res2 = loop ~proj_in_scope expr2 in
@@ -1007,7 +1007,7 @@ let translate ?ident_label (expr : expression) : result =
         }
     | [%expr
         [%e? expr1]
-        *+ [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+        +* [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
              ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest])
              [%e? expr2]]
       when String.contains spec_str '>' ->
