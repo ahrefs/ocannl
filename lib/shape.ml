@@ -601,7 +601,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           | None -> (
               match Hashtbl.find row_var_env label with
               | Some var -> delayed_ref.var <- `Row var
-              | None -> ()));
+              | None ->
+                  raise
+                  @@ Row.Shape_error
+                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                         [ Shape_mismatch [ cur_sh; sh ] ] )));
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
@@ -663,7 +667,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           | None -> (
               match Hashtbl.find row_var_env label with
               | Some var -> delayed_ref.var <- `Row var
-              | None -> ()));
+              | None ->
+                  raise
+                  @@ Row.Shape_error
+                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                         [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )));
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs1
