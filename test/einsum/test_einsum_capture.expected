@@ -6,7 +6,7 @@ Dimension c: 4
 Dimension i: 5
 Dimension j: 7
 Row variable r (product of dims): 12
-HERE: test/operations/test_einsum_capture.ml:51:21
+HERE: test/einsum/test_einsum_capture.ml:51:21
 ┌───────────────────────────┐
 │[41]: +_dim_calc shape 0:1 │
 │┌┬─────────┐               │
@@ -50,6 +50,12 @@ Test 3 - Row variable constraints (row1=row2 total elements):
   Input r2 shape: 3,5
   Output r3 shape: 2,3,5
   Row1 total: 3, Row2 total: 3 (should be equal)
+
+Test 4 - Mixed row-dimension constraints:
+  Input m1 shape: 2,4,8
+  Output m2 shape: 8,2,4
+  Dimension n: 8
+  Row mix total: 8
 
 Test 5 - Constraint propagation across operations:
   Chain1 shape: 4,5

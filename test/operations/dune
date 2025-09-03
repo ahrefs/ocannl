@@ -303,17 +303,6 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name test_einsum_capture)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
- (modules test_einsum_capture)
- (libraries base ocannl stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
-
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

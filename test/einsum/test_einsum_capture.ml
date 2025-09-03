@@ -207,23 +207,20 @@ let capture_for_shape_validation () =
     (match row2.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
 
   (* Test 4: Mixed row and dimension constraints *)
-  let _fixme_insufficient_projections_inference () =
-    let%op m1 = { m1 = uniform1 (); o = [ 6; 8 ] } in
-    let%op m2 = m1 ++ "..mix.., n => p, ..mix.." [ "mix"; "n"; "p" ] in
-    Shape.set_equal mix p;
+  let%op m1 = { m1 = uniform1 (); o = [ 2; 4; 8 ] } in
+  let%op m2 = m1 ++ "..mix.., n => n, ..mix.." [ "mix"; "n" ] in
+  Shape.set_equal mix n;
 
-    (* Row variable mix should have total elements = p *)
-    let _ctx = Train.forward_once (module Backend) ~ctx m2 in
+  (* Row variable mix should have total elements = p *)
+  let _ctx = Train.forward_once (module Backend) ~ctx m2 in
 
-    Stdio.printf "\nTest 4 - Mixed row-dimension constraints:\n";
-    Stdio.printf "  Input m1 shape: %s\n" (Shape.to_string_hum m1.shape);
-    Stdio.printf "  Output m2 shape: %s\n" (Shape.to_string_hum m2.shape);
-    Stdio.printf "  Dimension p: %s, n: %s\n"
-      (match p.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
-      (match n.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
-    Stdio.printf "  Row mix total: %s\n"
-      (match mix.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
-  in
+  Stdio.printf "\nTest 4 - Mixed row-dimension constraints:\n";
+  Stdio.printf "  Input m1 shape: %s\n" (Shape.to_string_hum m1.shape);
+  Stdio.printf "  Output m2 shape: %s\n" (Shape.to_string_hum m2.shape);
+  Stdio.printf "  Dimension n: %s\n"
+    (match n.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
+  Stdio.printf "  Row mix total: %s\n"
+    (match mix.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
 
   (* Test 5: Constraint propagation through multiple operations *)
   let%op chain1 = { chain1 = uniform1 (); o = [ 4; 5 ] } in
@@ -263,24 +260,26 @@ let capture_for_shape_inference () =
   Stdio.printf "\n=== Testing pure shape inference with equality constraints ===\n";
 
   (* Test 1: Pure matrix multiply with constraint-driven shape inference *)
-  let%op m1 = { m1 = uniform1 () } in  (* No shape specified *)
-  let%op m2 = { m2 = uniform1 () } in  (* No shape specified *)
+  let%op m1 = { m1 = uniform1 () } in
+  (* No shape specified *)
+  let%op m2 = { m2 = uniform1 () } in
+  (* No shape specified *)
   let%op result1 = m1 *+ "ij;jk=>ik" [ "i"; "j"; "k" ] m2 in
-  
+
   (* Set constraints to drive shape inference *)
   let i_size = Shape.get_variable_ref "i_size" in
   let j_size = Shape.get_variable_ref "j_size" in
   let k_size = Shape.get_variable_ref "k_size" in
-  
+
   Shape.set_dim i_size 3;
-  Shape.set_dim j_size 4;  
+  Shape.set_dim j_size 4;
   Shape.set_dim k_size 5;
   Shape.set_equal i i_size;
   Shape.set_equal j j_size;
   Shape.set_equal k k_size;
-  
+
   let ctx = Train.forward_once (module Backend) result1 in
-  
+
   Stdio.printf "Test 1 - Matrix multiply with constraint-driven shapes:\n";
   Stdio.printf "  m1 inferred shape: %s\n" (Shape.to_string_hum m1.shape);
   Stdio.printf "  m2 inferred shape: %s\n" (Shape.to_string_hum m2.shape);
@@ -289,28 +288,32 @@ let capture_for_shape_inference () =
     (match i.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match j.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match k.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
-  
+
   (* Test 2: Chain of operations with constraint propagation *)
-  let%op base = { base = uniform1 () } in  (* No shape specified *)
+  let%op base = { base = uniform1 () } in
+  (* No shape specified *)
   let%op transposed = base ++ "ab=>ba" [ "a"; "b" ] in
-  let%op multiplied = { mult_input = uniform1 () } in  (* No shape specified *)
+  let%op multiplied = { mult_input = uniform1 () } in
+  (* No shape specified *)
   let%op final = transposed *+ "ba;bc=>ac" [ "a"; "b"; "c" ] multiplied in
-  
+
   (* Set dimensions directly on the captured variables *)
   let base_height = Shape.get_variable_ref "base_height" in
   let base_width = Shape.get_variable_ref "base_width" in
   let mult_depth = Shape.get_variable_ref "mult_depth" in
-  
+
   Shape.set_dim base_height 6;
   Shape.set_dim base_width 8;
   Shape.set_dim mult_depth 10;
-  
-  Shape.set_equal a base_height;  (* This should propagate through the chain *)
-  Shape.set_equal b base_width;   (* This should propagate through the chain *)
+
+  Shape.set_equal a base_height;
+  (* This should propagate through the chain *)
+  Shape.set_equal b base_width;
+  (* This should propagate through the chain *)
   Shape.set_equal c mult_depth;
-  
+
   let ctx = Train.forward_once (module Backend) ~ctx final in
-  
+
   Stdio.printf "\nTest 2 - Chain operations with constraint propagation:\n";
   Stdio.printf "  base inferred shape: %s\n" (Shape.to_string_hum base.shape);
   Stdio.printf "  transposed inferred shape: %s\n" (Shape.to_string_hum transposed.shape);
@@ -320,27 +323,29 @@ let capture_for_shape_inference () =
     (match a.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match b.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match c.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
-  
+
   (* Test 3: Simple 3-tensor einsum with pure inference *)
-  let%op tensor1 = { tensor1 = uniform1 () } in  (* No shape specified *)
-  let%op tensor2 = { tensor2 = uniform1 () } in  (* No shape specified *) 
+  let%op tensor1 = { tensor1 = uniform1 () } in
+  (* No shape specified *)
+  let%op tensor2 = { tensor2 = uniform1 () } in
+  (* No shape specified *)
   let%op result3 = tensor1 *+ "xy;yz=>xz" [ "x"; "y"; "z" ] tensor2 in
-  
+
   (* Set up constraints for shape inference *)
   let x_size = Shape.get_variable_ref "x_size" in
   let y_size = Shape.get_variable_ref "y_size" in
   let z_size = Shape.get_variable_ref "z_size" in
-  
+
   Shape.set_dim x_size 7;
   Shape.set_dim y_size 8;
   Shape.set_dim z_size 9;
-  
+
   Shape.set_equal x x_size;
   Shape.set_equal y y_size;
   Shape.set_equal z z_size;
-  
+
   let ctx = Train.forward_once (module Backend) ~ctx result3 in
-  
+
   Stdio.printf "\nTest 3 - Simple 3-tensor einsum with pure inference:\n";
   Stdio.printf "  tensor1 inferred shape: %s\n" (Shape.to_string_hum tensor1.shape);
   Stdio.printf "  tensor2 inferred shape: %s\n" (Shape.to_string_hum tensor2.shape);
@@ -349,33 +354,36 @@ let capture_for_shape_inference () =
     (match x.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match y.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match z.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
-  
+
   (* Test 4: Complex inference with mixed constraints *)
-  let%op complex1 = { complex1 = uniform1 () } in  (* No shape specified *)
-  let%op complex2 = { complex2 = uniform1 () } in  (* No shape specified *)
+  let%op complex1 = { complex1 = uniform1 () } in
+  (* No shape specified *)
+  let%op complex2 = { complex2 = uniform1 () } in
+  (* No shape specified *)
   let%op complex_result = complex1 *+ "pqr;rst=>pqst" [ "p"; "q"; "r"; "s"; "t" ] complex2 in
-  
+
   (* Set up interdependent constraints *)
   let size_constraint = Shape.get_variable_ref "size_constraint" in
   Shape.set_dim size_constraint 4;
-  
+
   (* Make p = t = size_constraint, and q = s *)
   Shape.set_equal p size_constraint;
-  Shape.set_equal t size_constraint; 
+  Shape.set_equal t size_constraint;
   Shape.set_equal q s;
-  
+
   (* Set r to specific value *)
   let r_size = Shape.get_variable_ref "r_size" in
   Shape.set_dim r_size 6;
   Shape.set_equal r r_size;
-  
+
   (* Set q to a different specific value *)
   let q_size = Shape.get_variable_ref "q_size" in
   Shape.set_dim q_size 5;
-  Shape.set_equal q q_size;  (* This will also constrain s=5 due to q=s *)
-  
+  Shape.set_equal q q_size;
+
+  (* This will also constrain s=5 due to q=s *)
   let _ctx = Train.forward_once (module Backend) ~ctx complex_result in
-  
+
   Stdio.printf "\nTest 4 - Complex interdependent constraints:\n";
   Stdio.printf "  complex1 inferred shape: %s\n" (Shape.to_string_hum complex1.shape);
   Stdio.printf "  complex2 inferred shape: %s\n" (Shape.to_string_hum complex2.shape);
@@ -387,7 +395,7 @@ let capture_for_shape_inference () =
     (match s.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?")
     (match t.var_ref.solved_dim with Some d -> Int.to_string d | None -> "?");
   Stdio.printf "  Expected: p=4, q=5, r=6, s=5, t=4 (with q=s and p=t constraints satisfied)\n";
-  
+
   Stdio.printf "=== Pure shape inference tests completed ===\n"
 
 let () =
