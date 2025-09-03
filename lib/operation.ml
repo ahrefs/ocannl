@@ -80,43 +80,6 @@ let matmul ?(label = []) =
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   mul Compose ~op_asn ~label:("*" :: label)
 
-(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
-    matrix multiplication, inner and outer products, etc.
-
-    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the
-    input and the output axes. *)
-let einsum ?(label = []) ?(capture_dims = []) spec =
-  let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
-    g1 =+ g * v2;
-    g2 =+ v1 * g
-  in
-  Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
-
-(** Like [einsum], but adds instead than multiplying the resulting values. *)
-let outer_sum ?(label = []) ?(capture_dims = []) spec =
-  let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
-  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
-    g1 =+ g;
-    g2 =+ g
-  in
-  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
-
-(** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
-    diagonals, compute traces etc.
-
-    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the
-    input and the output axes. *)
-let einsum1 ?(label = []) ?(capture_dims = []) spec =
-  let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
-  let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop
-    ~transpose_op:(Shape.Permute (spec, capture_dims))
-    ~op_asn ~grad_asn ~label:("=>" :: label)
-
 module NDO_before_pow = struct
   let ( * ) t1 t2 = matmul ~grad_spec:Prohibit_grad t1 t2 ()
   let ( *. ) t1 t2 = pointmul ~grad_spec:Prohibit_grad t1 t2 ()
@@ -403,6 +366,77 @@ let where ?(label = []) ~grad_spec t1 t2 t3 =
   Tensor.ternop ~label:("where" :: label) ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
     t2 t3
 
+(** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
+    matrix multiplication, inner and outer products, etc.
+
+    Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the
+    input and the output axes. *)
+let einsum ?(label = []) ?(capture_dims = []) spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
+    g1 =+ g * v2;
+    g2 =+ v1 * g
+  in
+  Tensor.binop ~label:(";=>" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
+
+(** Like [einsum], but adds instead than multiplying the resulting values. *)
+let outer_sum ?(label = []) ?(capture_dims = []) spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
+  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
+    g1 =+ g;
+    g2 =+ g
+  in
+  Tensor.binop ~label:(";=>+" :: label) ~compose_op:(Einsum (spec, capture_dims)) ~op_asn ~grad_asn
+
+(** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
+    diagonals, compute traces etc.
+
+    Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the
+    input and the output axes. *)
+let einsum1 ?(label = []) ?(capture_dims = []) spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
+  let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
+  Tensor.unop
+    ~transpose_op:(Shape.Permute (spec, capture_dims))
+    ~op_asn ~grad_asn ~label:("=>" :: label)
+
+module NDO_before_einmax1 = struct
+  let (+) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
+  let where ?label t1 t2 t3 = where ?label ~grad_spec:Prohibit_grad t1 t2 t3 ()
+  let not ?label t = not ?label ~grad_spec:Prohibit_grad t ()
+  let ( < ) ?label t1 t2 = lt ?label ~grad_spec:Prohibit_grad t1 t2 ()
+  let ( = ) ?label t1 t2 = eq ?label ~grad_spec:Prohibit_grad t1 t2 ()
+end
+
+let einmax1 ?(label = []) ?(capture_dims = []) spec =
+  let module NTDSL = struct
+    include Initial_NTDSL
+    module O = NDO_before_einmax1
+  end in
+  let%cd op_asn ~v ~t1 ~projections = v =:@^ v1 in
+  let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ where (t = t1) g 0 in
+  Tensor.unop
+    ~transpose_op:(Shape.Permute (spec, capture_dims))
+    ~op_asn ~grad_asn ~label:("@^=>" :: label)
+
+(** This generalizes the tropical matrix multiplication to arbitrary indices combinations. *)
+let tropical ?(label = []) ?(capture_dims = []) spec =
+  let module NTDSL = struct
+    include Initial_NTDSL
+    module O = NDO_before_einmax1
+  end in
+  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
+  let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
+    g1 =+ where (t = t1 + t2) g 0;
+    g2 =+ where (t = t1 + t2) g 0
+  in
+  Tensor.binop
+    ~compose_op:(Shape.Einsum (spec, capture_dims))
+    ~op_asn ~grad_asn ~label:("@^=>+" :: label)
+
 (** [range] is a 1D tensor of shape [upto], spans [0] inclusive, [upto] exclusive. *)
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
   let result =
@@ -650,7 +684,7 @@ struct
     let recip_sqrt ?label t = recip_sqrt ?label t ()
     let tanh ?label t = tanh ?label t ()
     let where ?label t1 t2 t3 = where ?label t1 t2 t3 ()
-    let not t = not t ()
+    let not ?label t = not ?label t ()
     let ( < ) ?label t1 t2 = lt ?label t1 t2 ()
     let ( = ) ?label t1 t2 = eq ?label t1 t2 ()
     let ( <> ) ?label t1 t2 = ne ?label t1 t2 ()
