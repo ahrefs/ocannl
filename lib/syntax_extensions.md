@@ -180,7 +180,7 @@ Using [inline declarations](#inline-declarations), this becomes more concise:
   ...
 ```
 
-When there is a function directly under the `%op` extension point, like in the example above, or directly under a function taking a `~config` parameter, the function parameter must be a tensor. That's because `%op` uses this tensor's (value's) label to enrich the label of the resulting tensor.
+When there is a function directly under the `%op` extension point, like in the example above, or directly under a function taking a unit parameter `()`, the function parameter (to the right of `()`) should be a tensor. That's because `%op` uses this tensor's (value's) label to enrich the label of the resulting tensor.
 
 When the declaration is followed by a literal float, the float provides the initial value to initialize the tensor. Otherwise, the tensor value cells are initialized randomly with uniform distribution.
 
@@ -281,7 +281,7 @@ Examples:
 - `%op`: `{ x = 5.0 }`, `{ w; o = [hidden_dim] }`, `{ weights = [1.0; 2.0] }`
 - `%cd`: `{ temp }`, `{ result; output_dims = [3; 4] }`, `{ x; o = [10] }`
 
-The tensor name is bound to the newly created tensor, and the record expression itself evaluates to the tensor. The scope of the binding is the full scope of the extension point, even if the declaring record appeared in the body of a function that's inside the extension point scope (except for `%op` there is a special case of `~config` labeled argument discussed below). The first element of the label of the created tensor is the name that introduced it.
+The tensor name is bound to the newly created tensor, and the record expression itself evaluates to the tensor. The scope of the binding is the full scope of the extension point, even if the declaring record appeared in the body of a function that's inside the extension point scope (except for `%op` there is a special case of functions taking a unit parameter `()` discussed below -- inline definitions are introduced once `()` is applied). The first element of the label of the created tensor is the name that introduced it.
 
 For `%cd`, inline declarations are allowed both in the assigned-to position (left-hand side) of assignments and in standalone tensor expressions. When used in assignments, one of the tensors on the right-hand-side is picked to provide additional label information if possible. In particular, tensors that are function parameters inside the scope of the extension point, cannot be picked to provide label information, as they would escape their scope at the point the tensor is created. Inline declarations are still prohibited within the right-hand side of assignments to discourage over-use in locations with less label information. Example showing two tensor nodes declared inline, both of them include the label of the param `p` in their labels:
 
@@ -383,7 +383,7 @@ Examples:
 - `..v..|...ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result. Fails if the argument has input axes.
 - `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its output axes, preserve its other batch axes as output axes. Fails if the argument has input axes.
 
-### Capturing the dimensions of selected axes for further computation
+### Capturing the dimensions of selected axes for further computation or to add shape constraints
 
 The syntaxes `*+` and `++` accept an optional list of strings argument after the specification string. When passed, the strings should be some of the identifiers used in the specification. Both dimension variable and row variable labels are supported. This will introduce bindings for `Indexing.variable_ref` objects at the same point as the inline parameter definition bindings, and will pass these objects with the `~capture_dims` argument to `einsum` resp. `einsum1`. The bound objects can later be used with `Operation.embed_dim` or its alias `Operation.TDSL.O.dim` to embed the solved dimension of the corresponding variable (as a number) into a tensor expression. For a row variable, the number will be the product of the dimensions it resolved into.
 
@@ -429,9 +429,9 @@ The example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = 
 
 ### Label from function argument
 
-The resulting (primary) tensor's label will also have incorporated the label of the input argument, if any. In our example, the resulting `mlp_layer` tensor will also include the label of the actually applied `x`.
+The resulting (primary) tensor's label will also have incorporated the label of the input argument, if any. In our example, the resulting `mlp_layer` tensor will also include the label of the actually applied `x`. If the function has a unit parameter `()`, like `mlp_layer` above, only parameters to the right of `()` are considered for label extraction.
 
-Note that we do not include separate config labels, because the actually applied input argument will typically have more specific information.
+When there is the unit parameter, and a `~label` parameter (specifically a parameter with label `label`), this label is also incorporated.
 
 ### Configuring inline declarations: inline output dimensions, initial values
 
@@ -454,7 +454,9 @@ A very simple example from [micrograd_demo: Micrograd README basic example](test
   ...
 ```
 
-### Lifting of the applications of config arguments: if an error, refactor your code
+How does it relate to `let%op c = { a = -4 } + { b = 2 } in ...`? Without brackets, the number is used to initialize all cells of the tensor value, and shape inference decides the shape of the tensor. With brackets, the bracketing specifies both all the cells and the exact shape of the tensor.
+
+### Need to lift the applications of configuration arguments (up to the unit parameter)
 
 If you recall, inline declared param tensors get lifted out of functions to be defined at the point of a unit `()` parameter. Our example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })` translates as:
 
@@ -465,45 +467,36 @@ let mlp_layer ~label ~hid_dim () =
   fun x -> TDSL.O.(relu (w * x + b))
 ```
 
-For this to work properly, when employing such network blocks, their params also need to be introduced at the right moment. Therefore, the `%op` syntax ensures that this example:
+For this to work properly, when employing such network blocks, their params also need to be introduced at the right moment. At one point, we tried to do this automatically by the `%op` syntax, but that was confusing to use. So you need to ensure scoping manually. Consider:
 
 ```ocaml
+(* FIXME: this is wrong! Doesn't bind the parameters at the right place. *)
 let%op three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =
   mlp_layer ~label:[ "L3" ] ~hid_dim:dim3 ()
     (mlp_layer ~label:[ "L2" ] ~hid_dim:dim2 ()
        (mlp_layer ~label:[ "L1" ] ~hid_dim:dim1 () x))
 ```
 
-gets expanded to:
+This example would work if we used direct inline definitions, but it does not work when the definitions are indirectly in the functions called. We need to write instead:
 
 ```ocaml
 let three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =
-  let config_block__1 = mlp_layer ~label:[ "L3" ] ~hid_dim:dim3 ()
-  and config_block__2 = mlp_layer ~label:[ "L2" ] ~hid_dim:dim2 ()
-  and config_block__3 = mlp_layer ~label:[ "L1" ] ~hid_dim:dim1 () in
-  fun x -> config_block__1 (config_block__2 (config_block__3 x))
+  let layer3 = mlp_layer ~label:[ "L3" ] ~hid_dim:dim3 ()
+  and layer2 = mlp_layer ~label:[ "L2" ] ~hid_dim:dim2 ()
+  and layer1 = mlp_layer ~label:[ "L1" ] ~hid_dim:dim1 () in
+  fun x -> layer3 (layer2 (layer1 x))
 ```
 
-However, this raises a concern for more complex situations. Consider this code that fails to compile:
+The manual approach naturally extends to programmatic network architectures:
 
 ```ocaml
-let%op mlp ~label ~hid_dims () x =
-  List.foldi hid_dims ~init:x ~f:(fun i x hid_dim ->
-      mlp_layer ~label:[ "L" ^ Int.to_string i ] ~hid_dim () x)
-```
-
-The attempted lifting breaks because of the escaping variables `i` and `hid_dim`. This reminds us to rewrite the example, ensuring the proper introduction of params:
-
-```ocaml
-let mlp ~label ~hid_dims =
+let mlp ~label ~hid_dims () =
   let layers =
     List.mapi hid_dims ~f:(fun i hid_dim ->
         mlp_layer ~label:[ "L" ^ Int.to_string i ] ~hid_dim ())
   in
-  fun () x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
+  fun x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
 ```
-
-Unfortunately, we need to be mindful to introduce params at the right times.
 
 ## Implementation details
 
