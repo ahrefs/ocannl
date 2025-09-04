@@ -472,22 +472,49 @@ let%track7_sexp create_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims :
   let size_in_bytes : int = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
   let%track7_sexp finalizer (_result : t) =
     let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
-    [%log3 "Deleting", _debug, ptr_to_string_hum _result]
+    ()
   in
   let f prec = as_array prec @@ create_bigarray prec ~dims ~padding in
   let result = Ops.apply_prec { f } prec in
   Stdlib.Gc.finalise finalizer result;
   let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
-  [%debug3_sexp
-    [%log_block
-      "create_array";
-      [%log _debug, ptr_to_string_hum result]]];
   result
 
 (** See {!Bigarray.reshape}. *)
 let reshape nd dims =
   let f prec arr = as_array prec @@ Bigarray.reshape arr dims in
   apply_with_prec { f } nd
+
+(** Initializes an array using a function from indices to values. Note: [dims] must include padding
+    if padding is specified, but the callback [f] indices operate in the before-padding space.
+
+    This function is slow as it performs unboxing at each index. Generate and wrap a bigarray if
+    efficiency is a concern. *)
+let%track7_sexp init_array ~debug:(_debug : string) (prec : Ops.prec) ~(dims : int array) ~padding
+    ~(f : int array -> float) =
+  let size_in_bytes : int = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+  let%track7_sexp finalizer (_result : t) =
+    let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
+    ()
+  in
+  let result = create_array ~debug:_debug prec ~dims ~padding in
+  (* Initialize the array using the provided function *)
+  let padding_arr = match padding with None -> None | Some (padding_arr, _) -> Some padding_arr in
+  let rec init_indices indices depth =
+    if depth = Array.length dims then
+      let idx = Array.of_list (List.rev indices) in
+      let value = f idx in
+      set_from_float ?padding:padding_arr result idx value
+    else
+      let end_idx = compute_end_idx ?padding:padding_arr dims depth in
+      for i = 0 to end_idx do
+        init_indices (i :: indices) (depth + 1)
+      done
+  in
+  init_indices [] 0;
+  Stdlib.Gc.finalise finalizer result;
+  let _ : int = Atomic.fetch_and_add used_memory size_in_bytes in
+  result
 
 let get_used_memory () = Atomic.get used_memory
 

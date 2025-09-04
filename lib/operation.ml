@@ -570,6 +570,15 @@ let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
   Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ~output_dims
 
+(** Creates a tensor by initializing values using a function from indices to values. The dimensions
+    are split into axis kinds as specified, there is no shape inference. Recall that input axes are
+    rightmost. *)
+let init ~l ~prec ?(b = []) ?(i = []) ?(o = []) ~f =
+  let all_dims = Array.of_list (b @ o @ i) in
+  let ndarray = Ir.Ndarray.init_array ~debug:l prec ~dims:all_dims ~padding:None ~f in
+  Tensor.term ~init_data:(Asgns.Keep_shape_no_padding ndarray) ~batch_dims:b ~label:[ l ]
+    ~input_dims:i ~output_dims:o
+
 module Make_DSL (Grad_spec : sig
   val grad_spec : Tensor.grad_spec
 end) =
@@ -610,6 +619,7 @@ struct
   let wrap = wrap ~grad_spec:Grad_spec.grad_spec
   let wrap_padded = wrap_padded ~grad_spec:Grad_spec.grad_spec
   let rebatch = rebatch ~grad_spec:Grad_spec.grad_spec
+  let init = init ~grad_spec:Grad_spec.grad_spec
   let uniform = uniform ~grad_spec:Grad_spec.grad_spec
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
