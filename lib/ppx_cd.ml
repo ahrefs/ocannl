@@ -993,6 +993,24 @@ let translate ?ident_label (expr : expression) : result =
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
           [%e? expr1]
+          ([%e? { pexp_desc = Pexp_ident _; _ } as spec] [%e? expr2])]
+      when Hashtbl.mem einsum_binary_ops op_ident ->
+        let res1 = loop ~proj_in_scope expr1 in
+        let res2 = loop ~proj_in_scope expr2 in
+        let slot = List.hd_exn @@ List.sort [ res1.slot; res2.slot ] ~compare:compare_slots in
+        {
+          vbs = reduce_vbss [ res1.vbs; res2.vbs ];
+          typ = Tensor;
+          slot;
+          expr =
+            [%expr
+              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                [%e spec] [%e res1.expr] [%e res2.expr]];
+          array_opt_of_code = None;
+        }
+    | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
           ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2])]
       when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
         let res1 = loop ~proj_in_scope expr1 in
@@ -1031,7 +1049,19 @@ let translate ?ident_label (expr : expression) : result =
                 ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-    | [%expr
+        | [%expr
+        [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+          [%e? expr1]
+          [%e? { pexp_desc = Pexp_ident _; _ } as spec]]
+      when Hashtbl.mem einsum_unary_ops op_ident ->
+        let res1 = loop ~proj_in_scope expr1 in
+        {
+          res1 with
+          typ = Tensor;
+          expr =
+            [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
+        }
+        | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
           [%e? expr1]
           [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]

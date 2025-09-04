@@ -186,6 +186,17 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
+        ([%e? { pexp_desc = Pexp_ident _; _ } as spec] [%e? expr2])]
+    when Hashtbl.mem einsum_binary_ops op_ident ->
+      let vbs1, e1 = loop expr1 in
+      let vbs2, e2 = loop expr2 in
+      ( reduce_vbss [ vbs1; vbs2 ],
+        [%expr
+          [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+            ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+        [%e? expr1]
         ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }] [%e? expr2])]
     when String.contains spec_str '>' && Hashtbl.mem einsum_binary_ops op_ident ->
       let vbs1, e1 = loop expr1 in
@@ -195,6 +206,16 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
         [%expr
           [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
             ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+        [%e? expr1]
+        [%e? { pexp_desc = Pexp_ident _; _ } as spec]]
+    when Hashtbl.mem einsum_unary_ops op_ident ->
+      let vbs1, e1 = loop expr1 in
+      ( vbs1,
+        [%expr
+          [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+            ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
