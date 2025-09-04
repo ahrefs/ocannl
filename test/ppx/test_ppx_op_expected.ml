@@ -32,13 +32,13 @@ let y2 =
         ((( *. ) ?label:None) x1 hey3) x2
 let a =
   let open! TDSL.O in
-    ((ndarray
+    ((TDSL.ndarray
         [|(Float.of_int 1);(Float.of_int 2);(Float.of_int 3);(Float.of_int 4);(
           Float.of_int 5);(Float.of_int 6)|]) ~label:["a"]) ~batch_dims:[]
       ~input_dims:[3] ~output_dims:[2] ()
 let b =
   let open! TDSL.O in
-    ((ndarray
+    ((TDSL.ndarray
         [|(Float.of_int 7);(Float.of_int 8);(Float.of_int 9);(Float.of_int 10)|])
        ~label:["b"]) ~batch_dims:[2] ~input_dims:[] ~output_dims:[2] ()
 let y =

@@ -404,7 +404,7 @@ let einsum1 ?(label = []) ?(capture_dims = []) spec =
     ~op_asn ~grad_asn ~label:("=>" :: label)
 
 module NDO_before_einmax1 = struct
-  let (+) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
+  let ( + ) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
   let where ?label t1 t2 t3 = where ?label ~grad_spec:Prohibit_grad t1 t2 t3 ()
   let not ?label t = not ?label ~grad_spec:Prohibit_grad t ()
   let ( < ) ?label t1 t2 = lt ?label ~grad_spec:Prohibit_grad t1 t2 ()
@@ -436,6 +436,9 @@ let tropical ?(label = []) ?(capture_dims = []) spec =
   Tensor.binop
     ~compose_op:(Shape.Einsum (spec, capture_dims))
     ~op_asn ~grad_asn ~label:("@^=>+" :: label)
+
+(** A fully-shape-inferred tensor that is initialized with the offset of each cell. *)
+let offsets = Tensor.term ~fetch_op:Range_over_offsets ?init_data:None
 
 (** [range] is a 1D tensor of shape [upto], spans [0] inclusive, [upto] exclusive. *)
 let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
@@ -599,6 +602,7 @@ struct
   let einsum1 = einsum1 ~grad_spec:Grad_spec.grad_spec
   let einmax1 = einmax1 ~grad_spec:Grad_spec.grad_spec
   let tropical = tropical ~grad_spec:Grad_spec.grad_spec
+  let offsets = offsets ~grad_spec:Grad_spec.grad_spec
   let range = range ~grad_spec:Grad_spec.grad_spec
   let range_of_shape = range_of_shape ~grad_spec:Grad_spec.grad_spec
   let stop_gradient = stop_gradient
@@ -692,10 +696,11 @@ struct
     let ( <> ) ?label t1 t2 = ne ?label t1 t2 ()
     let embed_self_id = embed_self_id
     let einsum ?label ?capture_dims spec t1 t2 = einsum ?label ?capture_dims spec t1 t2 ()
+    let outer_sum ?label ?capture_dims spec t1 t2 = outer_sum ?label ?capture_dims spec t1 t2 ()
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
     let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims spec t1 ()
     let tropical ?label ?capture_dims spec t1 t2 = tropical ?label ?capture_dims spec t1 t2 ()
-    let ndarray = ndarray
+    let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()
     let uniform1 ?label () = uniform1 () ?label ()

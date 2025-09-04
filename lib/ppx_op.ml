@@ -45,7 +45,7 @@ let operators =
       ("embed_self_id", "embed_self_id");
       ("einsum", "einsum");
       ("einsum1", "einsum1");
-      ("ndarray", "ndarray");
+      ("offsets", "offsets");
       ("uniform", "uniform");
       ("uniform_at", "uniform_at");
       ("uniform1", "uniform1");
@@ -325,7 +325,7 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
   | { pexp_desc = Pexp_array _; _ }
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-      (no_vbs, ndarray_op ?label expr)
+      (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as
          already tensors. *)

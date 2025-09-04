@@ -914,7 +914,7 @@ let translate ?ident_label (expr : expression) : result =
             })
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-        { default_result with expr = ndarray_op expr }
+        { default_result with expr = ndarray_op ~ndarray_fn:[%expr NTDSL.ndarray] expr }
     | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->

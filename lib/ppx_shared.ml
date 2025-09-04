@@ -256,13 +256,17 @@ let assignment_ops =
 let einsum_binary_ops =
   Hashtbl.of_alist_exn
     (module String)
-    [ ("+*", fun loc -> [%expr einsum]); ("@^+", fun loc -> [%expr tropical]) ]
+    [
+      ("+*", fun loc -> [%expr einsum]);
+      ("@^+", fun loc -> [%expr tropical]);
+      ("+++", fun loc -> [%expr outer_sum]);
+    ]
 
 let einsum_unary_ops =
-      Hashtbl.of_alist_exn
-        (module String)
-        [ ("++", fun loc -> [%expr einsum1]); ("@^^", fun loc -> [%expr einmax1]) ]
-    
+  Hashtbl.of_alist_exn
+    (module String)
+    [ ("++", fun loc -> [%expr einsum1]); ("@^^", fun loc -> [%expr einmax1]) ]
+
 let is_primitive_op op_ident =
   List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
 
@@ -313,11 +317,11 @@ let translate_str translate ({ pstr_desc; pstr_loc = loc; _ } as str) =
 let str_expander_with_punning translate ~loc ~path (payload : structure_item list) =
   flatten_str ~loc ~path @@ List.map payload ~f:(translate_str translate)
 
-let ndarray_op ?axis_labels ?label expr =
+let ndarray_op ?axis_labels ?label ~ndarray_fn expr =
   let loc = expr.pexp_loc in
   let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
   let edims dims = Ast_builder.Default.elist ~loc dims in
-  let w_val = [%expr ndarray [%e values]] in
+  let w_val = [%expr [%e ndarray_fn] [%e values]] in
   let op =
     match (axis_labels, label) with
     | None, None -> w_val
