@@ -206,7 +206,7 @@ let compare_prec p1 p2 =
   | Single_prec _, _ -> -1
   | _, Single_prec _ -> 1
 
-let prec_in_bytes = function
+  let prec_in_bytes = function
   | Void_prec -> 0
   | Byte_prec _ -> 1
   | Uint16_prec _ -> 2
@@ -220,6 +220,20 @@ let prec_in_bytes = function
   | Fp8_prec _ -> 1
   | Single_prec _ -> 4
   | Double_prec _ -> 8
+let is_float = function
+  | Void_prec -> false
+  | Byte_prec _ -> false
+  | Uint16_prec _ -> false
+  | Int32_prec _ -> false
+  | Uint32_prec _ -> false
+  | Int64_prec _ -> false
+  | Uint64_prec _ -> false
+  | Uint4x32_prec _ -> false
+  | Half_prec _ -> true
+  | Bfloat16_prec _ -> true
+  | Fp8_prec _ -> true
+  | Single_prec _ -> true
+  | Double_prec _ -> true
 
 (** Prefer precision which is more likely to remain functional in the resulting computations.
     uint4x32 always dominates, because operations that work on uint4x32 do not support other
