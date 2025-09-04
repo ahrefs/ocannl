@@ -1,17 +1,84 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Nn_blocks (neural_nets_lib.Ocannl.Nn_blocks)</title><meta charset="utf-8"/><link rel="stylesheet" href="../../../odoc.support/odoc.css"/><meta name="generator" content="odoc 3.1.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../../../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="../index.html">Up</a> – <a href="../../../index.html">Index</a> &#x00BB; <a href="../../index.html">neural_nets_lib</a> &#x00BB; <a href="../index.html">Ocannl</a> &#x00BB; Nn_blocks</nav><header class="odoc-preamble"><h1>Module <code><span>Ocannl.Nn_blocks</span></code></h1></header><div class="odoc-content"><div class="odoc-spec"><div class="spec value anchored" id="val-mlp_layer"><a href="#val-mlp_layer" class="anchor"></a><code><span><span class="keyword">val</span> mlp_layer : 
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Nn_blocks (neural_nets_lib.Ocannl.Nn_blocks)</title><meta charset="utf-8"/><link rel="stylesheet" href="../../../odoc.support/odoc.css"/><meta name="generator" content="odoc 3.1.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../../../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="../index.html">Up</a> – <a href="../../../index.html">Index</a> &#x00BB; <a href="../../index.html">neural_nets_lib</a> &#x00BB; <a href="../index.html">Ocannl</a> &#x00BB; Nn_blocks</nav><header class="odoc-preamble"><h1>Module <code><span>Ocannl.Nn_blocks</span></code></h1><p>This file contains basic building blocks for neural networks, with limited functionality. Feel free to copy-paste and modify as needed.</p><p>We follow &quot;the principle of least commitment&quot;: where possible, we use row variables to remain agnostic to the number of axes. This flexibility often remains unused, but it makes explicit the architectural structure.</p></header><div class="odoc-content"><div class="odoc-spec"><div class="spec module anchored" id="module-Tn"><a href="#module-Tn" class="anchor"></a><code><span><span class="keyword">module</span> Tn</span><span> = <a href="../../../arrayjit/Ir/Tnode/index.html">Ir.Tnode</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mlp_layer"><a href="#val-mlp_layer" class="anchor"></a><code><span><span class="keyword">val</span> mlp_layer : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">hid_dim</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mlp"><a href="#val-mlp" class="anchor"></a><code><span><span class="keyword">val</span> mlp : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-dropout"><a href="#val-dropout" class="anchor"></a><code><span><span class="keyword">val</span> dropout : <span><span class="label">rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span> <span>unit <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Set rate=0.0 during inference.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mlp"><a href="#val-mlp" class="anchor"></a><code><span><span class="keyword">val</span> mlp : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">hid_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-softmax"><a href="#val-softmax" class="anchor"></a><code><span><span class="keyword">val</span> softmax : <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-basic_multi_head_attention"><a href="#val-basic_multi_head_attention" class="anchor"></a><code><span><span class="keyword">val</span> basic_multi_head_attention : 
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Multi-layer perceptron of depth <code>List.length hid_dims + 1</code>, with a linear output layer.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-reduce_specified_axes"><a href="#val-reduce_specified_axes" class="anchor"></a><code><span><span class="keyword">val</span> reduce_specified_axes : <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.String.t</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-softmax"><a href="#val-softmax" class="anchor"></a><code><span><span class="keyword">val</span> softmax : 
+  <span><span class="label">spec</span>:<span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Softmax across specified axes. Does not support non-default row variables.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-multi_head_attention"><a href="#val-multi_head_attention" class="anchor"></a><code><span><span class="keyword">val</span> multi_head_attention : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-layer_norm"><a href="#val-layer_norm" class="anchor"></a><code><span><span class="keyword">val</span> layer_norm : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder_block"><a href="#val-transformer_encoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder_block : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-cross_attention"><a href="#val-cross_attention" class="anchor"></a><code><span><span class="keyword">val</span> cross_attention : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">enc_output</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder_block"><a href="#val-transformer_decoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder_block : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">enc_output</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">mask</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder"><a href="#val-transformer_encoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder"><a href="#val-transformer_decoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">enc_output</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">mask</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer"><a href="#val-transformer" class="anchor"></a><code><span><span class="keyword">val</span> transformer : 
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_encoder_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_decoder_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_model</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span>unit <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div></div></body></html>
