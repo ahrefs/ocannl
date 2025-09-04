@@ -11,15 +11,9 @@ module Tn = Ir.Tnode
 
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
 
-(** Set rate=0.0 during inference. *)
+(** Set rate=0.0 during inference. Masks and scales by 1/keep_prob to maintain expected value. *)
 let%op dropout ~rate () x =
-  if Float.(rate <= 0.0) then x
-  else
-    let keep_prob = 1.0 - !.rate in
-    let mask = !.rate < uniform () *. x in
-    (* Creates 0/1 mask *)
-    (* Scale by 1/keep_prob to maintain expected value *)
-    x *. mask /. keep_prob
+  if Float.(rate <= 0.0) then x else x *. (!.rate < uniform () *. x) /. (1.0 - !.rate)
 
 (** Multi-layer perceptron of depth [List.length hid_dims + 1], with a linear output layer. *)
 let%op mlp ~label ~hid_dims () =
@@ -54,18 +48,18 @@ let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0)
   let v = { w_v } * x in
   (* Works with arbitrary number of model axes via `..d..` (row variable syntax). *)
   let scores =
-    (q +* " ... s | h ..d..; ... t | h ..d.. => ... | s t -> h " [ "h"; "d" ] k) /. sqrt (dim d)
+    (q +* " ... s | h ..d..; ... t | h ..d.. => ... s | t -> h " [ "h"; "d" ] k) /. sqrt (dim d)
   in
   Shape.set_dim h num_heads;
   (* We don't need to lift [softmax ~spec ()] because it doesn't introduce any new params. *)
   let attn_weights =
-    softmax ~spec:" ... | ... t -> ..." ?temperature ()
+    softmax ~spec:" ... | t -> ..." ?temperature ()
       (match mask with None -> scores | Some mask -> where mask scores !.(-1e9))
   in
   let attn_weights =
     if Float.(dropout_rate > 0.0) then dropout ~rate:dropout_rate () attn_weights else attn_weights
   in
-  let attended = attn_weights +* " ... | s t -> h; ... t | h ... => ... s | h ... " v in
+  let attended = attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v in
   { w_o } * attended
 
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
@@ -151,7 +145,7 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
   in
   (* All inline definitions, including for d, are lifted up to the unit parameter above. *)
   Shape.set_dim d d_model;
-  fun src tgt mask ->
+  fun ~src ~tgt ~mask ->
     (* Learned positional encoding *)
     let enc_output =
       encoder
