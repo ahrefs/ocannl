@@ -1,0 +1,9 @@
+Testing basic transformer model
+Output shape: batch_dims=[|2;8|] input_dims=[||] output_dims=[|100|]
+
+Testing transformer components
+MHA output shape: [|32|]
+Layer norm output shape: [|32|]
+FFN output shape: [|32|]
+
+All tests completed successfully!

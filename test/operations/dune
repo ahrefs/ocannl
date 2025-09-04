@@ -303,6 +303,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name transformer_test)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules transformer_test)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_sexp_conv)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)
