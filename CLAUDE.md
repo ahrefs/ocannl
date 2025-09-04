@@ -43,10 +43,11 @@ opam install cudajit  # for CUDA backend
 
 - `lib/`: High-level neural networks library
   - `tensor.ml/mli`: Main tensor type and operations
-  - `shape.ml/mli`: Shape inference system
+  - `shape.ml/mli`: Shape inference system (see detailed docs there for einsum notation)
   - `operation.ml`: Tensor operations and DSL modules
   - `train.ml`: Training utilities and optimizers
-  - `nn_blocks.ml`: Neural network building blocks
+  - `nn_blocks.ml`: Basic neural network building blocks (transformers, attention, etc.)
+  - `syntax_extensions.md`: Comprehensive guide to `%op` and `%cd` syntax
   - `ppx_*.ml`: Syntax extension implementations
 
 - `arrayjit/`: Low-level array compilation framework
@@ -66,8 +67,13 @@ opam install cudajit  # for CUDA backend
 1. **Dual Syntax Extensions**:
    - `%cd` ("code"): For assignment computations (`Assignments.comp`)
    - `%op` ("operation"): For tensor expressions (`Tensor.t`)
+   - Inline declarations lift to unit parameter `()` scope, enabling parameter reuse
 
-2. **Shape Inference**: Comprehensive axis tracking with batch/input/output classification and optional dimension labels
+2. **Shape Inference**: 
+   - Three axis kinds: batch | input -> output (matrix convention: input rightmost)
+   - Row variables (`..d..`) enable flexible axis handling and broadcasting
+   - Einsum notation supports convolutions, reductions, and arbitrary permutations
+   - "Principle of least commitment": use row variables where axis count doesn't matter
 
 3. **Backend Architecture**: Unified interface supporting CPU (multicore), CUDA, and Metal backends
 
@@ -111,7 +117,8 @@ opam install cudajit  # for CUDA backend
 3. Config file: `ocannl_config` in current or ancestor directories
 
 **Testing with Different Configurations**:
-- When using environment variables for test configuration other than OCANNL_CONFIG, Dune won't detect changes and may skip tests
+
+- When using environment variables for test configuration other than OCANNL_BACKEND, Dune won't detect changes and may skip tests
 - **Warning**: `dune test --force` does NOT re-run expect tests (only rules with alias fields)
 - Reliable ways to ensure tests run with new configuration:
   1. Modify `test/config/ocannl_config` directly
@@ -158,12 +165,20 @@ opam install cudajit  # for CUDA backend
 **Key differences between %op and %cd**:
 - `%op` allows initialization expressions (`{ x = uniform () }`), used for model parameters
 - `%cd` is self-referential only (`{ x }`), used in computation graphs where tensors are defined by operations
+- See `lib/syntax_extensions.md` for comprehensive documentation
 
 **Record syntax features**:
 - OCaml punning: `{ x }` expands to default initialization (uniform() for parameters in %op)
 - Shorthand field names: `o` → `output_dims`, `i` → `input_dims`, `b` → `batch_dims`
 - Additional fields map to labeled arguments of tensor creation functions
 - Dimension specification: lists `[...]` for output, tuples `(...)` for input, arrays `[|...|]` for batch
+
+**Einsum notation**:
+- Binary form: `tensor1 +* "spec1; spec2 => result_spec" tensor2`
+- Unary form: `tensor ++ "spec => result_spec"`
+- Capture dimensions: `+* "spec" ["var1"; "var2"]` binds dimension variables
+- Use `Shape.set_dim var value` to constrain captured dimensions
+- Special operators -- binary: `+*` (`einsum`, add-reduce with multiply), `@^+` (`tropical`, max-reduce with add), `+++` (`outer_sum`, add-reduce with add); unary: `++` (`einsum1`, add-reduce), `@^^` (`einmax1`, max-reduce)
 
 ## Common Development Tasks
 
@@ -173,10 +188,12 @@ opam install cudajit  # for CUDA backend
 2. Implement interpretation in the same file
 3. Add syntax support in `lib/ppx_*.ml` if needed
 4. Add high-level wrappers in `lib/operation.ml`
+5. For neural network blocks, see `lib/nn_blocks.ml` for patterns
 
 ### Debugging Backend Discrepancies
 
 When outputs differ between backends:
+
 1. Compare runtime logs in `<backend>-<device>-<stream>.log` files (might require minimizing test tensors)
 2. Check generated code in `build_files/*.c` vs `*.cu` / `*.metal` for differences
 3. Common issues:
