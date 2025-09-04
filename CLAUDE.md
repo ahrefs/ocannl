@@ -106,6 +106,20 @@ opam install cudajit  # for CUDA backend
   * When adding a test, update the corresponding test stanza
   * For standalone tests, add an `.expected` file for test results (can initially be empty)
 
+**Module Paths and Common APIs**:
+
+- **For files outside OCANNL implementation (tests, examples, user code), always start with `open Ocannl.Operation.DSL_modules`** - this brings all DSL modules into scope (defined in `lib/operation.ml` lines 720-737)
+- Available modules after `open Ocannl.Operation.DSL_modules`:
+  - `Ir` - Low-level IR types and operations (Ndarray, Ops, Tnode, etc.)
+  - `Shape` - Shape inference and einsum notation
+  - `Tensor` - Core tensor type and operations
+  - `TDSL` - Tensor DSL with automatic differentiation (grad_spec: If_needed)
+  - `NTDSL` - No-gradient tensor DSL (grad_spec: Prohibit_grad)
+  - `PDSL` - Parameter/gradient-required DSL (grad_spec: Require_grad)
+- Precision values: `Ir.Ops.single`, `Ir.Ops.double`, `Ir.Ops.half` (lowercase)
+- Tensor printing in expect tests: `Tensor.print ~here:[%here] ~force:false ~with_code:false ~with_grad:false \`Inline tensor`
+- For simple test executables, use `(libraries base ocannl stdio)` in dune file
+
 ### Configuration
 
 - See `ocannl_config.example` for documentation of all settings
