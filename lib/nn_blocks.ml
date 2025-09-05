@@ -168,13 +168,13 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
 let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
-  (* FIXME(#386): this is obviously wrong, but how will we pass use_padding? *)
+  (* FIXME(#386): this is super hacky, but how will we pass use_padding? *)
   [%oc Row.use_padding := use_padding];
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
   x
-  +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" [ "kh"; "kw" ]
-       { kernel }
+  +* "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw, ..ic.. -> ..oc.. => ... | oh, ow, ..oc.."
+       [ "kh"; "kw" ] { kernel }
   + { bias = 0. }
 
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
@@ -185,8 +185,166 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) () x =
   Shape.set_dim kw kernel_size;
   let depthwise =
     x
-    +* "... | stride*oh+kh, stride*ow+kw, c; kh, kw, c => ... | oh, ow, c" [ "kh"; "kw" ]
-         { dw_kernel }
+    +* "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw -> ..ic.. => ... | oh, ow, ..ic.."
+         [ "kh"; "kw" ] { dw_kernel }
   in
   (* Pointwise: 1x1 conv to mix channels *)
-  depthwise +* "... | h, w, c; c -> oc => ... | h, w, oc" { pw_kernel } + { bias = 0. }
+  depthwise
+  +* "... | h, w, ..ic..; ..ic.. -> ..oc.. => ... | h, w, ..oc.." { pw_kernel }
+  + { bias = 0. }
+
+(** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values. *)
+let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
+  (* Although there is no kernel participating, we need to set the iteration size. *)
+  Shape.set_dim wh window_size;
+  Shape.set_dim ww window_size;
+  x @^^ "... | stride*oh+wh, stride*ow+ww, ..c.. => ... | oh, ow, ..c.." [ "wh"; "ww" ]
+
+(** Average pooling for 2D spatial data - reduces spatial dimensions by averaging values. *)
+let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
+  Shape.set_dim wh window_size;
+  Shape.set_dim ww window_size;
+  let sum = x ++ "... | stride*oh+wh, stride*ow+ww, ..c.. => ... | oh, ow, ..c.." [ "wh"; "ww" ] in
+  sum /. (dim wh *. dim ww)
+
+(** Global average pooling - reduces each feature map to a single value by averaging. Commonly used
+    before final classification layer. *)
+let%op global_avg_pool2d x = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.."
+
+(** Batch normalization for CNN layers - normalizes across the batch dimension for each channel.
+    Typically applied after convolutions and before activations. *)
+let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x =
+  let _ = momentum in
+  (* TODO: implement running statistics, currently using learned params *)
+  (* Compute batch statistics across spatial dimensions *)
+  let mean = x ++ "... | h, w, ..c.. => 0 | 0, 0, ..c.." in
+  let centered = x - mean in
+  let variance = (centered *. centered) ++ "... | h, w, ..c.. => 0 | 0, 0, ..c.." in
+  let std_dev = sqrt (variance + !.epsilon) in
+  let normalized = centered /. std_dev in
+  (* Scale and shift with learnable parameters *)
+  match train_step with
+  | Some _ ->
+      (* During training: update running statistics *)
+      ({ gamma = 1. } *. normalized) + { beta = 0. }
+  | None ->
+      (* During inference: use running statistics (simplified for now) *)
+      (gamma *. normalized) + beta
+
+(** Conv block with conv -> batch norm -> activation pattern *)
+let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) () =
+  let conv = conv2d ~label:(label @ [ "conv" ]) ~kernel_size ~stride () in
+  let bn = batch_norm2d ~label:(label @ [ "bn" ]) () in
+  fun ~train_step x -> relu (bn ~train_step (conv x))
+
+(** Residual block for ResNet-style architectures. Features skip connections that help with gradient
+    flow in deep networks. *)
+let%op resnet_block ~label ?(stride = 1) () =
+  let conv1 = conv2d ~label:(label @ [ "conv1" ]) ~kernel_size:3 ~stride () in
+  let bn1 = batch_norm2d ~label:(label @ [ "bn1" ]) () in
+  let conv2 = conv2d ~label:(label @ [ "conv2" ]) ~kernel_size:3 ~stride:1 () in
+  let bn2 = batch_norm2d ~label:(label @ [ "bn2" ]) () in
+  let identity =
+    if stride > 1 then
+      (* Need to downsample the skip connection *)
+      let downsample_conv = conv2d ~label:(label @ [ "downsample" ]) ~kernel_size:1 ~stride () in
+      let downsample_bn = batch_norm2d ~label:(label @ [ "downsample_bn" ]) () in
+      fun train_step x -> downsample_bn ~train_step (downsample_conv x)
+    else fun _train_step x -> x
+  in
+  fun ~train_step x ->
+    let out = conv1 x in
+    let out = bn1 ~train_step out in
+    let out = relu out in
+    let out = conv2 out in
+    let out = bn2 ~train_step out in
+    relu (out + identity train_step x)
+
+(** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:
+    conv -> pool -> conv -> pool -> fc layers *)
+let%op lenet ~label ?(num_classes = 10) () =
+  let conv1 = conv2d ~label:(label @ [ "conv1" ]) ~kernel_size:5 () in
+  let pool1 = max_pool2d ~stride:2 () in
+  let conv2 = conv2d ~label:(label @ [ "conv2" ]) ~kernel_size:5 () in
+  let pool2 = max_pool2d ~stride:2 () in
+  let fc1 = mlp_layer ~label:(label @ [ "fc1" ]) ~hid_dim:120 () in
+  let fc2 = mlp_layer ~label:(label @ [ "fc2" ]) ~hid_dim:84 () in
+  fun ~train_step:_ x ->
+    let x = conv1 x in
+    let x = relu x in
+    let x = pool1 x in
+    let x = conv2 x in
+    let x = relu x in
+    let x = pool2 x in
+    (* Flatten spatial dimensions - merge all output axes into one *)
+    let x = x ++ "... | ..spatial.. => ... | 0" in
+    let x = fc1 x in
+    let x = fc2 x in
+    (* Final classification layer *)
+    ({ w_logits } * x) + { b_logits = 0.; o = [ num_classes ] }
+
+(** VGG-style block - multiple convolutions with same filter count followed by pooling *)
+let%op vgg_block ~label ~num_convs ?(kernel_size = 3) () =
+  let convs =
+    List.init num_convs ~f:(fun i ->
+        conv_bn_relu ~label:(label @ [ Printf.sprintf "conv%d" i ]) ~kernel_size ())
+  in
+  let pool = max_pool2d ~stride:2 () in
+  fun ~train_step x ->
+    let x = List.fold convs ~init:x ~f:(fun x conv -> conv ~train_step x) in
+    pool x
+
+(** Simple CNN for Sokoban-like grid environments. Processes grid states with multiple conv layers
+    and outputs action logits. *)
+let%op sokoban_cnn ~label ?(num_actions = 4) () =
+  (* Process spatial features with conv layers *)
+  let conv1 = conv_bn_relu ~label:(label @ [ "conv1" ]) ~kernel_size:3 () in
+  let conv2 = conv_bn_relu ~label:(label @ [ "conv2" ]) ~kernel_size:3 () in
+  let conv3 = conv_bn_relu ~label:(label @ [ "conv3" ]) ~kernel_size:3 () in
+  fun ~train_step ~grid_state ->
+    let x = conv1 ~train_step grid_state in
+    let x = conv2 ~train_step x in
+    let x = conv3 ~train_step x in
+
+    (* Global pooling to aggregate spatial info *)
+    let x = global_avg_pool2d x in
+
+    (* Action head *)
+    let action_logits = ({ w_action } * x) + { b_action = 0.; o = [ num_actions ] } in
+
+    (* Optional: value head for actor-critic methods *)
+    let value = ({ w_value } * x) + { b_value = 0.; o = [ 1 ] } ++ "... | 1 => ... | 0" in
+
+    (action_logits, value)
+
+(** Modern CNN with depthwise separable convolutions for efficiency. Suitable for mobile/edge
+    deployment. *)
+let%op mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
+  let _ = width_mult in
+  (* TODO: implement channel width multiplier *)
+  (* Initial standard conv *)
+  let conv_init = conv_bn_relu ~label:(label @ [ "conv_init" ]) ~kernel_size:3 ~stride:2 () in
+
+  (* Depthwise separable blocks *)
+  let dw_block1 = depthwise_separable_conv2d ~label:(label @ [ "dw1" ]) ~stride:1 () in
+  let dw_block2 = depthwise_separable_conv2d ~label:(label @ [ "dw2" ]) ~stride:2 () in
+  let dw_block3 = depthwise_separable_conv2d ~label:(label @ [ "dw3" ]) ~stride:1 () in
+  let dw_block4 = depthwise_separable_conv2d ~label:(label @ [ "dw4" ]) ~stride:2 () in
+
+  let bn = batch_norm2d ~label:(label @ [ "bn_final" ]) () in
+
+  fun ~train_step x ->
+    let x = conv_init ~train_step x in
+    let x = dw_block1 x in
+    let x = relu x in
+    let x = dw_block2 x in
+    let x = relu x in
+    let x = dw_block3 x in
+    let x = relu x in
+    let x = dw_block4 x in
+    let x = relu x in
+    let x = bn ~train_step x in
+
+    (* Global pooling and classification *)
+    let x = global_avg_pool2d x in
+    ({ w_classifier } * x) + { b_classifier = 0.; o = [ num_classes ] }
