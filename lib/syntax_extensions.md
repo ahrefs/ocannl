@@ -25,6 +25,7 @@
   - Syntax extension `%cd` stands for "code", to express assignments and computations: `Assignments.comp`.
   - Syntax extension `%op` stands for "operation", to express tensors: `Tensor.t`.
   - Both extensions use record syntax `{ tensor_name }` or `{ tensor_name = init_expr }` for inline tensor declarations.
+  - Anti-quotation `%oc` escapes expressions to preserve them as pure OCaml without transformation.
 
 ## Preliminaries
 
@@ -40,6 +41,35 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`. Functions inside `Operation.PDSL` use `~grad_spec:Require_grad`.
 
 The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding operators.
+
+### The %oc anti-quotation and the unit-parameter heuristic
+
+Within `%op` and `%cd` contexts, expressions typically undergo transformation to build tensors or assignments. However, OCANNL uses two mechanisms to preserve pure OCaml expressions:
+
+#### Unit-parameter heuristic (automatic in %op)
+
+In the `%op` syntax, when a function application contains a unit `()` argument, all arguments appearing **before** the unit are automatically preserved as pure OCaml expressions. This aligns with OCANNL's design pattern where configuration happens before the unit parameter:
+
+```ocaml
+(* Arguments before () are automatically preserved as OCaml *)
+let%op my_fn ~label x = 
+  other_fn ~label:(("prefix_" ^ name) :: label) ~config:value () x
+  (* label and config are preserved; x after () is transformed *)
+```
+
+#### Explicit %oc anti-quotation
+
+For cases where you need explicit control or the heuristic doesn't apply, the `%oc` (mnemonic: "OCaml") anti-quotation escapes from the transformation context:
+
+```ocaml
+(* Force preservation even after () or in edge cases *)
+let%op special = process_data data [%oc complex_ocaml_expr]
+```
+
+The `%oc` extension expects a single expression and returns it unchanged. Use cases:
+- Overriding the unit-parameter heuristic when needed
+- Preserving expressions in contexts without a unit parameter
+- Escaping from the DSL in `%cd` contexts (which don't use the unit heuristic)
 
 ## Primitive operations
 

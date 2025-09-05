@@ -153,6 +153,14 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~num_configs ~is_toplevel:false ~opt_label in
   match expr with
+  | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, payload); _ } -> (
+      (* %oc anti-quotation: preserve the expression without transformation *)
+      match payload with
+      | PStr [ { pstr_desc = Pstr_eval (expr, _); _ } ] -> (no_vbs, expr)
+      | _ ->
+          ( no_vbs,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc "%%oc expects a single expression" ))
   | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } ->
@@ -374,15 +382,30 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       let vbs3, e3 = loop expr3 in
       let vbs4, e4 = loop expr4 in
       (reduce_vbss [ vbs2; vbs3; vbs4 ], [%expr [%e e1] [%e e2] [%e e3] [%e e4]])
-  | [%expr [%e? expr1] [%e? expr2] [%e? expr3]] ->
-      let vbs1, e1 = loop ?label expr1 in
-      let vbs2, e2 = loop expr2 in
-      let vbs3, e3 = loop expr3 in
-      (reduce_vbss [ vbs1; vbs2; vbs3 ], [%expr [%e e1] [%e e2] [%e e3]])
-  | [%expr [%e? expr1] [%e? expr2]] ->
-      let vbs1, e1 = loop ?label expr1 in
-      let vbs2, e2 = loop expr2 in
-      (reduce_vbss [ vbs1; vbs2 ], [%expr [%e e1] [%e e2]])
+  | { pexp_desc = Pexp_apply (fn_expr, args); _ } ->
+      (* Smart application handling with unit-parameter heuristic:
+         If there's a unit () argument, don't transform args before it *)
+      let unit_position =
+        List.find_mapi args ~f:(fun i (_, arg_expr) ->
+            match arg_expr.pexp_desc with
+            | Pexp_construct ({ txt = Lident "()"; _ }, None) -> Some i
+            | _ -> None)
+      in
+      let vbs_fn, e_fn = loop ?label fn_expr in
+      let vbs_args, processed_args =
+        List.unzip
+        @@ List.mapi args ~f:(fun i (arg_label, arg_expr) ->
+               match unit_position with
+               | Some unit_pos when i < unit_pos ->
+                   (* Before unit: preserve as OCaml expression *)
+                   (no_vbs, (arg_label, arg_expr))
+               | _ ->
+                   (* After unit or no unit: transform *)
+                   let vbs, e = loop arg_expr in
+                   (vbs, (arg_label, e)))
+      in
+      let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
+      (all_vbs, Ast_builder.Default.pexp_apply ~loc e_fn processed_args)
   | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel -> (
       (* Check if there's a unit parameter or a labeled parameter with label "label" *)
       let rec find_unit acc = function

@@ -6,8 +6,8 @@ let y0 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey1") () in
   let open! TDSL.O in
-    ((+) ?label:(Some ["y0"]))
-      ((( *. ) ?label:None) (TDSL.number (Float.of_int 2)) hey1)
+    (+) ?label:(Some ["y0"])
+      (( *. ) ?label:None (TDSL.number (Float.of_int 2)) hey1)
       (TDSL.number (Float.of_int 3))
 let y1 =
   let hey2 =
@@ -15,21 +15,21 @@ let y1 =
        "hey2") () in
   let open! TDSL.O in
     fun x ->
-      ((+) ?label:(Some
-                     (List.concat [["y1"]; (x.Tensor.value).Ir.Tnode.label])))
-        ((( * ) ?label:None) hey2 (TDSL.number (Float.of_int 2))) x
+      (+) ?label:(Some
+                    (List.concat [["y1"]; (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None hey2 (TDSL.number (Float.of_int 2))) x
 let y2 =
   let hey3 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey3") () in
   let open! TDSL.O in
     fun x1 x2 ->
-      ((+) ?label:(Some
-                     (List.concat
-                        [["y2"];
-                        (x1.Tensor.value).Ir.Tnode.label;
-                        (x2.Tensor.value).Ir.Tnode.label])))
-        ((( *. ) ?label:None) x1 hey3) x2
+      (+) ?label:(Some
+                    (List.concat
+                       [["y2"];
+                       (x1.Tensor.value).Ir.Tnode.label;
+                       (x2.Tensor.value).Ir.Tnode.label]))
+        (( *. ) ?label:None x1 hey3) x2
 let a =
   let open! TDSL.O in
     ((TDSL.ndarray
@@ -46,8 +46,8 @@ let y =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey4") () in
   let open! TDSL.O in
-    ((+) ?label:(Some ["y"]))
-      ((( * ) ?label:None) hey4 (TDSL.number ?label:None ~axis_label:"q" 2.0))
+    (+) ?label:(Some ["y"])
+      (( * ) ?label:None hey4 (TDSL.number ?label:None ~axis_label:"q" 2.0))
       (TDSL.number ?label:None ~axis_label:"p" 1.0)
 let z =
   let hey5 =
@@ -57,9 +57,9 @@ let z =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey6") () in
   let open! TDSL.O in
-    ((+) ?label:(Some ["z"]))
-      ((( * ) ?label:None) (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
-      ((( * ) ?label:None) hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
+    (+) ?label:(Some ["z"])
+      (( * ) ?label:None (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
+      (( * ) ?label:None hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
 let stride = 2
 and dilation = 3
 let z2 =
@@ -98,21 +98,21 @@ let mlp_layer =
       and w =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "w") () in
-      fun x ->
-        (relu ?label:(Some ["mlp_layer"]))
-          (((+) ?label:None) ((( * ) ?label:None) w x) b)
+      fun ~x ->
+        relu ?label:(Some ["mlp_layer"])
+          ((+) ?label:None (( * ) ?label:None w x) b)
 let _use_layer =
   let open! TDSL.O in
     let l1 = mlp_layer ~label:["L"] ~hid_dim:3 () in
-    let l2 = mlp_layer ~label:["L2"] ~hid_dim:3 () in fun x -> l1 (l2 x)
+    let l2 = mlp_layer ~label:["L2"] ~hid_dim:3 () in fun x -> l1 ~x:(l2 ~x)
 let _config_layer =
   let open! TDSL.O in
     fun ~label () ->
-      let l = mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 () in fun x -> l x
+      let l = mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 () in fun x -> l ~x
 let _three_layer_perceptron =
   let open! TDSL.O in
     fun ~label ~dim1 ~dim2 ~dim3 () ->
       let l1 = mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 () in
       let l2 = mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 () in
       let l3 = mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 () in
-      fun x -> l3 (l2 (l1 x))
+      fun x -> l3 ~x:(l2 ~x:(l1 ~x))

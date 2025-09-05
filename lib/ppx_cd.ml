@@ -817,6 +817,17 @@ let translate ?ident_label (expr : expression) : result =
       assignment ~punned ~lhs:setup_l ~rhses:[ setup_r ] ~raw_body ()
     in
     match expr with
+    | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, payload); _ } -> (
+        (* %oc anti-quotation: preserve the expression without transformation *)
+        match payload with
+        | PStr [ { pstr_desc = Pstr_eval (expr, _); _ } ] -> { default_result with expr }
+        | _ ->
+            {
+              default_result with
+              expr =
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc "%%oc expects a single expression";
+            })
     | { pexp_desc = Pexp_constant (Pconst_float _); _ } ->
         { default_result with expr = [%expr NTDSL.number [%e expr]]; slot = Scalar }
     | { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } ->
