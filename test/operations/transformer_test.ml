@@ -48,7 +48,7 @@ let () =
   in
 
   (* Forward pass *)
-  let output = transformer_model ~src ~tgt ~mask in
+  let output = transformer_model ~train_step:None ~src ~tgt ~mask in
 
   (* Verify output shape *)
   Stdio.printf "Output shape:\n%s\n%!"
@@ -67,7 +67,7 @@ let () =
    batch_size ~f:(fun _ -> Array.init seq_len ~f:(fun _ -> Array.init d_model ~f:(fun _ ->
    Random.float 1.0))); |] in
 
-   let mha_output = mha input in
+   let mha_output = mha ~train_step:None input in
 
    (* Test layer norm *) let%op ln = Nn_blocks.layer_norm ~label:[ "test_ln" ] () in let ln_output =
    ln input in

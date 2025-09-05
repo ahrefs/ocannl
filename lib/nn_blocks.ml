@@ -3,7 +3,10 @@
 
     We follow "the principle of least commitment": where possible, we use row variables to remain
     agnostic to the number of axes. This flexibility often remains unused, but it makes explicit the
-    architectural structure. *)
+    architectural structure.
+
+    The einsum specifications in this file often use the single-char mode (no commas), where the
+    spaces are entirely ignored / optional, but are used copiously for readability. *)
 
 open! Base
 open Operation.DSL_modules
@@ -11,9 +14,13 @@ module Tn = Ir.Tnode
 
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
 
-(** Set rate=0.0 during inference. Masks and scales by 1/keep_prob to maintain expected value. *)
-let%op dropout ~rate () x =
-  if Float.(rate <= 0.0) then x else x *. (!.rate < uniform () *. x) /. (1.0 - !.rate)
+(** Masks and scales by 1/keep_prob to maintain expected value. When [train_step = None], the
+    dropout rate is ignored and the tensor is returned unmodified. *)
+let%op dropout ~rate () ~train_step x =
+  match train_step with
+  | Some train_step when Float.(rate > 0.0) ->
+      x *. (!.rate < uniform_at !@train_step *. x) /. (1.0 - !.rate)
+  | _ -> x
 
 (** Multi-layer perceptron of depth [List.length hid_dims + 1], with a linear output layer. *)
 let%op mlp ~label ~hid_dims () =
@@ -42,7 +49,8 @@ let%op softmax ~spec ?(temperature = 1.0) () =
     let exp_vals = exp (x_scaled - max_vals) in
     exp_vals /. (exp_vals ++ spec)
 
-let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () ?mask x =
+let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () ~train_step
+    ?mask x =
   let q = { w_q } * x in
   let k = { w_k } * x in
   let v = { w_v } * x in
@@ -56,9 +64,7 @@ let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0)
     softmax ~spec:" ... | t -> ..." ?temperature ()
       (match mask with None -> scores | Some mask -> where mask scores !.(-1e9))
   in
-  let attn_weights =
-    if Float.(dropout_rate > 0.0) then dropout ~rate:dropout_rate () attn_weights else attn_weights
-  in
+  let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
   let attended = attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v in
   { w_o } * attended
 
@@ -77,13 +83,14 @@ let%op transformer_encoder_block ~label ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let ffn = mlp ~label:(label @ [ "ffn" ]) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
   let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
-  fun input ->
-    let attn_output = mha input in
+  fun ~train_step input ->
+    let attn_output = mha ~train_step input in
     let x1 = ln1 (input + attn_output) in
     let ffn_output = ffn x1 in
     ln2 (x1 + ffn_output)
 
-let%op cross_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () x ~enc_output =
+let%op cross_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () ~train_step x
+    ~enc_output =
   let q = { w_q } * x in
   let k = { w_k } * enc_output in
   let v = { w_v } * enc_output in
@@ -92,9 +99,7 @@ let%op cross_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () x
   in
   Shape.set_dim h num_heads;
   let attn_weights = softmax ~spec:" ... | ... t -> ..." ?temperature () scores in
-  let attn_weights =
-    if Float.(dropout_rate > 0.0) then dropout ~rate:dropout_rate () attn_weights else attn_weights
-  in
+  let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
   let attended = attn_weights +* " ... | s t -> h; ... t | h ... => ... s | h ... " v in
   { w_o } * attended
 
@@ -106,10 +111,10 @@ let%op transformer_decoder_block ~label ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
   let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
   let ln3 = layer_norm ~label:(label @ [ "ln3" ]) ~epsilon () in
-  fun target ~enc_output ~mask ->
-    let self_attn_output = masked_mha ~mask target in
+  fun ~train_step target ~enc_output ~mask ->
+    let self_attn_output = masked_mha ~train_step ~mask target in
     let x1 = ln1 (target + self_attn_output) in
-    let cross_attn_output = cross_mha x1 ~enc_output in
+    let cross_attn_output = cross_mha ~train_step x1 ~enc_output in
     let x2 = ln2 (x1 + cross_attn_output) in
     let ffn_output = ffn x2 in
     ln3 (x2 + ffn_output)
@@ -121,7 +126,7 @@ let transformer_encoder ~label ~num_layers ~num_heads ~d_ff ?(epsilon = 1e-5) ()
           ~label:(label @ [ "layer" ^ Int.to_string i ])
           ~num_heads ~d_ff ~epsilon ())
   in
-  fun x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
+  fun ~train_step x -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
 
 let transformer_decoder ~label ~num_layers ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let layers =
@@ -130,8 +135,8 @@ let transformer_decoder ~label ~num_layers ~num_heads ~d_ff ?(epsilon = 1e-5) ()
           ~label:(label @ [ "layer" ^ Int.to_string i ])
           ~num_heads ~d_ff ~epsilon ())
   in
-  fun target ~enc_output ~mask ->
-    List.fold layers ~init:target ~f:(fun x layer -> layer x ~enc_output ~mask)
+  fun ~train_step target ~enc_output ~mask ->
+    List.fold layers ~init:target ~f:(fun x layer -> layer ~train_step x ~enc_output ~mask)
 
 let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_model ~d_ff
     ?(epsilon = 1e-5) () =
@@ -145,13 +150,14 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
   in
   (* All inline definitions, including for d, are lifted up to the unit parameter above. *)
   Shape.set_dim d d_model;
-  fun ~src ~tgt ~mask ->
+  fun ~train_step ~src ~tgt ~mask ->
     (* Learned positional encoding *)
     let enc_output =
-      encoder
+      encoder ~train_step
         (src +* " ... s | ..v.. ; ..v.. -> d => ... s | d " [ "d" ] { src_embed } + { pos_encoding })
     in
     let tgt_embedded =
       tgt +* " ... t | ..v.. ; ..v.. -> d => ... t | d " { tgt_embed } + pos_encoding
     in
-    decoder tgt_embedded ~enc_output ~mask +* " ... | d; d -> ..v.. => ... | ..v.. " { w_out }
+    decoder ~train_step tgt_embedded ~enc_output ~mask
+    +* " ... | d; d -> ..v.. => ... | ..v.. " { w_out }
