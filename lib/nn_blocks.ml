@@ -1,12 +1,21 @@
-(** This file contains basic building blocks for neural networks, with limited functionality. Feel
+(** {1 Neural Network Building Blocks}
+
+    This file contains basic building blocks for neural networks, with limited functionality. Feel
     free to copy-paste and modify as needed.
-
-    We follow "the principle of least commitment": where possible, we use row variables to remain
-    agnostic to the number of axes. This flexibility often remains unused, but it makes explicit the
-    architectural structure.
-
-    The einsum specifications in this file often use the single-char mode (no commas), where the
-    spaces are entirely ignored / optional, but are used copiously for readability. *)
+      
+    Design principles, OCANNL fundamentals, and common patterns:
+      - "Principle of least commitment": use row variables where axis count doesn't matter
+      - Einsum specs here often use single-char mode (no commas) but with spaces for readability
+      - Pooling uses constant kernels (0.5 + 0.5) to propagate window dimensions
+      - conv2d uses convolution syntax: "stride*out+kernel," (often in multi-char mode) 
+      - Input axes (before →) for kernels show intent (and end up rightmost for memory locality)
+      - Inline params { } are always learnable and are lifted to unit parameter ()
+      - Introduce inputs to a block after sub-block construction
+        (sub-blocks have no automatic lifting like there is for inline definitions of params)
+      - Always use literal strings with einsum operators when capturing variables
+      - Avoid unnecessary variable captures in einsum operators, be mindful they can shadow
+        other identifiers
+*)
 
 open! Base
 open Operation.DSL_modules
@@ -198,9 +207,9 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
   (* NOTE: projections inference runs per-assignment in a distinct phase from shape inference, so
-     for it to know about the window size, we use a constant kernel = 1 to propagate the shape.
-     We use a trick to create a shape-inferred constant tensor, equivalently we could write
-     "NTDSL.term ~fetch_op:(Constant 1.) ()" but that's less concise. See:
+     for it to know about the window size, we use a constant kernel = 1 to propagate the shape. We
+     use a trick to create a shape-inferred constant tensor, equivalently we could write "NTDSL.term
+     ~fetch_op:(Constant 1.) ()" but that's less concise. See:
      https://github.com/ahrefs/ocannl/discussions/381 *)
   x
   @^+ "... | stride*oh+wh, stride*ow+ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
