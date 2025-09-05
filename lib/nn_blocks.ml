@@ -161,3 +161,32 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     in
     decoder ~train_step tgt_embedded ~enc_output ~mask
     +* " ... | d; d -> ..v.. => ... | ..v.. " { w_out }
+
+(** {2 Convolutional Neural Network Building Blocks} *)
+
+(** 2D convolution layer with flexible padding and stride options. *)
+let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
+  (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
+     output height (oh), output width (ow) *)
+  (* FIXME(#386): this is obviously wrong, but how will we pass use_padding? *)
+  [%oc Row.use_padding := use_padding];
+  Shape.set_dim kh kernel_size;
+  Shape.set_dim kw kernel_size;
+  x
+  +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" [ "kh"; "kw" ]
+       { kernel }
+  + { bias = 0. }
+
+(** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
+    conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing) *)
+let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) () x =
+  (* Depthwise: each input channel is convolved with its own filter *)
+  Shape.set_dim kh kernel_size;
+  Shape.set_dim kw kernel_size;
+  let depthwise =
+    x
+    +* "... | stride*oh+kh, stride*ow+kw, c; kh, kw, c => ... | oh, ow, c" [ "kh"; "kw" ]
+         { dw_kernel }
+  in
+  (* Pointwise: 1x1 conv to mix channels *)
+  depthwise +* "... | h, w, c; c -> oc => ... | h, w, oc" { pw_kernel } + { bias = 0. }
