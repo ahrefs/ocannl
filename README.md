@@ -44,14 +44,14 @@ A possible route to learning OCANNL:
 
 1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
 2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/).
-3. Read the syntax extensions documentation [lib/syntax_extensions.md](lib/syntax_extensions.md).
-4. Read the introductory part of the shape inference documentation [lib/shape_inference.md](lib/shape_inference.md).
+3. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
+4. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
 5. Read the configuration documentation [ocannl_config.example](ocannl_config.example).
 6. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
-7. Read [arrayjit/lib/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
+7. Read [docs/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
 8. Read the implementation overview:
-   1. Shape inference details [lib/shape_inference.md](lib/shape_inference.md).
-   2. Backend-independent optimizations [arrayjit/lib/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
+   1. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
+   2. Backend-independent optimizations [docs/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
    3. More documentation to come.
 
 ### Using the tracing debugger with CUDA computations

@@ -34,6 +34,17 @@ jobs:
 
       - name: RL slides
         run: opam exec -- slipshow compile docs/slides-RL-REINFORCE.md -o docs/html/RL-REINFORCE.html
+        
+      - name: Setup pandoc
+        uses: pandoc/actions/setup@main
+        with:
+          version: 'latest'
+
+      - name: Migration guide
+        run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/migration_guide.md -o docs/html/migration_guide.html
+
+      - name: Syntax extensions
+        run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/syntax_extensions.md -o docs/html/syntax_extensions.html
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4

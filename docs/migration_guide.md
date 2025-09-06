@@ -22,19 +22,19 @@ This is why pooling needs a dummy constant kernel - to carry shape info between 
 ## Common Operations Mapping
 
 | PyTorch/TensorFlow | OCANNL | Notes |
-|-------------------|---------|--------|
-| `x.view(-1, d)` or `x.reshape(-1, d)` | Not directly supported | Use manual dimension setting on constant tensor as workaround |
-| `x.flatten()` | Not supported | Future syntax might be: `"x,y => x&y"` |
+|-----|------|----|
+| `x.view(-1, d)` or `x.reshape(-1, d)` | Not supported yet | Use shape inference and let tensors have the shape they want |
+| `x.flatten()` | Not supported yet | Future syntax might be: `"x,y => x&y"` |
 | `nn.Conv2d(in_c, out_c, kernel_size=k)` | `conv2d ~kernel_size:k () x` | Channels inferred or use row vars |
 | `F.max_pool2d(x, kernel_size=k)` | `max_pool2d ~window_size:k () x` | Uses `(0.5 + 0.5)` trick internally |
 | `F.avg_pool2d(x, kernel_size=k)` | `avg_pool2d ~window_size:k () x` | Normalized by window size |
 | `nn.BatchNorm2d(channels)` | `batch_norm2d () ~train_step x` | Channels inferred |
 | `F.dropout(x, p=0.5)` | `dropout ~rate:0.5 () ~train_step x` | Needs train_step for PRNG |
 | `F.relu(x)` | `relu x` | Direct function application |
-| `F.softmax(x, dim=-1)` | `softmax ~spec:"... \| ... -> ... d" () x` | Specify axes explicitly |
+| `F.softmax(x, dim=-1)` | `softmax ~spec:"... | ... -> ... d" () x` | Specify axes explicitly |
 | `torch.matmul(a, b)` | `a * b` or `a +* "...; ... => ..." b` | Einsum for complex cases |
-| `x.mean(dim=[1,2])` | `x ++ "... \| h, w, c => ... \| 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
-| `x.sum(dim=-1)` | `x ++ "... \| ... d => ... \| 0"` | Reduce by summing |
+| `x.mean(dim=[1,2])` | `x ++ "... | h, w, c => ... | 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
+| `x.sum(dim=-1)` | `x ++ "... | ... d => ... | 0"` | Reduce by summing |
 
 ## Tensor Creation Patterns
 
@@ -138,16 +138,17 @@ OCANNL's einsum has two syntax modes:
    
 2. **Multi-character mode**:
    - Triggered by ANY comma in the spec
+   - Trailing commas ignored
    - Identifiers can be multi-character (e.g., `height`, `width`)
    - Must be separated by non-alphanumeric: `,` `|` `->` `;` `=>`
-   - Enables convolution syntax: `stride*out+kernel`
+   - Makes convolution syntax less confusing: `stride*out+kernel`
 
 | Operation | PyTorch einsum | OCANNL single-char | OCANNL multi-char |
-|-----------|---------------|-------------------|-------------------|
+|--------|------------------|-------------------|-------------------|
 | Matrix multiply | `torch.einsum('ij,jk->ik', a, b)` | `a +* "i j; j k => i k" b` | `a +* "i, j; j, k => i, k" b` |
 | Batch matmul | `torch.einsum('bij,bjk->bik', a, b)` | `a +* "b i j; b j k => b i k" b` | `a +* "batch, i -> j; batch, j -> k => batch, i -> k" b` |
-| Attention scores | `torch.einsum('bqhd,bkhd->bhqk', q, k)` | `q +* "b q \| h d; b k \| h d => b \| q k -> h" k` | `q +* "b, q \| h, d; b, k \| h, d => b \| q, k -> h" k` |
-| Convolution | N/A | N/A (needs multi-char) | `x +* "... \| stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... \| oh, ow, oc" kernel` |
+| Attention scores | `torch.einsum('bqhd,bkhd->bhqk', q, k)` | `q +* "bq|hd; bk|hd => b|qk->h" k` | `q +* "b, q | h, d; b, k | h, d => b | q, k -> h" k` |
+| Convolution | N/A | better use multi-char | `x +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" kernel` |
 
 ### Row Variables
 - `...` context-dependent ellipsis: expands to `..batch..` in batch position, `..input..` before `->`, `..output..` after `->`
@@ -288,7 +289,7 @@ dropout ~rate:0.5 () ~train_step x
 
 ## Further Resources
 
-- [Shape Inference Documentation](../lib/shape.mli) - Detailed einsum notation spec
-- [Syntax Extensions Guide](../lib/syntax_extensions.md) - `%op` and `%cd` details  
-- [Neural Network Blocks](../lib/nn_blocks.ml) - Example implementations
+- [Shape Inference Documentation](../dev/neural_nets_lib/Ocannl/Shape/index.html) - Detailed einsum notation spec
+- [Syntax Extensions Guide](syntax_extensions.html) - `%op` and `%cd` details  
+- [Neural Network Blocks](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml) - Example implementations
 - [GitHub Discussions](https://github.com/ahrefs/ocannl/discussions) - Community Q&A

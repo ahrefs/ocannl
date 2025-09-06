@@ -18,7 +18,7 @@
 ## Coding Style & Naming Conventions
 - OCaml formatting enforced by `.ocamlformat` (margin 100, parse/wrap docstrings). Run `dune fmt` before pushing.
 - Overall preference for snake_case (e.g. files `my_module.ml`); OCaml enforces capitalized modules and constructors (`My_module`, `My_variant`).
-- Prefer small, composable functions; avoid needless global state. PPX usage (`%op`, `%cd`) is described in `lib/syntax_extensions.md`.
+- Prefer small, composable functions; avoid needless global state. PPX usage (`%op`, `%cd`) is described in `docs/syntax_extensions.md`.
 
 ## Testing Guidelines
 - Frameworks: `ppx_expect` for inline `%expect` tests, and Dune `test` stanzas for tests with output targets in `.expected` files. Tests live under `test/<area>/*.ml` with paired `*.expected` where applicable.

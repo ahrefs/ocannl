@@ -179,7 +179,7 @@ opam install cudajit  # for CUDA backend
 **Key differences between %op and %cd**:
 - `%op` allows initialization expressions (`{ x = uniform () }`), used for model parameters
 - `%cd` is self-referential only (`{ x }`), used in computation graphs where tensors are defined by operations
-- See `lib/syntax_extensions.md` for comprehensive documentation
+- See `docs/syntax_extensions.md` for comprehensive documentation
 
 **Record syntax features**:
 - OCaml punning: `{ x }` expands to default initialization (uniform() for parameters in %op)
