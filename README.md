@@ -36,23 +36,25 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 ## Usage
 
-Starting from OCANNL 0.5.2, the CUDA backend requires at least CUDA version 12.8. The Metal backend requires at least MSL version 3.1.
+The CUDA backend requires at least CUDA version 12.8. The Metal backend requires at least MSL version 3.1.
 
 [API documentation entry point](https://ahrefs.github.io/ocannl/dev/).
 
 A possible route to learning OCANNL:
 
 1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
-2. Get some basic grasp of the aims and design of the project by reading or skimming files in [test/](test/).
-3. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
-4. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
-5. Read the configuration documentation [ocannl_config.example](ocannl_config.example).
-6. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml), and [lib/nn_blocks.ml](lib/nn_blocks.ml).
-7. Read [docs/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
-8. Read the implementation overview:
-   1. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
-   2. Backend-independent optimizations [docs/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
-   3. More documentation to come.
+2. Read [the migration guide](docs/migration_guide.md).
+3. Soon: [shapes and the generalized einsum beginner-to-advanced slides](https://ahrefs.github.io/ocannl/docs/shapes_and_einsum.html).
+4. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
+5. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
+6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
+7. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
+8. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml).
+9. Read [docs/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
+10. Read the implementation overview:
+   1. The various tests.
+   2. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
+   3. Backend-independent optimizations [docs/lowering_and_inlining.md](arrayjit/lib/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
 
 ### Using the tracing debugger with CUDA computations
 

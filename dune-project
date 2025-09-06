@@ -23,7 +23,7 @@
 
 (license "BSD-2-Clause")
 
-(documentation https://github.com/lukstafi/ocannl/blob/master/README.md)
+(documentation https://ahrefs.github.io/ocannl/docs/)
 
 ; We give up on npy / ocannl_npy for now.
 

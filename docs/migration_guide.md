@@ -32,9 +32,10 @@ This is why pooling needs a dummy constant kernel - to carry shape info between 
 | `F.dropout(x, p=0.5)` | `dropout ~rate:0.5 () ~train_step x` | Needs train_step for PRNG |
 | `F.relu(x)` | `relu x` | Direct function application |
 | `F.softmax(x, dim=-1)` | `softmax ~spec:"... | ... -> ... d" () x` | Specify axes explicitly |
-| `torch.matmul(a, b)` | `a * b` or `a +* "...; ... => ..." b` | Einsum for complex cases |
+| `torch.matmul(a, b)` | `a * b` or `a +* "..b.. -> ..a..; ..b.. => ..a.." b` | Einsum for complex cases |
 | `x.mean(dim=[1,2])` | `x ++ "... | h, w, c => ... | 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
-| `x.sum(dim=-1)` | `x ++ "... | ... d => ... | 0"` | Reduce by summing |
+| `x.sum(dim=-1, keepdim=True)` | `x ++ "... | ... d => ... | ... 0"` | Reduce by summing |
+| `x.sum(dim=-1, keepdim=False)` | `x ++ "... | ... d => ... | ..."` | Reduce by summing |
 
 ## Tensor Creation Patterns
 
@@ -138,7 +139,7 @@ OCANNL's einsum has two syntax modes:
    
 2. **Multi-character mode**:
    - Triggered by ANY comma in the spec
-   - Trailing commas ignored
+   - Trailing commas ignored (can be used to trigger multi-char mode)
    - Identifiers can be multi-character (e.g., `height`, `width`)
    - Must be separated by non-alphanumeric: `,` `|` `->` `;` `=>`
    - Makes convolution syntax less confusing: `stride*out+kernel`
@@ -152,9 +153,8 @@ OCANNL's einsum has two syntax modes:
 
 ### Row Variables
 - `...` context-dependent ellipsis: expands to `..batch..` in batch position, `..input..` before `->`, `..output..` after `->`
-- `..b..` for batch axes (arbitrary number)
-- `..ic..`, `..oc..` for input/output channels (can be multi-dimensional)
-- `..spatial..` for spatial dimensions
+- Single-char mode example: `..b..|` for batch axes (arbitrary number)
+- Multi-char mode examples: `h, w, ..ic..`, `h, w, ..oc..` for input/output channels (can be multi-dimensional), `..spatial.., channel` for spatial dimensions
 
 ## Common Gotchas and Solutions
 
