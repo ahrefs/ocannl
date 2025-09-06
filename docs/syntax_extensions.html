@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>syntax_extensions</title>
+  <style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">body {
+max-width: 1000px;
+margin: 0 auto;
+padding: 20px;
+}</style>
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#syntax-extensions-cd-and-op" id="toc-syntax-extensions-cd-and-op">Syntax extensions %cd and %op</a>
+<ul>
+<li><a href="#preliminaries" id="toc-preliminaries">Preliminaries</a>
+<ul>
+<li><a href="#the-oc-anti-quotation-and-the-unit-parameter-heuristic" id="toc-the-oc-anti-quotation-and-the-unit-parameter-heuristic">The %oc
+anti-quotation and the unit-parameter heuristic</a></li>
+</ul></li>
+<li><a href="#primitive-operations" id="toc-primitive-operations">Primitive operations</a></li>
+<li><a href="#the-syntax-for-op" id="toc-the-syntax-for-op">The syntax
+for %op</a></li>
+<li><a href="#the-syntax-for-cd" id="toc-the-syntax-for-cd">The syntax
+for %cd</a></li>
+<li><a href="#numeric-and-n-dimensional-array-literals" id="toc-numeric-and-n-dimensional-array-literals">Numeric and
+N-dimensional array literals</a></li>
+<li><a href="#wildcard-bindings" id="toc-wildcard-bindings">Wildcard
+bindings</a></li>
+<li><a href="#inline-declarations" id="toc-inline-declarations">Inline
+declarations</a></li>
+<li><a href="#using-ocannls-generalized-einsum-notation" id="toc-using-ocannls-generalized-einsum-notation">Using OCANNL’s
+generalized einsum notation</a>
+<ul>
+<li><a href="#syntax-of-the-generalized-einsum-notation" id="toc-syntax-of-the-generalized-einsum-notation">Syntax of the
+generalized einsum notation</a></li>
+<li><a href="#capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints" id="toc-capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
+the dimensions of selected axes for further computation or to add shape
+constraints</a></li>
+</ul></li>
+<li><a href="#further-features-of-the-syntax-extension-cd" id="toc-further-features-of-the-syntax-extension-cd">Further features of
+the syntax extension %cd</a>
+<ul>
+<li><a href="#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node" id="toc-referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node">Referencing
+arrays: tensor value, tensor gradient, merge buffer of a tensor
+node</a></li>
+<li><a href="#block-comments" id="toc-block-comments">Block
+comments</a></li>
+</ul></li>
+<li><a href="#further-features-of-the-syntax-extension-op" id="toc-further-features-of-the-syntax-extension-op">Further features of
+the syntax extension %op</a>
+<ul>
+<li><a href="#name-from-binding" id="toc-name-from-binding">Name from
+binding</a></li>
+<li><a href="#label-from-function-argument" id="toc-label-from-function-argument">Label from function
+argument</a></li>
+<li><a href="#configuring-inline-declarations-inline-output-dimensions-initial-values" id="toc-configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
+inline declarations: inline output dimensions, initial values</a></li>
+<li><a href="#need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter" id="toc-need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter">Need
+to lift the applications of configuration arguments (up to the unit
+parameter)</a></li>
+</ul></li>
+<li><a href="#implementation-details" id="toc-implementation-details">Implementation details</a>
+<ul>
+<li><a href="#the-hard-coded-to-the-power-of-operator" id="toc-the-hard-coded-to-the-power-of-operator">The hard-coded
+to-the-power-of operator</a></li>
+<li><a href="#intricacies-of-the-syntax-extension-cd" id="toc-intricacies-of-the-syntax-extension-cd">Intricacies of the
+syntax extension %cd</a></li>
+<li><a href="#embedded-nodes" id="toc-embedded-nodes">Embedded
+nodes</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="syntax-extensions-cd-and-op">Syntax extensions %cd and %op</h1>
+<ul>
+<li>Table of contents
+<ul>
+<li><a href="#preliminaries">Preliminaries</a></li>
+<li><a href="#primitive-operations">Primitive operations</a></li>
+<li><a href="#the-syntax-for-op">The syntax for %op</a></li>
+<li><a href="#the-syntax-for-cd">The syntax for %cd</a></li>
+<li><a href="#numeric-and-n-dimensional-array-literals">Numeric and
+N-dimensional array literals</a></li>
+<li><a href="#wildcard-bindings">Wildcard bindings</a></li>
+<li><a href="#inline-declarations">Inline declarations</a></li>
+<li><a href="#using-ocannls-generalized-einsum-notation">Using OCANNL’s
+generalized einsum notation</a>
+<ul>
+<li><a href="#syntax-of-the-generalized-einsum-notation">Syntax of the
+generalized einsum notation</a></li>
+</ul></li>
+<li><a href="#further-features-of-the-syntax-extension-cd">Further
+features of the syntax extension %cd</a>
+<ul>
+<li><a href="#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node">Referencing
+arrays: tensor value, tensor gradient, merge buffer of a tensor
+node</a></li>
+<li><a href="#block-comments">Block comments</a></li>
+</ul></li>
+<li><a href="#further-features-of-the-syntax-extension-op">Further
+features of the syntax extension %op</a>
+<ul>
+<li><a href="#name-from-binding">Name from binding</a></li>
+<li><a href="#label-from-function-argument">Label from function
+argument</a></li>
+<li><a href="#configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
+inline declarations: inline output dimensions, initial values</a></li>
+<li><a href="#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code">Lifting
+of the applications of config arguments: if an error, refactor your
+code</a></li>
+</ul></li>
+<li><a href="#implementation-details">Implementation details</a>
+<ul>
+<li><a href="#the-hard-coded-to-the-power-of-operator">The hard-coded
+to-the-power-of operator</a></li>
+<li><a href="#intricacies-of-the-syntax-extension-cd">Intricacies of the
+syntax extension %cd</a></li>
+</ul></li>
+</ul></li>
+<li>In a nutshell
+<ul>
+<li>Syntax extension <code>%cd</code> stands for “code”, to express
+assignments and computations: <code>Assignments.comp</code>.</li>
+<li>Syntax extension <code>%op</code> stands for “operation”, to express
+tensors: <code>Tensor.t</code>.</li>
+<li>Both extensions use record syntax <code>{ tensor_name }</code> or
+<code>{ tensor_name = init_expr }</code> for inline tensor
+declarations.</li>
+<li>Anti-quotation <code>%oc</code> escapes expressions to preserve them
+as pure OCaml without transformation.</li>
+</ul></li>
+</ul>
+<h2 id="preliminaries">Preliminaries</h2>
+<p>OCANNL, and arrayjit specifically, is built around a fixed number of
+numeric operations, declared in <code>arrayjit/ops.ml</code>. We assign
+lexical operators to the binary operations, inventing novel operators if
+needed. For example, Rectified Linear Unit <code>Relu</code> operation,
+which computes <code>f(x) = max(0,x)</code>, is called
+<code>relu</code>, while the ReLU-Gate <code>Relu_gate</code> operation,
+which computes <code>f(x,y) = if x &gt; 0.0 then y else 0.0</code>, gets
+the operator <code>-?/</code> in addition to name
+<code>relu_gate</code>. These built-in numeric operations are used to
+construct assignments (<code>Assignments.t</code> packaged as
+<code>Assignments.comp</code>). The syntax <code>%cd</code> is needed to
+build assignments concisely, and the assignment operators always start
+with <code>=</code> (unlike in C where they end with <code>=</code>). On
+the other hand, while the syntax <code>%op</code> helps build tensors
+(<code>Tensor.t</code>), they can be expressed concisely in pure OCaml.
+Unlike for assignments, the building blocks for tensor expressions are
+easy to extend. The meaningful basic ones are provided in
+<code>lib/operation.ml</code>.</p>
+<p>In OCANNL, we call a tensor that is prohibited from propagating
+gradients, does not have a gradient node nor backprop code, a
+<em>non-differentiable tensor</em>. Accordingly we can call the “plain”
+tensors with a gradient node <em>differentiable tensors</em>.
+Expressions in the <code>%cd</code> syntax will sometimes build new
+non-differentiable tensors as components of assignments (they will never
+build new differentiable tensors). The syntax extensions make the
+following assumption:</p>
+<ul>
+<li><code>%cd</code> assumes that any extension point will be in the
+scope of a module <code>NTDSL</code> that provides at least the
+functionality of <code>Operation.NTDSL</code>.</li>
+<li><code>%op</code> assumes that any extension point will be in the
+scope of a module <code>TDSL</code> that provides at least the
+functionality of <code>Operation.TDSL</code>.</li>
+<li><code>%op</code> with inline definitions with inintialization
+expressions assumes that a module <code>PDSL</code> is in scope with at
+least the functionality of <code>Operation.PDSL</code>.</li>
+<li>Both extensions assume <code>Tensor</code> (from the
+<code>Ocannl</code> wrapper) is in scope.</li>
+</ul>
+<p>Functions inside <code>Operation.NTDSL</code> use
+<code>~grad_spec:Prohibit_grad</code> when calling into
+<code>Tensor</code>, making the resulting tensors non-differentiable.
+Functions inside <code>Operation.TDSL</code> use
+<code>~grad_spec:If_needed</code>, which will make the tensors
+non-differentiable when the gradient is not needed – except for
+<code>TDSL.param</code>, which internally sets
+<code>~grad_spec:Require_grad</code>. Functions inside
+<code>Operation.PDSL</code> use
+<code>~grad_spec:Require_grad</code>.</p>
+<p>The extension points open <code>NTDSL.O</code>, resp.
+<code>TDSL.O</code>, for the scope of the extension point, to expose the
+corresponding operators.</p>
+<h3 id="the-oc-anti-quotation-and-the-unit-parameter-heuristic">The %oc
+anti-quotation and the unit-parameter heuristic</h3>
+<p>Within <code>%op</code> and <code>%cd</code> contexts, expressions
+typically undergo transformation to build tensors or assignments.
+However, OCANNL uses two mechanisms to preserve pure OCaml
+expressions:</p>
+<h4 id="unit-parameter-heuristic-automatic-in-op">Unit-parameter
+heuristic (automatic in %op)</h4>
+<p>In the <code>%op</code> syntax, when a function application contains
+a unit <code>()</code> argument, all arguments appearing
+<strong>before</strong> the unit are automatically preserved as pure
+OCaml expressions. This aligns with OCANNL’s design pattern where
+configuration happens before the unit parameter:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Arguments before () are automatically preserved as OCaml *)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op my_fn ~label x = </span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  other_fn ~label:((<span class="st">&quot;prefix_&quot;</span> ^ name) :: label) ~config:value () x</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* label and config are preserved; x after () is transformed *)</span></span></code></pre></div>
+<h4 id="explicit-oc-anti-quotation">Explicit %oc anti-quotation</h4>
+<p>For cases where you need explicit control or the heuristic doesn’t
+apply, the <code>%oc</code> (mnemonic: “OCaml”) anti-quotation escapes
+from the transformation context:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Force preservation even after () or in edge cases *)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op special = process_data data [%oc complex_ocaml_expr]</span></code></pre></div>
+<p>The <code>%oc</code> extension expects a single expression and
+returns it unchanged. Use cases: - Overriding the unit-parameter
+heuristic when needed - Preserving expressions in contexts without a
+unit parameter - Escaping from the DSL in <code>%cd</code> contexts
+(which don’t use the unit heuristic)</p>
+<h2 id="primitive-operations">Primitive operations</h2>
+<p>To accomodate stylistic preferences, OCANNL supports both curried and
+uncurried syntaxes for primitive operation application. Binary operators
+are associated with infix operators, in addition to having alphabetic
+identifiers. This stems from the following restriction: in the
+<code>%cd</code> syntax, the assignment is always an infix operator, and
+it needs to pick the accumulation operation.</p>
+<p>The unary primitive operations:</p>
+<table>
+<thead>
+<tr>
+<th>Identifier</th>
+<th>Default projection</th>
+<th>Constructor in <code>Ir.Ops</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>pointwise</td>
+<td><code>Identity</code></td>
+</tr>
+<tr>
+<td><code>relu</code></td>
+<td>pointwise</td>
+<td><code>Relu</code></td>
+</tr>
+<tr>
+<td><code>sat01</code></td>
+<td>pointwise</td>
+<td><code>Satur01</code></td>
+</tr>
+<tr>
+<td><code>exp</code></td>
+<td>pointwise</td>
+<td><code>Exp</code></td>
+</tr>
+<tr>
+<td><code>log</code></td>
+<td>pointwise</td>
+<td><code>Log</code></td>
+</tr>
+<tr>
+<td><code>exp2</code></td>
+<td>pointwise</td>
+<td><code>Exp2</code></td>
+</tr>
+<tr>
+<td><code>log2</code></td>
+<td>pointwise</td>
+<td><code>Log2</code></td>
+</tr>
+<tr>
+<td><code>sin</code></td>
+<td>pointwise</td>
+<td><code>Sin</code></td>
+</tr>
+<tr>
+<td><code>cos</code></td>
+<td>pointwise</td>
+<td><code>Cos</code></td>
+</tr>
+<tr>
+<td><code>sqrt</code></td>
+<td>pointwise</td>
+<td><code>Sqrt</code></td>
+</tr>
+<tr>
+<td><code>recip</code></td>
+<td>pointwise</td>
+<td><code>Recip</code></td>
+</tr>
+<tr>
+<td><code>recip_sqrt</code></td>
+<td>pointwise</td>
+<td><code>Recip_sqrt</code></td>
+</tr>
+<tr>
+<td><code>neg</code></td>
+<td>pointwise</td>
+<td><code>Neg</code></td>
+</tr>
+<tr>
+<td><code>tanh</code></td>
+<td>pointwise</td>
+<td><code>Tanh_approx</code></td>
+</tr>
+<tr>
+<td><code>not</code></td>
+<td>pointwise</td>
+<td><code>Not</code></td>
+</tr>
+<tr>
+<td><code>uint4x32_to_prec_uniform</code></td>
+<td>dedicated</td>
+<td><code>Uint4x32_to_prec_uniform</code></td>
+</tr>
+</tbody>
+</table>
+<p>The binary primitive operations:</p>
+<table>
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 21%" />
+<col style="width: 27%" />
+<col style="width: 17%" />
+<col style="width: 17%" />
+</colgroup>
+<thead>
+<tr>
+<th>Identifier</th>
+<th>Infix operator</th>
+<th>Default projection</th>
+<th>Constructor in <code>Ir.Ops</code></th>
+<th>Assignments</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fst</code></td>
+<td><code>-@&gt;</code></td>
+<td>pointwise</td>
+<td><code>Arg1</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>snd</code></td>
+<td><code>-/&gt;</code></td>
+<td>pointwise</td>
+<td><code>Arg2</code></td>
+<td><code>=:</code></td>
+</tr>
+<tr>
+<td><code>add</code></td>
+<td><code>+</code></td>
+<td>pointwise</td>
+<td><code>Add</code></td>
+<td><code>=+</code>, <code>=:+</code></td>
+</tr>
+<tr>
+<td><code>sub</code></td>
+<td><code>-</code></td>
+<td>pointwise</td>
+<td><code>Sub</code></td>
+<td><code>=-</code>, <code>=:-</code></td>
+</tr>
+<tr>
+<td><code>mul</code></td>
+<td><code>*</code></td>
+<td>none</td>
+<td><code>Mul</code></td>
+<td><code>=*</code>, <code>=:*</code></td>
+</tr>
+<tr>
+<td><code>div</code></td>
+<td><code>/</code></td>
+<td>none</td>
+<td><code>Div</code></td>
+<td><code>=/</code>, <code>=:/</code></td>
+</tr>
+<tr>
+<td><code>pow</code></td>
+<td><code>**</code></td>
+<td>pointwise</td>
+<td><code>ToPowOf</code></td>
+<td><code>=**</code>, <code>=:**</code></td>
+</tr>
+<tr>
+<td><code>relu_gate</code></td>
+<td><code>-?/</code></td>
+<td>pointwise</td>
+<td><code>Relu_gate</code></td>
+<td><code>=?/</code>, <code>=:?/</code></td>
+</tr>
+<tr>
+<td><code>sat01_gate</code></td>
+<td><code>-?^</code></td>
+<td>pointwise</td>
+<td><code>Satur01_gate</code></td>
+<td><code>=?^</code>, <code>=:?^</code></td>
+</tr>
+<tr>
+<td><code>lt</code></td>
+<td><code>&lt;</code></td>
+<td>pointwise</td>
+<td><code>Cmplt</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>eq</code></td>
+<td><code>=</code></td>
+<td>pointwise</td>
+<td><code>Cmpeq</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>ne</code></td>
+<td><code>&lt;&gt;</code></td>
+<td>pointwise</td>
+<td><code>Cmpne</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>or_</code></td>
+<td><code>\|\|</code></td>
+<td>pointwise</td>
+<td><code>Or</code></td>
+<td><code>=\|\|</code>, <code>=:\|\|</code></td>
+</tr>
+<tr>
+<td><code>and_</code></td>
+<td><code>&amp;&amp;</code></td>
+<td>pointwise</td>
+<td><code>And</code></td>
+<td><code>=&amp;&amp;</code>, <code>=:&amp;&amp;</code></td>
+</tr>
+<tr>
+<td><code>mod_</code></td>
+<td><code>%</code></td>
+<td>pointwise</td>
+<td><code>Mod</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>max</code></td>
+<td><code>@^</code></td>
+<td>pointwise</td>
+<td><code>Max</code></td>
+<td><code>=@^</code>, <code>=:@^</code></td>
+</tr>
+<tr>
+<td><code>min</code></td>
+<td><code>@-</code></td>
+<td>pointwise</td>
+<td><code>Min</code></td>
+<td><code>=@-</code>, <code>=:@-</code></td>
+</tr>
+<tr>
+<td><code>threefry4x32</code></td>
+<td><code>^^^^</code></td>
+<td>pointwise</td>
+<td><code>Threefry4x32</code></td>
+<td><code>=^^^^</code>, <code>=:^^^^</code></td>
+</tr>
+</tbody>
+</table>
+<p>The ternary primitive operations:</p>
+<table>
+<thead>
+<tr>
+<th>Identifier</th>
+<th>Default projection</th>
+<th>Constructor in <code>Ir.Ops</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>where</code></td>
+<td>pointwise</td>
+<td><code>Where</code></td>
+</tr>
+<tr>
+<td><code>fma</code></td>
+<td>compose-accumulate</td>
+<td><code>FMA</code></td>
+</tr>
+</tbody>
+</table>
+<p>The interpretation functions also state the semantics:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> interpret_unop op v =</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">open</span> Float <span class="kw">in</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> op <span class="kw">with</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  | Identity -&gt; v</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  | Relu <span class="kw">when</span> v &gt;= <span class="dv">0</span>. -&gt; v</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  | Relu -&gt; <span class="dv">0</span>.</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  | Satur01 <span class="kw">when</span> v &lt;= <span class="dv">0</span>. -&gt; <span class="dv">0</span>.</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  | Satur01 <span class="kw">when</span> v &gt;= <span class="dv">1</span>. -&gt; <span class="dv">1</span>.</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  | Satur01 -&gt; v</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  | Exp -&gt; <span class="dt">exp</span> v</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  | Log -&gt; <span class="dt">log</span> v</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  | Exp2 -&gt; <span class="dv">2</span>. ** v</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  | Log2 -&gt; <span class="dt">log</span> v / <span class="dt">log</span> <span class="dv">2</span>.</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  | Sin -&gt; <span class="dt">sin</span> v</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  | Cos -&gt; <span class="dt">cos</span> v</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>  | Sqrt -&gt; <span class="dt">sqrt</span> v</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>  | Recip -&gt; <span class="dv">1</span>. / v</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>  | Recip_sqrt -&gt; <span class="dv">1</span>. / <span class="dt">sqrt</span> v</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  | Neg -&gt; ~-.v</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  | Tanh_approx -&gt; <span class="dt">tanh</span> v</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>  | Not -&gt; <span class="kw">if</span> v = <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  | Uint4x32_to_prec_uniform -&gt; <span class="dt">failwith</span> <span class="st">&quot;NOT IMPLEMENTED&quot;</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> interpret_binop op v1 v2 =</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">open</span> Float <span class="kw">in</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> op <span class="kw">with</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>  | Arg1 -&gt; v1</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>  | Arg2 -&gt; v2</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>  | Add -&gt; v1 + v2</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>  | Sub -&gt; v1 - v2</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>  | Mul -&gt; v1 * v2</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>  | Div -&gt; v1 / v2</span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>  | ToPowOf <span class="kw">when</span> is_integer v2 -&gt; int_pow v1 @@ to_int v2</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>  | ToPowOf -&gt; v1 ** v2</span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>  | Relu_gate -&gt; <span class="kw">if</span> v1 &gt; <span class="fl">0.0</span> <span class="kw">then</span> v2 <span class="kw">else</span> <span class="fl">0.0</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>  | Satur01_gate -&gt; <span class="kw">if</span> v1 &gt; <span class="fl">0.0</span> &amp;&amp; v1 &lt; <span class="fl">1.0</span> <span class="kw">then</span> v2 <span class="kw">else</span> <span class="fl">0.0</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>  | Max -&gt; <span class="dt">max</span> v1 v2</span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>  | Min -&gt; <span class="dt">min</span> v1 v2</span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>  | Mod -&gt; v1 % v2</span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>  | Cmplt -&gt; <span class="kw">if</span> v1 &lt; v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>  | Cmpeq -&gt; <span class="kw">if</span> v1 = v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>  | Cmpne -&gt; <span class="kw">if</span> v1 &lt;&gt; v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>  | Or -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. || v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a>  | And -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. &amp;&amp; v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a>  | Threefry4x32 -&gt; ...</span>
+<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> interpret_ternop op v1 v2 v3 =</span>
+<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">open</span> Float <span class="kw">in</span></span>
+<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> op <span class="kw">with</span> Where -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> v2 <span class="kw">else</span> v3 | FMA -&gt; (v1 * v2) + v3</span></code></pre></div>
+<h2 id="the-syntax-for-op">The syntax for %op</h2>
+<p>The <code>%op</code> syntax is simpler than the <code>%cd</code>
+syntax since it relies more on regular OCaml expressions. For example,
+we can write without syntax extensions:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> hid_dim = <span class="dv">8</span> <span class="kw">in</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> w = TDSL.param <span class="st">&quot;w&quot;</span> <span class="kw">in</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> b = TDSL.param ~output_dims:[ hid_dim ] <span class="st">&quot;b&quot;</span> <span class="kw">in</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layer x = TDSL.O.( relu(w * x + b) ) <span class="kw">in</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>Since <code>TDSL.O</code> is opened for the scope of an extension
+point <code>%op</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> hid_dim = <span class="dv">8</span> <span class="kw">in</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> w = TDSL.param <span class="st">&quot;w&quot;</span> <span class="kw">in</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> b = TDSL.param ~output_dims:[ hid_dim ] <span class="st">&quot;b&quot;</span> <span class="kw">in</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op layer x = relu(w * x + b) <span class="kw">in</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>Using <a href="#inline-declarations">inline declarations</a>, this
+becomes more concise:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> hid_dim = <span class="dv">8</span> <span class="kw">in</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op mlp_layer x = relu({ w } * x + { b; o = [ hid_dim ] }) <span class="kw">in</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>When there is a function directly under the <code>%op</code>
+extension point, like in the example above, or directly under a function
+taking a unit parameter <code>()</code>, the function parameter (to the
+right of <code>()</code>) should be a tensor. That’s because
+<code>%op</code> uses this tensor’s (value’s) label to enrich the label
+of the resulting tensor.</p>
+<p>When the declaration is followed by a literal float, the float
+provides the initial value to initialize the tensor. Otherwise, the
+tensor value cells are initialized randomly with uniform
+distribution.</p>
+<h2 id="the-syntax-for-cd">The syntax for %cd</h2>
+<p>The basic building blocks of the <code>%cd</code> syntax are
+individual assignments, separated by semicolons. The assignments,
+represented via <code>Assignments.Accum_binop</code> and
+<code>Assignments.Accum_unop</code>, are in full generality
+accumulating:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Assignments.t =</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>   ...</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  | Accum_binop <span class="kw">of</span> {</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>      initialize_neutral : <span class="dt">bool</span>;</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>      accum : Ops.binop;</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>      op : Ops.binop;</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>      lhs : Tnode.t;</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>      rhs1 : buffer;</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>      rhs2 : buffer;</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>      projections : Indexing.projections <span class="dt">Lazy</span>.t;</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>  | Accum_unop <span class="kw">of</span> {</span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>      initialize_neutral : <span class="dt">bool</span>;</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>      accum : Ops.binop;</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>      op : Ops.unop;</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>      lhs : Tnode.t;</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>      rhs : buffer;</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>      projections : Indexing.projections <span class="dt">Lazy</span>.t;</span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>    }</span></code></pre></div>
+<p>For example the binary case in pseudocode:
+<code>if initialize_neutral then lhs = 0; lhs = lhs accum (rhs1 op rhs2)</code>
+(assuming the neutral element of <code>accum</code> is 0). The
+representation also has a field <code>projections</code> which
+determines which loops should be run and how the tensor nodes should be
+indexed to perform the computation.</p>
+<p>The basic <code>%cd</code> syntax for assignments has the form:
+<code>&lt;lhs&gt; &lt;asgn-op&gt; &lt;primitive-op-application[rhs1, rhs2?, rhs3?]&gt;</code>.
+See <a href="#primitive-operations">Primitive operations</a> for the
+syntax of primitive operation application, where
+<code>&lt;rhs1&gt;</code>, <code>&lt;rhs2&gt;</code> (for binary and
+ternary ops), <code>&lt;rhs3&gt;</code> (for ternary ops) are
+subexpressions. <code>&lt;asgn-op&gt;</code> starts with <code>=</code>,
+followed by <code>:</code> only if <code>initialize_neutral</code> is
+true, then followed by the operator syntax variant of a binary primitive
+operation. The fields <code>&lt;lhs&gt;</code>,
+<code>&lt;rhs1&gt;</code>, <code>&lt;rhs2&gt;</code>,
+<code>&lt;rhs3&gt;</code> will often be either special-purpose
+identifiers (specifically <code>v</code>, <code>t</code>,
+<code>t1</code>, <code>t2</code>, <code>t3</code>, <code>g</code>,
+<code>g1</code>, <code>g2</code>, <code>g3</code>) or identifiers bound
+to tensors. <code>&lt;rhs1&gt;</code>, <code>&lt;rsh2&gt;</code>,
+<code>&lt;rsh3&gt;</code> will also often be (non-differentiable) tensor
+expressions. The notation <code>&lt;tensor&gt;.grad</code> stands for
+the gradient node of the given tensor. For more about “slot fillers”,
+and to learn about the operators <code>+*</code> and <code>++</code>,
+see the section <a href="#further-features-of-the-syntax-extension-cd">further features of
+the syntax extension %cd</a>.</p>
+<p>How is the <code>projections</code> field determined?
+<code>projections</code> can be given explicitly as a labeled argument
+<code>~projections</code>. If they aren’t but <code>%cd</code> realizes
+there is a <code>~projections</code> parameter in scope, it uses it –
+see <code>lib/operation.ml</code> where this option is used to define
+tensor operations. If instead of <code>~projections</code> a
+<code>~logic</code> labeled argument is given, the string passed is used
+to determine projections. <code>~logic:&quot;.&quot;</code> means a pointwise
+operation. <code>~logic:&quot;@&quot;</code> means an “output axes of rhs2 match
+input axes of rhs1” operation (matrix multiplication is a special case).
+<code>~logic:&quot;T&quot;</code> means transpose of input and output axes. The
+string passed to <code>~logic</code> can also use OCANNL’s
+generalization of the einsum notation, allowing arbitrary permutations
+and reductions of axes. If no information is given, the default depends
+on the primitive operation, but it is almost always a pointwise
+operation.</p>
+<p>Here we see an example of tensor multiplication – extending matrix
+multiplication to arbitrary number of axes – multiplying <code>a</code>
+by <code>b</code> to get <code>c</code>. In <code>=:+</code>,
+<code>=</code> is required to separate the assigned-to part from the
+computation, <code>:</code> clears-out <code>c</code> before the
+computation, <code>+</code> selects addition to accumulate the
+results.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>c =:+ a * b ~logic:<span class="st">&quot;@&quot;</span></span></code></pre></div>
+<p>Compare the following two ways of updating a parameter
+<code>p</code>:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>p =+ learning_rate * p.grad ~logic:<span class="st">&quot;.&quot;</span></span></code></pre></div>
+<p>and:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>p =+ learning_rate *. p.grad</span></code></pre></div>
+<p>In the first case, we have a binary assignment calculated pointwise.
+The resulting representation is <code>Accum_binop</code> where
+<code>accum</code> is <code>Add</code> and <code>op</code> is
+<code>Mul</code> (multiplication). In the second case, <code>*.</code>
+is not recognized as one of the built-in operators. This leaves the
+expression <code>learning_rate *. p.grad</code> un-transformed. Since
+<code>(*.)</code> is bound in <code>NTDSL.O</code> to pointwise tensor
+multiplication, this creates an intermediate tensor, that is then added
+onto p. The resulting representation is <code>Accum_unop</code> where
+<code>accum</code> is <code>Add</code> and <code>op</code> is
+<code>Identity</code>. Both variants end up with the same result, and
+even with the same computation, because the second variant’s computation
+will get optimized (unless configured not to).</p>
+<p>Advanced note: when a <code>~projections</code> parameter is in scope
+but no assignment-specific <code>~projections</code> argument is given –
+the typical case in <code>lib/operation.ml</code> – the actual
+projections field for an assignment is computed by transforming the
+projections parameter according to hints regarding how tensor nodes
+relate to the given projections. Specifically, the identifiers
+<code>rhs1</code>, <code>t1</code>, <code>v1</code>, <code>g1</code> are
+“slot RHS1” of the projections, <code>rhs2</code>, <code>t2</code>,
+<code>v2</code>, <code>g2</code> are “slot RHS2”, <code>lhs,</code>,
+<code>t</code>, <code>v</code>, <code>g</code> are “slot LHS”. Scalar
+constants are provided the projection directly, to make the automated
+derivation more expressive; this is supported both for literals, and
+(heuristically) for <code>!.</code> and <code>!..</code> embedding
+operators.</p>
+<h2 id="numeric-and-n-dimensional-array-literals">Numeric and
+N-dimensional array literals</h2>
+<p>Both <code>%cd</code> and <code>%op</code> extensions use a shared
+syntax for N-dimensional array literals. <code>%cd</code> uses
+<code>NTDSL.number</code> and <code>NTDSL.ndarray</code> functions,
+while <code>%op</code> uses <code>TDSL.number</code> and
+<code>TDSL.ndarray</code> functions. (This is just for consistency:
+<code>TDSL.ndarray</code> invokes
+<code>Tensor.ndarray ~grad_spec:If_needed</code>, which will figure out
+the gradient is not needed and will make the tensor
+non-differentiable.)</p>
+<p>Numbers are a special case: an array of (output) dimension 1.</p>
+<p>N-dimensional array literals combine the list, tuple and array
+syntaxes to strictly distinguish between output, input and batch
+axes:</p>
+<ul>
+<li>The tuple syntax translates to an input axis.</li>
+<li>The list syntax translates to an output axis.</li>
+<li>The array syntax translates to a batch axis.</li>
+</ul>
+<p>For example, <code>[ (1, 2, 3); (4, 5, 6) ]</code> is a mathematical
+matrix converting 3D vectors into 2D vectors.</p>
+<p>OCANNL supports dimension labels. The syntax for number allows
+prefixing a number by a character that stands for the dimension label of
+the resulting output dimension 1. These labels can then propagate to
+specify labels of other dimensions in other tensors, via shape
+inference. Example:
+<code>let%op y = ({ hey } * &#39;q&#39; 2.0) + &#39;p&#39; 1.0 in ...</code></p>
+<h2 id="wildcard-bindings">Wildcard bindings</h2>
+<p>When an extension is over a wildcard (ignore result) binding:
+<code>let%cd _ = ...</code> and <code>let%op _ = ...</code>, the
+generated code is wrapped in <code>Tensor.with_unchanged_roots</code>,
+to prevent it from upsetting rootness checks. The use-case for writing
+<code>%op</code> and <code>%cd</code> notations with ignored result is
+to generate additional shape inference constraints.</p>
+<h2 id="inline-declarations">Inline declarations</h2>
+<p>Both <code>%cd</code> and <code>%op</code> syntaxes support inline
+declarations of tensors. For <code>%op</code> these are differentiable,
+for <code>%cd</code> non-differentiable tensors.</p>
+<p>A declaration site uses the record syntax. The key difference between
+the two extensions:</p>
+<ul>
+<li><strong><code>%op</code></strong>:
+<code>{ tensor_name = init_expr }</code> allows initialization
+expressions, or <code>{ tensor_name }</code> for default initialization
+(uniform random)</li>
+<li><strong><code>%cd</code></strong>: <code>{ tensor_name }</code>
+requires self-referential syntax (the field name must match the field
+value identifier), no separate initialization expressions are
+allowed</li>
+</ul>
+<p>Both syntaxes support additional record fields that map directly to
+labeled arguments of the tensor creation functions (see
+<code>Tensor</code> module signatures):</p>
+<ul>
+<li><code>output_dims</code> or shorthand <code>o</code>: specifies
+output dimensions</li>
+<li><code>input_dims</code> or shorthand <code>i</code>: specifies input
+dimensions<br />
+</li>
+<li><code>batch_dims</code> or shorthand <code>b</code>: specifies batch
+dimensions</li>
+<li>Any other labeled argument accepted by <code>TDSL.param</code> (for
+<code>%op</code>) or <code>NTDSL.term</code> (for <code>%cd</code>)</li>
+</ul>
+<p>Note: for the <code>%op</code> declarations, if the root operation
+comes from <code>TDSL.O</code> and is not qualified with a module name,
+it becomes qualified with <code>PDSL</code> which ensures that the
+created tensor will be differentiable (will have gradients), and will be
+able to take the additional argumetns. There are also special cases for
+literal constants to ensure the resulting tensor is initialized with
+these constants but is differentiable.</p>
+<p>Examples:</p>
+<ul>
+<li><code>%op</code>: <code>{ x = 5.0 }</code>,
+<code>{ w; o = [hidden_dim] }</code>,
+<code>{ weights = [1.0; 2.0] }</code></li>
+<li><code>%cd</code>: <code>{ temp }</code>,
+<code>{ result; output_dims = [3; 4] }</code>,
+<code>{ x; o = [10] }</code></li>
+</ul>
+<p>The tensor name is bound to the newly created tensor, and the record
+expression itself evaluates to the tensor. The scope of the binding is
+the full scope of the extension point, even if the declaring record
+appeared in the body of a function that’s inside the extension point
+scope (except for <code>%op</code> there is a special case of functions
+taking a unit parameter <code>()</code> discussed below – inline
+definitions are introduced once <code>()</code> is applied). The first
+element of the label of the created tensor is the name that introduced
+it.</p>
+<p>For <code>%cd</code>, inline declarations are allowed both in the
+assigned-to position (left-hand side) of assignments and in standalone
+tensor expressions. When used in assignments, one of the tensors on the
+right-hand-side is picked to provide additional label information if
+possible. In particular, tensors that are function parameters inside the
+scope of the extension point, cannot be picked to provide label
+information, as they would escape their scope at the point the tensor is
+created. Inline declarations are still prohibited within the right-hand
+side of assignments to discourage over-use in locations with less label
+information. Example showing two tensor nodes declared inline, both of
+them include the label of the param <code>p</code> in their labels:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_one ~learning_rate ?(momentum = <span class="fl">0.0</span>) ?(weight_decay = <span class="fl">0.0</span>) ?(nesterov = <span class="kw">false</span>) p =</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  [%cd</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    { sgd_delta } =: p.grad + (!.weight_decay *. p);</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Float.(momentum &gt; <span class="fl">0.0</span>) <span class="kw">then</span> (</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>      { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta;</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">if</span> nesterov <span class="kw">then</span> sgd_delta =+ !.momentum *. sgd_momentum <span class="kw">else</span> sgd_delta =: sgd_momentum);</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    p =- learning_rate *. sgd_delta]</span></code></pre></div>
+<p>Inline declarations can also be used outside of assignments for
+creating non-differentiable tensors, to mimic the behavior of
+<code>%op</code> but without the burden of initialization that a
+parameter would introduce:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd mlp_result = mlp { point } <span class="kw">in</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result_routine =</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine (<span class="kw">module</span> Backend) sgd_routine.context IDX.empty</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>      [%cd ~~(<span class="st">&quot;mlp infer&quot;</span>; mlp_result.forward)]</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> callback (x, y) =</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    Tn.set_values point [| x; y |];</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    Train.run result_routine;</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    Float.(mlp_result.@[<span class="dv">0</span>] &gt;= <span class="dv">0</span>.)</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span></code></pre></div>
+<p>For <code>%op</code>, the declaration is allowed anywhere. If there
+is a unit <code>()</code> parameter in the function, the scope of
+inline-declared tensors is delimited at that parameter. The tensors are
+defined right after the unit parameter. If there is a labeled parameter
+with label <code>label</code> before the unit parameter (e.g.,
+<code>~label</code>), the inline-declared tensors will use that
+parameter (which should be of type <code>string list</code>) to enrich
+their labels. Example showing two param tensors declared inline, with
+scope delimited by <code>()</code> and labels enriched by the
+<code>label</code> parameter:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</span></code></pre></div>
+<h2 id="using-ocannls-generalized-einsum-notation">Using OCANNL’s
+generalized einsum notation</h2>
+<p>As we mentioned above, in the <code>%cd</code> syntax you can set up
+an arbitrary assignment with projections derived from a generalized
+einsum specification, by passing the specification as a string with the
+<code>~logic</code> label. However, both the <code>%cd</code> and
+<code>%op</code> syntaxes support built-in operators that take an einsum
+specification: <code>+*</code> binding to <code>NTDSL.einsum</code>
+resp. <code>TDSL.einsum</code>, and <code>++</code> binding to
+<code>NTDSL.einsum1</code> resp. <code>TDSL.einsum1</code>.
+<code>+*</code> is a “ternary” operator, binary wrt. tensor arguments,
+and <code>++</code> is a binary operator, unary postfix wrt. tensor
+arguments. The einsum specification string should directly follow
+<code>+*</code> and <code>++</code>.</p>
+<p>Both <code>+*</code> and <code>++</code> use addition for the
+accumulation operation; <code>+*</code> uses multiplication. You can
+verify that looking at the <code>Operation.einsum</code> and
+<code>Operation.einsum1</code> definitions. You can find examples of
+<code>+*</code> and <code>++</code> behavior in the test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a>. A frequent use-case
+for <code>++</code> is to sum out all axes of a tensor:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; 0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>where <code>(!..)</code> converts an integer into a constant
+tensor.</p>
+<h3 id="syntax-of-the-generalized-einsum-notation">Syntax of the
+generalized einsum notation</h3>
+<p>The specification syntax has two modes:</p>
+<ul>
+<li>if there is a comma anywhere in a spec, it is the <em>multichar
+mode</em>: axis identifiers are comma-separated and can have multiple
+characters;</li>
+<li>otherwise, it is the <em>single-char mode</em>: each alphanumeric
+character corresponds to an axis.</li>
+</ul>
+<p>The syntax of a generalized einsum spec has two variants:</p>
+<ul>
+<li>unary: “&lt;rhs&gt; shape spec <code>=&gt;</code> &lt;lhs&gt; shape
+spec”, specifies a unary assignment
+<code>&lt;lhs&gt; &lt;asgn-op&gt; &lt;rhs&gt;</code> (see <a href="#the-syntax-for-cd">syntax for <code>%cd</code></a>),</li>
+<li>binary: “&lt;rhs1&gt; shape spec <code>;</code> &lt;rhs2&gt; shape
+spec <code>=&gt;</code> &lt;lhs&gt; shape spec”, specifies a binary
+assignment
+<code>&lt;lhs&gt; &lt;asgn-op&gt; &lt;rhs1&gt; &lt;op&gt; &lt;rhs2&gt;</code>
+(see <a href="#the-syntax-for-cd">syntax for <code>%cd</code></a>).</li>
+</ul>
+<p>Recall that a tensor <em>shape</em> is composed of three
+<em>rows</em>, i.e. sequences of axes: batch, input and output axes.
+Correspondingly, a shape spec in the notation can be:</p>
+<ul>
+<li>the output row at the end of the spec, or just the output row,</li>
+<li>the input row to the left of <code>-&gt;</code>, if given,</li>
+<li>the batch row to the left of <code>|</code>, if given.</li>
+</ul>
+<p>The notation for a row is composed of sequences of row specs, and an
+optional <em>row variable</em> spec. A row variable tracks broadcasting.
+The syntax of a row:</p>
+<ul>
+<li>a sequence of axis specs: specifies the rightmost axes, with
+untracked broadcasting “to the left”,</li>
+<li>a row variable spec followed a sequence of axis specs for the
+rightmost axes,</li>
+<li>leftmost axes specs, followed by a row variable, followed by
+rightmost axes specs.</li>
+</ul>
+<p>The syntax of a row variable:</p>
+<ul>
+<li><code>..</code>variable_id<code>..</code>: variable_id stands for
+the row variable identifier,</li>
+<li>ellipsis <code>...</code> is context dependent: in the batch row it
+means <code>..batch..</code>, in the input row <code>..input..</code>,
+in the output row <code>..output..</code>.</li>
+</ul>
+<p>The syntax of an axis spec:</p>
+<ul>
+<li>Depending on the mode, either a alphabetic character or an
+alphanumeric identifier provides an axis variable.</li>
+<li>Dhe underscore <code>_</code> is a placeholder to align other axes,
+but does not specify anything for the given axis (it is not a
+variable).</li>
+<li>A number specifies the particular dimension within the axis,</li>
+<li>A <code>+</code> sign specifies a convolution input axis with the
+output on the left of <code>+</code> and the kernel on the right of
+<code>+</code>.
+<ul>
+<li>In both the output part and the kernel part you can prefix the axis
+variable by a constant coefficient with the <code>*</code> sign.</li>
+<li>The coefficient can directly only be an integer,
+e.g. <code>&quot;2*i+3*k&quot;</code>, but under the <code>%op</code> and
+<code>%cd</code> syntax extensions, it can also be an identifier of an
+integer value,
+e.g. <code>let stride = 2 and dilation = 3 in [%op &quot;input&quot; +* &quot;stride * a + dilation * b; b=&gt;a,&quot; &quot;kernel&quot;]</code>.</li>
+<li>Note the comma above. The syntax extension’s expansion of stride and
+dilation respects the “multichar” mode. Without the comma we are limited
+to single-character identifiers,
+e.g. <code>let s = 2 and d = 3 in [%op &quot;input&quot; +* &quot;is*a+d*bc;b=&gt;iac&quot; &quot;kernel&quot;]</code>.</li>
+</ul></li>
+</ul>
+<p>Examples:</p>
+<ul>
+<li><code>...|...-&gt;... =&gt; 0</code>: reduce all axes of the
+argument into a single number. Useful e.g. for reducing losses to a
+single number.</li>
+<li><code>...|... =&gt; 0</code>, <code>...-&gt;... =&gt; 0</code>,
+<code>... =&gt; 0</code> do the same but will fail if the argument has
+axes of the kind for which the ellipsis is missing.</li>
+<li><code>...|...-&gt;... =&gt; ...|...-&gt;...</code>: fully pointwise
+unary operation.</li>
+<li><code>...-&gt;... =&gt; ...-&gt;...</code>,
+<code>...|... =&gt; ...|...</code>, <code>... =&gt; ...</code>: fully
+pointwise but will fail if the argument has axes of the kind for which
+the ellipsis is missing.</li>
+<li><code>...|...-&gt;... ; ...|...-&gt;... =&gt; ...|...-&gt;...</code>:
+fully pointwise binary operation.</li>
+<li><code>...|...-&gt;... =&gt; ...-&gt;...</code>: reduce the batch
+axes into the result.</li>
+<li><code>2...|...-&gt;... =&gt; ...|...-&gt;...</code>: slice the
+tensor at dimension 2 of the leftmost batch axis. Note that the tensor
+operation <code>@|</code> implements slicing at the leftmost batch axis
+for arbitrary dimension.</li>
+<li><code>...|... =&gt; ...|...2</code>: expand the tensor by putting
+the argument at leftmost output dimension 2 of the result (and reduce
+input axes if any). <code>rhs ++ &quot;...|... =&gt; ...|...2&quot;</code> will
+fill the other cells of the new tensor with zeroes;
+<code>[%cd lhs =:* rhs ~logic:&quot;...|... =&gt; ...|...2&quot;]</code> will fill
+the other cells of <code>lhs</code> with ones since it’s the neutral
+element of the assignment (reduction) operator, here with ones.</li>
+<li><code>ijk =&gt; kji</code>: reverse the three output axes, fails if
+the argument has any other axes.</li>
+<li><code>ijk =&gt; ki</code>: as above but also reduce the
+second-leftmost output axis.</li>
+<li><code>..v..|...ijk =&gt; ..v..kji</code>: reverse the three
+rightmost output axes, reduce any other output axes, pointwise for batch
+axes, pairing the batch axes with the leftmost output axes of the
+result. Fails if the argument has input axes.</li>
+<li><code>2..v..|... =&gt; ..v..</code>: slice the tensor at dimension 2
+of the leftmost batch axis, reduce all its output axes, preserve its
+other batch axes as output axes. Fails if the argument has input
+axes.</li>
+</ul>
+<h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
+the dimensions of selected axes for further computation or to add shape
+constraints</h3>
+<p>The syntaxes <code>+*</code> and <code>++</code> accept an optional
+list of strings argument after the specification string. When passed,
+the strings should be some of the identifiers used in the specification.
+Both dimension variable and row variable labels are supported. This will
+introduce bindings for <code>Indexing.variable_ref</code> objects at the
+same point as the inline parameter definition bindings, and will pass
+these objects with the <code>~capture_dims</code> argument to
+<code>einsum</code> resp. <code>einsum1</code>. The bound objects can
+later be used with <code>Operation.embed_dim</code> or its alias
+<code>Operation.TDSL.O.dim</code> to embed the solved dimension of the
+corresponding variable (as a number) into a tensor expression. For a row
+variable, the number will be the product of the dimensions it resolved
+into.</p>
+<h2 id="further-features-of-the-syntax-extension-cd">Further features of
+the syntax extension %cd</h2>
+<h3 id="referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node">Referencing
+arrays: tensor value, tensor gradient, merge buffer of a tensor
+node</h3>
+<p>The <code>%cd</code> syntax uses record-style notation to point
+to:</p>
+<ul>
+<li>the value tensor node of a tensor
+<code>&lt;tensor&gt;.value</code>,</li>
+<li>the gradient tensor node of a tensor
+<code>&lt;tensor&gt;.grad</code>,</li>
+<li>the merge buffer of a tensor node
+<code>&lt;tensor-node&gt;.merge</code>;
+<code>&lt;tensor&gt;.merge</code> is a shorthand for
+<code>&lt;tensor&gt;.value.merge</code>,</li>
+<li>the forward code of a tensor
+<code>&lt;tensor&gt;.forward</code>,</li>
+<li>the backprop code of a tensor
+<code>&lt;tensor&gt;.backprop</code>,</li>
+<li>the zeroing gradients code of a tensor
+<code>&lt;tensor&gt;.zero_grads</code>.</li>
+</ul>
+<p>The accessor <code>.value</code> can (almost?) always be dropped: by
+default, tensors in the <code>%cd</code> syntax refer to their value
+nodes. The forward and backprop code accesses manage roots (via the
+<code>Tensor.consume_forward_code</code> and
+<code>Tensor.consume_backprop_code</code> functions).</p>
+<p>For example, in a data-parallel computation, gradients of the same
+param <code>p</code> can be merged across devices using the code
+<code>p.grad =+ p.grad.merge</code>, combined with an explicit
+device-to-device transfer.</p>
+<h3 id="block-comments">Block comments</h3>
+<p>The <code>%cd</code> syntax uses the prefix operator
+<code>(~~)</code> in a semicolon sequence to introduce block
+comments:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Assignments.t =</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  | Block_comment <span class="kw">of</span> <span class="dt">string</span> * t</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>Schematic example:
+<code>~~(&quot;space&quot; &quot;separated&quot; &quot;comment&quot; &quot;tensor p debug_name:&quot; p; &lt;scope of the comment&gt;)</code>.
+The content of the comment uses application syntax, must be composed of
+strings, <code>&lt;tensor&gt;</code>, <code>&lt;tensor&gt;.value</code>
+(equivalent to <code>&lt;tensor&gt;</code>),
+<code>&lt;tensor&gt;.grad</code> components, where
+<code>&lt;tensor&gt;</code> is any tensor expression or tensor
+identifier.</p>
+<p>This syntax used to be very important, because comments in
+assignments are used to derive file names for generated code. Now, the
+<code>%cd</code> syntax automatically introduces block comments for code
+at let-binding points, using the identifier. Currently the comment does
+not yet incorporate any tensor node labels – and for that reason we are
+not yet adding comments around function bodies if a function is
+annotated with <code>%cd</code>. Moreover, we only automatically add
+comments for code, not for tensors – so the <code>~~</code> syntax is
+still helpful when the comment needs to be more precise for debugging or
+naming purposes, or when <code>%cd</code> is not used with a let
+binding, or when we want to pass a forward code directly instead of
+let-binding it. If an explicit comment is provided at the let-binding
+level, the automatic one is omitted.</p>
+<h2 id="further-features-of-the-syntax-extension-op">Further features of
+the syntax extension %op</h2>
+<h3 id="name-from-binding">Name from binding</h3>
+<p>When an extension point is applied to a let-binding,
+e.g. <code>let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</code>,
+it uses the name of the binding (<code>mlp_layer</code> in the example)
+for the label of the primary tensor created by the extension, if any.
+This is why the resulting layer tensor in the example has its label
+starting with <code>&quot;mlp_layer&quot;</code>. If the extension is over a
+semicolon-separated sequence of expressions, the primary tensor can only
+be in the last component of the sequence, other syntax constructs are
+handled analogously.</p>
+<p>The example
+<code>let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</code>
+also illustrates providing additional string list to populate the label
+of the tensor: <code>label</code> must be of type
+<code>string list</code>.</p>
+<h3 id="label-from-function-argument">Label from function argument</h3>
+<p>The resulting (primary) tensor’s label will also have incorporated
+the label of the input argument, if any. In our example, the resulting
+<code>mlp_layer</code> tensor will also include the label of the
+actually applied <code>x</code>. If the function has a unit parameter
+<code>()</code>, like <code>mlp_layer</code> above, only parameters to
+the right of <code>()</code> are considered for label extraction.</p>
+<p>When there is the unit parameter, and a <code>~label</code> parameter
+(specifically a parameter with label <code>label</code>), this label is
+also incorporated.</p>
+<h3 id="configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
+inline declarations: inline output dimensions, initial values</h3>
+<p>In the <code>%op</code> syntax, inline declarations use record syntax
+with additional fields to configure the tensor:</p>
+<ul>
+<li><strong>Basic declaration with default initialization</strong>:
+<code>{ tensor_name }</code> uses OCaml’s punning syntax and defaults to
+uniform random initialization</li>
+<li><strong>Declaration with value initialization</strong>:
+<code>{ tensor_name = value }</code> where value can be:
+<ul>
+<li>A scalar: <code>{ x = 5.0 }</code> or <code>{ y = 42 }</code></li>
+<li>A list/array: <code>{ weights = [1.0; 2.0; 3.0] }</code></li>
+<li>An initialization function: <code>{ z = uniform () }</code></li>
+</ul></li>
+<li><strong>Declaration with dimensions</strong>: Additional fields
+specify tensor dimensions:
+<ul>
+<li><code>output_dims</code> or shorthand <code>o</code>:
+<code>{ b; output_dims = [ hid_dim ] }</code> or
+<code>{ b; o = [ hid_dim ] }</code></li>
+<li><code>input_dims</code> or shorthand <code>i</code>:
+<code>{ w; i = [ 3 ]; o = [ 4 ] }</code></li>
+<li><code>batch_dims</code> or shorthand <code>b</code>: for batch
+dimensions (rarely used in <code>%op</code>)</li>
+</ul></li>
+</ul>
+<p>A very simple example from <a href="test/micrograd_demo.ml">micrograd_demo: Micrograd README basic
+example</a>:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op c = { a = [ <span class="dv">-4</span> ] } + { b = [ <span class="dv">2</span> ] } <span class="kw">in</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<p>How does it relate to
+<code>let%op c = { a = -4 } + { b = 2 } in ...</code>? Without brackets,
+the number is used to initialize all cells of the tensor value, and
+shape inference decides the shape of the tensor. With brackets, the
+bracketing specifies both all the cells and the exact shape of the
+tensor.</p>
+<h3 id="need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter">Need
+to lift the applications of configuration arguments (up to the unit
+parameter)</h3>
+<p>If you recall, inline declared param tensors get lifted out of
+functions to be defined at the point of a unit <code>()</code>
+parameter. Our example
+<code>let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</code>
+translates as:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp_layer ~label ~hid_dim () =</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> w = TDSL.param ~more_label:label <span class="st">&quot;w&quot;</span> () </span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> b = TDSL.param ~more_label:label ~output_dims:[ hid_dim ] <span class="st">&quot;b&quot;</span> () <span class="kw">in</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; TDSL.O.(relu (w * x + b))</span></code></pre></div>
+<p>For this to work properly, when employing such network blocks, their
+params also need to be introduced at the right moment. At one point, we
+tried to do this automatically by the <code>%op</code> syntax, but that
+was confusing to use. So you need to ensure scoping manually.
+Consider:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* </span><span class="al">FIXME</span><span class="co">: this is wrong! Doesn&#39;t bind the parameters at the right place. *)</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    (mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>       (mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () x))</span></code></pre></div>
+<p>This example would work if we used direct inline definitions, but it
+does not work when the definitions are indirectly in the functions
+called. We need to write instead:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layer3 = mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer2 = mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer1 = mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () <span class="kw">in</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; layer3 (layer2 (layer1 x))</span></code></pre></div>
+<p>The manual approach naturally extends to programmatic network
+architectures:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp ~label ~hid_dims () =</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layers =</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">List</span>.mapi hid_dims ~f:(<span class="kw">fun</span> i hid_dim -&gt;</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        mlp_layer ~label:[ <span class="st">&quot;L&quot;</span> ^ <span class="dt">Int</span>.to_string i ] ~hid_dim ())</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; <span class="dt">List</span>.fold layers ~init:x ~f:(<span class="kw">fun</span> x layer -&gt; layer x)</span></code></pre></div>
+<h2 id="implementation-details">Implementation details</h2>
+<h3 id="the-hard-coded-to-the-power-of-operator">The hard-coded
+to-the-power-of operator</h3>
+<p>OCANNL has a built-in numerical binary operation to-power-of:
+<code>Ops.ToPowOf</code>. As part of assignments, the corresponding
+operator is <code>**</code>. Here is the full definition of the
+to-power-of tensor operation from <a href="lib/operation.ml">Operation</a>:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">rec</span> pointpow ?(label : <span class="dt">string</span> <span class="dt">list</span> = []) ~grad_spec p t1 : Tensor.t =</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">module</span> NTDSL = <span class="kw">struct</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">include</span> Initial_NTDSL</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">module</span> O = <span class="kw">struct</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">include</span> NDO_without_pow</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> ( **. ) ?label base <span class="dt">exp</span> = pointpow ?label ~grad_spec:Tensor.Prohibit_grad <span class="dt">exp</span> base</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span> <span class="kw">in</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> p_t = NTDSL.number p <span class="kw">in</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd grad_asn =</span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Tensor.is_prohibit_grad grad_spec <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop</span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">2.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">1.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ g</span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. (t1 **. (p -. <span class="dv">1</span>.)) * g</span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  Tensor.binop ~label:(<span class="st">&quot;**.&quot;</span> :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t</span></code></pre></div>
+<p>On the <code>Tensor</code> level, this is implemented as a binary
+tensor operation, but it is exposed as a unary tensor operation! To
+avoid the complexities of propagating gradient into the exponent,
+<code>Operation.pointpow</code> is implemented as a function of only one
+tensor, the exponent is a number. We hard-code the pointwise-power-of
+operator <code>NTDSL.O.( **. )</code>, resp.
+<code>TDSL.O.( **. )</code>, in the <code>%cd</code> and
+<code>%op</code> syntaxes, to pass the numeric value to
+<code>pointpow</code> (the second argument of <code>**.</code>) without
+converting it to a tensor first.</p>
+<h3 id="intricacies-of-the-syntax-extension-cd">Intricacies of the
+syntax extension %cd</h3>
+<p>The syntax <code>%cd</code> translator needs to accomplish more than
+a context-free conversion of a concise notation to an
+<code>Assignments.comp</code> data-type. In particular:</p>
+<ul>
+<li>It needs to keep track if <code>~projections</code> is in scope, and
+it needs to collect the information about an assignment to properly
+transofm the projections from the scope into the projections valid for
+the particular assignment.</li>
+<li>Whenever the parsed notation uses tensors whose value nodes have not
+been computed yet, the translator needs to include the “forward” code of
+the tensors among the generated assignments. Typically this is required
+for embedded tensor expressions, which create new tensors. The
+translator puts the forward code in sequence just prior to the
+assignment that made use of the created tensor. The translator includes
+the forward code of tensors that are “forward roots” at the time the
+assigments are constructed (using <code>Tensor.is_fwd_root</code>).</li>
+<li>For inline declarations of tensors, the translator needs to pick the
+right other tensor, if any, to enrich the label information of the
+created tensor. Mechanisms:
+<ul>
+<li>Prefer tensors from identifiers (or field dereferences), since
+labels of tensor expressions (creating new tensors) will typically be
+overly verbose.</li>
+<li>Filter out escaping variables (identifiers coming from nested
+function parameters).</li>
+<li>Filter out embedded tensor expressions. In principle we could use
+them – we already introduce local bindings to avoid recomputing the
+expressions – but this would need pulling out these bindings together
+with the inline definition and does not seem worth the benefit.</li>
+<li>When one inline declaration uses another inline declaration on its
+right-hand-side, recall the other declaration’s label-enriching-tensor
+and use it directly.</li>
+</ul></li>
+<li>The argument slots in <code>Assignments.Accum_binop</code> and
+<code>Assignments.Accum_unop</code> can be either regular tensor nodes,
+or merge buffers of tensor nodes. The translator needs to determine
+that.</li>
+<li>When a tensor expression is used to create a new tensor, the
+translator lifts the expression into a let-binding, to be able to refer
+to the (same) tensor more than once. The created tensor is referred to
+at least twice: at its use site, and to include its forward code among
+the assignments.</li>
+</ul>
+<h3 id="embedded-nodes">Embedded nodes</h3>
+<p>In fact, the syntax <code>%cd</code> produces
+<code>Assignments.comp</code> values:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> comp = {</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  asgns : t;</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  embedded_nodes : <span class="dt">Set</span>.M(Tnode).t;</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The tensor nodes that are in <code>asgns</code> but not in
+<code>embedded_nodes</code>, and are on-device, must already be present
+in contexts with which the computation is linked. Such non-embedded
+nodes can be seen as inputs to the computation – except that for
+<code>backprop</code> code of a tensor, they are actually the outputs!
+Embedded nodes are closely related to <em>rootness</em> – when a node
+has not been used in the code of another tensor, it is a root (a forward
+root for value nodes and a backprop root for grad nodes).
+<code>embedded_nodes</code> were roots the first time they were used in
+<code>asgns</code>. Parameters, as created by <code>Tensor.param</code>,
+are not embedded in the code that uses them and thus will not be in
+<code>embedded_nodes</code> of the forward and backprop code over the
+parameters; however, they will constitute the
+<code>embedded_nodes</code> of the <code>Tensor.init_params</code>
+code.</p>
+</body>
+</html>
