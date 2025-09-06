@@ -266,11 +266,7 @@ let%op resnet_block ~label ?(stride = 1) () =
     else fun _train_step x -> x
   in
   fun ~train_step x ->
-    let out = conv1 x in
-    let out = bn1 ~train_step out in
-    let out = relu out in
-    let out = conv2 out in
-    let out = bn2 ~train_step out in
+    let out = conv1 x |> bn1 ~train_step |> relu |> conv2 |> bn2 ~train_step in
     relu (out + identity train_step x)
 
 (** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:
@@ -283,16 +279,7 @@ let%op lenet ~label ?(num_classes = 10) () =
   let fc1 = mlp_layer ~label:(label @ [ "fc1" ]) ~hid_dim:120 () in
   let fc2 = mlp_layer ~label:(label @ [ "fc2" ]) ~hid_dim:84 () in
   fun ~train_step:_ x ->
-    let x = conv1 x in
-    let x = relu x in
-    let x = pool1 x in
-    let x = conv2 x in
-    let x = relu x in
-    let x = pool2 x in
-    (* Flatten spatial dimensions - merge all output axes into one *)
-    let x = x ++ "... | ..spatial.. => ... | 0" in
-    let x = fc1 x in
-    let x = fc2 x in
+    let x = conv1 x |> relu |> pool1 |> conv2 |> relu |> pool2 |> fc1 |> fc2 in
     (* Final classification layer *)
     ({ w_logits } * x) + { b_logits = 0.; o = [ num_classes ] }
 
@@ -315,9 +302,7 @@ let%op sokoban_cnn ~label ?(num_actions = 4) () =
   let conv2 = conv_bn_relu ~label:(label @ [ "conv2" ]) ~kernel_size:3 () in
   let conv3 = conv_bn_relu ~label:(label @ [ "conv3" ]) ~kernel_size:3 () in
   fun ~train_step ~grid_state ->
-    let x = conv1 ~train_step grid_state in
-    let x = conv2 ~train_step x in
-    let x = conv3 ~train_step x in
+    let x = conv1 ~train_step grid_state |> conv2 ~train_step |> conv3 ~train_step in
 
     (* Global pooling to aggregate spatial info *)
     let x = global_avg_pool2d x in
@@ -347,16 +332,10 @@ let%op mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
   let bn = batch_norm2d ~label:(label @ [ "bn_final" ]) () in
 
   fun ~train_step x ->
-    let x = conv_init ~train_step x in
-    let x = dw_block1 x in
-    let x = relu x in
-    let x = dw_block2 x in
-    let x = relu x in
-    let x = dw_block3 x in
-    let x = relu x in
-    let x = dw_block4 x in
-    let x = relu x in
-    let x = bn ~train_step x in
+    let x =
+      conv_init ~train_step x |> dw_block1 |> relu |> dw_block2 |> relu |> dw_block3 |> relu
+      |> dw_block4 |> relu |> bn ~train_step
+    in
 
     (* Global pooling and classification *)
     let x = global_avg_pool2d x in

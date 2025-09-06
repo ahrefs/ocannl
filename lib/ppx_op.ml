@@ -382,9 +382,20 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       let vbs3, e3 = loop expr3 in
       let vbs4, e4 = loop expr4 in
       (reduce_vbss [ vbs2; vbs3; vbs4 ], [%expr [%e e1] [%e e2] [%e e3] [%e e4]])
+  | [%expr [%e? arg] |> [%e? fn]] ->
+      (* TODO: this is a workaround for optional arguments spoiling type inference. We should
+         consider removing ?label arguments from Make_DSL.O -- not sure what benefit we get from
+         them. Then consider removing this case, but maybe not... *)
+      let vbs1, arg = loop arg in
+      let vbs2, fn = loop fn in
+      let vbs = reduce_vbss [ vbs1; vbs2 ] in
+      ( vbs,
+        [%expr
+          let __x = [%e arg] in
+          [%e fn] __x] )
   | { pexp_desc = Pexp_apply (fn_expr, args); _ } ->
-      (* Smart application handling with unit-parameter heuristic:
-         If there's a unit () argument, don't transform args before it *)
+      (* Smart application handling with unit-parameter heuristic: If there's a unit () argument,
+         don't transform args before it *)
       let unit_position =
         List.find_mapi args ~f:(fun i (_, arg_expr) ->
             match arg_expr.pexp_desc with
