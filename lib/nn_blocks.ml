@@ -74,8 +74,7 @@ let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0)
       (match mask with None -> scores | Some mask -> where mask scores !.(-1e9))
   in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
-  let attended = attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v in
-  { w_o } * attended
+  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v)
 
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
@@ -93,10 +92,8 @@ let%op transformer_encoder_block ~label ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
   let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
   fun ~train_step input ->
-    let attn_output = mha ~train_step input in
-    let x1 = ln1 (input + attn_output) in
-    let ffn_output = ffn x1 in
-    ln2 (x1 + ffn_output)
+    let x1 = ln1 (input + mha ~train_step input) in
+    ln2 (x1 + ffn x1)
 
 let%op cross_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () ~train_step x
     ~enc_output =
@@ -109,8 +106,7 @@ let%op cross_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0) () ~
   Shape.set_dim h num_heads;
   let attn_weights = softmax ~spec:" ... | ... t -> ..." ?temperature () scores in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
-  let attended = attn_weights +* " ... | s t -> h; ... t | h ... => ... s | h ... " v in
-  { w_o } * attended
+  { w_o } * (attn_weights +* " ... | s t -> h; ... t | h ... => ... s | h ... " v)
 
 let%op transformer_decoder_block ~label ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let masked_mha = multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads () in
@@ -121,12 +117,9 @@ let%op transformer_decoder_block ~label ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
   let ln3 = layer_norm ~label:(label @ [ "ln3" ]) ~epsilon () in
   fun ~train_step target ~enc_output ~mask ->
-    let self_attn_output = masked_mha ~train_step ~mask target in
-    let x1 = ln1 (target + self_attn_output) in
-    let cross_attn_output = cross_mha ~train_step x1 ~enc_output in
-    let x2 = ln2 (x1 + cross_attn_output) in
-    let ffn_output = ffn x2 in
-    ln3 (x2 + ffn_output)
+    let x1 = ln1 (target + masked_mha ~train_step ~mask target) in
+    let x2 = ln2 (x1 + cross_mha ~train_step x1 ~enc_output) in
+    ln3 (x2 + ffn x2)
 
 let transformer_encoder ~label ~num_layers ~num_heads ~d_ff ?(epsilon = 1e-5) () =
   let layers =
@@ -234,11 +227,12 @@ let%op global_avg_pool2d x = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.."
     Typically applied after convolutions and before activations. *)
 let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x =
   let _ = momentum in
-  (* TODO: implement running statistics, currently using learned params *)
+  (* FIXME: implement running statistics, currently using learned params *)
   (* Compute batch statistics across spatial dimensions *)
-  let mean = x ++ "... | h, w, ..c.. => 0 | 0, 0, ..c.." in
+  let total_size = dim o *. dim h *. dim w in
+  let mean = (x ++ "..o.. | h, w, ..c.. => 0 | 0, 0, ..c.." [ "o"; "h"; "w" ]) /. total_size in
   let centered = x - mean in
-  let variance = (centered *. centered) ++ "... | h, w, ..c.. => 0 | 0, 0, ..c.." in
+  let variance = ((centered *. centered) ++ "... | h, w, ..c.. => 0 | 0, 0, ..c..") /. total_size in
   let std_dev = sqrt (variance + !.epsilon) in
   let normalized = centered /. std_dev in
   (* Scale and shift with learnable parameters *)
@@ -332,7 +326,7 @@ let%op sokoban_cnn ~label ?(num_actions = 4) () =
     let action_logits = ({ w_action } * x) + { b_action = 0.; o = [ num_actions ] } in
 
     (* Optional: value head for actor-critic methods *)
-    let value = ({ w_value } * x) + { b_value = 0.; o = [ 1 ] } ++ "... | 1 => ... | 0" in
+    let value = ({ w_value } * x) + { b_value = 0.; o = [ 1 ] } in
 
     (action_logits, value)
 
