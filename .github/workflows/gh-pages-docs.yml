@@ -15,30 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@main
 
-      - name: Cache opam
-        id: cache-opam
-        uses: actions/cache@v4
-        with:
-          path: ~/.opam
-          key: opam-ubuntu-22.04-5.3.0
-
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: '5.3.0'
-
-      - name: slipshow
-        run: opam install slipshow
+      - name: Install slipshow
+        run: |
+          wget https://github.com/panglesd/slipshow/releases/download/v0.6.0/slipshow-linux-x86_64.tar
+          tar -xvf slipshow-linux-x86_64.tar --strip-components=1
+          sudo mv slipshow /usr/local/bin/slipshow
 
       - name: Introductory slides
-        run: opam exec -- slipshow compile docs/slides-basics_backprop_training_codegen.md -o docs/html/basics_backprop_training_codegen.html
+        run: slipshow compile docs/slides-basics_backprop_training_codegen.md -o docs/html/basics_backprop_training_codegen.html
 
       - name: RL slides
-        run: opam exec -- slipshow compile docs/slides-RL-REINFORCE.md -o docs/html/RL-REINFORCE.html
+        run: slipshow compile docs/slides-RL-REINFORCE.md -o docs/html/RL-REINFORCE.html
         
-      - name: Setup pandoc
+      - name: Install pandoc
         uses: pandoc/actions/setup@main
         with:
-          version: 'latest'
+          version: '3.7.0.2'
 
       - name: Migration guide
         run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/migration_guide.md -o docs/html/migration_guide.html
