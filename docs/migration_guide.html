@@ -241,7 +241,8 @@ info between phases.</p>
 </tr>
 <tr>
 <td><code>torch.matmul(a, b)</code></td>
-<td><code>a * b</code> or <code>a +* &quot;...; ... =&gt; ...&quot; b</code></td>
+<td><code>a * b</code> or
+<code>a +* &quot;..b.. -&gt; ..a..; ..b.. =&gt; ..a..&quot; b</code></td>
 <td>Einsum for complex cases</td>
 </tr>
 <tr>
@@ -250,8 +251,13 @@ info between phases.</p>
 <td>Sum then divide</td>
 </tr>
 <tr>
-<td><code>x.sum(dim=-1)</code></td>
-<td><code>x ++ &quot;... | ... d =&gt; ... | 0&quot;</code></td>
+<td><code>x.sum(dim=-1, keepdim=True)</code></td>
+<td><code>x ++ &quot;... | ... d =&gt; ... | ... 0&quot;</code></td>
+<td>Reduce by summing</td>
+</tr>
+<tr>
+<td><code>x.sum(dim=-1, keepdim=False)</code></td>
+<td><code>x ++ &quot;... | ... d =&gt; ... | ...&quot;</code></td>
 <td>Reduce by summing</td>
 </tr>
 </tbody>
@@ -390,7 +396,8 @@ variables and convolutions.</p>
 <li><strong>Multi-character mode</strong>:
 <ul>
 <li>Triggered by ANY comma in the spec</li>
-<li>Trailing commas ignored</li>
+<li>Trailing commas ignored (can be used to trigger multi-char
+mode)</li>
 <li>Identifiers can be multi-character (e.g., <code>height</code>,
 <code>width</code>)</li>
 <li>Must be separated by non-alphanumeric: <code>,</code> <code>|</code>
@@ -447,10 +454,12 @@ variables and convolutions.</p>
 <code>..batch..</code> in batch position, <code>..input..</code> before
 <code>-&gt;</code>, <code>..output..</code> after
 <code>-&gt;</code></li>
-<li><code>..b..</code> for batch axes (arbitrary number)</li>
-<li><code>..ic..</code>, <code>..oc..</code> for input/output channels
-(can be multi-dimensional)</li>
-<li><code>..spatial..</code> for spatial dimensions</li>
+<li>Single-char mode example: <code>..b..|</code> for batch axes
+(arbitrary number)</li>
+<li>Multi-char mode examples: <code>h, w, ..ic..</code>,
+<code>h, w, ..oc..</code> for input/output channels (can be
+multi-dimensional), <code>..spatial.., channel</code> for spatial
+dimensions</li>
 </ul>
 <h2 id="common-gotchas-and-solutions">Common Gotchas and Solutions</h2>
 <h3 id="variable-capture-with-einsum">Variable Capture with Einsum</h3>
