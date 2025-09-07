@@ -2,7 +2,7 @@
 
 {pause}
 
-My work on OCANNL is sponsored by **[a]{style="color:orange"}[hrefs]{style="color:blue"}**
+Lukstafi's work on OCANNL is sponsored by **[a]{style="color:orange"}[hrefs]{style="color:blue"}**
 
 {pause}
 

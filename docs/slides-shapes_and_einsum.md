@@ -2,6 +2,10 @@
 
 {pause}
 
+Lukstafi's work on OCANNL is sponsored by **[a]{style="color:orange"}[hrefs]{style="color:blue"}**
+
+{pause}
+
 {#intro .definition title="Shape Inference in OCANNL"}
 > OCANNL provides powerful shape inference and generalized einsum notation for building neural networks:
 > 
