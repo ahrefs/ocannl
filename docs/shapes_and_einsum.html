@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>slides-shapes_and_einsum</title>
+  <style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">body {
+max-width: 1000px;
+margin: 0 auto;
+padding: 20px;
+}</style>
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#shapes-and-einsum-in-ocannl-from-basics-to-advanced" id="toc-shapes-and-einsum-in-ocannl-from-basics-to-advanced">Shapes and
+Einsum in OCANNL: From Basics to Advanced</a>
+<ul>
+<li><a href="#einsum-operators" id="toc-einsum-operators">Einsum
+Operators</a></li>
+<li><a href="#capturing-dimensions" id="toc-capturing-dimensions">Capturing Dimensions</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="shapes-and-einsum-in-ocannl-from-basics-to-advanced">Shapes and
+Einsum in OCANNL: From Basics to Advanced</h1>
+<p>{pause}</p>
+<p>{#intro .definition title=“Shape Inference in OCANNL”} &gt; OCANNL
+provides powerful shape inference and generalized einsum notation for
+building neural networks: &gt; &gt; * <strong>Shape inference</strong>:
+Automatic deduction of tensor dimensions &gt; * <strong>Row
+variables</strong>: Flexible handling of unknown axis counts<br />
+&gt; * <strong>Einsum notation</strong>: Concise syntax for complex
+tensor operations &gt; * <strong>Three axis kinds</strong>:
+<code>batch | input -&gt; output</code> (matrix convention)</p>
+<p>{pause}</p>
+<p>{#why-shapes .block title=“Why Care About Shapes?”} &gt; *
+<strong>Expressivity gains</strong>: The axis kind split doesn’t enforce
+semantics but offers better expressivity &gt; * <strong>Broadcasting
+magic</strong>: Tensors with dimension-1 axes broadcast automatically
+&gt; * <strong>Less commitment</strong>: Use row variables
+<code>..d..</code> where axis count doesn’t matter &gt; * <strong>Type
+safety</strong>: Shape mismatches caught at compile time, not
+runtime</p>
+<p>{pause up=why-shapes #numpy-differences} ## From NumPy to OCANNL: Key
+Differences</p>
+<p>{.remark} &gt; OCANNL’s einsum differs syntactically from NumPy: &gt;
+&gt; * <code>-&gt;</code> separates input/output axes (not
+arguments/result) &gt; * <code>=&gt;</code> appears to the left of the
+result tensor &gt; * <code>;</code> separates argument tensors &gt; *
+<code>,</code> separates identifiers in multi-char mode</p>
+<p>{pause up=numpy-differences #basic-example .example title=“Your First
+Einsum”}</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">open</span> Ocannl.Operation.DSL_modules</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op matrix_multiply a b = </span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  a +* <span class="st">&quot;m n; n p =&gt; m p&quot;</span> b</span></code></pre></div>
+<p>Compare with NumPy: <code>np.einsum(&quot;mn,np-&gt;mp&quot;, a, b)</code></p>
+<p>{pause up} ## The Three Axis Kinds</p>
+<p>{#axis-kinds .definition title=“Batch | Input -&gt; Output”} &gt;
+Every tensor shape has three rows of axes: &gt; &gt; * <strong>Batch
+axes</strong>: Data samples, preserved in operations &gt; *
+<strong>Output axes</strong>: Results of computations (leftmost in
+matrix convention) &gt; * <strong>Input axes</strong>: Arguments to
+operations (rightmost in matrix convention)</p>
+<p>{pause}</p>
+<p>{#axis-example .example title=“Shape Specifications”}</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Different ways to specify the same shape *)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;batch | input -&gt; output&quot;</span>    <span class="co">(* Full specification *)</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;input -&gt; output&quot;</span>             <span class="co">(* No batch axes *)</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;batch | output&quot;</span>              <span class="co">(* No input axes *)</span>  </span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;output&quot;</span>                      <span class="co">(* Just output axes *)</span></span></code></pre></div>
+<p>{pause up} ## Row Variables and Broadcasting</p>
+<p>{#row-variables .definition title=“The Power of …”} Row variables
+enable flexible axis handling:</p>
+<ul>
+<li><code>...</code> - Context-dependent ellipsis</li>
+<li><code>..var..</code> / <code>..v..</code> - Named row variable
+(multi-char / single-char mode)</li>
+<li>Broadcasting happens “in the middle”</li>
+</ul>
+<p>{pause}</p>
+<p>{#ellipsis-examples .example title=“Using Ellipsis”}</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Reduce all output axes to scalar,</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">   require no batch or input axes *)</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op sum_all_output x = x ++ <span class="st">&quot;... =&gt; 0&quot;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* Reduce all axes to scalar *)</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op sum_all x = x ++ <span class="st">&quot;...|...-&gt;... =&gt; 0&quot;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co">(* Pointwise operation preserving all axes *)</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op square x = x *. x</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>       <span class="co">(* Implicit: &quot;...|...-&gt;... =&gt; ...|...-&gt;...&quot; *)</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Sum over last output axis only, require no input axes *)</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op sum_last x = x ++ <span class="st">&quot;...|...k =&gt; ...|...&quot;</span> </span></code></pre></div>
+<p>{pause up} ## Multi-Character Mode</p>
+<p>{#multichar-mode .block title=“When Identifiers Get Long”} &gt; Add a
+comma anywhere to enable multi-character identifiers: &gt; &gt;
+<code>ocaml &gt; (* Single-char mode *) &gt; &quot;b | hw -&gt; c&quot;  (* b, h, w, c are separate axes *) &gt;  &gt; (* Multi-char mode (note the comma) *) &gt; &quot;batch | height, width -&gt; channels,&quot;   &gt;</code></p>
+<p>{pause}</p>
+<p>{#multichar-example .example title=“Real-World Multi-Char”}</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op attention ~num_heads () x =</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> q = { w_q } * x <span class="kw">in</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> k = { w_k } * x <span class="kw">in</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Capture dimensions for scaling *)</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> scores = </span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    q +* <span class="st">&quot;... seq | heads, ..dims..; ... time | heads, ..dims..</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="st">          =&gt; ... seq | time -&gt; heads&quot;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      [<span class="st">&quot;heads&quot;</span>; <span class="st">&quot;dims&quot;</span>] k </span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  Shape.set_dim heads num_heads;</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  scores /. <span class="dt">sqrt</span> (dim dims)</span></code></pre></div>
+<p>{pause up=multichar-example}</p>
+<h2 id="einsum-operators">Einsum Operators</h2>
+<p>{#einsum-ops .definition title=“Built-in Einsum Operators”} &gt;
+OCANNL provides specialized einsum operators: &gt; &gt; | Operator |
+Unary/Binary | Accumulation | Operation | Function | &gt;
+|———-|————–|————–|———–|———-| &gt; | <code>++</code> | Unary | Add | - |
+<code>einsum1</code> | &gt; | <code>+*</code> | Binary | Add | Multiply
+| <code>einsum</code> | &gt; | <code>@^^</code> | Unary | Max | - |
+<code>einmax1</code> | &gt; | <code>@^+</code> | Binary | Max | Add |
+<code>tropical</code> |</p>
+<p>{pause up=einsum-ops}</p>
+<p>{#operator-examples .example title=“Using Einsum Operators”}</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Matrix multiplication on individual output axes *)</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op matmul a b = a +* <span class="st">&quot;ik; kj =&gt; ij&quot;</span> b</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Batch matrix multiply on individual output axes with broadcasting *)</span>  </span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op batch_matmul a b = </span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  a +* <span class="st">&quot;... | ik; ... | kj =&gt; ... | ij&quot;</span> b</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="co">(* Full tensor multiplication, equivalent to [a * b] *)</span>  </span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op tensor_mul a b = </span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  a +* <span class="st">&quot;... | ..k..-&gt;..i..; ... | ..j..-&gt;..k.. =&gt; ... | ..j..-&gt;..i..&quot;</span> b</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Max pooling, requiring specifically 4 output axes *)</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op max_reduce_ouput x = x @^^ <span class="st">&quot;bhwc =&gt; b00c&quot;</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="co">(* Max pooling, with arbitrary batch axes and no input axes *)</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op max_reduce x = x @^^ <span class="st">&quot;...|hwc =&gt; ...|00c&quot;</span></span></code></pre></div>
+<p>{pause up=operator-examples}</p>
+<p>{pause up} ## Convolutions with Einsum</p>
+<p>{#convolution-syntax .definition title=“Convolution Notation”} &gt;
+Use <code>+</code> for convolution axes with stride and dilation: &gt;
+&gt; <code>&gt; &quot;stride*output + dilation*kernel&quot; &gt;</code></p>
+<p>{pause}</p>
+<p>{#conv-example .example title=“2D Convolution”}</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op conv2d ?(stride=<span class="dv">1</span>) ?(kernel_size=<span class="dv">3</span>) () x =</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  Shape.set_dim kh kernel_size;</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  Shape.set_dim kw kernel_size;</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  x +* <span class="st">&quot;... | stride*oh+kh, stride*ow+kw, ic;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="st">        kh, kw, ic -&gt; oc =&gt; ... | oh, ow, oc&quot;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>       [<span class="st">&quot;kh&quot;</span>; <span class="st">&quot;kw&quot;</span>] { kernel }</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  + { bias = <span class="dv">0</span>. }</span></code></pre></div>
+<p>{pause up=conv-example}</p>
+<h2 id="capturing-dimensions">Capturing Dimensions</h2>
+<p>{#capture-dims .block title=“Dimension Variables”} &gt; Capture
+dimension values for computation: &gt; &gt;
+<code>ocaml &gt; let%op normalize x = &gt;   let mean = x ++ &quot;... | ..d.. =&gt; ... | 0&quot; [&quot;d&quot;] in &gt;   let centered = (x - mean) /. dim d in &gt;   centered /. sqrt (variance + !.1e-5) &gt;</code></p>
+<p>{pause up=capture-dims #capture-warning .remark}
+<strong>Warning</strong>: Captured variables can shadow other
+identifiers. Only capture what you need!</p>
+<p>{pause down #constants-trick .block title=“Creating Shape-Inferred
+Constants”} &gt; Need a tensor of ones that matches another tensor’s
+shape? &gt; &gt;
+<code>ocaml &gt; (* Used in pooling to propagate dimensions *) &gt; let%op avg_pool2d ~window () x = &gt;   let kernel = 0.5 + 0.5 in  (* Shape-inferred 1s *) &gt;   x +* &quot;... | stride*oh+kh, stride*ow+kw, c;  &gt;         kh, kw =&gt; ... | oh, ow, c&quot; kernel &gt;   /. !.(window * window) &gt;</code></p>
+<p>{pause up} ## Advanced: Building Custom Operations</p>
+<p>{#custom-ops .example title=“Beyond Built-in Operators”} &gt; You can
+define operations with custom accumulation: &gt; &gt;
+<code>ocaml &gt; let einmax ?(label = []) ?(capture_dims = []) spec = &gt;   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:@^ v1 * v2 in &gt;   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections = &gt;     g1 =+ where (t = t1 + t2) (g *. v2) 0; &gt;     g2 =+ where (t = t1 + t2) (v1 *. g) 0 &gt;   in &gt;   Tensor.binop &gt;     ~compose_op:(Shape.Einsum (spec, capture_dims)) &gt;     ~op_asn ~grad_asn ~label:(&quot;@^=&gt;*&quot; :: label) &gt;</code></p>
+<p>{pause center}</p>
+<p>It looks complicated because we introduce a brand new differentiable
+tensor operation. It’s easier to use custom accumulations in code. That
+uses <code>~logic:</code> which can be any spec, with special handling
+for <code>&quot;.&quot;</code> (pointwise), <code>&quot;@&quot;</code> (tensor inner product
+/ multiply, like <code>*</code>), <code>&quot;T&quot;</code> (transpose: swap
+input and output axes).</p>
+<p>{pause down #custom-sgd .example title=“Custom SGD step with
+per-parameter min/max values”}</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_and_track ~learning_rate p =</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> <span class="dt">Option</span>.is_none p.Tensor.diff <span class="kw">then</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">raise</span> @@ Tensor.Session_error</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>      (<span class="st">&quot;sgd_and_track: not differentiable&quot;</span>, <span class="dt">Some</span> p);</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd update =</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    ~~(p <span class="st">&quot;sgd track min max&quot;</span>;</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>       p =- learning_rate * sgd_delta ~logic:<span class="st">&quot;.&quot;</span>;</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>       { p_min } =@- p ~logic:<span class="st">&quot;...-&gt;... =&gt; 0&quot;</span>;</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>       { p_max } =@^ p ~logic:<span class="st">&quot;...-&gt;... =&gt; 0&quot;</span>) <span class="kw">in</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>  update, p_min, p_max</span></code></pre></div>
+<p>{pause up} You can programmatically create the spec for use with the
+dedicated syntaxes, but for the sake of code clarity this does not
+support variable capture.</p>
+<p>{#custom-example .example title=“Reduce Last N Dimensions”}</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Reduce last N output dimensions, PyTorch-style keepdim *)</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op reduce_last_n ~n ?(keepdim = <span class="kw">true</span>) () =</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> vars = <span class="dt">List</span>.init n ~f:(<span class="kw">fun</span> i -&gt; </span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Char</span>.to_string (<span class="dt">Char</span>.of_int_exn (<span class="dv">97</span> + i))) <span class="kw">in</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result_dims = </span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> keepdim <span class="kw">then</span> <span class="dt">String</span>.make n <span class="ch">&#39;0&#39;</span> <span class="kw">else</span> <span class="st">&quot;&quot;</span> <span class="kw">in</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> spec = <span class="st">&quot;... | ...&quot;</span> ^ <span class="dt">String</span>.concat <span class="st">&quot;&quot;</span> vars ^ </span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>             <span class="st">&quot; =&gt; ... | ...&quot;</span> ^ result_dims <span class="kw">in</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; x ++ spec</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="co">(* Example: reduce_last_n ~n:3 ~keepdim:true () </span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="co">   generates: &quot;... | ...abc =&gt; ... | ...000&quot; </span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="co">   </span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="co">   With ~keepdim:false:</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="co">   generates: &quot;... | ...abc =&gt; ... | ...&quot; *)</span></span></code></pre></div>
+<p>{pause up} ## Practical Patterns</p>
+<p>{#patterns .block title=“Common Shape Patterns”} &gt;
+<strong>Principle of least commitment</strong>: Use row variables where
+possible &gt; &gt; * <code>&quot;...|...-&gt;...&quot;</code> - Handle ANY shape
+(all three axis kinds) &gt; * <code>&quot;...-&gt;...&quot;</code> - Parameters
+(no batch axes expected) &gt; * <code>&quot;...|...&quot;</code> - Data tensors
+(no input axes expected) &gt; * <code>&quot;... | ..d.. =&gt; ... | 0&quot;</code>
+- Reduce unknown output axes &gt; *
+<code>&quot;...|...-&gt;...; ...|...-&gt;... =&gt; ...|...-&gt;...&quot;</code> -
+Pointwise binary op</p>
+<p>{pause down #pattern-examples .example title=“Real Examples from
+nn_blocks.ml”}</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Layer norm - reduce over feature dimensions *)</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer_norm () x =</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> mean = x ++ <span class="st">&quot;... | ..d.. =&gt; ... | 0&quot;</span> [<span class="st">&quot;d&quot;</span>] <span class="kw">in</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> normalized = (x - mean) /. dim d <span class="kw">in</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  ({ gamma = <span class="dv">1</span>. } *. normalized) + { beta = <span class="dv">0</span>. }</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Attention scores with flexible batching *)</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> scores = </span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  q +* <span class="st">&quot;...batch.., seq | heads, ..dims..; </span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="st">        ...batch.., time | heads, ..dims.. =&gt; </span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="st">        ...batch.., seq | time -&gt; heads&quot;</span> </span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    [<span class="st">&quot;heads&quot;</span>; <span class="st">&quot;dims&quot;</span>] k</span></code></pre></div>
+<p>{pause up} ## Shape Inference Magic</p>
+<p>{#inference .definition title=“How Shape Inference Works”} &gt;
+OCANNL’s shape inference is declarative: &gt; &gt; 1. <strong>Collect
+constraints</strong> from tensor operations &gt; 2. <strong>Propagate
+shapes</strong> bottom-up and top-down<br />
+&gt; 3. <strong>Solve inequalities</strong> (dim-1 broadcasts to any
+size) &gt; 4. <strong>Substitute variables</strong> with least upper
+bounds</p>
+<p>{pause}</p>
+<p>{#inference-example .example title=“Shape Inference in Action”}</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op flexible_mlp () x =</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Fix hidden dim where it can&#39;t be inferred, </span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co">     let other shapes propagate *)</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  { w_out } * relu ({ w_hid } * x + { bias; o = [<span class="dv">128</span>] })</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* Shape propagation:</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="co">   - From x: determines w_hid&#39;s input dims</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="co">   - From usage (e.g., loss): determines w_out&#39;s dims</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co">   - Only bias needs explicit [128] - no other context! *)</span></span></code></pre></div>
+<p>{pause up} ## Projections: Under the Hood</p>
+<p>{#projections .block title=“From Shapes to Loops”} &gt; Projections
+determine how tensors are indexed in generated code: &gt; &gt; * Each
+axis gets a projection (iterator or fixed index) &gt; * Broadcasting
+axes → fixed index 0 &gt; * Convolutions → strided iteration with
+padding &gt; * Projections are freshened per operation (no
+contamination)</p>
+<p>{pause}</p>
+<p>{#projection-example .example title=“Projection Example”}</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* This einsum: *)</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>a +* <span class="st">&quot;ij; jk =&gt; ik&quot;</span> b</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Generates loops like: *)</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* for i = 0 to I-1 do</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co">     for k = 0 to K-1 do  </span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">       c[i,k] = 0;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="co">       for j = 0 to J-1 do</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="co">         c[i,k] += a[i,j] * b[j,k] *)</span></span></code></pre></div>
+<p>{pause up} ## Tips and Tricks</p>
+<p>{#tips .block title=“Best Practices”} &gt; 1. <strong>Use
+<code>|</code> for axis kinds</strong> when mixing batch/input/output
+&gt; 2. <strong>Add trailing comma</strong> for multi-char mode:
+<code>&quot;input-&gt;output,&quot;</code> &gt; 3. <strong>Avoid
+over-capturing</strong> dimensions in einsum specs &gt; 4.
+<strong>Remember tensor operators</strong>: <code>*</code> (matmul) vs
+<code>*.</code> (pointwise) &gt; 5. <strong>Let inference work</strong>:
+Don’t over-specify dimensions</p>
+<p>{pause}</p>
+<p>{#debugging .remark title=“Debugging Shapes”} &gt; When shapes don’t
+match: &gt; &gt; * Print tensor shapes:
+<code>Tensor.print ~force:true tensor</code> &gt; * Check axis kinds are
+correctly specified &gt; * Verify broadcasting assumptions &gt; * Use
+explicit dimension constraints when needed</p>
+<p>{pause up} ## Common Pitfalls</p>
+<p><strong>Tensor operators matter:</strong> * <code>*</code> - tensor
+multiplication (matrix multiply generalized) * <code>*.</code> -
+pointwise multiplication * <code>/.</code> - pointwise division (not
+using <code>/</code> with tensors, for consistency)</p>
+<p><strong>Einsum spec with variable capture must be
+literal:</strong></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Wrong: *)</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> spec = <span class="st">&quot;i j =&gt; j i&quot;</span> <span class="kw">in</span> (x ++ spec [ <span class="st">&quot;j&quot;</span> ]) /. dim j</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Right: *)</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>(x ++ <span class="st">&quot;i j =&gt; j i&quot;</span> [ <span class="st">&quot;j&quot;</span> ]) /. dim j</span></code></pre></div>
+<p><strong>Single vs multi-char mode:</strong></p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;abc&quot;</span>        <span class="co">(* 3 axes: a, b, c *)</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;abc,&quot;</span>       <span class="co">(* 1 axis: abc (comma triggers multi-char) *)</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;a, b, c&quot;</span>    <span class="co">(* 3 axes: a, b, c (multi-char mode) *)</span></span></code></pre></div>
+<p>{pause up} ## Building Your First Model</p>
+<p>Try building a simplified attention mechanism:</p>
+<p>{#exercise carousel .example title=“Exercise: Custom Attention”} &gt;
+{.block title=“Task”} &gt;
+<code>ocaml &gt; let%op simple_attention () input = &gt;   (* Hints: &gt;      - Project input to query and key spaces &gt;      - Compute attention scores (QK^T) &gt;      - Apply softmax normalization &gt;      - Weight values by attention *) &gt;   let query = { w_q } * input in &gt;   let key = { w_k } * input in &gt;   let value = { w_v } * input in &gt;   (* Your einsum operations here... *) &gt;   ??? &gt;</code>
+&gt; &gt; — &gt; &gt; {.block title=“Solution”} &gt;
+<code>ocaml &gt; let%op simple_attention () input = &gt;   let query = { w_q } * input in &gt;   let key = { w_k } * input in &gt;   let value = { w_v } * input in &gt;   let scores = &gt;     query +* &quot;batch, seq, dim; batch, time, dim &gt;               =&gt; batch, seq, time&quot; key in &gt;   let weights = &gt;     softmax ~spec:&quot;... | ..., time&quot; () scores in &gt;   weights +* &quot;batch, seq, time; batch, time, dim &gt;               =&gt; batch, seq, dim&quot; value &gt;</code></p>
+<p>{pause change-page=exercise}</p>
+<p>{pause}</p>
+<p>Check <a href="https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68">nn_blocks.ml</a>,
+which uses an input axis in the scores.</p>
+<p>{pause up} ## Summary</p>
+<p>{#summary .definition title=“Key Takeaways”} &gt; You’ve learned to:
+&gt; &gt; * <strong>Navigate</strong> OCANNL’s three-axis shape system
+&gt; * <strong>Write</strong> concise einsum specifications<br />
+&gt; * <strong>Leverage</strong> row variables for flexibility &gt; *
+<strong>Build</strong> complex operations from primitives &gt; *
+<strong>Trust</strong> shape inference to handle the details</p>
+<p>{pause}</p>
+<p>{#next-steps .block title=“Next Steps”} &gt; * Read
+<code>docs/migration_guide.md</code> for PyTorch/TF comparisons &gt; *
+Study <code>lib/nn_blocks.ml</code> for production patterns &gt; *
+Experiment with custom einsum operations &gt; * Build your own neural
+network layers &gt; &gt; Remember: <strong>Lean on shape
+inference</strong> - commit only to what matters!</p>
+<p>{pause down #philosophy .remark title=“The OCANNL Way”} &gt; Unlike
+PyTorch/TensorFlow where you specify exact shapes, OCANNL encourages:
+&gt; &gt; * Using row variables (<code>..v..</code>) for flexible
+architectures &gt; * Letting shape inference propagate constraints &gt;
+* Working with multi-dimensional channels naturally &gt; * Avoiding
+premature shape commitments</p>
+<p>{pause up=philosophy} ## References</p>
+<p>{#references} * <a href="https://github.com/ahrefs/ocannl">OCANNL
+Website</a> * <a href="https://ahrefs.github.io/ocannl/docs">OCANNL
+Documentation</a> * <a href="syntax_extensions.html">doc/syntax_extensions.md</a> - Full
+<code>%op</code> and <code>%cd</code> syntax * <a href="../dev/neural_nets_lib/Ocannl/Shape/index.html">lib/shape.mli</a>
+- Shape inference internals * <a href="https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68">lib/nn_blocks.ml</a>
+- Production examples * <code>test/einsum_trivia.ml</code> - Einsum test
+cases</p>
+</body>
+</html>
