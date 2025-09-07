@@ -343,11 +343,9 @@ Patterns</h2>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> conv1 = conv2d ~kernel_size:<span class="dv">3</span> () <span class="kw">in</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> pool = max_pool2d () <span class="kw">in</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt;</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x = conv1 x <span class="kw">in</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x = relu x <span class="kw">in</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x = pool x <span class="kw">in</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* No flattening needed - FC layer works with spatial dims *)</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    { w_out } * x + { b_out = <span class="dv">0</span>.; o = [<span class="dv">10</span>] }</span></code></pre></div>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x = conv1 x |&gt; relu |&gt; pool <span class="kw">in</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* No flattening needed - FC layer works with spatial dims *)</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    { w_out } * x + { b_out = <span class="dv">0</span>.; o = [<span class="dv">10</span>] }</span></code></pre></div>
 <h3 id="residual-connections">Residual Connections</h3>
 <p><strong>PyTorch:</strong></p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ResBlock(nn.Module):</span>
@@ -374,12 +372,8 @@ Patterns</h2>
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> bn2 = batch_norm2d () <span class="kw">in</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> ~train_step x -&gt;</span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> identity = x <span class="kw">in</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = conv1 x <span class="kw">in</span></span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = bn1 ~train_step out <span class="kw">in</span></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = relu out <span class="kw">in</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = conv2 out <span class="kw">in</span></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = bn2 ~train_step out <span class="kw">in</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    relu (out + identity)</span></code></pre></div>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> out = conv1 x |&gt; bn1 ~train_step |&gt; relu |&gt; conv2 |&gt; bn2 ~train_step <span class="kw">in</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    relu (out + identity)</span></code></pre></div>
 <h2 id="einsum-notation">Einsum Notation</h2>
 <p>OCANNL’s einsum is more general than PyTorch’s, supporting row
 variables and convolutions.</p>
