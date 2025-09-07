@@ -6,33 +6,25 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 
 * A from-scratch, compiled Deep Learning framework.
 * Implements backpropagation (i.e. first-order reverse mode autodiff) and shape inference.
-* The long-term goal is to provide several "low-level" backends, aiming to seek inspiration from projects such as [TinyGrad](https://github.com/tinygrad/tinygrad), [TVM](https://github.com/apache/tvm), [Luminal](https://github.com/jafioti/luminal).
+* The long-term goal is to provide several "low-level" backends, aiming to seek inspiration from projects such as [tinygrad](https://github.com/tinygrad/tinygrad), [TVM](https://github.com/apache/tvm), [Luminal](https://github.com/jafioti/luminal).
   * OCANNL starts with a high-level representation, but can compile everything down to `for` loops.
 * The library users can compile any amount of code into a routine (i.e. a compilation unit). The user decides explicitly what the scope of a compilation unit is, by putting together the corresponding code. Depending on the use case:
   * the whole training update step can be a single routine,
   * or the step can be composed of a gradient update routine (a forward pass and a backprop pass) and a params update routine (e.g. SGD with momentum, ADAM, etc.),
   * or the user can compile parts of a model separately, manually composing the corresponding forward pass code and the backprop code.
 * Tensor axes are split into kinds: batch, input and output. Tensor dimensions have optional labels.
-  * The labels ensure a more precise semantics for dimension matching.
-  * In the future we might introduce axis labels as an alternative to positional axis selection, it would be a separate naming mechanism.
-* OCANNL has full support for the `einsum` notation, integrated with shape inference. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
+  * The labels ensure a more precise semantics for dimension matching, alternative name: dimension units. It's **not** an axis selection mechanism.
+* OCANNL has full support for a significantly extended `einsum` notation, integrated with shape inference. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
   * OCANNL does not have dynamic indexing (using the last axis of one tensor as indices into another tensor). If it's needed, it can be added (we had a prototype once, removed to reduce complexity). Then it would also be integrated with shape inference.
-* OCANNL has a suite of tutorials doubling as tests with inline expectations.
 * OCANNL offers two main levels of abstraction.
-  * Differentiable computations, centered around the [`%op`](lib/ppx_op.ml) syntax extension.
+  * Tensor expressions as differentiable computations, centered around the [`%op`](lib/ppx_op.ml) syntax extension.
     * `%op` stands for "operation", it's meant to express tensors: `Tensor.t`, and tensor functions.
   * Plain computations, centered around the [`%cd`](lib/ppx_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
     * `%cd` stands for "code", it's meant to express assignment computations: `Assignments.comp`.
-* The support for mixed-precision computations is upcoming.
+* Fully supports mixed-precision computations, with bidirectional precision inference.
   * E.g. higher-precision network components, or gradients at a higher precision than values.
-  * Currently (v0.3), you can select the precision, and individual computation nodes track their precision, but mixing precisions might break things.
 * Should be easily extensible.
 * Model surgery should be starightforward (not sure if we are there yet).
-* It's a feature, not a bug!
-  * To scale a tensor by a number, always use pointwise-multiplication, e.g. `2*.m` or `m*.2`.
-  * Matrix-multiplying a tensor `m` by a constant number, e.g. `m*2`, broadcasts the number to the shape of the input axes of the tensor. This results in an output-axes-only tensor (multi-axis-vector) that is the scaled sum over the input axes of the tensor `m`.
-  * Matrix-multiplying a constant number by a tensor `m`, e.g. `2*m`, broadcasts the number to the shape of the output axes of the tensor. This results in a tensor whose inputs are of the same shape as the inputs of `m`, and the output shape is 1D (scalar), that is the scaled sum over the output axes of the tensor `m`.
-  * The matrix-multiply operation behaves pointwise along the batch axes.
 
 ## Usage
 
@@ -43,11 +35,11 @@ The CUDA backend requires at least CUDA version 12.8. The Metal backend requires
 A possible route to learning OCANNL:
 
 1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
-2. Read [the migration guide](docs/migration_guide.md).
-3. Soon: [shapes and the generalized einsum beginner-to-advanced slides](https://ahrefs.github.io/ocannl/docs/shapes_and_einsum.html).
+2. Read: [shapes and the generalized einsum beginner-to-advanced slides](https://ahrefs.github.io/ocannl/docs/shapes_and_einsum.html).
+3. Read [the migration guide](docs/migration_guide.md).
 4. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
-5. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
-6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
+5. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
+6. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
 7. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
 8. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml).
 9. Read [docs/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
