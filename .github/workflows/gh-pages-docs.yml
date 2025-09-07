@@ -38,8 +38,8 @@ jobs:
       - name: Syntax extensions
         run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/syntax_extensions.md -o docs/html/syntax_extensions.html
 
-      - name: Shapes and Einsum
-        run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/slides-shapes_and_einsum.md -o docs/html/shapes_and_einsum.html
+      - name: Shapes and Einsum slides
+        run: slipshow compile docs/slides-shapes_and_einsum.md -o docs/html/shapes_and_einsum.html
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
