@@ -1947,13 +1947,15 @@ let%op sum_last x = x ++ &amp;quot;...|...k =&amp;gt; ...|...&amp;quot;
 &lt;pre id=&quot;operator-examples&quot; class=&quot;example&quot; title=&quot;Using Einsum Operators&quot;&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Matrix multiplication on individual output axes *)
 let%op matmul a b = a +* &amp;quot;ik; kj =&amp;gt; ij&amp;quot; b
 
-(* Batch matrix multiply on individual output axes with broadcasting *)  
+(* Batch matrix multiply on individual output axes
+   with broadcasting *)  
 let%op batch_matmul a b = 
   a +* &amp;quot;... | ik; ... | kj =&amp;gt; ... | ij&amp;quot; b
 
 (* Full tensor multiplication, equivalent to [a * b] *)  
 let%op tensor_mul a b = 
-  a +* &amp;quot;... | ..k..-&amp;gt;..i..; ... | ..j..-&amp;gt;..k.. =&amp;gt; ... | ..j..-&amp;gt;..i..&amp;quot; b
+  a +* &amp;quot;... | ..k..-&amp;gt;..i..; ... | ..j..-&amp;gt;..k..
+        =&amp;gt; ... | ..j..-&amp;gt;..i..&amp;quot; b
 
 (* Max pooling, requiring specifically 4 output axes *)
 let%op max_reduce_ouput x = x @^^ &amp;quot;bhwc =&amp;gt; b00c&amp;quot;
@@ -1967,6 +1969,7 @@ let%op max_reduce x = x @^^ &amp;quot;...|hwc =&amp;gt; ...|00c&amp;quot;
 &lt;p&gt;&lt;span&gt;Use &lt;/span&gt;&lt;code&gt;+&lt;/code&gt;&lt;span&gt; for convolution axes with stride and dilation:&lt;/span&gt;&lt;/p&gt;
 &lt;pre&gt;&lt;code&gt;&amp;quot;stride*output + dilation*kernel&amp;quot;
 &lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;&lt;span&gt;Within the syntax extensions, &lt;/span&gt;&lt;code&gt;stride&lt;/code&gt;&lt;span&gt; and &lt;/span&gt;&lt;code&gt;dilation&lt;/code&gt;&lt;span&gt; can be identifiers of &lt;/span&gt;&lt;code&gt;int&lt;/code&gt;&lt;span&gt; values, in addition to integer literals.&lt;/span&gt;&lt;/p&gt;
 &lt;/div&gt;
 &lt;div pause&gt;&lt;/div&gt;
 &lt;pre id=&quot;conv-example&quot; class=&quot;example&quot; title=&quot;2D Convolution&quot;&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let%op conv2d ?(stride=1) ?(kernel_size=3) () x =
@@ -2028,12 +2031,13 @@ let%op avg_pool2d ~window () x =
 &lt;p up-at-unpause pause&gt;&lt;span&gt;You can programmatically create the spec for use with the dedicated syntaxes, but for the sake of code clarity this does not support variable capture.&lt;/span&gt;&lt;/p&gt;
 &lt;pre id=&quot;custom-example&quot; class=&quot;example&quot; title=&quot;Reduce Last N Dimensions&quot;&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Reduce last N output dimensions, PyTorch-style keepdim *)
 let%op reduce_last_n ~n ?(keepdim = true) () =
-  let vars = List.init n ~f:(fun i -&amp;gt; 
-    Char.to_string (Char.of_int_exn (97 + i))) in
+  let vars =
+    [%oc List.init n ~f:(fun i -&amp;gt; 
+           Char.to_string (Char.of_int_exn (97 + i)))] in
   let result_dims = 
-    if keepdim then String.make n '0' else &amp;quot;&amp;quot; in
-  let spec = &amp;quot;... | ...&amp;quot; ^ String.concat &amp;quot;&amp;quot; vars ^ 
-             &amp;quot; =&amp;gt; ... | ...&amp;quot; ^ result_dims in
+    [%oc if keepdim then String.make n '0' else &amp;quot;&amp;quot;] in
+  let spec = [%oc &amp;quot;... | ...&amp;quot; ^ String.concat &amp;quot;&amp;quot; vars ^ 
+                  &amp;quot; =&amp;gt; ... | ...&amp;quot; ^ result_dims] in
   fun x -&amp;gt; x ++ spec
   
 (* Example: reduce_last_n ~n:3 ~keepdim:true () 
@@ -2042,6 +2046,8 @@ let%op reduce_last_n ~n ?(keepdim = true) () =
    With ~keepdim:false:
    generates: &amp;quot;... | ...abc =&amp;gt; ... | ...&amp;quot; *)
 &lt;/code&gt;&lt;/pre&gt;
+&lt;div pause&gt;&lt;/div&gt;
+&lt;p&gt;&lt;span&gt;The &lt;/span&gt;&lt;code&gt;[%oc ...]&lt;/code&gt;&lt;span&gt; syntax allows embedding arbitrary OCaml code without &lt;/span&gt;&lt;code&gt;%op&lt;/code&gt;&lt;span&gt; attempting to interpret things as tensors.&lt;/span&gt;&lt;/p&gt;
 &lt;h2 id=&quot;practical-patterns&quot; up-at-unpause pause&gt;&lt;a class=&quot;anchor&quot; aria-hidden=&quot;true&quot; href=&quot;#practical-patterns&quot;&gt;&lt;/a&gt;&lt;span&gt;Practical Patterns&lt;/span&gt;&lt;/h2&gt;
 &lt;div id=&quot;patterns&quot; class=&quot;block&quot; title=&quot;Common Shape Patterns&quot;&gt;
 &lt;p&gt;&lt;strong&gt;&lt;span&gt;Principle of least commitment&lt;/span&gt;&lt;/strong&gt;&lt;span&gt;: Use row variables where possible&lt;/span&gt;&lt;/p&gt;
@@ -2111,7 +2117,7 @@ a +* &amp;quot;ij; jk =&amp;gt; ik&amp;quot; b
 &lt;h2 id=&quot;tips-and-tricks&quot; up-at-unpause pause&gt;&lt;a class=&quot;anchor&quot; aria-hidden=&quot;true&quot; href=&quot;#tips-and-tricks&quot;&gt;&lt;/a&gt;&lt;span&gt;Tips and Tricks&lt;/span&gt;&lt;/h2&gt;
 &lt;div id=&quot;tips&quot; class=&quot;block&quot; title=&quot;Best Practices&quot;&gt;
 &lt;ol&gt;
-&lt;li&gt;&lt;strong&gt;&lt;span&gt;Use &lt;/span&gt;&lt;code&gt;|&lt;/code&gt;&lt;span&gt; for axis kinds&lt;/span&gt;&lt;/strong&gt;&lt;span&gt; when mixing batch/input/output&lt;/span&gt;&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;span&gt;Use &lt;/span&gt;&lt;code&gt;|&lt;/code&gt;&lt;span&gt;, &lt;/span&gt;&lt;code&gt;-&amp;gt;&lt;/code&gt;&lt;span&gt; for axis kinds&lt;/span&gt;&lt;/strong&gt;&lt;span&gt; when there's a meaningful batch/input/output split&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;&lt;span&gt;Add trailing comma&lt;/span&gt;&lt;/strong&gt;&lt;span&gt; for multi-char mode: &lt;/span&gt;&lt;code&gt;&amp;quot;input-&amp;gt;output,&amp;quot;&lt;/code&gt;&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;&lt;span&gt;Avoid over-capturing&lt;/span&gt;&lt;/strong&gt;&lt;span&gt; dimensions in einsum specs&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;&lt;span&gt;Remember tensor operators&lt;/span&gt;&lt;/strong&gt;&lt;span&gt;: &lt;/span&gt;&lt;code&gt;*&lt;/code&gt;&lt;span&gt; (matmul) vs &lt;/span&gt;&lt;code&gt;*.&lt;/code&gt;&lt;span&gt; (pointwise)&lt;/span&gt;&lt;/li&gt;
@@ -2122,13 +2128,16 @@ a +* &amp;quot;ij; jk =&amp;gt; ik&amp;quot; b
 &lt;div id=&quot;debugging&quot; class=&quot;remark&quot; title=&quot;Debugging Shapes&quot;&gt;
 &lt;p&gt;&lt;span&gt;When shapes don't match:&lt;/span&gt;&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;span&gt;Print tensor shapes: &lt;/span&gt;&lt;code&gt;Tensor.print ~force:true tensor&lt;/code&gt;&lt;/li&gt;
+&lt;li&gt;&lt;span&gt;Print tensor shapes: &lt;/span&gt;&lt;code&gt;Tensor.print ~force:true tensor&lt;/code&gt;&lt;br&gt;
+&lt;span id=&quot;premature-inference-finalize&quot; class=&quot;unrevealed&quot;&gt;&lt;span&gt;but not before all relevant tensor expressions are constructed&lt;/span&gt;&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;span&gt;Check axis kinds are correctly specified&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;span&gt;Verify broadcasting assumptions&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;span&gt;Use explicit dimension constraints when needed&lt;/span&gt;&lt;/li&gt;
 &lt;/ul&gt;
 &lt;/div&gt;
-&lt;h2 id=&quot;common-pitfalls&quot; up-at-unpause pause&gt;&lt;a class=&quot;anchor&quot; aria-hidden=&quot;true&quot; href=&quot;#common-pitfalls&quot;&gt;&lt;/a&gt;&lt;span&gt;Common Pitfalls&lt;/span&gt;&lt;/h2&gt;
+&lt;div reveal-at-unpause=premature-inference-finalize pause&gt;&lt;/div&gt;
+&lt;div focus-at-unpause=premature-inference-finalize pause&gt;&lt;/div&gt;
+&lt;h2 id=&quot;common-pitfalls&quot; up-at-unpause unfocus-at-unpause pause&gt;&lt;a class=&quot;anchor&quot; aria-hidden=&quot;true&quot; href=&quot;#common-pitfalls&quot;&gt;&lt;/a&gt;&lt;span&gt;Common Pitfalls&lt;/span&gt;&lt;/h2&gt;
 &lt;p&gt;&lt;strong&gt;&lt;span&gt;Tensor operators matter:&lt;/span&gt;&lt;/strong&gt;&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;code&gt;*&lt;/code&gt;&lt;span&gt; - tensor multiplication (matrix multiply generalized)&lt;/span&gt;&lt;/li&gt;
@@ -2220,7 +2229,7 @@ let spec = &amp;quot;i j =&amp;gt; j i&amp;quot; in (x ++ spec [ &amp;quot;j&amp
 &lt;li&gt;&lt;a href=&quot;syntax_extensions.html&quot;&gt;&lt;span&gt;doc/syntax_extensions.md&lt;/span&gt;&lt;/a&gt;&lt;span&gt; - Full &lt;/span&gt;&lt;code&gt;%op&lt;/code&gt;&lt;span&gt; and &lt;/span&gt;&lt;code&gt;%cd&lt;/code&gt;&lt;span&gt; syntax&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;../dev/neural_nets_lib/Ocannl/Shape/index.html&quot;&gt;&lt;span&gt;lib/shape.mli&lt;/span&gt;&lt;/a&gt;&lt;span&gt; - Shape inference internals&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;a href=&quot;https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68&quot;&gt;&lt;span&gt;lib/nn_blocks.ml&lt;/span&gt;&lt;/a&gt;&lt;span&gt; - Production examples&lt;/span&gt;&lt;/li&gt;
-&lt;li&gt;&lt;code&gt;test/einsum_trivia.ml&lt;/code&gt;&lt;span&gt; - Einsum test cases&lt;/span&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://github.com/ahrefs/ocannl/blob/master/test/einsum/einsum_trivia.ml&quot;&gt;&lt;span&gt;test/einsum_trivia.ml&lt;/span&gt;&lt;/a&gt;&lt;span&gt; - Einsum test cases&lt;/span&gt;&lt;/li&gt;
 &lt;/ul&gt;
 &lt;/div&gt;
 &lt;/div&gt;
