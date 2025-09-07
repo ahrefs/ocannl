@@ -234,8 +234,8 @@
 
         let filteredFiles = htmlFiles;
 
-        function getFileIcon(filename) {
-            const name = filename.toLowerCase();
+        function getFileIcon(filename, title) {
+            const name = filename.toLowerCase() + ' ' + title.toLowerCase();
             if (name.includes('rl-')) return '🧠';
             if (name.includes('introduction') || name.includes('basics')) return '🚀';
             if (name.includes('api') || name.includes('/dev/')) return '🔌';
@@ -265,7 +265,7 @@
             fileGrid.innerHTML = files.map(file => `
                 <a href="${file.name}" class="file-card">
                     <div class="file-header">
-                        <div class="file-icon">${getFileIcon(file.name)}</div>
+                        <div class="file-icon">${getFileIcon(file.name, file.title)}</div>
                         <div class="file-name">${file.title}</div>
                     </div>
                     <div class="file-info">
