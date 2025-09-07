@@ -141,13 +141,15 @@ let%op attention ~num_heads () x =
 (* Matrix multiplication on individual output axes *)
 let%op matmul a b = a +* "ik; kj => ij" b
 
-(* Batch matrix multiply on individual output axes with broadcasting *)  
+(* Batch matrix multiply on individual output axes
+   with broadcasting *)  
 let%op batch_matmul a b = 
   a +* "... | ik; ... | kj => ... | ij" b
 
 (* Full tensor multiplication, equivalent to [a * b] *)  
 let%op tensor_mul a b = 
-  a +* "... | ..k..->..i..; ... | ..j..->..k.. => ... | ..j..->..i.." b
+  a +* "... | ..k..->..i..; ... | ..j..->..k..
+        => ... | ..j..->..i.." b
 
 (* Max pooling, requiring specifically 4 output axes *)
 let%op max_reduce_ouput x = x @^^ "bhwc => b00c"
@@ -167,6 +169,8 @@ let%op max_reduce x = x @^^ "...|hwc => ...|00c"
 > ```
 > "stride*output + dilation*kernel"
 > ```
+>
+> Within the syntax extensions, `stride` and `dilation` can be identifiers of `int` values, in addition to integer literals.
 
 {pause}
 
@@ -253,12 +257,13 @@ You can programmatically create the spec for use with the dedicated syntaxes, bu
 ```ocaml
 (* Reduce last N output dimensions, PyTorch-style keepdim *)
 let%op reduce_last_n ~n ?(keepdim = true) () =
-  let vars = List.init n ~f:(fun i -> 
-    Char.to_string (Char.of_int_exn (97 + i))) in
+  let vars =
+    [%oc List.init n ~f:(fun i -> 
+           Char.to_string (Char.of_int_exn (97 + i)))] in
   let result_dims = 
-    if keepdim then String.make n '0' else "" in
-  let spec = "... | ..." ^ String.concat "" vars ^ 
-             " => ... | ..." ^ result_dims in
+    [%oc if keepdim then String.make n '0' else ""] in
+  let spec = [%oc "... | ..." ^ String.concat "" vars ^ 
+                  " => ... | ..." ^ result_dims] in
   fun x -> x ++ spec
   
 (* Example: reduce_last_n ~n:3 ~keepdim:true () 
@@ -267,6 +272,10 @@ let%op reduce_last_n ~n ?(keepdim = true) () =
    With ~keepdim:false:
    generates: "... | ...abc => ... | ..." *)
 ```
+
+{pause}
+
+The `[%oc ...]` syntax allows embedding arbitrary OCaml code without `%op` attempting to interpret things as tensors.
 
 {pause up}
 ## Practical Patterns
@@ -352,7 +361,7 @@ a +* "ij; jk => ik" b
 ## Tips and Tricks
 
 {#tips .block title="Best Practices"}
-> 1. **Use `|` for axis kinds** when mixing batch/input/output
+> 1. **Use `|`, `->` for axis kinds** when there's a meaningful batch/input/output split
 > 2. **Add trailing comma** for multi-char mode: `"input->output,"`
 > 3. **Avoid over-capturing** dimensions in einsum specs
 > 4. **Remember tensor operators**: `*` (matmul) vs `*.` (pointwise)
@@ -363,12 +372,17 @@ a +* "ij; jk => ik" b
 {#debugging .remark title="Debugging Shapes"}
 > When shapes don't match:
 > 
-> * Print tensor shapes: `Tensor.print ~force:true tensor`
+> * Print tensor shapes: `Tensor.print ~force:true tensor`  
+>   [but not before all relevant tensor expressions are constructed]{.unrevealed #premature-inference-finalize}
 > * Check axis kinds are correctly specified
 > * Verify broadcasting assumptions
 > * Use explicit dimension constraints when needed
 
-{pause up}
+{pause reveal=premature-inference-finalize}
+
+{pause focus=premature-inference-finalize}
+
+{pause unfocus up}
 ## Common Pitfalls
 
 **Tensor operators matter:**
@@ -475,4 +489,4 @@ Check [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.
 * [doc/syntax_extensions.md](syntax_extensions.html) - Full `%op` and `%cd` syntax
 * [lib/shape.mli](../dev/neural_nets_lib/Ocannl/Shape/index.html) - Shape inference internals
 * [lib/nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68) - Production examples
-* `test/einsum_trivia.ml` - Einsum test cases
+* [test/einsum_trivia.ml](https://github.com/ahrefs/ocannl/blob/master/test/einsum/einsum_trivia.ml) - Einsum test cases
