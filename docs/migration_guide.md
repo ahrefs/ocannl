@@ -78,9 +78,7 @@ let%op model () =
   let conv1 = conv2d ~kernel_size:3 () in
   let pool = max_pool2d () in
   fun x ->
-    let x = conv1 x in
-    let x = relu x in
-    let x = pool x in
+    let x = conv1 x |> relu |> pool in
     (* No flattening needed - FC layer works with spatial dims *)
     { w_out } * x + { b_out = 0.; o = [10] }
 ```
@@ -116,11 +114,7 @@ let%op resnet_block () =
   let bn2 = batch_norm2d () in
   fun ~train_step x ->
     let identity = x in
-    let out = conv1 x in
-    let out = bn1 ~train_step out in
-    let out = relu out in
-    let out = conv2 out in
-    let out = bn2 ~train_step out in
+    let out = conv1 x |> bn1 ~train_step |> relu |> conv2 |> bn2 ~train_step in
     relu (out + identity)
 ```
 
