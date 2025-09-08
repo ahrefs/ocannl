@@ -18,7 +18,7 @@ let%expect_test "Pointwise multiplication dims 1" =
 
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. { hey = 7.0 } in
-  let _ctx = Train.With_context.forward ctx y in
+  let _ctx = Train.forward_once ctx y in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
@@ -40,7 +40,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ({ hey = 7.0 } * 'q' 2.0) + 'p' 1.0 in
-  let _ctx = Train.With_context.forward ctx y in
+  let _ctx = Train.forward_once ctx y in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
@@ -88,7 +88,7 @@ let%expect_test "Print tensor too early" =
     |}];
   let%op c = a *. b in
 
-  let _ctx = Train.With_context.forward ctx c in
+  let _ctx = Train.forward_once ctx c in
   Train.printf ~here:[%here] c;
   [%expect
     {|
@@ -108,7 +108,7 @@ let%expect_test "Print constant tensor" =
   let ctx = Context.auto () in
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
-  let ctx = Train.With_context.forward ctx hey in
+  let ctx = Train.forward_once ctx hey in
   (* ignore (failwith @@ Tn.debug_memory_mode hey.value.memory_mode); *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hey;
   [%expect
@@ -134,7 +134,7 @@ let%expect_test "Print constant tensor" =
     └─────────────────────────────────────┘
     |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
-  let ctx = Train.With_context.forward ctx hoo in
+  let ctx = Train.forward_once ctx hoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo;
   [%expect
     {|
@@ -166,7 +166,7 @@ let%expect_test "Print constant tensor" =
       ((19, 20, 21), (22, 23, 24));
     ]
   in
-  let ctx = Train.With_context.forward ctx hey2 in
+  let ctx = Train.forward_once ctx hey2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false @@ hey2;
   [%expect
     {|
@@ -209,7 +209,7 @@ let%expect_test "Print constant tensor" =
       [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
     |]
   in
-  let ctx = Train.With_context.forward ctx hoo2 in
+  let ctx = Train.forward_once ctx hoo2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo2;
   [%expect
     {|
@@ -244,7 +244,7 @@ let%expect_test "Print constant tensor" =
       [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
     |]
   in
-  let ctx = Train.With_context.forward ctx heyhoo in
+  let ctx = Train.forward_once ctx heyhoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo;
   [%expect
     {|
@@ -279,7 +279,7 @@ let%expect_test "Print constant tensor" =
       [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
     |]
   in
-  let ctx = Train.With_context.forward ctx heyhoo2 in
+  let ctx = Train.forward_once ctx heyhoo2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo2;
   [%expect
     {|
@@ -343,7 +343,7 @@ let%expect_test "Print constant tensor" =
       |];
     |]
   in
-  let ctx = Train.With_context.forward ctx heyhoo3 in
+  let ctx = Train.forward_once ctx heyhoo3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo3;
   [%expect
     {|
@@ -416,7 +416,7 @@ let%expect_test "Print constant tensor" =
       ];
     |]
   in
-  let _ctx = Train.With_context.forward ctx heyhoo4 in
+  let _ctx = Train.forward_once ctx heyhoo4 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo4;
   [%expect
     {|
@@ -484,7 +484,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
   (* Hey is inferred to be a matrix. *)
   let%op y = ({ hey = 7.0 } * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  let _ctx = Train.With_context.forward ctx y in
+  let _ctx = Train.forward_once ctx y in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
@@ -522,7 +522,7 @@ let%expect_test "Big matrix" =
   let hey = TDSL.param ~value:0.5 "hey" () in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
-  let _ctx = Train.With_context.forward ctx y in
+  let _ctx = Train.forward_once ctx y in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
@@ -563,7 +563,7 @@ let%expect_test "Very big tensor" =
   in
   let%op hoo = (hey * (1 + 1)) - 10 in
   Train.set_hosted hey.value;
-  let _ctx = Train.With_context.forward ctx hoo in
+  let _ctx = Train.forward_once ctx hoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
@@ -730,7 +730,7 @@ let%expect_test "Embed self id" =
   Train.set_hosted hey.value;
   Train.set_hosted hoo.value;
   Train.set_hosted bar.value;
-  let _ctx = Train.With_context.forward ctx bar in
+  let _ctx = Train.forward_once ctx bar in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;

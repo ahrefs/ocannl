@@ -270,16 +270,6 @@ let sgd_step ~learning_rate ?momentum ?weight_decay ?nesterov ?(bindings = IDX.e
   let ctx, sgd_routine = Context.compile ctx sgd_comp bindings in
   Context.run ctx sgd_routine
 
-(** Deprecated: Use the module-level functions directly *)
-module With_context = struct
-  let init_params ?(reinit_all = false) ctx t = 
-    init_params ~reinit_all ctx IDX.empty t
-  let forward ?(bindings = IDX.empty) ctx t = 
-    forward_once ~bindings ctx t
-  let grad_update ?(bindings = IDX.empty) ctx t = 
-    update_once ~bindings ctx t
-  let sgd_step = sgd_step
-end
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
