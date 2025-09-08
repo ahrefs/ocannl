@@ -1,7 +1,6 @@
 (executable
- ; A placeholder main entry.
  (package neural_nets_lib)
- (public_name ocannl)
+ (public_name moons_benchmark)
  (name moons_benchmark)
  (modules moons_benchmark)
  (libraries ocannl base stdio time_now datasets)
@@ -10,72 +9,11 @@
  (modes exe))
 
 (executable
- (name sanity_check)
- (modules sanity_check)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl))
- (modes exe))
-
-(executable
- (name hello_world)
- (modules hello_world)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl))
- (modes exe))
-
-(executable
- (name hello_world_op)
- (modules hello_world_op)
- (libraries ocannl base stdio ppx_minidebug.runtime)
- (preprocess
-  (pps ppx_here ppx_minidebug ppx_ocannl ppx_sexp_conv))
- (modes exe))
-
-(executable
- (name primitive_ops)
- (modules primitive_ops)
- (libraries ocannl base stdio ppx_minidebug.runtime)
- (preprocess
-  (pps ppx_minidebug ppx_ocannl ppx_sexp_conv ppx_here))
- (modes exe))
-
-(executable
+ (package neural_nets_lib)
+ (public_name compilation_speed_benchmark)
  (name compilation_speed)
  (modules compilation_speed)
- (libraries ocannl base stdio time_now)
+ (libraries ocannl base stdio time_now datasets)
  (preprocess
-  (pps ppx_here ppx_sexp_conv ppx_ocannl))
+  (pps ppx_here ppx_sexp_conv ppx_string ppx_ocannl ppx_minidebug ppx_here))
  (modes exe))
-
-(executable
- (name einsum_trivia)
- (modules einsum_trivia)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl))
- (modes exe))
-
-(executable
- (name zero2hero_1of7)
- (modules zero2hero_1of7)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl ppx_minidebug ppx_sexp_conv))
- (modes exe))
-
-(executable
- (name micrograd_basic)
- (modules micrograd_basic)
- (libraries ocannl base stdio)
- (preprocess
-  (pps ppx_here ppx_ocannl ppx_minidebug))
- (modes exe))
-
-(executable
- (name micrograd_demo_logging)
- (modules micrograd_demo_logging)
- (libraries ocannl)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
