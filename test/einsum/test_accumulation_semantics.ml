@@ -10,7 +10,7 @@ module type Backend = Ir.Backend_intf.Backend
 let test_einsum_reduction () =
   Stdio.printf "\n=== Testing einsum reduction (surjective but not injective) ===\n";
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Create input tensor with shape [batch=2, input=3, output=4] *)
   let input = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
 
@@ -23,7 +23,7 @@ let test_einsum_reduction () =
   Train.set_hosted result.value;
   Train.every_non_literal_on_host result;
 
-  ignore (Train.forward_once (module Backend) result);
+  ignore (Train.forward_once ctx result);
 
   Stdio.printf "Input tensor (shape: batch=2, input=3, output=4):\n";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
@@ -40,7 +40,7 @@ let test_einsum_reduction () =
 let test_diagonal_tensor () =
   Stdio.printf "\n=== Testing diagonal tensor (not surjective) ===\n";
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Create a diagonal tensor using einsum: i=>ii This projection is: - NOT surjective: off-diagonal
      positions never get written (need Zero_out) - Injective: each source position maps to exactly
      one target *)
@@ -48,7 +48,7 @@ let test_diagonal_tensor () =
   let%op diagonal = input ++ "i=>ii" in
 
   Train.set_hosted diagonal.value;
-  ignore (Train.forward_once (module Backend) diagonal);
+  ignore (Train.forward_once ctx diagonal);
 
   Stdio.printf "Input (1D tensor of size 5):\n";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
@@ -62,7 +62,7 @@ let test_diagonal_tensor () =
 let test_fixed_index_projection () =
   Stdio.printf "\n=== Testing fixed index projection (not surjective) ===\n";
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Create a sparse tensor using fixed index: i=>i0 This projection is: - NOT surjective: only
      column 0 gets written (need Zero_out for other columns) - Injective: each source position maps
      to exactly one target *)
@@ -71,7 +71,7 @@ let test_fixed_index_projection () =
   let%op _ = sparse ++ "i2=>i" in
 
   Train.set_hosted sparse.value;
-  ignore (Train.forward_once (module Backend) sparse);
+  ignore (Train.forward_once ctx sparse);
 
   Stdio.printf "Input (1D tensor of size 4):\n";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
@@ -85,7 +85,7 @@ let test_fixed_index_projection () =
 let test_bijective_transpose () =
   Stdio.printf "\n=== Testing bijective transpose (optimization case) ===\n";
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Simple transpose: ij=>ji This projection is: - Surjective: all target positions get written -
      Injective: each source maps to exactly one target - Therefore BIJECTIVE: can skip both Zero_out
      and accumulation *)
@@ -93,7 +93,7 @@ let test_bijective_transpose () =
   let%op transposed = input ++ "ij=>ji" in
 
   Train.set_hosted transposed.value;
-  ignore (Train.forward_once (module Backend) transposed);
+  ignore (Train.forward_once ctx transposed);
 
   Stdio.printf "Input (3x4 matrix):\n";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;

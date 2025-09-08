@@ -12,7 +12,7 @@ let main () =
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let open Operation.At in
   (* Sensitive to batch size -- smaller batch sizes are better. *)
   let batch_size = 10 in
@@ -49,17 +49,17 @@ let main () =
   (* TODO: is set_hosted needed? *)
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let ctx = Train.init_params (module Backend) bindings scalar_loss in
+  let ctx = Train.init_params ctx bindings scalar_loss in
   let sgd_routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
+    Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ])
   in
-  let step_ref = IDX.find_exn sgd_routine.bindings step_n in
+  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
-    Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
-        Train.run sgd_routine;
-        let batch_ref = IDX.find_exn sgd_routine.bindings batch_n in
+    Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
+        Train.run ctx sgd_routine;
+        let batch_ref = IDX.find_exn (Context.bindings sgd_routine) batch_n in
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         if !step_ref = steps - 5 then Stdio.printf "\n%!";
         if !step_ref < 10 then
@@ -78,16 +78,14 @@ let main () =
   let%cd mlp_result = mlp { point } in
   Train.set_on_host mlp_result.value;
   let result_routine =
-    Train.to_routine
-      (module Backend)
-      sgd_routine.context IDX.empty
+    Train.to_routine (Context.context sgd_routine) IDX.empty
       [%cd
         ~~("moons infer";
            mlp_result.forward)]
   in
   let callback (x, y) =
     Tn.set_values point.value [| x; y |];
-    Train.run result_routine;
+    Train.run ctx result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in
   let _plot_moons =

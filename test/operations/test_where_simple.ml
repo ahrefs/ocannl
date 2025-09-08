@@ -5,7 +5,7 @@ open Operation.DSL_modules
 
 let () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Simple test: where(true, x, y) should have gradient flow to x only *)
   let x = Tensor.term_init [| 2.0 |] ~grad_spec:Require_grad () in
   let y = Tensor.term_init [| 3.0 |] ~grad_spec:Require_grad () in
@@ -20,11 +20,11 @@ let () =
   Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
   Train.set_hosted (Option.value_exn ~here:[%here] y.diff).grad;
 
-  let ctx = Train.init_params (module Backend) Train.IDX.empty result in
+  let ctx = Train.init_params ctx Train.IDX.empty result in
   let update = Train.grad_update result in
-  let routine = Train.to_routine (module Backend) ctx Train.IDX.empty update in
+  let routine = Train.to_routine ctx Train.IDX.empty update in
 
-  Train.run routine;
+  Train.run ctx routine;
 
   Stdio.printf "x = %.4g, gradient = %.4g\n" x.@[0] x.@%[0];
   Stdio.printf "y = %.4g, gradient = %.4g\n" y.@[0] y.@%[0];
@@ -46,11 +46,11 @@ let () =
   Train.set_hosted (Option.value_exn ~here:[%here] x2.diff).grad;
   Train.set_hosted (Option.value_exn ~here:[%here] y2.diff).grad;
 
-  let ctx2 = Train.init_params (module Backend) Train.IDX.empty result2 in
+  let ctx2 = Train.init_params ctx Train.IDX.empty result2 in
   let update2 = Train.grad_update result2 in
-  let routine2 = Train.to_routine (module Backend) ctx2 Train.IDX.empty update2 in
+  let routine2 = Train.to_routine ctx2 Train.IDX.empty update2 in
 
-  Train.run routine2;
+  Train.run ctx routine2;
 
   Stdio.printf "x = %.4g, gradient = %.4g\n" x2.@[0] x2.@%[0];
   Stdio.printf "y = %.4g, gradient = %.4g\n" y2.@[0] y2.@%[0];

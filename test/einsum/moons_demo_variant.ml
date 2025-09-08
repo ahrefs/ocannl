@@ -11,7 +11,7 @@ module type Backend = Ir.Backend_intf.Backend
 let () =
   (* Very similar to micrograd_demo.ml, but with an einsum shape inference corner case. *)
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let len = 200 in
   let batch_size = 10 in
   let n_batches = 2 * len / batch_size in
@@ -42,12 +42,12 @@ let () =
   let%op learning_rate = 0.1 *. ((2 *. !..len) - !@step_n) /. !..len in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let ctx = Train.init_params (module Backend) bindings scalar_loss in
+  let ctx = Train.init_params ctx bindings scalar_loss in
   let sgd_routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
+    Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ])
   in
   (* Skipping over the training loop, not needed for the test. *)
-  Train.run sgd_routine;
+  Train.run ctx sgd_routine;
 
   Tn.print_accessible_headers ();
   (* This should force liveness of more tensor nodes for accessible headers. *)

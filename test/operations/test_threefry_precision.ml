@@ -18,9 +18,9 @@ let () =
   let uniform_result = TDSL.uint4x32_to_prec_uniform ~label:[ "uniform" ] rng_result () in
   Stdlib.Printf.printf "Uniform result precision: %s\n"
     (Ir.Ops.prec_string (Lazy.force uniform_result.value.prec));
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   try
-    let _ctx = Train.forward_once (module Backend) uniform_result in
+    let _ctx = Train.forward_once ctx uniform_result in
     Stdlib.Printf.printf "Compilation successful!\n";
     (* Also check the actual value precision in the context *)
     let tn = rng_result.value in

@@ -6,7 +6,7 @@ open Ocannl.Operation.DSL_modules
 
 let uniform1_basic_test () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let module O = TDSL.O in
   (* Create a simple 1D range tensor to use as input *)
   let range_tensor = TDSL.range 10 in
@@ -24,7 +24,7 @@ let uniform1_basic_test () =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform1_floats.value;
-  let ctx = Ocannl.Train.forward_once (module Backend) uniform1_floats in
+  let ctx = Ocannl.Train.forward_once ctx uniform1_floats in
   let result1 = Ir.Tnode.get_values uniform1_floats.value in
 
   (* Print first few values *)
@@ -47,7 +47,7 @@ let uniform1_basic_test () =
 
   Ir.Tnode.update_prec uniform_floats.value Ir.Ops.single;
   Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once (module Backend) ~ctx uniform_floats);
+  ignore (Ocannl.Train.forward_once ctx uniform_floats);
   let result_vec = Ir.Tnode.get_values uniform_floats.value in
 
   Stdio.printf "\nFirst 5 uniform (vectorized) random values:\n";
@@ -62,7 +62,7 @@ let uniform1_basic_test () =
 
 let uniform_at1_test () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Create a counter tensor *)
@@ -74,7 +74,7 @@ let uniform_at1_test () =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform_at1_floats.value;
-  ignore (Ocannl.Train.forward_once (module Backend) uniform_at1_floats);
+  ignore (Ocannl.Train.forward_once ctx uniform_at1_floats);
   let result = Ir.Tnode.get_values uniform_at1_floats.value in
 
   (* Print values *)
@@ -90,7 +90,7 @@ let uniform_at1_test () =
 
 let uniform1_shape_preservation_test () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let open Ocannl.Operation.DSL_modules in
   let module O = TDSL.O in
   (* Test that uniform1 preserves shape (1:1 mapping) *)
@@ -108,7 +108,7 @@ let uniform1_shape_preservation_test () =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform1_tensor.value;
-  let ctx = Ocannl.Train.forward_once (module Backend) uniform1_tensor in
+  let ctx = Ocannl.Train.forward_once ctx uniform1_tensor in
   let result = Ir.Tnode.get_values uniform1_tensor.value in
 
   Stdio.printf "Input size: %d elements\n" input_size;
@@ -125,7 +125,7 @@ let uniform1_shape_preservation_test () =
 
   Ir.Tnode.update_prec uniform_vec.value Ir.Ops.single;
   Ocannl.Train.set_hosted uniform_vec.value;
-  ignore (Ocannl.Train.forward_once (module Backend) ~ctx uniform_vec);
+  ignore (Ocannl.Train.forward_once ctx uniform_vec);
   let result_vec = Ir.Tnode.get_values uniform_vec.value in
 
   Stdio.printf "\nVectorized uniform output size: %d elements\n" (Array.length result_vec);

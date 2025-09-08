@@ -175,14 +175,14 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov
 
 {pause focus=train-loop}
 ```ocaml
-  let step_ref = IDX.find_exn sgd_routine.bindings step_n in
+  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
     Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
-        Train.run sgd_routine;
+        Train.run ctx sgd_routine;
         let batch_ref =
-          IDX.find_exn sgd_routine.bindings batch_n in
+          IDX.find_exn (Context.bindings sgd_routine) batch_n in
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         learning_rates :=
           ~-.(learning_rate.@[0]) :: !learning_rates;
@@ -681,16 +681,16 @@ let update = Train.grad_update scalar_loss in
 let%op learning_rate =
   0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
 (* Use the default backend (C compiler, CPU). *)
-let module Backend = (val Backends.fresh_backend ()) in
+let ctx = Context.auto () in
 (* Don't inline learning rate so we can debug its value. *)
 Train.set_hosted learning_rate.value;
 let sgd =
   Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
 let ctx =
-  Train.init_params (module Backend) bindings scalar_loss in
+  Train.init_params ctx bindings scalar_loss in
 (* Combine forward, backward passes with parameter updates. *)
 let sgd_routine =
-  Train.to_routine (module Backend) ctx bindings
+  Train.to_routine ctx bindings
     (Asgns.sequence [ update; sgd ])
 in
 ```

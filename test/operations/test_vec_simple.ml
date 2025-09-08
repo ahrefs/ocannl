@@ -2,7 +2,7 @@ open Base
 open Ocannl.Operation.DSL_modules
 
 let () =
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Generate random bits *)
   let%op random_bits = threefry4x32 (embed_self_id ()) 42L in
 
@@ -12,7 +12,7 @@ let () =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once (module Backend) uniform_floats);
+  ignore (Ocannl.Train.forward_once ctx uniform_floats);
   let result = Ir.Tnode.get_values uniform_floats.value in
 
   (* Print results *)

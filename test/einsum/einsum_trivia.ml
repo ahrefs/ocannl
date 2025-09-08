@@ -12,23 +12,16 @@ module type Backend = Ir.Backend_intf.Backend
 
 let%expect_test "einsum1 permute axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
-  ignore (Train.forward_once backend ho);
+  ignore (Train.forward_once ctx ho);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:28:21
+    HERE: test/einsum/einsum_trivia.ml:21:21
     ┌───────────────────────────────────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:4|2:2->1:3                                              │
     │┌──────┬───────────────┬───────────────┬───────────────┬──────────────────┐│
@@ -45,11 +38,11 @@ let%expect_test "einsum1 permute axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
-  ignore (Train.forward_once backend ho2);
+  ignore (Train.forward_once ctx ho2);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:49:21
+    HERE: test/einsum/einsum_trivia.ml:42:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: =>_ho2 shape 0:4,1:7|4:2,5:6->2:5,3:3                                                  │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -158,23 +151,16 @@ let%expect_test "einsum1 permute axes" =
 
 let%expect_test "einsum1 sum out axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => b|i" in
-  ignore (Train.forward_once backend ho);
+  ignore (Train.forward_once ctx ho);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:174:21
+    HERE: test/einsum/einsum_trivia.ml:160:21
     ┌────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|1:3            │
     │┌──────┬───────────────────────────┐│
@@ -189,13 +175,13 @@ let%expect_test "einsum1 sum out axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
-  ignore (Train.forward_once backend ho2);
+  ignore (Train.forward_once ctx ho2);
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1), that's
      why axis 1 of ho2 appears nearly constant. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:195:21
+    HERE: test/einsum/einsum_trivia.ml:181:21
     ┌────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: =>_ho2 shape 0:4|2:2->1:5                                                      │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -213,24 +199,17 @@ let%expect_test "einsum1 sum out axes" =
 
 let%expect_test "einsum outer product" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let%op c = (a + 1) +* "i; j => i->j" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:230:21
+    HERE: test/einsum/einsum_trivia.ml:209:21
     ┌──────────────────────────┐
     │[4]: ;=>_c shape 1:2->0:3 │
     │┌──────┬────────────┐     │
@@ -245,11 +224,11 @@ let%expect_test "einsum outer product" =
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
   let%op c = a +* "i|j->k; l|m->n => il|jm->kn" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:249:21
+    HERE: test/einsum/einsum_trivia.ml:228:21
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[7]: ;=>_c shape 0:2,1:5|4:3,5:6->2:4,3:7                                                                                             │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -401,32 +380,25 @@ let%expect_test "einsum outer product" =
 
 let%expect_test "einsum matrix/inner+outer products" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op a2 = a +* "b|i->o; b|i->o => b|i->o" a in
-  let ctx = Train.forward_once backend a2 in
+  let ctx = Train.forward_once ctx a2 in
   let%op c = b +* "b|h->o; b|i->h => b|i->o" a in
-  let ctx = Train.forward_once backend ~ctx c in
+  let ctx = Train.forward_once ctx c in
   let%op d = a +* "a|i->h; b|h->o => ab|i->o" b in
-  ignore (Train.forward_once backend ~ctx d);
+  ignore (Train.forward_once ctx d);
   let%op e = a +* "b|i->h; b|h->o => i->o" b in
-  ignore (Train.forward_once backend ~ctx e);
+  ignore (Train.forward_once ctx e);
   let%op f = a +* "a|i->h; b|h->o => i->o" b in
-  ignore (Train.forward_once backend ~ctx f);
+  ignore (Train.forward_once ctx f);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false a2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:426:21
+    HERE: test/einsum/einsum_trivia.ml:398:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_a2 shape 0:2|2:3->1:4                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -443,7 +415,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:443:21
+    HERE: test/einsum/einsum_trivia.ml:415:21
     ┌────────────────────────────────────────────────────────────────┐
     │[3]: ;=>_c shape 0:2|2:3->1:5                                   │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -461,7 +433,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false d;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:461:21
+    HERE: test/einsum/einsum_trivia.ml:433:21
     ┌────────────────────────────────────────────────────────────────┐
     │[4]: ;=>_d shape 0:2,1:2|3:3->2:5                               │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -485,7 +457,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false e;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:485:21
+    HERE: test/einsum/einsum_trivia.ml:457:21
     ┌────────────────────────────────────┐
     │[5]: ;=>_e shape 1:3->0:5           │
     │┌──────┬───────────────────────────┐│
@@ -502,7 +474,7 @@ let%expect_test "einsum matrix/inner+outer products" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false f;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:502:21
+    HERE: test/einsum/einsum_trivia.ml:474:21
     ┌────────────────────────────────────┐
     │[6]: ;=>_f shape 1:3->0:5           │
     │┌──────┬───────────────────────────┐│
@@ -519,22 +491,14 @@ let%expect_test "einsum matrix/inner+outer products" =
 
 let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
-  let ctx = Train.forward_once backend ho in
+  let ctx = Train.forward_once ctx ho in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:534:21
+    HERE: test/einsum/einsum_trivia.ml:498:21
     ┌─────────────────────────────────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|2:4->1:3                                            │
     │┌──────┬───────────────────────────┬────────────────────────────────────┐│
@@ -548,11 +512,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────────────────────────────────┘
     |}];
   let%op ho2 = hey ++ "b|...->o => o|...->b" in
-  ignore (Train.forward_once backend ~ctx ho2);
+  ignore (Train.forward_once ctx ho2);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:552:21
+    HERE: test/einsum/einsum_trivia.ml:516:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: =>_ho2 shape 0:4|2:3->1:2                                                                                          │
     │┌──────┬───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -569,11 +533,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
-  let ctx2 = Train.forward_once backend ho3 in
+  let ctx2 = Train.forward_once ctx ho3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho3;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:573:21
+    HERE: test/einsum/einsum_trivia.ml:537:21
     ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: =>_ho3 shape 0:2,1:5|4:4,5:7->2:6,3:3                                                                                                                                      │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -699,11 +663,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     |}];
 
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
-  ignore (Train.forward_once backend ~ctx:ctx2 ho4);
+  ignore (Train.forward_once ctx2 ho4);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:703:21
+    HERE: test/einsum/einsum_trivia.ml:667:21
     ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[5]: =>_ho4 shape 0:5|2:7->1:3                                                                                                                                                                                            │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -717,17 +681,17 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}];
   let%op ho5 = hey ++ "...|...->...o => o" in
-  ignore (Train.forward_once backend ~ctx ho5);
+  ignore (Train.forward_once ctx ho5);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:721:21
+    HERE: test/einsum/einsum_trivia.ml:685:21
     [0]: r2x4x3 shape 0:2|2:3->1:4  <not-hosted>
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho5;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:727:21
+    HERE: test/einsum/einsum_trivia.ml:691:21
     ┌───────────────────────────────────────┐
     │[6]: =>_ho5 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
@@ -739,11 +703,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     |}];
   let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op ho6 = hey3 ++ "...|...->...o => o" in
-  ignore (Train.forward_once backend ho6);
+  ignore (Train.forward_once ctx ho6);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho6;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:743:21
+    HERE: test/einsum/einsum_trivia.ml:707:21
     ┌───────────────────────────────────────┐
     │[8]: =>_ho6 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
@@ -756,11 +720,11 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   (* Broadcast with a shift. *)
   let hey4 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
   let%op ho7 = hey4 ++ "i->...o => ...io" in
-  ignore (Train.forward_once backend ho7);
+  ignore (Train.forward_once ctx ho7);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho7;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:760:21
+    HERE: test/einsum/einsum_trivia.ml:724:21
     ┌─────────────────────────────────────────────┐
     │[10]: =>_ho7 shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
@@ -780,24 +744,17 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 
 let%expect_test "einsum broadcast or sum out prefix axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a +* "...|i->...; ...|...->i => ...|i" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:797:21
+    HERE: test/einsum/einsum_trivia.ml:754:21
     ┌─────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -813,11 +770,11 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
   let%op f = d +* "i->...;j->... => ...ij" e in
-  ignore (Train.forward_once backend f);
+  ignore (Train.forward_once ctx f);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false f;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:817:21
+    HERE: test/einsum/einsum_trivia.ml:774:21
     ┌─────────────────────────────────────────────┐
     │[5]: ;=>_f shape 0:3,1:2,2:4                 │
     │┌──────┬────────────────────────────────────┐│
@@ -837,23 +794,16 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
 
 let%expect_test "einsum1 fixed dim axis" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
-  let ctx = Train.forward_once backend ho in
+  let ctx = Train.forward_once ctx ho in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:853:21
+    HERE: test/einsum/einsum_trivia.ml:803:21
     ┌─────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -865,11 +815,11 @@ let%expect_test "einsum1 fixed dim axis" =
     └─────────────────────────────────────────────┘
     |}];
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
-  ignore (Train.forward_once backend ~ctx ho2);
+  ignore (Train.forward_once ctx ho2);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:869:21
+    HERE: test/einsum/einsum_trivia.ml:819:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: =>_ho2 shape 0:2|2:3->1:1                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -882,11 +832,11 @@ let%expect_test "einsum1 fixed dim axis" =
     |}];
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
-  let ctx = Train.forward_once backend ho3 in
+  let ctx = Train.forward_once ctx ho3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho3;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:886:21
+    HERE: test/einsum/einsum_trivia.ml:836:21
     ┌──────────────────────┐
     │[4]: =>_ho3 shape 0:1 │
     │┌┬─────────┐          │
@@ -897,11 +847,11 @@ let%expect_test "einsum1 fixed dim axis" =
     └──────────────────────┘
     |}];
   let%op ho4 = hey2 ++ "i->j => i0j" in
-  ignore (Train.forward_once backend ~ctx ho4);
+  ignore (Train.forward_once ctx ho4);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:901:21
+    HERE: test/einsum/einsum_trivia.ml:851:21
     ┌──────────────────────────────┐
     │[5]: =>_ho4 shape 0:2,1:1,2:3 │
     │┌──────┬──────────────────┐   │
@@ -918,24 +868,17 @@ let%expect_test "einsum1 fixed dim axis" =
 
 let%expect_test "einsum with fixed dim axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a +* "...|i->1; ...|...->i => ...|i" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:935:21
+    HERE: test/einsum/einsum_trivia.ml:878:21
     ┌─────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -950,15 +893,8 @@ let%expect_test "einsum with fixed dim axes" =
 
 let%expect_test "outer_sum simulating axis concatenation" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let ri = TDSL.range 4 in
   let%op ti = ri ++ "i=>i0" in
@@ -970,11 +906,11 @@ let%expect_test "outer_sum simulating axis concatenation" =
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
   Train.set_hosted tk.value;
-  ignore (Train.forward_once backend positions);
+  ignore (Train.forward_once ctx positions);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false positions;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:974:21
+    HERE: test/einsum/einsum_trivia.ml:910:21
     ┌────────────────────────────────┐
     │[9]: ;=>+ shape 0:4,1:5,2:6,3:3 │
     │┌──────┬──────────────────┐     │
@@ -1117,13 +1053,13 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ti;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1117:21
+    HERE: test/einsum/einsum_trivia.ml:1053:21
     [1]: =>_ti shape 0:4,1:3  <not-hosted>
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false tk;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1123:21
+    HERE: test/einsum/einsum_trivia.ml:1059:21
     ┌───────────────────────────┐
     │[7]: =>_tk shape 0:6,1:3   │
     │┌──────┬──────────────────┐│
@@ -1140,15 +1076,8 @@ let%expect_test "outer_sum simulating axis concatenation" =
 
 let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a =
     TDSL.range_of_shape ~label:[ "a" ] ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] ()
@@ -1157,11 +1086,11 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
     TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] ()
   in
   let%op c = a +* "...|i->1; ...|j...->i => ...|ij" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1161:21
+    HERE: test/einsum/einsum_trivia.ml:1090:21
     ┌─────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 0:3|1:4,2:2                                     │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -1178,24 +1107,17 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
 
 let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
   let%op c = a +* "i->1; ij...->0 => ...->ji" b in
-  ignore (Train.forward_once backend c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:1195:21
+    HERE: test/einsum/einsum_trivia.ml:1117:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: ;=>_c shape 2:4->0:3,1:2                                                                                          │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│

@@ -10,7 +10,7 @@ let main () =
   Tensor.unsafe_reinitialize ();
   (* Note: for as-yet unknown reason, this test can lead to different resuls on different versions
      of dependencies. *)
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let open Operation.At in
   (* Sensitive to batch size -- smaller batch sizes are better. *)
   let batch_size = 10 in
@@ -47,18 +47,16 @@ let main () =
   (* TODO: is set_hosted needed? *)
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
-  let ctx = Train.init_params (module Backend) bindings scalar_loss in
-  let sgd_routine =
-    Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ])
-  in
-  let step_ref = IDX.find_exn sgd_routine.bindings step_n in
+  let ctx = Train.init_params ctx bindings scalar_loss in
+  let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
+  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
   for _epoch = 1 to epochs do
-    Train.sequential_loop sgd_routine.bindings ~f:(fun () ->
-        Train.run sgd_routine;
-        (* let batch_ref = IDX.find_exn sgd_jitted.bindings batch_n in Stdio.printf "Epoch=%d,
-           step=%d, batch=%d, lr=%.4g, loss=%.4g\n%!" epoch !step_ref !batch_ref learning_rate.@[0]
-           scalar_loss.@[0]; *)
+    Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
+        Train.run ctx sgd_routine;
+        (* let batch_ref = IDX.find_exn (Context.bindings sgd_jitted) batch_n in Stdio.printf
+           "Epoch=%d, step=%d, batch=%d, lr=%.4g, loss=%.4g\n%!" epoch !step_ref !batch_ref
+           learning_rate.@[0] scalar_loss.@[0]; *)
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
         log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
@@ -71,16 +69,14 @@ let main () =
   let%cd mlp_result = mlp { point } in
   Train.set_on_host mlp_result.value;
   let result_routine =
-    Train.to_routine
-      (module Backend)
-      sgd_routine.context IDX.empty
+    Train.to_routine (Context.context sgd_routine) IDX.empty
       [%cd
         ~~("moons infer";
            mlp_result.forward)]
   in
   let callback (x, y) =
     Tn.set_values point.value [| x; y |];
-    Train.run result_routine;
+    Train.run ctx result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in
   let plot_moons =

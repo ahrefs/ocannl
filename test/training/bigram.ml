@@ -64,18 +64,18 @@ let () =
   let%op learning_rate = 1 in
   let sgd = Train.sgd_update ~learning_rate batch_loss in
 
-  let module Backend = (val Backends.fresh_backend ()) in
-  let ctx = Train.init_params (module Backend) bindings batch_loss in
-  let sgd_step = Train.to_routine (module Backend) ctx bindings (Asgns.sequence [ update; sgd ]) in
+  let ctx = Context.auto () in
+  let ctx = Train.init_params ctx bindings batch_loss in
+  let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
   (* Train.printf w ~with_grad:false; *)
 
   let open Operation.At in
-  let batch_ref = IDX.find_exn sgd_step.bindings batch_n in
+  let batch_ref = IDX.find_exn (Context.bindings sgd_step) batch_n in
   for epoch = 0 to 10 do
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
-      Train.run sgd_step;
+      Train.run ctx sgd_step;
       let loss = batch_loss.@[0] in
       epoch_loss := !epoch_loss +. loss;
       if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.4g\n%!" epoch batch loss
@@ -91,15 +91,15 @@ let () =
     { dice } =: uniform_at !@counter_n
   in
   Train.set_on_host infer_probs.value;
-  let infer_step = Train.to_routine (module Backend) sgd_step.context bindings infer_step in
-  let counter_ref = IDX.find_exn infer_step.bindings counter_n in
+  let infer_step = Train.to_routine (Context.context sgd_step) bindings infer_step in
+  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
   let infer c =
     let c_one_hot = Datasets.Names.char_to_one_hot c in
     Tn.set_values cha.value c_one_hot;
     Int.incr counter_ref;
-    Train.run infer_step;
+    Train.run ctx infer_step;
     let dice_value = dice.@[0] in
 
     let rec aux i sum =

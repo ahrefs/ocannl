@@ -4,13 +4,13 @@ open Ocannl
 let capture_for_computation () =
   let open Operation.DSL_modules in
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let%op x = { x = uniform1 (); o = [ 2; 3 ] } in
   let%op y = { y = uniform1 (); o = [ 3; 4 ] } in
   let%op z = x +* "ab;bc=>ac" [ "a"; "b"; "c" ] y in
 
   (* Trigger shape inference by accessing the tensor node *)
-  let ctx = Train.forward_once (module Backend) z in
+  let ctx = Train.forward_once ctx z in
 
   (* Check if dimensions were captured *)
   Stdio.printf "Dimension a: %s\n"
@@ -25,7 +25,7 @@ let capture_for_computation () =
   let%op y2 = x2 ++ "ij=>ji" [ "i"; "j" ] in
 
   (* Trigger shape inference by accessing the tensor node *)
-  let ctx = Train.forward_once (module Backend) ~ctx y2 in
+  let ctx = Train.forward_once ctx y2 in
 
   (* Check if dimensions were captured *)
   Stdio.printf "Dimension i: %s\n"
@@ -39,14 +39,14 @@ let capture_for_computation () =
   let%op z3 = x3 +* "a..r..;..r..b=>ab" [ "r" ] y3 in
 
   (* Trigger shape inference *)
-  let ctx = Train.forward_once (module Backend) ~ctx z3 in
+  let ctx = Train.forward_once ctx z3 in
 
   (* Check if row variable was captured *)
   Stdio.printf "Row variable r (product of dims): %s\n"
     (match r.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
   let%op dim_calc = dim a + dim j + dim r in
-  let _ctx = Train.forward_once (module Backend) ~ctx dim_calc in
+  let _ctx = Train.forward_once ctx dim_calc in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false dim_calc
 
@@ -90,13 +90,13 @@ let test_set_dim_and_set_equal () =
   | _ -> Stdio.printf "Test 4 - ERROR: Unexpected exception type\n");
 
   (* Test 5: Using captured variables in actual einsum operations *)
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let%op x_test = { x_test = uniform1 (); o = [ 3; 4 ] } in
   let%op y_test = { y_test = uniform1 (); o = [ 4; 5 ] } in
   let%op z_test = x_test +* "pq;qr=>pr" [ "p"; "q"; "r" ] y_test in
 
   (* Don't set equality constraint - just test capturing works *)
-  let ctx = Train.forward_once (module Backend) z_test in
+  let ctx = Train.forward_once ctx z_test in
 
   Stdio.printf "Test 5 - einsum variable capture:\n";
   Stdio.printf "  Dimension p: %s\n"
@@ -122,7 +122,7 @@ let test_set_dim_and_set_equal () =
   Shape.set_equal s dim_var;
 
   (* s is a row variable, dim_var is a dimension variable *)
-  let _ctx = Train.forward_once (module Backend) ~ctx z_row in
+  let _ctx = Train.forward_once ctx z_row in
 
   Stdio.printf "Test 6 - row-dimension equality:\n";
   Stdio.printf "  Row variable s (product): %s\n"
@@ -142,7 +142,7 @@ let capture_for_shape_validation () =
   let open Operation.DSL_modules in
   Tensor.unsafe_reinitialize ();
   Shape.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   Stdio.printf "\n=== Testing shape validation integration with equality constraints ===\n";
 
   (* Test 1: Einsum with equality constraints - demonstrate constraint validation *)
@@ -154,7 +154,7 @@ let capture_for_shape_validation () =
   (* Add constraint that i should equal k - this should work since both are 4 *)
   Shape.set_equal i k;
 
-  let ctx = Train.forward_once (module Backend) c1 in
+  let ctx = Train.forward_once ctx c1 in
 
   Stdio.printf "Test 1 - Constraint i=k in matrix multiply:\n";
   Stdio.printf "  Input a1 shape: %s\n" (Shape.to_string_hum a1.shape);
@@ -176,7 +176,7 @@ let capture_for_shape_validation () =
   Shape.set_dim fixed_c 7;
   Shape.set_equal c fixed_c;
 
-  let ctx = Train.forward_once (module Backend) ~ctx z2 in
+  let ctx = Train.forward_once ctx z2 in
 
   Stdio.printf "\nTest 2 - Multiple constraints (a=d, c=7):\n";
   Stdio.printf "  Input x2 shape: %s\n" (Shape.to_string_hum x2.shape);
@@ -196,7 +196,7 @@ let capture_for_shape_validation () =
   (* Constraint: row1 and row2 should have same total elements *)
   Shape.set_equal row1 row2;
 
-  let ctx = Train.forward_once (module Backend) ~ctx r3 in
+  let ctx = Train.forward_once ctx r3 in
 
   Stdio.printf "\nTest 3 - Row variable constraints (row1=row2 total elements):\n";
   Stdio.printf "  Input r1 shape: %s\n" (Shape.to_string_hum r1.shape);
@@ -212,7 +212,7 @@ let capture_for_shape_validation () =
   Shape.set_equal mix n;
 
   (* Row variable mix should have total elements = p *)
-  let _ctx = Train.forward_once (module Backend) ~ctx m2 in
+  let _ctx = Train.forward_once ctx m2 in
 
   Stdio.printf "\nTest 4 - Mixed row-dimension constraints:\n";
   Stdio.printf "  Input m1 shape: %s\n" (Shape.to_string_hum m1.shape);
@@ -236,7 +236,7 @@ let capture_for_shape_validation () =
   Shape.set_equal d final_size;
 
   (* This should propagate back to a *)
-  let _ctx = Train.forward_once (module Backend) ~ctx chain4 in
+  let _ctx = Train.forward_once ctx chain4 in
 
   Stdio.printf "\nTest 5 - Constraint propagation across operations:\n";
   Stdio.printf "  Chain1 shape: %s\n" (Shape.to_string_hum chain1.shape);
@@ -256,7 +256,7 @@ let capture_for_shape_inference () =
   let open Operation.DSL_modules in
   Tensor.unsafe_reinitialize ();
   Shape.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   Stdio.printf "\n=== Testing pure shape inference with equality constraints ===\n";
 
   (* Test 1: Pure matrix multiply with constraint-driven shape inference *)
@@ -278,7 +278,7 @@ let capture_for_shape_inference () =
   Shape.set_equal j j_size;
   Shape.set_equal k k_size;
 
-  let ctx = Train.forward_once (module Backend) result1 in
+  let ctx = Train.forward_once ctx result1 in
 
   Stdio.printf "Test 1 - Matrix multiply with constraint-driven shapes:\n";
   Stdio.printf "  m1 inferred shape: %s\n" (Shape.to_string_hum m1.shape);
@@ -312,7 +312,7 @@ let capture_for_shape_inference () =
   (* This should propagate through the chain *)
   Shape.set_equal c mult_depth;
 
-  let ctx = Train.forward_once (module Backend) ~ctx final in
+  let ctx = Train.forward_once ctx final in
 
   Stdio.printf "\nTest 2 - Chain operations with constraint propagation:\n";
   Stdio.printf "  base inferred shape: %s\n" (Shape.to_string_hum base.shape);
@@ -344,7 +344,7 @@ let capture_for_shape_inference () =
   Shape.set_equal y y_size;
   Shape.set_equal z z_size;
 
-  let ctx = Train.forward_once (module Backend) ~ctx result3 in
+  let ctx = Train.forward_once ctx result3 in
 
   Stdio.printf "\nTest 3 - Simple 3-tensor einsum with pure inference:\n";
   Stdio.printf "  tensor1 inferred shape: %s\n" (Shape.to_string_hum tensor1.shape);
@@ -382,7 +382,7 @@ let capture_for_shape_inference () =
   Shape.set_equal q q_size;
 
   (* This will also constrain s=5 due to q=s *)
-  let _ctx = Train.forward_once (module Backend) ~ctx complex_result in
+  let _ctx = Train.forward_once ctx complex_result in
 
   Stdio.printf "\nTest 4 - Complex interdependent constraints:\n";
   Stdio.printf "  complex1 inferred shape: %s\n" (Shape.to_string_hum complex1.shape);

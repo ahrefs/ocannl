@@ -5,7 +5,7 @@ module Tn = Ir.Tnode
 
 let () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Test heterogeneous precision in where operation using %cd syntax *)
   let%cd condition = { cond } in
   let%cd then_val = { a } in
@@ -29,5 +29,5 @@ let () =
   Tn.set_values b.value [| 2.0 |];
 
   (* Set up values and run computation *)
-  ignore (Train.forward_once (module Backend) result);
+  ignore (Train.forward_once ctx result);
   Train.printf_tree result

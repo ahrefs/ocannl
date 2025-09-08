@@ -720,7 +720,6 @@ end
 
 module DSL_modules = struct
   module Ir = Ir
-  module Backends = Context.Backends_deprecated
   module Shape = Shape
   module Tensor = Tensor
 

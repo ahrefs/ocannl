@@ -8,15 +8,8 @@ module type Backend = Ir.Backend_intf.Backend
 
 let%expect_test "diagonal_tensor_initialization" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   (* Create a diagonal tensor using einsum: i->ii *)
   let input = TDSL.range 5 in
@@ -24,13 +17,13 @@ let%expect_test "diagonal_tensor_initialization" =
 
   (* Ensure the diagonal tensor is hosted *)
   Train.set_hosted diagonal.value;
-  ignore (Train.forward_once backend diagonal);
+  ignore (Train.forward_once ctx diagonal);
 
   (* Print the diagonal tensor *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false diagonal;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:30:21
+    HERE: test/einsum/surjectivity.ml:23:21
     ┌───────────────────────────────────────┐
     │[1]: =>_diagonal shape 0:5,1:5         │
     │┌──────┬──────────────────────────────┐│
@@ -47,27 +40,20 @@ let%expect_test "diagonal_tensor_initialization" =
 
 let%expect_test "sparse_assignment_with_fixed_indices" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   (* Create a sparse tensor using fixed indices: i->i0j *)
   let input = TDSL.range 4 in
   let%op sparse = input ++ "i=>i0j" in
 
   Train.set_hosted sparse.value;
-  ignore (Train.forward_once backend sparse);
+  ignore (Train.forward_once ctx sparse);
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:67:21
+    HERE: test/einsum/surjectivity.ml:53:21
     ┌─────────────────────────────────┐
     │[1]: =>_sparse shape 0:4,1:1,2:1 │
     │┌──────┬──────┐                  │
@@ -90,27 +76,20 @@ let%expect_test "sparse_assignment_with_fixed_indices" =
 
 let%expect_test "multiple_sparse_axes" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
+  
 
   (* Test with multiple fixed indices: ij->i1j2 *)
   let input = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op sparse_multi = input ++ "ij=>i1j2" in
 
   Train.set_hosted sparse_multi.value;
-  ignore (Train.forward_once backend sparse_multi);
+  ignore (Train.forward_once ctx sparse_multi);
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse_multi;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:110:21
+    HERE: test/einsum/surjectivity.ml:89:21
     ┌───────────────────────────────────────────┐
     │[1]: =>_sparse_multi shape 0:3,1:2,2:4,3:3 │
     │┌──────┬──────────────────┐                │

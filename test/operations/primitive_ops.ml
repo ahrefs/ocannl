@@ -9,7 +9,7 @@ module type Backend = Ir.Backend_intf.Backend
 
 let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let open Operation.At in
   CDSL.virtualize_settings.enable_device_only <- false;
   let size = 100 in
@@ -23,16 +23,16 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   Train.set_hosted x.value;
   Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
   (* There actually are no params! Stress test the empty comp case. *)
-  let ctx = Train.init_params (module Backend) IDX.empty fx in
+  let ctx = Train.init_params ctx IDX.empty fx in
   let update = Train.grad_update fx in
-  let fx_routine = Train.to_routine (module Backend) ctx bindings update in
-  Train.run fx_routine;
-  let step_ref = IDX.find_exn fx_routine.bindings step_sym in
+  let fx_routine = Train.to_routine ctx bindings update in
+  Train.run ctx fx_routine;
+  let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
            step_ref := i;
-           Train.run fx_routine;
+           Train.run ctx fx_routine;
            (fx.@[0], x.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)

@@ -3,7 +3,7 @@ open Ocannl.Operation.DSL_modules
 
 let () =
   (* Basic transformer test *)
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Test configuration *)
   let batch_size = 2 in
   let src_seq_len = 10 in

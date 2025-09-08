@@ -6,7 +6,7 @@ open Ocannl.Operation.DSL_modules
 module O = TDSL.O
 
 let%expect_test "threefry4x32 basic test" =
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* Use the random seed as the key *)
   let key = Ocannl.Tensor.get_random_seed () in
 
@@ -22,7 +22,7 @@ let%expect_test "threefry4x32 basic test" =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once (module Backend) uniform_floats);
+  ignore (Ocannl.Train.forward_once ctx uniform_floats);
   let result = Ir.Tnode.get_values uniform_floats.value in
 
   (* Print first few values *)
@@ -47,21 +47,20 @@ let%expect_test "threefry4x32 basic test" =
     |}]
 
 let%expect_test "uint4x32_to_prec_uniform different precisions" =
-  let module Backend = (val Backends.fresh_backend ()) in
   (* TODO(#330): This is an opportunity to test that optimization context checking complains about
      the random seed being missing if it is not set here. *)
   Ocannl.Tensor.set_random_seed ();
   let key = Ocannl.Tensor.get_random_seed () in
   let counter = TDSL.range 5 in
   let random_bits = O.threefry4x32 key counter in
-  let ctx = ref None in
+  let ctx = ref (Context.auto ()) in
 
   (* Test different target precisions *)
   let test_precision prec prec_name =
     let uniform = O.uint4x32_to_prec_uniform random_bits in
     Ir.Tnode.update_prec uniform.value prec;
     Ocannl.Train.set_hosted uniform.value;
-    ctx := Some (Ocannl.Train.forward_once (module Backend) ?ctx:!ctx uniform);
+    ctx := Ocannl.Train.forward_once !ctx uniform;
     let result = Ir.Tnode.get_values uniform.value in
     Stdio.printf "%s precision - first value: %.4g, second value: %.4g\n" prec_name result.(0)
       result.(1);

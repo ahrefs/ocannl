@@ -6,7 +6,7 @@ module O = TDSL.O
 
 let () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   (* This is a stress-test for shape inference, usually we would use %op or %cd syntax *)
   let key =
     Ocannl.Tensor.term ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad
@@ -22,7 +22,7 @@ let () =
 
   (* Compile and run *)
   Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once (module Backend) uniform_floats);
+  ignore (Ocannl.Train.forward_once ctx uniform_floats);
   let result = Ir.Tnode.get_values uniform_floats.value in
 
   (* Print the results *)

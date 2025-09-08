@@ -13,7 +13,7 @@ let () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   let%op d = (a *. b) + (b **. 3) in
   let%op c = c + c + 1 in
@@ -27,7 +27,7 @@ let () =
   List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_hosted diff.Tensor.grad)) [ a.diff; b.diff ];
   (* FIXME(#351): this is a good test for common subexpression elimination. *)
   Utils.capture_stdout_logs @@ fun () ->
-  ignore (Train.update_once (module Backend) g);
+  ignore (Train.update_once ctx g);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false g;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true a;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true b;

@@ -8,6 +8,10 @@ type t
 (** A compiled computational routine ready for execution *)
 type routine
 
+val bindings : routine -> Ir.Indexing.lowered_bindings
+
+val context : routine -> t
+
 (** {2 Context creation} *)
 
 (** Create a CUDA context. *)

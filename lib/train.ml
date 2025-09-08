@@ -42,7 +42,7 @@ module IDX = struct
   let find_exn = Idx.find_exn
 end
 
-let run jitted = Task.run jitted.BT.schedule
+let run ctx routine = ignore (Context.run ctx routine)
 
 (* let save_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
    is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
@@ -186,42 +186,36 @@ let every_non_literal_on_host =
 
 module Lazy = Utils.Lazy
 
-let to_routine (type buffer_ptr dev runner event optimize_ctx)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type event = event
-       and type optimize_ctx = optimize_ctx) (context : Backend.context) ?(hosted = true) ?name
-    bindings comp =
+let to_routine (ctx : Context.t) ?(hosted = true) bindings comp =
   if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
-  Backend.link context @@ Backend.compile context.optimize_ctx ?name bindings comp
+  let _ctx, routine = Context.compile ctx comp bindings in
+  (* Return just the routine for backward compatibility - ctx is discarded here *)
+  routine
 
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
     only the parameters that are not in [ctx.ctx_arrays] are initialized. *)
-let init_params (type buffer_ptr dev runner event optimize_ctx)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type event = event
-       and type optimize_ctx = optimize_ctx) ?(ctx : Backend.context option) ?(reinit_all = false)
-    ?hosted ?name bindings t =
-  let ctx =
-    match ctx with
-    | Some ctx -> ctx
-    | None -> Backend.make_context @@ Backend.new_stream @@ Backend.get_device ~ordinal:0
+let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
+  let comp = 
+    if reinit_all then Tensor.init_params t
+    else 
+      (* Check which params are already initialized *)
+      let skip = Map.empty (module Tn) in
+      Set.fold t.Tensor.params ~init:skip ~f:(fun skip p ->
+        if Context.is_initialized ctx p.Tensor.value then
+          Map.set skip ~key:p.Tensor.value ~data:()
+        else skip)
+      |> fun skip -> Tensor.init_params ~skip t
   in
-  let skip = if reinit_all then None else Some ctx.ctx_arrays in
-  let comp = Tensor.init_params ?skip t in
-  let init = to_routine (module Backend) ctx ?hosted ?name bindings comp in
-  let ctx =
-    Set.fold comp.Asgns.embedded_nodes ~init:init.context ~f:(fun ctx tn ->
-        if not (Map.mem ctx.ctx_arrays tn) then Backend.init_from_host ctx tn else ctx)
-  in
-  run init;
-  ctx
+  if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
+  (* Compile and run the initialization *)
+  let ctx, routine = Context.compile ctx comp bindings in
+  let ctx = Context.run ctx routine in
+  (* Mark embedded nodes as initialized via init_from_host *)
+  Set.fold comp.Asgns.embedded_nodes ~init:ctx ~f:(fun ctx tn ->
+    if not (Context.is_initialized ctx tn) then 
+      Context.init_from_host_deprecated ctx tn
+    else ctx)
 
 type example_train_result = {
   inputs : Tensor.t;
@@ -241,53 +235,51 @@ type example_train_result = {
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
     parameters that are not in [ctx.ctx_arrays] are initialized. *)
 let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
-    (type buffer_ptr dev runner event optimize_ctx)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type optimize_ctx = optimize_ctx
-       and type event = event) ?(ctx : Backend.context option) ?(bindings = IDX.empty) ~f t =
-  (* TODO: this will get nicer with modular explicits. *)
+    ?(bindings = IDX.empty) ~f ctx t =
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
   let ctx =
-    match ctx with
-    | Some ctx -> ctx
-    | None -> Backend.make_context @@ Backend.new_stream @@ Backend.get_device ~ordinal:0
-  in
-  let ctx =
     if skip_init || Set.is_empty t.params then ctx
-    else init_params (module Backend) ~ctx ~hosted ?reinit_all bindings t
+    else init_params ?reinit_all ~hosted ctx bindings t
   in
-  let routine = Backend.(link ctx @@ compile ctx.optimize_ctx bindings update) in
-  Task.run routine.schedule;
-  routine.context
+  let ctx, routine = Context.compile ctx update bindings in
+  Context.run ctx routine
+
+(** Context-based versions of training functions for the new simplified API *)
 
 (** [forward_once] is a wrapper around {!run_once} that runs the forward code of [t]. *)
-let forward_once ?hosted ?skip_init ?reinit_all (type buffer_ptr dev runner event optimize_ctx)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type optimize_ctx = optimize_ctx
-       and type event = event) ?ctx ?bindings t =
-  let ctx = run_once ?hosted ?skip_init ?reinit_all (module Backend) ~f:forward ?ctx ?bindings t in
+let forward_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
+  let ctx = run_once ~hosted ~skip_init ?reinit_all ~bindings ~f:forward ctx t in
   (* FIXME: this is going away soon. *)
   Tensor.remove_bprop_root t;
   ctx
 
 (** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
     forward and backprop. *)
-let update_once ?hosted ?skip_init ?reinit_all (type buffer_ptr dev runner event optimize_ctx)
-    (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
-       and type runner = runner
-       and type optimize_ctx = optimize_ctx
-       and type event = event) ?ctx ?bindings t =
-  run_once ?hosted ?skip_init ?reinit_all (module Backend) ~f:grad_update ?ctx ?bindings t
+let update_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
+  run_once ~hosted ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
+
+let sgd_step ~learning_rate ?momentum ?weight_decay ?nesterov ?(bindings = IDX.empty) ctx loss =
+  (* First compute gradients *)
+  let grad_comp = grad_update loss in
+  let ctx, grad_routine = Context.compile ctx grad_comp bindings in
+  let ctx = Context.run ctx grad_routine in
+  (* Then apply SGD updates *)
+  let sgd_comp = sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss in
+  let ctx, sgd_routine = Context.compile ctx sgd_comp bindings in
+  Context.run ctx sgd_routine
+
+(** Deprecated: Use the module-level functions directly *)
+module With_context = struct
+  let init_params ?(reinit_all = false) ctx t = 
+    init_params ~reinit_all ctx IDX.empty t
+  let forward ?(bindings = IDX.empty) ctx t = 
+    forward_once ~bindings ctx t
+  let grad_update ?(bindings = IDX.empty) ctx t = 
+    update_once ~bindings ctx t
+  let sgd_step = sgd_step
+end
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)

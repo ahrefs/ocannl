@@ -8,7 +8,7 @@ module type Backend = Ir.Backend_intf.Backend
 
 let inline_inner () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 5 ] ~output_dims:[ 3 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op c = (a * b) ++ "...|i->j => ...|ij" in
@@ -16,13 +16,13 @@ let inline_inner () =
   Ir.Low_level.virtualize_settings.inline_complex_computations <- true;
   Train.set_hosted a.value;
   Train.set_hosted b.value;
-  ignore (Train.forward_once (module Backend) c);
+  ignore (Train.forward_once ctx c);
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
   Stdio.printf "\n%!"
 
 let inline_view () =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 5 ] ~output_dims:[ 3 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op c1 = (a * b) ++ "...|i->j => ...|ij" in
@@ -30,7 +30,7 @@ let inline_view () =
   Ir.Low_level.virtualize_settings.inline_complex_computations <- false;
   Train.set_hosted a.value;
   Train.set_hosted b.value;
-  ignore (Train.forward_once (module Backend) d);
+  ignore (Train.forward_once ctx d);
   Train.printf_tree ~here:[%here] ~with_grad:false d;
   Stdio.printf "\n%!"
 

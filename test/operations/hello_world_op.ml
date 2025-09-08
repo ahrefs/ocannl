@@ -14,24 +14,16 @@ let%expect_test "Hello World" =
 
 let%expect_test "Pointwise multiplication dims 1" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   (* "Hey" is inferred to be a scalar. *)
   let%op y = 2 *. { hey = 7.0 } in
-  ignore (Train.forward_once backend y);
+  let _ctx = Train.With_context.forward ctx y in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:31:21
+    HERE: test/operations/hello_world_op.ml:23:21
     ┌────────────────────┐
     │[3]: *._y shape 0:1 │
     │┌┬─────────┐        │
@@ -44,24 +36,16 @@ let%expect_test "Pointwise multiplication dims 1" =
 
 let%expect_test "Matrix multiplication dims 1x1" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ({ hey = 7.0 } * 'q' 2.0) + 'p' 1.0 in
-  ignore (Train.forward_once backend y);
+  let _ctx = Train.With_context.forward ctx y in
   (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:61:21
+    HERE: test/operations/hello_world_op.ml:45:21
     ┌────────────────────────┐
     │[0]: hey shape 1:1->0:1 │
     │┌──────┬──────┐         │
@@ -74,7 +58,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:74:21
+    HERE: test/operations/hello_world_op.ml:58:21
     ┌───────────────────┐
     │[6]: +_y shape 0:1 │
     │┌┬─────────┐       │
@@ -87,7 +71,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
 
 let%expect_test "Print tensor too early" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
+  let ctx = Context.auto () in
   let _print_tensor = Train.printf ~with_code:false ~with_grad:false in
 
   let%op a = [| 1.; 2.; 3.; 4. |] in
@@ -96,19 +80,19 @@ let%expect_test "Print tensor too early" =
   Tensor.print ~here:[%here] ~force:false ~with_code:false ~with_grad:false `Inline b;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:95:21
+    HERE: test/operations/hello_world_op.ml:79:21
     [0]: 1,2,3,4_a shape 0:4|  <not-in-yet>
 
-    HERE: test/operations/hello_world_op.ml:96:21
+    HERE: test/operations/hello_world_op.ml:80:21
     [1]: 2,3,4,5_b shape 0:4|  <not-in-yet>
     |}];
   let%op c = a *. b in
 
-  ignore (Train.forward_once (module Backend) c);
+  let _ctx = Train.With_context.forward ctx c in
   Train.printf ~here:[%here] c;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:108:21
+    HERE: test/operations/hello_world_op.ml:92:21
     ┌─────────────────────────────────┐
     │[2]: *._c shape 0:4|             │
     │┌┬──────────────────────────────┐│
@@ -121,23 +105,15 @@ let%expect_test "Print tensor too early" =
 
 let%expect_test "Print constant tensor" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
-  ignore (Train.forward_once backend hey);
+  let ctx = Train.With_context.forward ctx hey in
   (* ignore (failwith @@ Tn.debug_memory_mode hey.value.memory_mode); *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:137:21
+    HERE: test/operations/hello_world_op.ml:113:21
     [0]: 1,2,3,4,5..._hey shape 1:3->0:2  [
        1.00 , 2.00 , 3.00
       ;  4.00 , 5.00 , 6.00
@@ -146,7 +122,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:146:21
+    HERE: test/operations/hello_world_op.ml:122:21
     ┌─────────────────────────────────────┐
     │[0]: 1,2,3,4,5..._hey shape 1:3->0:2 │
     │┌──────┬──────────────────┐          │
@@ -158,11 +134,11 @@ let%expect_test "Print constant tensor" =
     └─────────────────────────────────────┘
     |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
-  ignore (Train.forward_once backend hoo);
+  let ctx = Train.With_context.forward ctx hoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:162:21
+    HERE: test/operations/hello_world_op.ml:138:21
     [1]: 1,2,3,4,5..._hoo shape 0:2|1:3  [|
       [ 1.00 ; 2.00 ; 3.00 ]
       ; [ 4.00 ; 5.00 ; 6.00 ]
@@ -171,7 +147,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:171:21
+    HERE: test/operations/hello_world_op.ml:147:21
     ┌────────────────────────────────────┐
     │[1]: 1,2,3,4,5..._hoo shape 0:2|1:3 │
     │┌──────┬──────────────────┐         │
@@ -190,11 +166,11 @@ let%expect_test "Print constant tensor" =
       ((19, 20, 21), (22, 23, 24));
     ]
   in
-  ignore (Train.forward_once backend hey2);
+  let ctx = Train.With_context.forward ctx hey2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false @@ hey2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:194:21
+    HERE: test/operations/hello_world_op.ml:170:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: 1,2,3,4,5..._hey2 shape 1:2,2:3->0:4                       │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -211,7 +187,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:211:21
+    HERE: test/operations/hello_world_op.ml:187:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: 1,2,3,4,5..._hey2 shape 1:2,2:3->0:4                       │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -233,11 +209,11 @@ let%expect_test "Print constant tensor" =
       [ [ 19; 20; 21 ]; [ 22; 23; 24 ] ];
     |]
   in
-  ignore (Train.forward_once backend hoo2);
+  let ctx = Train.With_context.forward ctx hoo2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:237:21
+    HERE: test/operations/hello_world_op.ml:213:21
     [3]: 1,2,3,4,5..._hoo2 shape 0:4|1:2,2:3  [|
       [ [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] ]
       ; [ [ 7.00 ; 8.00 ; 9.00 ] ; [ 10.00 ; 11.00 ; 12.00 ] ]
@@ -248,7 +224,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:248:21
+    HERE: test/operations/hello_world_op.ml:224:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: 1,2,3,4,5..._hoo2 shape 0:4|1:2,2:3                                                                       │
     │┌──────┬──────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -268,11 +244,11 @@ let%expect_test "Print constant tensor" =
       [| [ 19; 20; 21 ]; [ 22; 23; 24 ] |];
     |]
   in
-  ignore (Train.forward_once backend heyhoo);
+  let ctx = Train.With_context.forward ctx heyhoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:272:21
+    HERE: test/operations/hello_world_op.ml:248:21
     [4]: 1,2,3,4,5..._heyhoo shape 0:4,1:2|2:3  [|
       [| [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] |]
       ; [| [ 7.00 ; 8.00 ; 9.00 ] ; [ 10.00 ; 11.00 ; 12.00 ] |]
@@ -283,7 +259,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:283:21
+    HERE: test/operations/hello_world_op.ml:259:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: 1,2,3,4,5..._heyhoo shape 0:4,1:2|2:3                                                                     │
     │┌──────┬──────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -303,11 +279,11 @@ let%expect_test "Print constant tensor" =
       [| [ [ 19; 49 ]; [ 20; 50 ]; [ 21; 51 ] ]; [ [ 22; 52 ]; [ 23; 53 ]; [ 24; 54 ] ] |];
     |]
   in
-  ignore (Train.forward_once backend heyhoo2);
+  let ctx = Train.With_context.forward ctx heyhoo2 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:307:21
+    HERE: test/operations/hello_world_op.ml:283:21
     [5]: 1,31,2,32,3..._heyhoo2 shape 0:4,1:2|2:3,3:2  [|
       [|
         [ [ 1.00 ; 31.00 ] ; [ 2.00 ; 32.00 ] ; [ 3.00 ; 33.00 ] ]
@@ -330,7 +306,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:330:21
+    HERE: test/operations/hello_world_op.ml:306:21
     ┌──────────────────────────────────────────────────┐
     │[5]: 1,31,2,32,3..._heyhoo2 shape 0:4,1:2|2:3,3:2 │
     │┌──────┬──────────────────┬──────────────────┐    │
@@ -367,11 +343,11 @@ let%expect_test "Print constant tensor" =
       |];
     |]
   in
-  ignore (Train.forward_once backend heyhoo3);
+  let ctx = Train.With_context.forward ctx heyhoo3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo3;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:371:21
+    HERE: test/operations/hello_world_op.ml:347:21
     [6]: 1,31,2,32,3..._heyhoo3 shape 0:2,1:2|2:2,3:3,4:2  [|
       [|
         [
@@ -398,7 +374,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo3;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:398:21
+    HERE: test/operations/hello_world_op.ml:374:21
     ┌──────────────────────────────────────────────────────┐
     │[6]: 1,31,2,32,3..._heyhoo3 shape 0:2,1:2|2:2,3:3,4:2 │
     │┌──────┬───────────────┬──────────────────┐           │
@@ -440,11 +416,11 @@ let%expect_test "Print constant tensor" =
       ];
     |]
   in
-  ignore (Train.forward_once backend heyhoo4);
+  let _ctx = Train.With_context.forward ctx heyhoo4 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo4;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:444:21
+    HERE: test/operations/hello_world_op.ml:420:21
     [7]: 1,31,2,32,3..._heyhoo4 shape 0:2|4:2->1:2,2:2,3:3  [|
       [
         [
@@ -471,7 +447,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo4;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:471:21
+    HERE: test/operations/hello_world_op.ml:447:21
     ┌───────────────────────────────────────────────────────┐
     │[7]: 1,31,2,32,3..._heyhoo4 shape 0:2|4:2->1:2,2:2,3:3 │
     │┌──────┬───────────────┬──────────────────┐            │
@@ -504,23 +480,15 @@ let%expect_test "Print constant tensor" =
 
 let%expect_test "Matrix multiplication dims 2x3" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   (* Hey is inferred to be a matrix. *)
   let%op y = ({ hey = 7.0 } * [ 2; 3 ]) + [ 4; 5; 6 ] in
-  ignore (Train.forward_once backend y);
+  let _ctx = Train.With_context.forward ctx y in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:520:21
+    HERE: test/operations/hello_world_op.ml:488:21
     ┌────────────────────────┐
     │[0]: hey shape 1:2->0:3 │
     │┌──────┬────────────┐   │
@@ -535,7 +503,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:535:21
+    HERE: test/operations/hello_world_op.ml:503:21
     ┌──────────────────────────────┐
     │[6]: +_y shape 0:3            │
     │┌┬───────────────────────────┐│
@@ -548,25 +516,17 @@ let%expect_test "Matrix multiplication dims 2x3" =
 
 let%expect_test "Big matrix" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   (* Hey is inferred to be a matrix. *)
   let hey = TDSL.param ~value:0.5 "hey" () in
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
-  ignore (Train.forward_once backend y);
+  let _ctx = Train.With_context.forward ctx y in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:566:21
+    HERE: test/operations/hello_world_op.ml:526:21
     ┌──────────────────────────────────────────────────┐
     │[0]: hey shape 1:20->0:20                         │
     │┌──────┬─────────────────────────────────────────┐│
@@ -583,7 +543,7 @@ let%expect_test "Big matrix" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:583:21
+    HERE: test/operations/hello_world_op.ml:543:21
     ┌────────────────────────────────────────────┐
     │[5]: + shape 0:20                           │
     │┌┬─────────────────────────────────────────┐│
@@ -596,26 +556,18 @@ let%expect_test "Big matrix" =
 
 let%expect_test "Very big tensor" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
 
   let hey =
     TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()
   in
   let%op hoo = (hey * (1 + 1)) - 10 in
   Train.set_hosted hey.value;
-  ignore (Train.forward_once backend hoo);
+  let _ctx = Train.With_context.forward ctx hoo in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:615:21
+    HERE: test/operations/hello_world_op.ml:567:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[0]: r6x10x11x7x8x9 shape 0:6|3:7,4:8,5:9->1:10,2:11                                                                                                                                   │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -753,7 +705,7 @@ let%expect_test "Very big tensor" =
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:752:21
+    HERE: test/operations/hello_world_op.ml:704:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[6]: -_hoo shape 0:6|1:10,2:11                                                                                                                                                         │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -771,28 +723,20 @@ let%expect_test "Very big tensor" =
 
 let%expect_test "Embed self id" =
   Tensor.unsafe_reinitialize ();
-  let module Backend = (val Backends.fresh_backend ()) in
-  let backend =
-    (module Backend : Backend
-      with type buffer_ptr = Backend.buffer_ptr
-       and type dev = Backend.dev
-       and type runner = Backend.runner
-       and type event = Backend.event
-       and type optimize_ctx = Backend.optimize_ctx)
-  in
+  let ctx = Context.auto () in
   let%op hey = embed_self_id () in
   let%op hoo = embed_self_id () in
   let%op bar = hoo + hey + embed_self_id () in
   Train.set_hosted hey.value;
   Train.set_hosted hoo.value;
   Train.set_hosted bar.value;
-  ignore (Train.forward_once backend bar);
+  let _ctx = Train.With_context.forward ctx bar in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:790:21
+    HERE: test/operations/hello_world_op.ml:734:21
     ┌─────────────────────────┐
     │[0]: !@self_id shape 0:1 │
     │┌┬──────┐                │
@@ -801,7 +745,7 @@ let%expect_test "Embed self id" =
     │││ 0.00 │                │
     │└┴──────┘                │
     └─────────────────────────┘
-    HERE: test/operations/hello_world_op.ml:791:21
+    HERE: test/operations/hello_world_op.ml:735:21
     ┌─────────────────────────┐
     │[1]: !@self_id shape 0:1 │
     │┌┬──────┐                │
@@ -810,7 +754,7 @@ let%expect_test "Embed self id" =
     │││ 1.00 │                │
     │└┴──────┘                │
     └─────────────────────────┘
-    HERE: test/operations/hello_world_op.ml:792:21
+    HERE: test/operations/hello_world_op.ml:736:21
     ┌─────────────────────┐
     │[4]: +_bar shape 0:1 │
     │┌┬──────┐            │
@@ -823,7 +767,7 @@ let%expect_test "Embed self id" =
   Train.printf_tree ~here:[%here] bar;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:823:26
+    HERE: test/operations/hello_world_op.ml:767:26
                        #4 +_bar
                         3.00
           #3 + Virt/40       │#2 !@self_id Virt/40

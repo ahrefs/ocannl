@@ -330,12 +330,12 @@ Inline declarations can also be used outside of assignments for creating non-dif
 ```ocaml
   let%cd mlp_result = mlp { point } in
   let result_routine =
-    Train.to_routine (module Backend) sgd_routine.context IDX.empty
+    Train.to_routine (Context.context sgd_routine) IDX.empty
       [%cd ~~("mlp infer"; mlp_result.forward)]
   in
   let callback (x, y) =
     Tn.set_values point [| x; y |];
-    Train.run result_routine;
+    Train.run ctx result_routine;
     Float.(mlp_result.@[0] >= 0.)
   in
 ```
