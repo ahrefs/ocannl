@@ -1,6 +1,7 @@
 open Base
 open Ocannl
 open Operation.At
+open Operation.DSL_modules
 
 let () =
   Tensor.unsafe_reinitialize ();
