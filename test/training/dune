@@ -24,17 +24,6 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
- (name moons_demo_parallel)
- (package neural_nets_lib)
- (modules moons_demo_parallel)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
- (libraries ocannl datasets)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
-
-(test
  (name bigram)
  (package neural_nets_lib)
  (modules bigram)

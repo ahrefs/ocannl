@@ -1,15 +1,5 @@
 (executable
  (package neural_nets_lib)
- (public_name moons_benchmark)
- (name moons_benchmark)
- (modules moons_benchmark)
- (libraries ocannl base stdio time_now datasets)
- (preprocess
-  (pps ppx_here ppx_sexp_conv ppx_string ppx_ocannl ppx_minidebug ppx_here))
- (modes exe))
-
-(executable
- (package neural_nets_lib)
  (public_name compilation_speed_benchmark)
  (name compilation_speed)
  (modules compilation_speed)
