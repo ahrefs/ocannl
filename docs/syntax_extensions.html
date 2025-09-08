@@ -868,12 +868,12 @@ creating non-differentiable tensors, to mimic the behavior of
 parameter would introduce:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd mlp_result = mlp { point } <span class="kw">in</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result_routine =</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine (<span class="kw">module</span> Backend) sgd_routine.context IDX.empty</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine (Context.context sgd_routine) IDX.empty</span>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>      [%cd ~~(<span class="st">&quot;mlp infer&quot;</span>; mlp_result.forward)]</span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> callback (x, y) =</span>
 <span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    Tn.set_values point [| x; y |];</span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    Train.run result_routine;</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    Train.run ctx result_routine;</span>
 <span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    Float.(mlp_result.@[<span class="dv">0</span>] &gt;= <span class="dv">0</span>.)</span>
 <span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span></code></pre></div>
 <p>For <code>%op</code>, the declaration is allowed anywhere. If there
