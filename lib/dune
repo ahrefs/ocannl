@@ -16,7 +16,7 @@
   ppx_here.runtime-lib
   ppx_minidebug.runtime
   arrayjit.ir
-  arrayjit.backends)
+  arrayjit.context)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (preprocess
