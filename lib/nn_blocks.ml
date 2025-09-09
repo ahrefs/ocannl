@@ -79,7 +79,7 @@ let%op multi_head_attention ~label ~num_heads ?temperature ?(dropout_rate = 0.0)
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
   let centered = (x - mean) /. dim d in
-  let variance = (centered * centered) ++ " ... | ... => ... |  0 " in
+  let variance = (centered *. centered) ++ " ... | ... => ... |  0 " in
   let std_dev = sqrt (variance + !.epsilon) in
   let normalized = centered /. std_dev in
   (* gamma and beta are learned, but initialized to good defaults *)

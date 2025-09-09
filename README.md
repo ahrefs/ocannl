@@ -36,13 +36,13 @@ A possible route to learning OCANNL:
 
 1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
 2. Read: [shapes and the generalized einsum beginner-to-advanced slides](https://ahrefs.github.io/ocannl/docs/shapes_and_einsum.html).
-3. Read [the migration guide](docs/migration_guide.md).
-4. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
-5. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
-6. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
-7. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
-8. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/backend_intf.ml](arrayjit/lib/backend_intf.ml), [lib/train.ml](lib/train.ml).
-9. Read [docs/anatomy_of_a_backend.md](arrayjit/lib/anatomy_of_a_backend.md).
+3. Upcoming in v0.7: slides about [`Context`](arrayjit/lib/context.mli).
+4. Read [the migration guide](docs/migration_guide.md).
+5. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
+6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
+7. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
+8. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
+9. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/context.mli](arrayjit/lib/context.mli), [lib/train.ml](lib/train.ml).
 10. Read the implementation overview:
    1. The various tests.
    2. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
@@ -58,14 +58,17 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* **0.6.1: convolution NNs, transformers.**
+* **0.6.1: Syntax extension improvements, transformers.**
+  * Heterogeneous precision operations.
   * Counter-based randomness via threefry, second pass (pointwise and weak-but-efficient variants); normal distribution operation.
-  * Padding inference during shape inference.
   * New syntax for inline parameter definitions; record-based syntax instead of string-based.
-  * Add convnet building blocks and corresponding examples starting with MNIST.
-  * Add transformer building blocks.
+  * Add transformer and convnet building blocks.
+  * Better shape error messages.
+* **0.6.2: Shape inference improvements, convolution NNs, real-life transformers.**
+  * Padding inference during shape inference.
+  * Add convnet examples starting with MNIST.
+  * Add a GPT-2 or Llama style example. Tokenization using llama.cpp extracted tokenizer.
 * **0.7: CPU-style performance and memory efficiency.**
-  * Add a GPT-2 style example, ideally benchmarkable against [llm.c](https://github.com/karpathy/llm.c). Tokenization via Raven's library Sage.
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
 * **0.7.1: HIP backend (AMD hardware) and WebGPU backend.**
 * **0.8: GPU-style performance -- low hanging fruit.**
