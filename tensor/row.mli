@@ -83,6 +83,15 @@ type row_constraint =
   | Exact of dim list  (** The concatenated rows have these axes. *)
 [@@deriving equal, hash, compare, sexp_of]
 
+type constraint_origin = {
+  lhs_name : string;
+  lhs_kind : kind;
+  rhs_name : string;
+  rhs_kind : kind;
+  operation : string option;
+}
+[@@deriving sexp_of]
+
 (** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
     [subr] must be sorted using the [@@deriving compare] comparison. *)
 type dim_entry =
@@ -92,6 +101,7 @@ type dim_entry =
       subr : dim_var list;
       lub : dim option;
       constr : dim_constraint;
+      origin : constraint_origin list;
     }
 [@@deriving sexp_of]
 
@@ -102,40 +112,25 @@ type row_entry =
       subr : row_var list;
       lub : t option;
       constr : row_constraint;
+      origin : constraint_origin list;
     }
 [@@deriving sexp_of]
 
-type constraint_origin = {
-  lhs_name : string;
-  lhs_kind : kind;
-  rhs_name : string;
-  rhs_kind : kind;
-  operation : string option;
-}
-[@@deriving sexp_of]
 
 type constraint_ =
-  | Dim_eq of { d1 : dim; d2 : dim; mutable origin : constraint_origin option }
-  | Row_eq of { r1 : t; r2 : t; mutable origin : constraint_origin option }
-  | Dim_ineq of { cur : dim; subr : dim; mutable origin : constraint_origin option }
-  | Row_ineq of { cur : t; subr : t; mutable origin : constraint_origin option }
-  | Dim_constr of { d : dim; constr : dim_constraint; mutable origin : constraint_origin option }
-  | Rows_constr of { r : t list; constr : row_constraint; mutable origin : constraint_origin option }
+  | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
+  | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
+  | Dim_ineq of { cur : dim; subr : dim; origin : constraint_origin list }
+  | Row_ineq of { cur : t; subr : t; origin : constraint_origin list }
+  | Dim_constr of { d : dim; constr : dim_constraint; origin : constraint_origin list }
+  | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
-  | Terminal_dim of dim
-  | Terminal_row of t
+  | Terminal_dim of dim * constraint_origin list
+  | Terminal_row of t * constraint_origin list
       (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors). *)
-  | Shape_row of t  (** A row of a shape of interest. *)
+  | Shape_row of t * constraint_origin list  (** A row of a shape of interest. *)
 [@@deriving compare, equal, sexp_of, variants]
-
-(** Helper functions for creating constraints with optional origins *)
-val dim_eq : ?origin:constraint_origin -> dim -> dim -> constraint_
-val row_eq : ?origin:constraint_origin -> t -> t -> constraint_
-val dim_ineq : constraint_origin -> cur:dim -> subr:dim -> constraint_
-val row_ineq : constraint_origin -> cur:t -> subr:t -> constraint_
-val dim_constr : ?origin:constraint_origin -> dim -> dim_constraint -> constraint_
-val rows_constr : ?origin:constraint_origin -> t list -> row_constraint -> constraint_
 
 type error_trace = ..
 
@@ -154,7 +149,7 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
 
 val subst_row : environment -> t -> t
-val unify_row : stage:stage -> origin:constraint_origin option -> t * t -> environment -> constraint_ list * environment
+val unify_row : stage:stage -> constraint_origin list -> t * t -> environment -> constraint_ list * environment
 val empty_env : environment
 val get_dim_from_env : environment -> dim_var -> int option
 val get_row_from_env : environment -> row_var -> t option
