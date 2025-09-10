@@ -233,7 +233,7 @@ the other hand, while the syntax <code>%op</code> helps build tensors
 (<code>Tensor.t</code>), they can be expressed concisely in pure OCaml.
 Unlike for assignments, the building blocks for tensor expressions are
 easy to extend. The meaningful basic ones are provided in
-<code>lib/operation.ml</code>.</p>
+<code>tensor/operation.ml</code>.</p>
 <p>In OCANNL, we call a tensor that is prohibited from propagating
 gradients, does not have a gradient node nor backprop code, a
 <em>non-differentiable tensor</em>. Accordingly we can call the “plain”
@@ -702,7 +702,7 @@ the syntax extension %cd</a>.</p>
 <code>projections</code> can be given explicitly as a labeled argument
 <code>~projections</code>. If they aren’t but <code>%cd</code> realizes
 there is a <code>~projections</code> parameter in scope, it uses it –
-see <code>lib/operation.ml</code> where this option is used to define
+see <code>tensor/operation.ml</code> where this option is used to define
 tensor operations. If instead of <code>~projections</code> a
 <code>~logic</code> labeled argument is given, the string passed is used
 to determine projections. <code>~logic:&quot;.&quot;</code> means a pointwise
@@ -742,7 +742,7 @@ even with the same computation, because the second variant’s computation
 will get optimized (unless configured not to).</p>
 <p>Advanced note: when a <code>~projections</code> parameter is in scope
 but no assignment-specific <code>~projections</code> argument is given –
-the typical case in <code>lib/operation.ml</code> – the actual
+the typical case in <code>tensor/operation.ml</code> – the actual
 projections field for an assignment is computed by transforming the
 projections parameter according to hints regarding how tensor nodes
 relate to the given projections. Specifically, the identifiers
@@ -1211,7 +1211,7 @@ to-the-power-of operator</h3>
 <p>OCANNL has a built-in numerical binary operation to-power-of:
 <code>Ops.ToPowOf</code>. As part of assignments, the corresponding
 operator is <code>**</code>. Here is the full definition of the
-to-power-of tensor operation from <a href="lib/operation.ml">Operation</a>:</p>
+to-power-of tensor operation from <a href="../tensor/operation.ml">Operation</a>:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">rec</span> pointpow ?(label : <span class="dt">string</span> <span class="dt">list</span> = []) ~grad_spec p t1 : Tensor.t =</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">module</span> NTDSL = <span class="kw">struct</span></span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">include</span> Initial_NTDSL</span>
