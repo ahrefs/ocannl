@@ -69,6 +69,10 @@ This is very tentative.
   * Add convnet examples starting with MNIST.
   * Add a GPT-2 or Llama style example. Tokenization using llama.cpp extracted tokenizer.
 * **0.7: CPU-style performance and memory efficiency.**
+  * Cleanup of deprecated streams functionality.
+  * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
+  * Optimizations: loop invariant lifting and common subexpression elimination.
+  * Universal Pool Allocator.
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
 * **0.7.1: HIP backend (AMD hardware) and WebGPU backend.**
 * **0.8: GPU-style performance -- low hanging fruit.**
@@ -82,7 +86,7 @@ This is very tentative.
   * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
 * **0.9: Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
-  * We should also reproduce the search that tinygrad is doing.
+  * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
   * Milestone phrasing: Program search with execution-based per-backend or aggregate-of-backends cost functions. Starting with augmenting the tiling and layout mechanisms from v0.8 with cost functions, progressing to a broader range of code graph rewriting rules.
 * **1.0: Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
@@ -153,7 +157,7 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 
 Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
 
-The dependency on `cudajit` and `metal` is optional, so you have to install them first to enable the CUDA or Apple Metal backends.
+The dependency on `cudajit` is optional so you have to install it first to enable the CUDA backend. The dependency on `metal` is MacOS-specific but automatic.
 
 ### Code Organization
 
@@ -161,10 +165,10 @@ The codebase is organized to separate user-facing recipes from framework interna
 
 - **`lib/`**: User-facing recipes and utilities
   - `train.ml` - Training utilities and optimizers
-  - `nn_blocks.ml` - Neural network building blocks (transformers, attention, etc.)
+  - `nn_blocks.ml` - Neural network building blocks (transformers, attention, convolution, etc.)
   - `ocannl.ml` - Re-exports for backward compatibility
   
-- **`tensor/`**: Framework internals (separate package `ocannl_tensor`)
+- **`tensor/`**: Framework internals (separate library `ocannl_tensor`)
   - `tensor.ml/mli` - Core tensor type and operations
   - `shape.ml/mli` - Shape inference system  
   - `operation.ml` - Tensor operations and DSL modules
