@@ -382,7 +382,7 @@ let einsum_slot_spec_to_dims_bio ~generative ~sh_id ~row_var_env ~dim_var_env la
         let var = Row.get_var () in
         let d = Row.Var var in
         proj_env_update := Map.add_exn !proj_env_update ~key:var ~data:(Idx.Fixed_idx i);
-        extras := Row.Dim_constr { d; constr = At_least_dim (i + 1) } :: !extras;
+        extras := Row.Dim_constr { d; constr = At_least_dim (i + 1); origin = None } :: !extras;
         d
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
         let output_dim =
@@ -421,6 +421,16 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   let mark_terminal () =
     [ Terminal_row cur_sh.batch; Terminal_row cur_sh.input; Terminal_row cur_sh.output ]
   in
+  let get_origin lhs_kind sh rhs_kind operation =
+    Row.
+      {
+        lhs_name = cur_sh.debug_name;
+        lhs_kind;
+        rhs_name = sh.debug_name;
+        rhs_kind;
+        operation = Some operation;
+      }
+  in
   match logic with
   | Terminal (Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
   | Terminal (Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
@@ -436,6 +446,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   numerator = Num_elems (Array.fold (Ir.Ndarray.dims nd) ~init:1 ~f:( * ));
                   divided_by = [];
                 };
+            origin = None;
           }
         :: mark_terminal () )
   | Terminal (Data (Keep_shape_no_padding nd)) ->
@@ -446,6 +457,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
             constr =
               Exact (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+            origin = None;
           }
         :: mark_terminal () )
   | Terminal (Data (Padded { data; padding; padded_value })) ->
@@ -457,6 +469,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
             constr =
               Exact (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+            origin = None;
           }
         :: mark_terminal () )
   | Terminal (Fetch (Constant_fill values)) ->
@@ -466,6 +479,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
             constr = Total_elems { numerator = Num_elems len; divided_by = [] };
+            origin = None;
           }
         :: mark_terminal () )
   | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
@@ -478,6 +492,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 Exact
                   (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
                   |> List.map ~f:(fun d -> get_dim ~d ()));
+              origin = None;
             }
           :: mark_terminal () )
       else (Row.dim_map_empty, mark_terminal ())
@@ -487,60 +502,60 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh.output };
-          Row_ineq { cur = cur_sh.output; subr = sh.input };
+          Row.row_ineq (get_origin `Batch sh `Batch "transpose") ~cur:cur_sh.batch ~subr:sh.batch;
+          Row.row_ineq (get_origin `Input sh `Output "transpose") ~cur:cur_sh.input ~subr:sh.output;
+          Row.row_ineq (get_origin `Output sh `Input "transpose") ~cur:cur_sh.output ~subr:sh.input;
         ] )
   | Transpose (Pointwise_un, sh) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = cur_sh.batch; subr = sh.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh.input };
-          Row_ineq { cur = cur_sh.output; subr = sh.output };
+          Row.row_ineq (get_origin `Batch sh `Batch "pointwise_unary") ~cur:cur_sh.batch ~subr:sh.batch;
+          Row.row_ineq (get_origin `Input sh `Input "pointwise_unary") ~cur:cur_sh.input ~subr:sh.input;
+          Row.row_ineq (get_origin `Output sh `Output "pointwise_unary") ~cur:cur_sh.output ~subr:sh.output;
         ] )
   | Broadcast (Compose, sh1, sh2) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = sh1.input; subr = sh2.output };
-          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh2.input };
-          Row_ineq { cur = cur_sh.output; subr = sh1.output };
+          Row.row_ineq { lhs_name = sh1.debug_name; lhs_kind = `Input; rhs_name = sh2.debug_name; rhs_kind = `Output; operation = Some "compose" } ~cur:sh1.input ~subr:sh2.output;
+          Row.row_ineq (get_origin `Batch sh1 `Batch "compose") ~cur:cur_sh.batch ~subr:sh1.batch;
+          Row.row_ineq (get_origin `Batch sh2 `Batch "compose") ~cur:cur_sh.batch ~subr:sh2.batch;
+          Row.row_ineq (get_origin `Input sh2 `Input "compose") ~cur:cur_sh.input ~subr:sh2.input;
+          Row.row_ineq (get_origin `Output sh1 `Output "compose") ~cur:cur_sh.output ~subr:sh1.output;
         ] )
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh1.input };
-          Row_ineq { cur = cur_sh.input; subr = sh2.input };
-          Row_ineq { cur = cur_sh.output; subr = sh1.output };
-          Row_ineq { cur = cur_sh.output; subr = sh2.output };
+          Row.row_ineq (get_origin `Batch sh1 `Batch "pointwise_binary") ~cur:cur_sh.batch ~subr:sh1.batch;
+          Row.row_ineq (get_origin `Batch sh2 `Batch "pointwise_binary") ~cur:cur_sh.batch ~subr:sh2.batch;
+          Row.row_ineq (get_origin `Input sh1 `Input "pointwise_binary") ~cur:cur_sh.input ~subr:sh1.input;
+          Row.row_ineq (get_origin `Input sh2 `Input "pointwise_binary") ~cur:cur_sh.input ~subr:sh2.input;
+          Row.row_ineq (get_origin `Output sh1 `Output "pointwise_binary") ~cur:cur_sh.output ~subr:sh1.output;
+          Row.row_ineq (get_origin `Output sh2 `Output "pointwise_binary") ~cur:cur_sh.output ~subr:sh2.output;
         ] )
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = sh1.input; subr = sh2.output };
-          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh2.input };
-          Row_ineq { cur = cur_sh.output; subr = sh1.output };
-          Row_ineq { cur = cur_sh.batch; subr = sh3.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh3.input };
-          Row_ineq { cur = cur_sh.output; subr = sh3.output };
+          Row.row_ineq { lhs_name = sh1.debug_name; lhs_kind = `Input; rhs_name = sh2.debug_name; rhs_kind = `Output; operation = Some "compose_accumulate" } ~cur:sh1.input ~subr:sh2.output;
+          Row.row_ineq (get_origin `Batch sh1 `Batch "compose_accumulate") ~cur:cur_sh.batch ~subr:sh1.batch;
+          Row.row_ineq (get_origin `Batch sh2 `Batch "compose_accumulate") ~cur:cur_sh.batch ~subr:sh2.batch;
+          Row.row_ineq (get_origin `Input sh2 `Input "compose_accumulate") ~cur:cur_sh.input ~subr:sh2.input;
+          Row.row_ineq (get_origin `Output sh1 `Output "compose_accumulate") ~cur:cur_sh.output ~subr:sh1.output;
+          Row.row_ineq (get_origin `Batch sh3 `Batch "compose_accumulate") ~cur:cur_sh.batch ~subr:sh3.batch;
+          Row.row_ineq (get_origin `Input sh3 `Input "compose_accumulate") ~cur:cur_sh.input ~subr:sh3.input;
+          Row.row_ineq (get_origin `Output sh3 `Output "compose_accumulate") ~cur:cur_sh.output ~subr:sh3.output;
         ] )
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
       ( Row.dim_map_empty,
         [
-          Row_ineq { cur = cur_sh.batch; subr = sh1.batch };
-          Row_ineq { cur = cur_sh.batch; subr = sh2.batch };
-          Row_ineq { cur = cur_sh.batch; subr = sh3.batch };
-          Row_ineq { cur = cur_sh.input; subr = sh1.input };
-          Row_ineq { cur = cur_sh.input; subr = sh2.input };
-          Row_ineq { cur = cur_sh.input; subr = sh3.input };
-          Row_ineq { cur = cur_sh.output; subr = sh1.output };
-          Row_ineq { cur = cur_sh.output; subr = sh2.output };
-          Row_ineq { cur = cur_sh.output; subr = sh3.output };
+          Row.row_ineq (get_origin `Batch sh1 `Batch "pointwise_ternary") ~cur:cur_sh.batch ~subr:sh1.batch;
+          Row.row_ineq (get_origin `Batch sh2 `Batch "pointwise_ternary") ~cur:cur_sh.batch ~subr:sh2.batch;
+          Row.row_ineq (get_origin `Batch sh3 `Batch "pointwise_ternary") ~cur:cur_sh.batch ~subr:sh3.batch;
+          Row.row_ineq (get_origin `Input sh1 `Input "pointwise_ternary") ~cur:cur_sh.input ~subr:sh1.input;
+          Row.row_ineq (get_origin `Input sh2 `Input "pointwise_ternary") ~cur:cur_sh.input ~subr:sh2.input;
+          Row.row_ineq (get_origin `Input sh3 `Input "pointwise_ternary") ~cur:cur_sh.input ~subr:sh3.input;
+          Row.row_ineq (get_origin `Output sh1 `Output "pointwise_ternary") ~cur:cur_sh.output ~subr:sh1.output;
+          Row.row_ineq (get_origin `Output sh2 `Output "pointwise_ternary") ~cur:cur_sh.output ~subr:sh2.output;
+          Row.row_ineq (get_origin `Output sh3 `Output "pointwise_ternary") ~cur:cur_sh.output ~subr:sh3.output;
         ] )
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
       let slice_v = get_var () in
@@ -567,11 +582,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       ( proj_axis_env,
         (Option.to_list static_range
-        |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var }))
+        |> List.map ~f:(fun range -> Dim_eq { d1 = get_dim ~d:range (); d2 = slice_var; origin = None }))
         @ [
-            Row_eq { r1 = expanded_batch; r2 = sh.batch };
-            Row_eq { r1 = cur_sh.input; r2 = sh.input };
-            Row_eq { r1 = cur_sh.output; r2 = sh.output };
+            Row_eq { r1 = expanded_batch; r2 = sh.batch; origin = None };
+            Row_eq { r1 = cur_sh.input; r2 = sh.input; origin = None };
+            Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = None };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
       let ls_rhs, ls_lhs =
@@ -613,12 +628,12 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       ( proj_env,
         extras_rhs @ extras_lhs
         @ [
-            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_eq { r1 = b_rhs; r2 = sh.batch };
-            Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_eq { r1 = i_rhs; r2 = sh.input };
-            Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_eq { r1 = o_rhs; r2 = sh.output };
+            Row_ineq { cur = cur_sh.batch; subr = b_lhs; origin = None };
+            Row_eq { r1 = b_rhs; r2 = sh.batch; origin = None };
+            Row_ineq { cur = cur_sh.input; subr = i_lhs; origin = None };
+            Row_eq { r1 = i_rhs; r2 = sh.input; origin = None };
+            Row_ineq { cur = cur_sh.output; subr = o_lhs; origin = None };
+            Row_eq { r1 = o_rhs; r2 = sh.output; origin = None };
           ] )
   | Transpose (Uint4x32_to_prec target_prec, sh) ->
       let var = get_var () in
@@ -628,13 +643,14 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       ( Row.dim_map_empty,
         [
-          Rows_constr { r = [ sh.batch; sh.output; sh.input ]; constr = Row.Exact [ Var var ] };
+          Rows_constr { r = [ sh.batch; sh.output; sh.input ]; constr = Row.Exact [ Var var ]; origin = None };
           Rows_constr
             {
               r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
               constr =
                 Total_elems
                   { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
+              origin = None;
             };
         ] )
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
@@ -681,15 +697,15 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       ( proj_env,
         extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
-            Row_ineq { cur = cur_sh.batch; subr = b_lhs };
-            Row_eq { r1 = b_rhs1; r2 = sh1.batch };
-            Row_eq { r1 = b_rhs2; r2 = sh2.batch };
-            Row_ineq { cur = cur_sh.input; subr = i_lhs };
-            Row_eq { r1 = i_rhs1; r2 = sh1.input };
-            Row_eq { r1 = i_rhs2; r2 = sh2.input };
-            Row_ineq { cur = cur_sh.output; subr = o_lhs };
-            Row_eq { r1 = o_rhs1; r2 = sh1.output };
-            Row_eq { r1 = o_rhs2; r2 = sh2.output };
+            Row_ineq { cur = cur_sh.batch; subr = b_lhs; origin = None };
+            Row_eq { r1 = b_rhs1; r2 = sh1.batch; origin = None };
+            Row_eq { r1 = b_rhs2; r2 = sh2.batch; origin = None };
+            Row_ineq { cur = cur_sh.input; subr = i_lhs; origin = None };
+            Row_eq { r1 = i_rhs1; r2 = sh1.input; origin = None };
+            Row_eq { r1 = i_rhs2; r2 = sh2.input; origin = None };
+            Row_ineq { cur = cur_sh.output; subr = o_lhs; origin = None };
+            Row_eq { r1 = o_rhs1; r2 = sh1.output; origin = None };
+            Row_eq { r1 = o_rhs2; r2 = sh2.output; origin = None };
           ] )
 
 let state = ref Row.empty_env
@@ -709,7 +725,7 @@ let set_dim delayed_var_ref dim =
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var } ->
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
-        Row.Dim_eq { d1 = Row.Var dim_var; d2 = Row.get_dim ~d:dim () } :: !active_constraints
+        Row.Dim_eq { d1 = Row.Var dim_var; d2 = Row.get_dim ~d:dim (); origin = None } :: !active_constraints
   | { var_ref = { solved_dim = None; _ }; var = `Row row_var } ->
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
@@ -719,6 +735,7 @@ let set_dim delayed_var_ref dim =
                is in, should be stored in `Row and in env_row_var. *)
             r = [ Row.get_row_for_var row_var ];
             constr = Total_elems { numerator = Num_elems dim; divided_by = [] };
+            origin = None;
           }
         :: !active_constraints
 
@@ -750,11 +767,11 @@ let set_equal delayed_ref1 delayed_ref2 =
   | { var = `Dim dim_var1; _ }, { var = `Dim dim_var2; _ } ->
       (* Both are dimension variables - create equality constraint *)
       active_constraints :=
-        Row.Dim_eq { d1 = Row.Var dim_var1; d2 = Row.Var dim_var2 } :: !active_constraints
+        Row.Dim_eq { d1 = Row.Var dim_var1; d2 = Row.Var dim_var2; origin = None } :: !active_constraints
   | { var = `Row row_var1; _ }, { var = `Row row_var2; _ } ->
       (* Both are row variables - create row equality constraint *)
       active_constraints :=
-        Row.Row_eq { r1 = Row.get_row_for_var row_var1; r2 = Row.get_row_for_var row_var2 }
+        Row.Row_eq { r1 = Row.get_row_for_var row_var1; r2 = Row.get_row_for_var row_var2; origin = None }
         :: !active_constraints
   | { var = `Dim dim_var; _ }, { var = `Row row_var; _ }
   | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
@@ -775,6 +792,7 @@ let set_equal delayed_ref1 delayed_ref2 =
                       };
                   divided_by = [];
                 };
+            origin = None;
           }
         :: !active_constraints
 

@@ -64,16 +64,6 @@ val dims_label_assoc : t -> (string * dim) list
 val get_row_for_var : ?row_id:row_id -> row_var -> t
 
 type environment [@@deriving sexp_of]
-type error_trace = ..
-
-type error_trace +=
-  | Row_mismatch of t list
-  | Dim_mismatch of dim list
-  | Index_mismatch of Ir.Indexing.axis_index list
-
-val sexp_of_error_trace : error_trace -> Sexp.t
-
-exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 type dim_constraint = Unconstrained_dim | At_least_dim of int
 [@@deriving equal, hash, compare, sexp_of, variants]
@@ -115,13 +105,22 @@ type row_entry =
     }
 [@@deriving sexp_of]
 
+type constraint_origin = {
+  lhs_name : string;
+  lhs_kind : kind;
+  rhs_name : string;
+  rhs_kind : kind;
+  operation : string option;
+}
+[@@deriving sexp_of]
+
 type constraint_ =
-  | Dim_eq of { d1 : dim; d2 : dim }
-  | Row_eq of { r1 : t; r2 : t }
-  | Dim_ineq of { cur : dim; subr : dim }
-  | Row_ineq of { cur : t; subr : t }
-  | Dim_constr of { d : dim; constr : dim_constraint }
-  | Rows_constr of { r : t list; constr : row_constraint }
+  | Dim_eq of { d1 : dim; d2 : dim; mutable origin : constraint_origin option }
+  | Row_eq of { r1 : t; r2 : t; mutable origin : constraint_origin option }
+  | Dim_ineq of { cur : dim; subr : dim; mutable origin : constraint_origin option }
+  | Row_ineq of { cur : t; subr : t; mutable origin : constraint_origin option }
+  | Dim_constr of { d : dim; constr : dim_constraint; mutable origin : constraint_origin option }
+  | Rows_constr of { r : t list; constr : row_constraint; mutable origin : constraint_origin option }
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
   | Terminal_dim of dim
@@ -130,6 +129,27 @@ type constraint_ =
   | Shape_row of t  (** A row of a shape of interest. *)
 [@@deriving compare, equal, sexp_of, variants]
 
+(** Helper functions for creating constraints with optional origins *)
+val dim_eq : ?origin:constraint_origin -> dim -> dim -> constraint_
+val row_eq : ?origin:constraint_origin -> t -> t -> constraint_
+val dim_ineq : constraint_origin -> cur:dim -> subr:dim -> constraint_
+val row_ineq : constraint_origin -> cur:t -> subr:t -> constraint_
+val dim_constr : ?origin:constraint_origin -> dim -> dim_constraint -> constraint_
+val rows_constr : ?origin:constraint_origin -> t list -> row_constraint -> constraint_
+
+type error_trace = ..
+
+type error_trace +=
+  | Row_mismatch of t list
+  | Dim_mismatch of dim list
+  | Index_mismatch of Ir.Indexing.axis_index list
+  | Constraint_failed of constraint_
+
+val sexp_of_error_trace : error_trace -> Sexp.t
+
+exception Shape_error of string * error_trace list [@@deriving sexp_of]
+
+(** Removed duplicate helper functions *)
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
 
