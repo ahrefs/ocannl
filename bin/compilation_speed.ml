@@ -26,10 +26,11 @@ let benchmark_overhead _backend_name () =
   (* Note: this compiles entirely fresh code for each step of the loop. *)
   let ys =
     Array.map xs ~f:(fun v ->
-        let%cd update_x = ~~("update_x"; x =: !.v )in
-        let assign_x =
-          Train.to_routine (Context.context f_routine) IDX.empty update_x
+        let%cd update_x =
+          ~~("update_x";
+             x =: !.v)
         in
+        let assign_x = Train.to_routine (Context.context f_routine) IDX.empty update_x in
         Train.run ctx assign_x;
         Train.run ctx f_routine;
         f.@[0])

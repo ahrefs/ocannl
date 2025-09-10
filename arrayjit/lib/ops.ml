@@ -206,7 +206,7 @@ let compare_prec p1 p2 =
   | Single_prec _, _ -> -1
   | _, Single_prec _ -> 1
 
-  let prec_in_bytes = function
+let prec_in_bytes = function
   | Void_prec -> 0
   | Byte_prec _ -> 1
   | Uint16_prec _ -> 2
@@ -220,6 +220,7 @@ let compare_prec p1 p2 =
   | Fp8_prec _ -> 1
   | Single_prec _ -> 4
   | Double_prec _ -> 8
+
 let is_float = function
   | Void_prec -> false
   | Byte_prec _ -> false

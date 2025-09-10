@@ -1060,7 +1060,7 @@ let translate ?ident_label (expr : expression) : result =
                 ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
-        | [%expr
+    | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
           [%e? expr1]
           [%e? { pexp_desc = Pexp_ident _; _ } as spec]]
@@ -1072,7 +1072,7 @@ let translate ?ident_label (expr : expression) : result =
           expr =
             [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
         }
-        | [%expr
+    | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
           [%e? expr1]
           [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]

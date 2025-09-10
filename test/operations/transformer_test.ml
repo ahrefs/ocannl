@@ -51,7 +51,7 @@ let () =
   let output = transformer_model ~train_step:None ~src ~tgt ~mask in
 
   let _ctx = Ocannl.Train.forward_once ctx output in
-  
+
   (* Verify output shape *)
   Stdio.printf "Output shape:\n%s\n%!"
     (Sexp.to_string_hum ([%sexp_of: Shape.t] output.Tensor.shape))

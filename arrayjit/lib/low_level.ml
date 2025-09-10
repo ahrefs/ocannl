@@ -1087,11 +1087,13 @@ let simplify_llc llc =
       when Ops.is_float prec ->
         loop_scalar (Binop (Mul, (Constant (c2 /. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
     | Binop (Div, (Constant c1, prec1), (Binop (Mul, (Constant c2, prec2), llsc), prec3))
-    | Binop (Div, (Constant c1, prec1), (Binop (Mul, llsc, (Constant c2, prec2)), prec3)) when Ops.is_float prec ->
+    | Binop (Div, (Constant c1, prec1), (Binop (Mul, llsc, (Constant c2, prec2)), prec3))
+      when Ops.is_float prec ->
         (* TODO: this might worsen the conditioning in hand-designed formula cases. *)
         loop_scalar (Binop (Div, (Constant (c1 /. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
     | Binop (Mul, llv1, (Binop (Div, llv2, llv3), prec23))
-    | Binop (Mul, (Binop (Div, llv2, llv3), prec23), llv1) when Ops.is_float prec ->
+    | Binop (Mul, (Binop (Div, llv2, llv3), prec23), llv1)
+      when Ops.is_float prec ->
         loop_scalar (Binop (Div, (Binop (Mul, llv1, llv2), prec), llv3), prec23)
     | Binop (Div, llv1, (Binop (Div, llv2, llv3), prec23)) when Ops.is_float prec ->
         loop_scalar (Binop (Div, (Binop (Mul, llv1, llv3), prec), llv2), prec23)

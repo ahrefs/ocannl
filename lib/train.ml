@@ -2,13 +2,10 @@ open Base
 module Ops = Ir.Ops
 module Tn = Ir.Tnode
 module Nd = Ir.Ndarray
-open Ocannl_tensor.Operation.DSL_modules
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Task = Ir.Task
-module BT = Ir.Backend_intf
-
-module type Backend = Ir.Backend_intf.Backend
+open Ocannl_tensor.Operation.DSL_modules
 
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
@@ -196,15 +193,15 @@ let to_routine (ctx : Context.t) ?(hosted = true) bindings comp =
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
     only the parameters that are not in [ctx.ctx_arrays] are initialized. *)
 let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
-  let comp = 
+  let comp =
     if reinit_all then Tensor.init_params t
-    else 
+    else
       (* Check which params are already initialized *)
       let skip = Map.empty (module Tn) in
       Set.fold t.Tensor.params ~init:skip ~f:(fun skip p ->
-        if Context.is_initialized ctx p.Tensor.value then
-          Map.set skip ~key:p.Tensor.value ~data:()
-        else skip)
+          if Context.is_initialized ctx p.Tensor.value then
+            Map.set skip ~key:p.Tensor.value ~data:()
+          else skip)
       |> fun skip -> Tensor.init_params ~skip t
   in
   if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
@@ -213,9 +210,7 @@ let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
   let ctx = Context.run ctx routine in
   (* Mark embedded nodes as initialized via init_from_host *)
   Set.fold comp.Asgns.embedded_nodes ~init:ctx ~f:(fun ctx tn ->
-    if not (Context.is_initialized ctx tn) then 
-      Context.init_from_host_deprecated ctx tn
-    else ctx)
+      if not (Context.is_initialized ctx tn) then Context.init_from_host_deprecated ctx tn else ctx)
 
 type example_train_result = {
   inputs : Tensor.t;
@@ -234,8 +229,8 @@ type example_train_result = {
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
     parameters that are not in [ctx.ctx_arrays] are initialized. *)
-let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all
-    ?(bindings = IDX.empty) ~f ctx t =
+let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
+    ~f ctx t =
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in

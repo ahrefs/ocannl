@@ -50,9 +50,7 @@ let main () =
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let ctx = Train.init_params ctx bindings scalar_loss in
-  let sgd_routine =
-    Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ])
-  in
+  let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
   let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
   for epoch = 1 to epochs do
