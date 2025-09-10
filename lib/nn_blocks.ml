@@ -18,7 +18,7 @@
 *)
 
 open! Base
-open Operation.DSL_modules
+open Ocannl_tensor.Operation.DSL_modules
 module Tn = Ir.Tnode
 
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
@@ -171,7 +171,7 @@ let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
   (* FIXME(#386): this is super hacky, but how will we pass use_padding? *)
-  [%oc Row.use_padding := use_padding];
+  [%oc Ocannl_tensor.Row.use_padding := use_padding];
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
   x

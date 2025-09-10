@@ -41,14 +41,18 @@ opam install cudajit  # for CUDA backend
 
 ### Core Directory Structure
 
-- `lib/`: High-level neural networks library
+- `lib/`: User-facing recipes and utilities
+  - `train.ml`: Training utilities and optimizers  
+  - `nn_blocks.ml`: Basic neural network building blocks (transformers, attention, etc.)
+  - `ocannl.ml`: Re-exports of all public modules for backward compatibility
+
+- `tensor/`: Framework internals (separate package `ocannl_tensor`)
   - `tensor.ml/mli`: Main tensor type and operations
   - `shape.ml/mli`: Shape inference system (see detailed docs there for einsum notation)
   - `operation.ml`: Tensor operations and DSL modules
-  - `train.ml`: Training utilities and optimizers
-  - `nn_blocks.ml`: Basic neural network building blocks (transformers, attention, etc.)
-  - `syntax_extensions.md`: Comprehensive guide to `%op` and `%cd` syntax
-  - `ppx_*.ml`: Syntax extension implementations
+  - `row.ml`: Row variables for shape inference
+  - `ppx_*.ml`: Syntax extension implementations (`ppx_op`, `ppx_cd`)
+  - `PrintBox_utils.ml`: Pretty-printing utilities
 
 - `arrayjit/`: Low-level array compilation framework
   - `lib/`: Core IR and backend implementations
@@ -108,7 +112,7 @@ opam install cudajit  # for CUDA backend
 
 **Module Paths and Common APIs**:
 
-- **For files outside OCANNL implementation (tests, examples, user code), always start with `open Ocannl.Operation.DSL_modules`** - this brings all DSL modules into scope (defined in `lib/operation.ml` lines 720-737)
+- **For files outside OCANNL implementation (tests, examples, user code), always start with `open Ocannl.Operation.DSL_modules`** - this brings all DSL modules into scope (defined in `tensor/operation.ml` lines 720-737)
 - Available modules after `open Ocannl.Operation.DSL_modules`:
   - `Ir` - Low-level IR types and operations (Ndarray, Ops, Tnode, etc.)
   - `Shape` - Shape inference and einsum notation
@@ -200,8 +204,8 @@ opam install cudajit  # for CUDA backend
 
 1. Add primitive operation to `arrayjit/lib/ops.ml`
 2. Implement interpretation in the same file
-3. Add syntax support in `lib/ppx_*.ml` if needed
-4. Add high-level wrappers in `lib/operation.ml`
+3. Add syntax support in `tensor/ppx_*.ml` if needed
+4. Add high-level wrappers in `tensor/operation.ml`
 5. For neural network blocks, see `lib/nn_blocks.ml` for patterns
 
 ### Debugging Backend Discrepancies
@@ -224,7 +228,7 @@ When outputs differ between backends:
 ### Shape Inference Extensions
 
 1. Modify projection logic in `arrayjit/lib/indexing.ml`
-2. Update shape constraint generation in `lib/shape.ml`
+2. Update shape constraint generation in `tensor/shape.ml`
 3. Test with various einsum patterns in e.g. `test/einsum_trivia.ml`
 
 ## Debugging and Logging

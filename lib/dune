@@ -3,42 +3,24 @@
  (public_name neural_nets_lib)
  (libraries
   base
-  printbox
-  printbox-text
-  printbox-ext-plot
-  angstrom
   stdio
-  sexplib
-  num
-  str
   arrayjit.utils
-  ; mem_usage
   ppx_here.runtime-lib
   ppx_minidebug.runtime
   arrayjit.ir
-  arrayjit.context)
+  arrayjit.context
+  ocannl_tensor)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (preprocess
   (pps
    ppx_compare
-   ppx_fields_conv
    ppx_hash
    ppx_here
    ppx_sexp_conv
    ppx_string
-   ppx_variants_conv
    ppx_ocannl
    ppx_minidebug))
- (modules PrintBox_utils row shape tensor operation train nn_blocks)
+ (modules train nn_blocks ocannl)
  (modes best)
  (c_library_flags -lpthread))
-
-(library
- (name ppx_ocannl)
- (public_name neural_nets_lib.ppx_ocannl)
- (kind ppx_rewriter)
- (modules ppx_shared ppx_cd ppx_op ppx_ocannl)
- (libraries base ppxlib str ppx_arrayjit)
- (preprocess
-  (pps ppxlib.metaquot)))

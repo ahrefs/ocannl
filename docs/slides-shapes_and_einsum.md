@@ -491,6 +491,6 @@ Check [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.
 * [OCANNL Website](https://github.com/ahrefs/ocannl)
 * [OCANNL Documentation](https://ahrefs.github.io/ocannl/docs)
 * [doc/syntax_extensions.md](syntax_extensions.html) - Full `%op` and `%cd` syntax
-* [lib/shape.mli](../dev/neural_nets_lib/Ocannl/Shape/index.html) - Shape inference internals
+* [tensor/shape.mli](../dev/neural_nets_lib/Ocannl/Shape/index.html) - Shape inference internals
 * [lib/nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68) - Production examples
 * [test/einsum_trivia.ml](https://github.com/ahrefs/ocannl/blob/master/test/einsum/einsum_trivia.ml) - Einsum test cases

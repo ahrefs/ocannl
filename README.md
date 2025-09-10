@@ -17,9 +17,9 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 * OCANNL has full support for a significantly extended `einsum` notation, integrated with shape inference. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
   * OCANNL does not have dynamic indexing (using the last axis of one tensor as indices into another tensor). If it's needed, it can be added (we had a prototype once, removed to reduce complexity). Then it would also be integrated with shape inference.
 * OCANNL offers two main levels of abstraction.
-  * Tensor expressions as differentiable computations, centered around the [`%op`](lib/ppx_op.ml) syntax extension.
+  * Tensor expressions as differentiable computations, centered around the [`%op`](tensor/ppx_op.ml) syntax extension.
     * `%op` stands for "operation", it's meant to express tensors: `Tensor.t`, and tensor functions.
-  * Plain computations, centered around the [`%cd`](lib/ppx_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
+  * Plain computations, centered around the [`%cd`](tensor/ppx_cd.ml) syntax extension. It integrates the `arrayjit` backend library with shape inference.
     * `%cd` stands for "code", it's meant to express assignment computations: `Assignments.comp`.
 * Fully supports mixed-precision computations, with bidirectional precision inference.
   * E.g. higher-precision network components, or gradients at a higher precision than values.
@@ -39,10 +39,10 @@ A possible route to learning OCANNL:
 3. Upcoming in v0.7: slides about [`Context`](arrayjit/lib/context.mli).
 4. Read [the migration guide](docs/migration_guide.md).
 5. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
-6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml).
+6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml) and the training recipes [lib/train.ml](lib/train.ml).
 7. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
 8. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
-9. Improve your understanding by reading or skimming: [lib/shape.mli](lib/shape.mli), [lib/tensor.mli](lib/tensor.mli), [lib/operation.ml](lib/operation.ml), [arrayjit/lib/context.mli](arrayjit/lib/context.mli), [lib/train.ml](lib/train.ml).
+9. Improve your understanding by reading or skimming the framework internals: [tensor/shape.mli](tensor/shape.mli), [tensor/tensor.mli](tensor/tensor.mli), [tensor/operation.ml](tensor/operation.ml), [arrayjit/lib/context.mli](arrayjit/lib/context.mli).
 10. Read the implementation overview:
    1. The various tests.
    2. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
@@ -142,11 +142,11 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 * Some aspects are more centralized in OCANNL than in OWL and form the "infrastructure":
   * Tensor indexing mechanisms are not extensible, other than changing OCANNL code.
   * Shape inference is fully handled by OCANNL and not extensible, other than changing OCANNL code.
-  * [`Tensor`](lib/tensor.ml) implements "putting pieces together".
+  * [`Tensor`](tensor/tensor.ml) implements "putting pieces together".
   * [`Train`](lib/train.ml) has the optimization "frontend" and utilities.
   * [`arrayjit`](arrayjit/), which may one day become a standalone library: generates the code, performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined), implements the backends.
 * Some aspects that are more core to OWL are less encapsulated in OCANNL, so it should be more natural to extend them.
-  * Specifically, [`Operation`](lib/operation.ml) and [`Train`](lib/train.ml) are just collections of functions.
+  * Specifically, [`Operation`](tensor/operation.ml) and [`Train`](lib/train.ml) are just collections of functions.
 * OCANNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.
 
 ## Installation
@@ -154,6 +154,23 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
 
 The dependency on `cudajit` and `metal` is optional, so you have to install them first to enable the CUDA or Apple Metal backends.
+
+### Code Organization
+
+The codebase is organized to separate user-facing recipes from framework internals:
+
+- **`lib/`**: User-facing recipes and utilities
+  - `train.ml` - Training utilities and optimizers
+  - `nn_blocks.ml` - Neural network building blocks (transformers, attention, etc.)
+  - `ocannl.ml` - Re-exports for backward compatibility
+  
+- **`tensor/`**: Framework internals (separate package `ocannl_tensor`)
+  - `tensor.ml/mli` - Core tensor type and operations
+  - `shape.ml/mli` - Shape inference system  
+  - `operation.ml` - Tensor operations and DSL modules
+  - `ppx_*.ml` - Syntax extensions implementation
+  
+- **`arrayjit/`**: Low-level optimizing compiler with multiple backends
 
 ## Development
 

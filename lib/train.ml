@@ -2,7 +2,7 @@ open Base
 module Ops = Ir.Ops
 module Tn = Ir.Tnode
 module Nd = Ir.Ndarray
-open Operation.DSL_modules
+open Ocannl_tensor.Operation.DSL_modules
 module Asgns = Ir.Assignments
 module Idx = Ir.Indexing
 module Task = Ir.Task
