@@ -1132,7 +1132,10 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   | Not_constrained -> ()
   | Input_equals_output -> (
       try
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 (input, output) !state in
+        let origin = Some Row.{ lhs_name = result.debug_name; lhs_kind = `Input; 
+                                 rhs_name = result.debug_name; rhs_kind = `Output; 
+                                 operation = Some "input_equals_output" } in
+        let more_ineqs, env = Row.unify_row ~stage:Stage2 ~origin (input, output) !state in
         assert (List.is_empty more_ineqs);
         state := env
       with Shape_error (s, trace) when !with_error_trace ->
@@ -1191,7 +1194,10 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   | Not_constrained -> ()
   | Input_equals_output -> (
       try
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 (input, output) !state in
+        let origin = Some Row.{ lhs_name = result.debug_name; lhs_kind = `Input; 
+                                 rhs_name = result.debug_name; rhs_kind = `Output; 
+                                 operation = Some "input_equals_output" } in
+        let more_ineqs, env = Row.unify_row ~stage:Stage2 ~origin (input, output) !state in
         assert (List.is_empty more_ineqs);
         state := env
       with Row.Shape_error (s, trace) when !with_error_trace ->

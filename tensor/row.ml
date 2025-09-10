@@ -1419,7 +1419,7 @@ and apply_row_constraint ~depth stage (r : row) (constr : row_constraint) env : 
         ( List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin = None }) @ extras,
           env )
 
-let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
+let%debug5_sexp rec unify_dim ~stage ~origin (eq : dim * dim) (env : environment) :
     constraint_ list * environment =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
@@ -1431,11 +1431,11 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   | (Conv_input { stride = 1; output; _ }, dim | dim, Conv_input { stride = 1; output; _ })
     when !use_padding ->
-      unify_dim ~stage (output, dim) env
+      unify_dim ~stage ~origin (output, dim) env
   | ( Conv_input { stride = stride1; output = output1; dilation = dilation1; kernel = kernel1 },
       Conv_input { stride = stride2; output = output2; dilation = dilation2; kernel = kernel2 } )
     when !use_padding && (stride1 % stride2 = 0 || stride2 % stride1 = 0) ->
-      unify_dim ~stage
+      unify_dim ~stage ~origin
         ( Conv_input
             {
               stride = (if stride1 > stride2 then stride1 / stride2 else stride2 / stride1);
@@ -1447,18 +1447,18 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
         env
   | (Conv_input { stride; output = Dim s; _ }, dim | dim, Conv_input { stride; output = Dim s; _ })
     when !use_padding ->
-      unify_dim ~stage (get_dim ~d:(stride * s.d) (), dim) env
+      unify_dim ~stage ~origin (get_dim ~d:(stride * s.d) (), dim) env
   | (Conv_input { stride; output; _ }, Dim s | Dim s, Conv_input { stride; output; _ })
     when !use_padding && s.d % stride = 0 ->
-      unify_dim ~stage (get_dim ~d:(s.d / stride) (), output) env
+      unify_dim ~stage ~origin (get_dim ~d:(s.d / stride) (), output) env
   | Conv_input { stride; output = Dim s; dilation; kernel = Dim k }, dim
   | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k } ->
-      unify_dim ~stage (get_dim ~d:((stride * s.d) + (dilation * k.d)) (), dim) env
+      unify_dim ~stage ~origin (get_dim ~d:((stride * s.d) + (dilation * k.d)) (), dim) env
   | Conv_input { stride; output; dilation; kernel = Dim k }, Dim s
   | Dim s, Conv_input { stride; output; dilation; kernel = Dim k }
     when (s.d - (dilation * k.d)) % stride = 0 ->
-      unify_dim ~stage (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
-  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin = None } ], env)
+      unify_dim ~stage ~origin (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
+  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
   | Var v, dim2 | dim2, Var v ->
       let ineqs = ref [] in
       let f in_ =
@@ -1499,11 +1499,11 @@ let%debug5_sexp rec unify_dim ~stage (eq : dim * dim) (env : environment) :
       ineqs_from_reapply_rows_constr := [];
       let dim_eqs, ineqs =
         List.partition_map !ineqs ~f:(function
-          | Dim_eq { d1; d2; origin = _ } -> Either.First (d1, d2)
+          | Dim_eq { d1; d2; origin } -> Either.First ((d1, d2), origin)
           | ineq -> Either.Second ineq)
       in
-      let f (ineqs, env) ds =
-        let more_ineqs, env = unify_dim ~stage ds env in
+      let f (ineqs, env) (ds, origin) =
+        let more_ineqs, env = unify_dim ~stage ~origin ds env in
         (more_ineqs @ ineqs, env)
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
@@ -1515,15 +1515,15 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
+let%debug5_sexp rec unify_row ~stage ~origin (eq : t * t) (env : environment) :
     constraint_ list * environment =
   let rec solve ((ineqs : constraint_ list), env) : constraint_ -> constraint_ list * environment =
     function
-    | Dim_eq { d1; d2; origin = _ } ->
-        let more_ineqs, env = unify_dim ~stage (d1, d2) env in
+    | Dim_eq { d1; d2; origin = eq_origin } ->
+        let more_ineqs, env = unify_dim ~stage ~origin:(Option.first_some eq_origin origin) (d1, d2) env in
         List.fold ~init:(ineqs, env) more_ineqs ~f:solve
-    | Row_eq { r1; r2; origin = _ } ->
-        let more_ineqs, env = unify_row ~stage (r1, r2) env in
+    | Row_eq { r1; r2; origin = eq_origin } ->
+        let more_ineqs, env = unify_row ~stage ~origin:(Option.first_some eq_origin origin) (r1, r2) env in
         (more_ineqs @ ineqs, env)
     | ( Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _ | Terminal_dim _ | Terminal_row _
       | Shape_row _ ) as ineq ->
@@ -1532,7 +1532,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
   let unify_suffix init dims1 dims2 len =
     let dims1 = take_from_end dims1 len and dims2 = take_from_end dims2 len in
     List.fold ~init ~f:(fun acc (d1, d2) ->
-        let constr = Dim_eq { d1; d2; origin = None } in
+        let constr = Dim_eq { d1; d2; origin } in
         try solve acc constr
         with Shape_error (s, trace) -> raise @@ Shape_error (s, Constraint_failed constr :: trace))
     @@ List.zip_exn dims1 dims2
@@ -1563,7 +1563,7 @@ let%debug5_sexp rec unify_row ~stage (eq : t * t) (env : environment) :
       in
       let beg_dims_l = min beg_dims1_l beg_dims2_l in
       if dims1_l > dims2_l || (dims1_l = dims2_l && beg_dims1_l > beg_dims2_l) then
-        if is_row_var r2.bcast then unify_row ~stage (r2, r1) env
+        if is_row_var r2.bcast then unify_row ~stage ~origin (r2, r1) env
         else raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
       else
         let orig_rows = [ r1; r2 ] in
@@ -2432,12 +2432,12 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with
-      | Dim_eq { d1; d2; origin = _ } ->
+      | Dim_eq { d1; d2; origin } ->
           (* Substituted inside unify_dim. *)
-          unify_dim ~stage (d1, d2) env
-      | Row_eq { r1; r2; origin = _ } ->
+          unify_dim ~stage ~origin (d1, d2) env
+      | Row_eq { r1; r2; origin } ->
           (* Substituted inside unify_row. *)
-          unify_row ~stage (r1, r2) env
+          unify_row ~stage ~origin (r1, r2) env
       | Dim_ineq { cur; subr; origin = _ } ->
           let cur = subst_dim env cur and subr = subst_dim env subr in
           solve_dim_ineq ~stage ~cur ~subr env
