@@ -50,7 +50,7 @@ let () =
   (* Forward pass *)
   let output = transformer_model ~train_step:None ~src ~tgt ~mask in
 
-  let _ctx = Ocannl.Train.forward_once ctx output in
+  let _ctx = Ocannl.Train.forward_once ~output_cd_file:true ctx output in
 
   (* Verify output shape *)
   Stdio.printf "Output shape:\n%s\n%!"

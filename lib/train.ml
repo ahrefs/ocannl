@@ -228,12 +228,20 @@ type example_train_result = {
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
-    parameters that are not in [ctx.ctx_arrays] are initialized. *)
-let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
-    ~f ctx t =
+    parameters that are not in [ctx.ctx_arrays] are initialized. If [output_cd_file] is true, the
+    update code is output to a file before shape inference potentially crashes at [init_params]. *)
+let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init = false) ?reinit_all
+    ?(bindings = IDX.empty) ~f ctx t =
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
+  (if Utils.settings.output_debug_files_in_build_directory || output_cd_file then
+     let name = Asgns.get_name_exn update.Asgns.asgns in
+     let cd_source = Utils.output_to_build_file ~fname:(name ^ "-debug.cd") in
+     let static_indices = Idx.bound_symbols bindings in
+     match cd_source with
+     | None -> ()
+     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () update.Asgns.asgns));
   let ctx =
     if skip_init || Set.is_empty t.params then ctx
     else init_params ?reinit_all ~hosted ctx bindings t
@@ -244,16 +252,18 @@ let%track3_sexp run_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bin
 (** Context-based versions of training functions for the new simplified API *)
 
 (** [forward_once] is a wrapper around {!run_once} that runs the forward code of [t]. *)
-let forward_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
-  let ctx = run_once ~hosted ~skip_init ?reinit_all ~bindings ~f:forward ctx t in
+let forward_once ?output_cd_file ?(hosted = true) ?(skip_init = false) ?reinit_all
+    ?(bindings = IDX.empty) ctx t =
+  let ctx = run_once ?output_cd_file ~hosted ~skip_init ?reinit_all ~bindings ~f:forward ctx t in
   (* FIXME: this is going away soon. *)
   Tensor.remove_bprop_root t;
   ctx
 
 (** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
     forward and backprop. *)
-let update_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
-  run_once ~hosted ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
+let update_once ?output_cd_file ?(hosted = true) ?(skip_init = false) ?reinit_all
+    ?(bindings = IDX.empty) ctx t =
+  run_once ?output_cd_file ~hosted ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
