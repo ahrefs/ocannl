@@ -442,12 +442,12 @@ let to_doc ?name ?static_indices () c =
           String.concat ~sep:", " (Array.to_list (Array.map values ~f:Float.to_string))
         in
         string ("constant_fill([" ^ values_str ^ "])")
-    | Range_over_offsets -> string "range_over_offsets"
+    | Range_over_offsets -> string "range_over_offsets()"
     | Slice { batch_idx; sliced } ->
         string (ident sliced ^ " @| " ^ Indexing.symbol_ident batch_idx.static_symbol)
     | Embed_symbol { static_symbol; static_range = _ } ->
         string ("!@" ^ Indexing.symbol_ident static_symbol)
-    | Embed_self_id -> string "!@self_id"
+    | Embed_self_id -> string "self_id()"
     | Embed_dim { ref_label; _ } -> string ("(dim " ^ ref_label ^ ")")
   in
 
