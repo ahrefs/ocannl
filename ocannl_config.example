@@ -218,3 +218,7 @@ cc_backend_post_compile_timeout=10.0
 
 # If true, the CC backend will fail if the codesign of the compiled dynamic library fails.
 cc_backend_verify_codesign=false
+
+# The maximal number of entries for the provenance of constraints, as for example reported
+# in shape error exceptions.
+max_shape_error_origins=20

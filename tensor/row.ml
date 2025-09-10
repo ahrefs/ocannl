@@ -293,7 +293,8 @@ let rec interleave l1 l2 =
 
 let merge_origins o1 o2 =
   let o = List.dedup_and_sort ~compare:compare_constraint_origin @@ interleave o1 o2 in
-  List.take o 10
+  List.take o
+    (Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins")
 
 let dim_to_int_exn = function
   | Dim { d; _ } -> d
@@ -528,8 +529,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
           else if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
           else if quotient = 1 && Option.is_none num_var then
             (* The difference variables must all be 1 *)
-            List.map diff_vars ~f:(fun v ->
-                Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+            List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
           else
             (* The product of difference variables equals the quotient *)
             let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
@@ -541,8 +541,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                   Strided_var { coeff; var; denom = n_small }
             in
             [
-              Rows_constr
-                { r = [ r ]; constr = Total_elems { numerator; divided_by = [] }; origin };
+              Rows_constr { r = [ r ]; constr = Total_elems { numerator; divided_by = [] }; origin };
             ]
       in
       let lazy_extras ~keep_constr1 ~num_var ?(extra_var = []) ~coeff ~denom () =
@@ -643,21 +642,18 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                         Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
                   in
                   let exact_vars_eqs =
-                    List.map vars ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+                    List.map vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
                   in
                   Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
                 else if List.is_empty divided_by && List.length vars = 1 && reminder > 0 then
                   (* divided_by is empty and there is only one dim variable in Exact dims *)
                   let v = List.hd_exn vars in
-                  Some
-                    ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
                 else if List.is_empty vars && List.length divided_by = 1 && reminder > 0 then
                   (* Exact dims contain only known dimensions and divided_by has exactly one
                      variable *)
                   let v = List.hd_exn divided_by in
-                  Some
-                    ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
                 else None
           | Strided_var { coeff; var; denom } ->
               if known_product = 0 then
@@ -897,11 +893,7 @@ let check_empty_row ~origin r =
       if List.is_empty beg_dims then
         [
           Row_eq
-            {
-              r1 = row_of_var v r.id;
-              r2 = { dims = []; bcast = Broadcastable; id = r.id };
-              origin;
-            };
+            { r1 = row_of_var v r.id; r2 = { dims = []; bcast = Broadcastable; id = r.id }; origin };
         ]
       else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
 
@@ -1336,8 +1328,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
             when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
               (* Total = (coeff * v / denom) / v = coeff / denom *)
               if Utils.safe_force coeff % denom = 0 then
-                ( Dim_eq
-                    { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) (); origin }
+                ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) (); origin }
                   :: extras,
                   env )
               else if
@@ -1917,8 +1908,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) (e
   | ({ dims = _; bcast = Row_var { v; _ }; id }, _ | _, { dims = _; bcast = Row_var { v; _ }; id })
     when is_stage6_up stage ->
       ( Row_ineq { cur; subr; origin }
-        :: Row_eq
-             { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id }; origin }
+        :: Row_eq { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id }; origin }
         :: ineqs,
         env )
   | cur, subr when equal_row cur subr -> ([], env)
@@ -2088,10 +2078,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) (e
       in
       (* We don't need to add any dimension inequalities, because they'll be captured by the extra
          row inequalities. *)
-      ( [
-          Row_eq { r1 = cur; r2 = template; origin };
-          Row_ineq { cur = template; subr; origin };
-        ],
+      ( [ Row_eq { r1 = cur; r2 = template; origin }; Row_ineq { cur = template; subr; origin } ],
         env )
   | { bcast = Broadcastable; _ }, _ when cur_dims_l + cur_beg_dims_l < subr_dims_l + subr_beg_dims_l
     ->
