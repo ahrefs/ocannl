@@ -260,17 +260,6 @@ let forward_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = 
 let update_once ?(hosted = true) ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
   run_once ~hosted ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
 
-let sgd_step ~learning_rate ?momentum ?weight_decay ?nesterov ?(bindings = IDX.empty) ctx loss =
-  (* First compute gradients *)
-  let grad_comp = grad_update loss in
-  let ctx, grad_routine = Context.compile ctx grad_comp bindings in
-  let ctx = Context.run ctx grad_routine in
-  (* Then apply SGD updates *)
-  let sgd_comp = sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss in
-  let ctx, sgd_routine = Context.compile ctx sgd_comp bindings in
-  Context.run ctx sgd_routine
-
-
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
 let printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
