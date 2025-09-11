@@ -58,7 +58,7 @@ let%op softmax ~spec ?(temperature = 1.0) () =
     let exp_vals = exp (x_scaled - max_vals) in
     exp_vals /. (exp_vals ++ spec)
 
-let%op multi_head_attention ~label ~num_heads ~d_attention ?temperature ?(dropout_rate = 0.0) ()
+let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) ()
     ~train_step ?mask x =
   let q = { w_q } * x in
   let k = { w_k } * x in
@@ -67,8 +67,9 @@ let%op multi_head_attention ~label ~num_heads ~d_attention ?temperature ?(dropou
     (q +* " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ] k) /. sqrt (dim d)
   in
   Shape.set_dim h num_heads;
-  (* NOTE: often d_attention = d_model / num_heads, but we allow for other values. *)
-  Shape.set_dim d d_attention;
+  (* NOTE: often d_k = d_v = d_model / num_heads, but we allow for other values. *)
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
   (* We don't need to lift [softmax ~spec ()] because it doesn't introduce any new params. *)
   let attn_weights =
     softmax ~spec:" ... | t -> ..." ?temperature ()
@@ -76,7 +77,7 @@ let%op multi_head_attention ~label ~num_heads ~d_attention ?temperature ?(dropou
   in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
   (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v)
+  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h ..." [ "e" ] v)
 
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
@@ -87,8 +88,8 @@ let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   (* gamma and beta are learned, but initialized to good defaults *)
   ({ gamma = 1. } *. normalized) + { beta = 0. }
 
-let%op transformer_encoder_block ~label ~num_heads ~d_attention ~d_ff ?(epsilon = 1e-5) () =
-  let mha = multi_head_attention ~label:(label @ [ "mha" ]) ~num_heads ~d_attention () in
+let%op transformer_encoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
+  let mha = multi_head_attention ~label:(label @ [ "mha" ]) ~num_heads ~d_k ~d_v () in
   (* Standard 2-layer FFN: expand to d_ff then contract back to d_model *)
   let ffn = mlp ~label:(label @ [ "ffn" ]) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
@@ -97,8 +98,8 @@ let%op transformer_encoder_block ~label ~num_heads ~d_attention ~d_ff ?(epsilon 
     let x1 = ln1 (input + mha ~train_step input) in
     ln2 (x1 + ffn x1)
 
-let%op cross_attention ~label ~num_heads ~d_attention ?temperature ?(dropout_rate = 0.0) ()
-    ~train_step x ~enc_output =
+let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) () ~train_step
+    x ~enc_output =
   let q = { w_q } * x in
   let k = { w_k } * enc_output in
   let v = { w_v } * enc_output in
@@ -106,16 +107,15 @@ let%op cross_attention ~label ~num_heads ~d_attention ?temperature ?(dropout_rat
     (q +* " ... s | h d; ... t | h d => ... s | t -> h " [ "h"; "d" ] k) /. sqrt (dim d)
   in
   Shape.set_dim h num_heads;
-  Shape.set_dim d d_attention;
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
   let attn_weights = softmax ~spec:" ... | t -> ..." ?temperature () scores in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h ... => ... s | h ... " v)
+  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h ..." [ "e" ] v)
 
-let%op transformer_decoder_block ~label ~num_heads ~d_attention ~d_ff ?(epsilon = 1e-5) () =
-  let masked_mha =
-    multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads ~d_attention ()
-  in
-  let cross_mha = cross_attention ~label:(label @ [ "cross_mha" ]) ~num_heads ~d_attention () in
+let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
+  let masked_mha = multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads ~d_k ~d_v () in
+  let cross_mha = cross_attention ~label:(label @ [ "cross_mha" ]) ~num_heads ~d_k ~d_v () in
   (* Standard 2-layer FFN: expand to d_ff then contract back to d_model *)
   let ffn = mlp ~label:(label @ [ "ffn" ]) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
@@ -126,38 +126,40 @@ let%op transformer_decoder_block ~label ~num_heads ~d_attention ~d_ff ?(epsilon 
     let x2 = ln2 (x1 + cross_mha ~train_step x1 ~enc_output) in
     ln3 (x2 + ffn x2)
 
-let transformer_encoder ~label ~num_layers ~num_heads ~d_attention ~d_ff ?(epsilon = 1e-5) () =
+let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_encoder_block
           ~label:(label @ [ "layer" ^ Int.to_string i ])
-          ~num_heads ~d_attention ~d_ff ~epsilon ())
+          ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step x -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
 
-let transformer_decoder ~label ~num_layers ~num_heads ~d_attention ~d_ff ?(epsilon = 1e-5) () =
+let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_decoder_block
           ~label:(label @ [ "layer" ^ Int.to_string i ])
-          ~num_heads ~d_attention ~d_ff ~epsilon ())
+          ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step target ~enc_output ~mask ->
     List.fold layers ~init:target ~f:(fun x layer -> layer ~train_step x ~enc_output ~mask)
 
-let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_model ~d_ff
+let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_enc ~d_dec ~d_ff
     ?(epsilon = 1e-5) () =
+  let enc_att = [%oc d_enc / num_heads] in
+  let dec_att = [%oc d_dec / num_heads] in
   let encoder =
     transformer_encoder ~label:(label @ [ "encoder" ]) ~num_layers:num_encoder_layers ~num_heads
-      ~d_attention:(d_model / num_heads) ~d_ff ~epsilon ()
+      ~d_k:enc_att ~d_v:enc_att ~d_ff ~epsilon ()
   in
   let decoder =
     transformer_decoder ~label:(label @ [ "decoder" ]) ~num_layers:num_decoder_layers ~num_heads
-      ~d_attention:(d_model / num_heads) ~d_ff ~epsilon ()
+      ~d_k:dec_att ~d_v:dec_att ~d_ff ~epsilon ()
   in
   (* All inline definitions, including for ds, dt, are lifted up to the unit parameter above. *)
-  Shape.set_dim ds d_model;
-  Shape.set_dim dt d_model;
+  Shape.set_dim ds d_enc;
+  Shape.set_dim dt d_dec;
   fun ~train_step ~src ~tgt ~mask ->
     (* Learned positional encoding *)
     let enc_output =

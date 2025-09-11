@@ -9,7 +9,7 @@ let () =
   let src_seq_len = 10 in
   let tgt_seq_len = 8 in
   let d_model = 64 in
-  let num_heads = 4 in
+  let num_heads = 6 in
   let d_ff = 128 in
   let src_vocab_size = 100 in
   let tgt_vocab_size = 100 in
@@ -21,7 +21,7 @@ let () =
   (* Create a simple transformer model *)
   let transformer_model =
     Ocannl.Nn_blocks.transformer ~label:[ "test_transformer" ] ~num_encoder_layers
-      ~num_decoder_layers ~num_heads ~d_model ~d_ff ()
+      ~num_decoder_layers ~num_heads ~d_enc:d_model ~d_dec:d_model ~d_ff ()
   in
 
   (* Create input tensors *)
@@ -63,7 +63,7 @@ let () =
    let d_model = 32 in let num_heads = 2 in let seq_len = 5 in let batch_size = 1 in
 
    (* Test multi-head attention *) let%op mha = Ocannl.Nn_blocks.multi_head_attention ~label:[
-   "test_mha" ] ~num_heads () in
+   "test_mha" ] ~num_heads ~d_attention:(d_model / num_heads) () in
 
    let input = Tensor.ndarray ~label:[ "input" ] ~grad_spec:Tensor.Prohibit_grad [| Array.init
    batch_size ~f:(fun _ -> Array.init seq_len ~f:(fun _ -> Array.init d_model ~f:(fun _ ->
