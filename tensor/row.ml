@@ -2200,11 +2200,11 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) origin (env : environment) (
   | Var v -> (
       match Map.find env.dim_env v with
       | Some (Solved_dim _) -> assert false
-      | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage2_up stage ->
+      | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage3_up stage ->
           [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 (); origin } ]
-      | Some (Bounds_dim { lub = Some lub; _ }) when is_stage3_up stage ->
+      | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
           [ Dim_eq { d1 = dim; d2 = lub; origin } ]
-      | _ when not (is_stage4_up stage) -> [ Terminal_dim (dim, origin) ]
+      | _ when not (is_stage5_up stage) -> [ Terminal_dim (dim, origin) ]
       | _ -> [])
   | Conv_input _ ->
       (* The input dimension itself cannot be dim-1, and the output dimension doesn't become
