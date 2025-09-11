@@ -551,9 +551,14 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let c_str = Printf.sprintf "%.16g" c in
+        let c_str = 
+          if Float.(c = infinity) then "INFINITY"
+          else if Float.(c = neg_infinity) then "(-INFINITY)"
+          else if Float.is_nan c then "NAN"
+          else Printf.sprintf "%.16g" c
+        in
         let expr =
-          if String.is_empty prefix && Float.(c < 0.0) then
+          if String.is_empty prefix && Float.(c < 0.0) && not Float.(c = neg_infinity) then
             string "(" ^^ string c_str ^^ string ")" ^^ string postfix
           else string prefix ^^ string c_str ^^ string postfix
         in
@@ -679,7 +684,12 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let c_str = Printf.sprintf "%.16g" c in
+        let c_str = 
+          if Float.(c = infinity) then "INFINITY"
+          else if Float.(c = neg_infinity) then "(-INFINITY)"
+          else if Float.is_nan c then "NAN"
+          else Printf.sprintf "%.16g" c
+        in
         (string prefix ^^ string c_str ^^ string postfix, [])
     | Constant_bits i ->
         let from_prec = Ops.int64 in
