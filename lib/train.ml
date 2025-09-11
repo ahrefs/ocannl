@@ -228,20 +228,28 @@ type example_train_result = {
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
-    parameters that are not in [ctx.ctx_arrays] are initialized. If [output_cd_file] is true, the
-    update code is output to a file before shape inference potentially crashes at [init_params]. *)
+    parameters that are not in [ctx.ctx_arrays] are initialized.
+
+    If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
+    true, and the update code is output to a file before shape inference potentially crashes at
+    [init_params]. *)
 let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init = false) ?reinit_all
     ?(bindings = IDX.empty) ~f ctx t =
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
-  (if Utils.settings.output_debug_files_in_build_directory || output_cd_file then
-     let name = Asgns.get_name_exn update.Asgns.asgns in
-     let cd_source = Utils.output_to_build_file ~fname:(name ^ "-debug.cd") in
-     let static_indices = Idx.bound_symbols bindings in
-     match cd_source with
-     | None -> ()
-     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () update.Asgns.asgns));
+  if output_cd_file then (
+    let name = Asgns.get_name_exn update.Asgns.asgns in
+    if not Utils.settings.output_debug_files_in_build_directory then
+      raise
+      @@ Utils.User_error
+           "Train.run_once: output_cd_file is true, but output_debug_files_in_build_directory is \
+            false";
+    let cd_source = Utils.output_to_build_file ~fname:(name ^ "-debug.cd") in
+    let static_indices = Idx.bound_symbols bindings in
+    match cd_source with
+    | None -> ()
+    | Some callback -> callback (Asgns.to_doc ~name ~static_indices () update.Asgns.asgns));
   let ctx =
     if skip_init || Set.is_empty t.params then ctx
     else init_params ?reinit_all ~hosted ctx bindings t
