@@ -150,18 +150,22 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     transformer_decoder ~label:(label @ [ "decoder" ]) ~num_layers:num_decoder_layers ~num_heads
       ~d_ff ~epsilon ()
   in
-  (* All inline definitions, including for d, are lifted up to the unit parameter above. *)
-  Shape.set_dim d d_model;
+  (* All inline definitions, including for ds, dt, are lifted up to the unit parameter above. *)
+  Shape.set_dim ds d_model;
+  Shape.set_dim dt d_model;
   fun ~train_step ~src ~tgt ~mask ->
     (* Learned positional encoding *)
     let enc_output =
       encoder ~train_step
-        (src +* " ... s | ..v.. ; ..v.. -> d => ... s | d " [ "d" ] { src_embed } + { pos_encoding })
+        (src
+        +* " ..., s | ..v.. ; ..v.. -> ds => ..., s | ds " [ "ds" ] { src_embed }
+        + { pos_encoding })
     in
     let tgt_embedded =
-      tgt +* " ... t | ..v.. ; ..v.. -> d => ... t | d " { tgt_embed } + pos_encoding
+      tgt +* " ..., t | ..v.. ; ..v.. -> dt => ..., t | dt " [ "dt" ] { tgt_embed } + pos_encoding
     in
     decoder ~train_step tgt_embedded ~enc_output ~mask
+    (* Einsum notation internal variables are local *)
     +* " ... | d; d -> ..v.. => ... | ..v.. " { w_out }
 
 (** {2 Convolutional Neural Network Building Blocks} *)
@@ -228,7 +232,7 @@ let%op global_avg_pool2d x = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.."
 let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x =
   let _ = momentum in
   (* FIXME: implement running statistics, currently using learned params *)
-  (* Compute batch statistics across spatial dimensions *)
+  (* Compute batch statistics across batch and spatial dimensions for each channel *)
   let total_size = dim o *. dim h *. dim w in
   let mean = (x ++ "..o.. | h, w, ..c.. => 0 | 0, 0, ..c.." [ "o"; "h"; "w" ]) /. total_size in
   let centered = x - mean in
