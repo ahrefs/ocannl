@@ -551,7 +551,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let c_str = 
+        let c_str =
           if Float.(c = infinity) then "INFINITY"
           else if Float.(c = neg_infinity) then "(-INFINITY)"
           else if Float.is_nan c then "NAN"
@@ -684,7 +684,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let c_str = 
+        let c_str =
           if Float.(c = infinity) then "INFINITY"
           else if Float.(c = neg_infinity) then "(-INFINITY)"
           else if Float.is_nan c then "NAN"

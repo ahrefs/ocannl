@@ -303,7 +303,6 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; FIXME: failing test; needs work on shape inference
 (test
  (name transformer_test)
  (package neural_nets_lib)

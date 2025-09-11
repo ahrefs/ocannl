@@ -2248,7 +2248,7 @@ let r_dims r =
 
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
     (constr : row_constraint) env : constraint_ list * environment =
-  if depth > 4 then ([Rows_constr { r = rows; constr; origin }], env)
+  if depth > 4 then ([ Rows_constr { r = rows; constr; origin } ], env)
   else
     match rows_to_row_or_vars rows with
     | Either.First single_row ->

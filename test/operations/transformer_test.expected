@@ -1,9 +1,13 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
 Testing basic transformer model
-Output shape: batch_dims=[|2;8|] input_dims=[||] output_dims=[|100|]
-
-Testing transformer components
-MHA output shape: [|32|]
-Layer norm output shape: [|32|]
-FFN output shape: [|32|]
-
-All tests completed successfully!
+Output shape:
+((batch
+  ((dims
+    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 2194)))))
+     (Dim ((d 8) (label ()) (proj_id ((Proj_id 2195)))))))
+   (bcast Broadcastable) (id ((sh_id 830) (kind Batch)))))
+ (input ((dims ()) (bcast Broadcastable) (id ((sh_id 830) (kind Input)))))
+ (output ((dims ()) (bcast Broadcastable) (id ((sh_id 830) (kind Output)))))
+ (batch_padding ()) (input_padding ()) (output_padding ()) (id 830)
+ (debug_name transformer))

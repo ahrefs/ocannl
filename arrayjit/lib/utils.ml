@@ -436,8 +436,8 @@ let get_local_debug_runtime =
         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
-        ~exclude_on_path:Re.(str "env") ?prune_upto
-        ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
+        ~exclude_on_path:Re.(str "env")
+        ?prune_upto ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
         ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
 
 let _get_local_debug_runtime = get_local_debug_runtime
