@@ -160,6 +160,7 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
   (* All inline definitions, including for ds, dt, are lifted up to the unit parameter above. *)
   Shape.set_dim ds d_enc;
   Shape.set_dim dt d_dec;
+  let pos_encoding_tgt = if Int.(d_enc = d_dec) then pos_encoding else { pos_encoding_tgt } in
   fun ~train_step ~src ~tgt ~mask ->
     (* Learned positional encoding *)
     let enc_output =
@@ -169,7 +170,9 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
         + { pos_encoding })
     in
     let tgt_embedded =
-      tgt +* " ..., t | ..v.. ; ..v.. -> dt => ..., t | dt " [ "dt" ] { tgt_embed } + pos_encoding
+      tgt
+      +* " ..., t | ..v.. ; ..v.. -> dt => ..., t | dt " [ "dt" ] { tgt_embed }
+      + pos_encoding_tgt
     in
     decoder ~train_step tgt_embedded ~enc_output ~mask
     (* Einsum notation internal variables are local *)
