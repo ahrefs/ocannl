@@ -22,6 +22,7 @@
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Softmax across specified axes. Does not support non-default row variables.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-multi_head_attention"><a href="#val-multi_head_attention" class="anchor"></a><code><span><span class="keyword">val</span> multi_head_attention : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -36,6 +37,7 @@
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder_block"><a href="#val-transformer_encoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder_block : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -44,6 +46,7 @@
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-cross_attention"><a href="#val-cross_attention" class="anchor"></a><code><span><span class="keyword">val</span> cross_attention : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -53,6 +56,7 @@
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder_block"><a href="#val-transformer_decoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder_block : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -64,6 +68,7 @@
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -73,6 +78,7 @@
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_attention</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -85,7 +91,7 @@
   <span><span class="label">num_encoder_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_decoder_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">d_model</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">d_model</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
