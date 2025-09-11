@@ -9,7 +9,7 @@ let () =
   let src_seq_len = 10 in
   let tgt_seq_len = 8 in
   let d_model = 64 in
-  let num_heads = 6 in
+  let num_heads = 4 in
   let d_ff = 128 in
   let src_vocab_size = 100 in
   let tgt_vocab_size = 100 in
@@ -36,11 +36,13 @@ let () =
   in
 
   (* Create a causal mask for the decoder input (target sequence) *)
+  (* Mask should be 0 for positions to mask out, 1 for positions to keep *)
+  (* This creates an upper triangular matrix where future positions are masked *)
   let mask =
     NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ batch_size; tgt_seq_len ] ~i:[ tgt_seq_len ]
       ~o:[ 1 ]
       ~f:(function
-        | [| _; s; _; t |] -> if s <= t then 1. else 0.
+        | [| _; s; _; t |] -> if s >= t then 1. else 0.
         | idcs ->
             failwith @@ "Invalid indices length: expected [| _; s; _; t |], got "
             ^ Sexp.to_string_hum ([%sexp_of: int array] idcs))
