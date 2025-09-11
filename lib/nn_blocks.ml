@@ -158,25 +158,12 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
       ~d_k:dec_att ~d_v:dec_att ~d_ff ~epsilon ()
   in
   (* All inline definitions, including for ds, dt, are lifted up to the unit parameter above. *)
-  Shape.set_dim ds d_enc;
-  Shape.set_dim dt d_dec;
   let pos_encoding_tgt = if Int.(d_enc = d_dec) then pos_encoding else { pos_encoding_tgt } in
   fun ~train_step ~src ~tgt ~mask ->
     (* Learned positional encoding *)
-    let enc_output =
-      encoder ~train_step
-        (src
-        +* " ..., s | ..v.. ; ..v.. -> ds => ..., s | ds " [ "ds" ] { src_embed }
-        + { pos_encoding })
-    in
-    let tgt_embedded =
-      tgt
-      +* " ..., t | ..v.. ; ..v.. -> dt => ..., t | dt " [ "dt" ] { tgt_embed }
-      + pos_encoding_tgt
-    in
-    decoder ~train_step tgt_embedded ~enc_output ~mask
-    (* Einsum notation internal variables are local *)
-    +* " ... | d; d -> ..v.. => ... | ..v.. " { w_out }
+    let enc_output = encoder ~train_step ({ src_embed; o = [ d_enc ] } * src) + { pos_encoding } in
+    let tgt_embedded = ({ tgt_embed; o = [ d_dec ] } * tgt) + pos_encoding_tgt in
+    { w_out } * decoder ~train_step tgt_embedded ~enc_output ~mask
 
 (** {2 Convolutional Neural Network Building Blocks} *)
 
