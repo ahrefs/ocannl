@@ -21,14 +21,14 @@ open! Base
 open Ocannl_tensor.Operation.DSL_modules
 module Tn = Ir.Tnode
 
-let%op mlp_layer ~label ~hid_dim () x = relu (({ w = uniform () } * x) + { b = 0.; o = [ hid_dim ] })
+let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [ hid_dim ] })
 
 (** Masks and scales by 1/keep_prob to maintain expected value. When [train_step = None], the
     dropout rate is ignored and the tensor is returned unmodified. *)
 let%op dropout ~rate () ~train_step x =
   match train_step with
   | Some train_step when Float.(rate > 0.0) ->
-      x *. (!.rate < uniform_at !@train_step *. x) /. (1.0 - !.rate)
+      x *. (!.rate < uniform_at !@train_step) /. (1.0 - !.rate)
   | _ -> x
 
 (** Multi-layer perceptron of depth [List.length hid_dims + 1], with a linear output layer. *)
