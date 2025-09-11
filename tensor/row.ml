@@ -292,9 +292,20 @@ let rec interleave l1 l2 =
   match (l1, l2) with [], l | l, [] -> l | h1 :: t1, h2 :: t2 -> h1 :: h2 :: interleave t1 t2
 
 let merge_origins o1 o2 =
-  let o = List.dedup_and_sort ~compare:compare_constraint_origin @@ interleave o1 o2 in
-  List.take o
-    (Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins")
+  let n = Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins" in
+  (* First deduplicate each source independently to get unique items *)
+  let unique1 = List.dedup_and_sort ~compare:compare_constraint_origin o1 in
+  let unique2 = List.dedup_and_sort ~compare:compare_constraint_origin o2 in
+  (* Interleave the unique items to preserve fairness *)
+  let interleaved = interleave unique1 unique2 in
+  (* Remove duplicates that appear in both sources while preserving order *)
+  let seen = ref [] in
+  let deduplicated = 
+    List.filter interleaved ~f:(fun item ->
+      if List.mem !seen item ~equal:equal_constraint_origin then false
+      else (seen := item :: !seen; true)) in
+  (* Take at most n items *)
+  List.take deduplicated n
 
 let dim_to_int_exn = function
   | Dim { d; _ } -> d
