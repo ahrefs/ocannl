@@ -58,23 +58,18 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* **0.6.1: Syntax extension improvements, transformers.**
-  * Heterogeneous precision operations.
-  * Counter-based randomness via threefry, second pass (pointwise and weak-but-efficient variants); normal distribution operation.
-  * New syntax for inline parameter definitions; record-based syntax instead of string-based.
-  * Add transformer and convnet building blocks.
-  * Better shape error messages.
-* **0.6.2: Shape inference improvements, convolution NNs, real-life transformers.**
+* **0.6.2: Shape inference improvements, convolution NNs, toy generative transformer.**
+  * Transformer for the Names dataset.
   * Padding inference during shape inference.
   * Add convnet examples starting with MNIST.
-  * Add a GPT-2 or Llama style example. Tokenization using llama.cpp extracted tokenizer.
 * **0.7: CPU-style performance and memory efficiency.**
   * Cleanup of deprecated streams functionality.
   * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   * Optimizations: loop invariant lifting and common subexpression elimination.
   * Universal Pool Allocator.
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
-* **0.7.1: HIP backend (AMD hardware) and WebGPU backend.**
+* **0.7.1: Real-life transformer inference. HIP backend (AMD hardware) and WebGPU backend.**
+  * Add a GPT-2 or Llama style example. Tokenization using llama.cpp extracted tokenizer.
 * **0.8: GPU-style performance -- low hanging fruit.**
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
@@ -98,6 +93,12 @@ This is very tentative.
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.6.1: Syntax extension improvements, transformer building blocks.**
+  * Heterogeneous precision operations.
+  * Counter-based randomness via threefry, second pass (pointwise and weak-but-efficient variants); normal distribution operation.
+  * New syntax for inline parameter definitions; record-based syntax instead of string-based.
+  * Add transformer and convnet building blocks.
+  * Better shape error messages.
 * **0.6: more precisions, initialization, counter-based randomness, strided iteration.**
   * BF16, FP8.
   * Extended expressivity of projections and the generalized einsum notation to cover strided iteration and convolution.

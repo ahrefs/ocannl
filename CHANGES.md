@@ -1,4 +1,4 @@
-## [0.6.1] -- current
+## [0.6.1] -- 2025-01-12
 
 ### Added
 
@@ -14,6 +14,19 @@
 - More output options for `ocannl_read_config` utility
 - Added comprehensive RL/REINFORCE tutorial slides with concrete examples
 - Added clear explanations of slipshow navigation semantics to CLAUDE.md
+- Transformer architecture support with multi-head attention, layer normalization, and positional encodings
+- CNN building blocks: conv2d, pooling operations (max/avg), and comprehensive migration guide
+- Context API as simplified backend interface replacing stream-based parallelism
+- Shape constraint provenance tracking for dramatically improved error messages with origins
+- Dimension capture and equality constraints in einsum specifications via `set_dim` and `set_equal`
+- New einsum operations: `einmax1` (unary max-reduce) and `tropical` (max-reduce with add)
+- `%oc` anti-quotation syntax for improved OCaml integration in ppx extensions
+- Tensor initialization operation with configurable strategies
+- `offsets` convenience operation for index generation
+- Comprehensive migration guide for PyTorch/TensorFlow users
+- Shapes and einsum tutorial slides with slipshow presentation format
+- Configurable limit on shape constraint provenance tracking
+- Origin tracking in shape error messages
 
 ### Changed
 
@@ -28,6 +41,15 @@
 - Generalized `guess_output_nodes` to `collect_nodes_guess_output` for more reuse
 - Converted documentation slides to use slipshow for better updatability and navigation
 - Updated CLAUDE.md with record syntax documentation and testing guidelines
+- Major reorganization: moved tensor-related modules to dedicated `tensor/` directory
+- Renamed einsum operator `*+` to `+*` for better consistency
+- Refactored DSL modules into `Operation.DSL_modules` for cleaner API
+- Removed stream-based parallelism in favor of simpler Context API
+- Improved `%op` and `%cd` syntax extensions with better function application handling
+- Enhanced shape inference with proper dimension staging (no closing at stage 2)
+- Migrated documentation to `docs/` directory with pandoc rendering support
+- Improved `.cd` file generation with clearer rendering of special operations
+- Updated ppx_minidebug integration with log pruning for better performance
 
 ### Fixed
 
@@ -38,6 +60,15 @@
 - Test dependency on `OCANNL_BACKEND` environment variable
 - Build setup for `ocannl_read_config` utility needed for tests
 - Missing package dependencies and assignments in dune configuration
+- Critical transformer bugs: mask handling, attention dimension specifications, position encodings
+- C backend INFINITY macro usage (was using invalid inf literals)
+- Shape inference bugs with dimension closing and constraint generation
+- Dropout pseudo-random number splitting
+- Layer normalization implementation in `nn_blocks.ml`
+- Dimension inference for attention layers with hidden dimensions
+- Pooling operations projection inference
+- Division simplification for integer precision
+- Various syntax extension edge cases and error handling
 
 ## [0.6.0] -- 2025-08-19
 
