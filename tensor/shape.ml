@@ -379,7 +379,7 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
     | Label label ->
         Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
     | Fixed_index 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
-        Row.get_dim ~d:1 ()
+        Row.get_dim ~d:1 ~proj_id:61 ()
     | Fixed_index i ->
         let var = Row.get_var () in
         let d = Row.Var var in

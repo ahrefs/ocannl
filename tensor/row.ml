@@ -70,13 +70,21 @@ type dim =
   | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
 [@@deriving equal, hash, compare, sexp, variants]
 
+let equal_dim d1 d2 =
+  match (d1, d2) with
+  | Dim { d = d1; label = l1; proj_id = _ }, Dim { d = d2; label = l2; proj_id = _ } ->
+      d1 = d2 && Option.equal String.equal l1 l2
+  | _ -> equal_dim d1 d2
+
 let uid = ref 0
 
 let get_var ?label () : dim_var =
   Int.incr uid;
   { id = !uid; label }
 
-let get_dim ~d ?label () = Dim { d; label; proj_id = None }
+let get_dim ~d ?label ?proj_id () =
+  let proj_id = Option.map ~f:(fun p -> Proj_id.Proj_id p) proj_id in
+  Dim { d; label; proj_id }
 
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
@@ -300,10 +308,13 @@ let merge_origins o1 o2 =
   let interleaved = interleave unique1 unique2 in
   (* Remove duplicates that appear in both sources while preserving order *)
   let seen = ref [] in
-  let deduplicated = 
+  let deduplicated =
     List.filter interleaved ~f:(fun item ->
-      if List.mem !seen item ~equal:equal_constraint_origin then false
-      else (seen := item :: !seen; true)) in
+        if List.mem !seen item ~equal:equal_constraint_origin then false
+        else (
+          seen := item :: !seen;
+          true))
+  in
   (* Take at most n items *)
   List.take deduplicated n
 
@@ -540,7 +551,8 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
           else if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
           else if quotient = 1 && Option.is_none num_var then
             (* The difference variables must all be 1 *)
-            List.map diff_vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+            List.map diff_vars ~f:(fun v ->
+                Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:42 (); origin })
           else
             (* The product of difference variables equals the quotient *)
             let r = { dims = List.map diff_vars ~f:(fun v -> Var v); bcast = Broadcastable; id } in
@@ -650,10 +662,11 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                   (* reminder is 1: equate all variables on both sides to 1 *)
                   let divided_by_eqs =
                     List.map divided_by ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:43 (); origin })
                   in
                   let exact_vars_eqs =
-                    List.map vars ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+                    List.map vars ~f:(fun v ->
+                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:44 (); origin })
                   in
                   Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
                 else if List.is_empty divided_by && List.length vars = 1 && reminder > 0 then
@@ -733,7 +746,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
               else None))
 
 let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (dim : dim)
-    (constr : dim_constraint) (env : environment) : constraint_ list * dim_constraint =
+    (constr : dim_constraint) env : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
     | Dim { d; _ }, At_least_dim d_min ->
@@ -764,11 +777,6 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
             | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
     | _, Unconstrained_dim -> ([], constr)
   in
-  (* FIXME: *)
-  (* match (dim, constr, stage) with
-  | Var _, At_least_dim d, Stage4 ->
-      (Dim_eq { d1 = dim; d2 = get_dim ~d () ; origin } :: extras, Unconstrained_dim)
-  | _ -> *)
   (extras, constr)
 
 exception Given_up
@@ -1091,7 +1099,7 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
             origin;
           } )
 
-let subst_row (env : environment) ({ dims; bcast; id } : t) : t =
+let subst_row env ({ dims; bcast; id } : t) : t =
   let s_dims = List.map ~f:(subst_dim env) in
   let dims = s_dims dims in
   let bcast =
@@ -1129,7 +1137,7 @@ let subst_row_constraint stage env constr =
     constr
 
 let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
-    (constr : row_constraint) (env : environment) : constraint_ list * environment =
+    (constr : row_constraint) env : constraint_ list * _ =
   if depth > 16 then ([], env)
   else
     match rows_to_row_or_vars rows with
@@ -1169,7 +1177,7 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
                   (* Equate all product vars to d=1 and add Total_elems 1 for each row var *)
                   let var_eqs =
                     List.map all_product_vars ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:45 (); origin })
                   in
                   let row_constrs =
                     List.map row_vars ~f:(fun (v, id) ->
@@ -1331,7 +1339,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
               (Dim_eq { d1 = Var v; d2 = get_dim ~d:n (); origin } :: extras, env)
           | Num_elems 1, vs1, vs2 ->
               ( List.map
-                  ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+                  ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:46 (); origin })
                   (vs1 @ vs2)
                 @ extras,
                 env )
@@ -1403,8 +1411,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
         assert (not stored);
         (List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) @ extras, env)
 
-let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) (env : environment) :
-    constraint_ list * environment =
+let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
   | Dim { label = Some l1; _ }, Dim { label = Some l2; _ } when not (String.equal l1 l2) ->
@@ -1500,10 +1507,8 @@ let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
-let%debug5_sexp rec unify_row ~stage origin (eq : t * t) (env : environment) :
-    constraint_ list * environment =
-  let rec solve ((ineqs : constraint_ list), env) : constraint_ -> constraint_ list * environment =
-    function
+let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
+  let rec solve (ineqs, env) : constraint_ -> constraint_ list * _ = function
     | Dim_eq { d1; d2; origin = eq_origin } ->
         let origin = merge_origins eq_origin origin in
         let more_ineqs, env = unify_dim ~stage origin (d1, d2) env in
@@ -1657,8 +1662,8 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) (env : environment) :
             ~f:(fun acc (d1, d2) -> solve acc (Dim_eq { d1; d2; origin }))
             eqs)
 
-let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim)
-    (env : environment) : constraint_ list * environment =
+let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim) env :
+    constraint_ list * _ =
   let nonredundant ?(more = []) (v : dim_var) (vs : dim_var list) : dim_var list =
     let _more : dim_var list = more in
     Utils.sorted_diff ~compare:compare_dim_var
@@ -1849,7 +1854,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
             match (cur, lub2) with
             | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
             | Dim _, Dim _ (* when d1 <> d2 *) ->
-                let lub = get_dim ~d:1 () in
+                let lub = get_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
@@ -1888,8 +1893,8 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
 
 let global_template_cache = Hashtbl.Poly.create ()
 
-let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) (env : environment) :
-    constraint_ list * environment =
+let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) env :
+    constraint_ list * _ =
   let nonredundant ?(more = []) v vs =
     Utils.sorted_diff ~compare:compare_row_var
       (List.dedup_and_sort ~compare:compare_row_var (v :: vs))
@@ -2146,26 +2151,26 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) (e
                 match (d1, d2) with
                 | Dim { d = 1; _ }, _ -> d1
                 | _, Dim { d = 1; _ } -> d2
-                | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ()
+                | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ~proj_id:48 ()
                 | Conv_input { stride; output = Dim s; _ }, Dim s'
                 | Dim s', Conv_input { stride; output = Dim s; _ }
                   when !use_padding && stride * s.d <> s'.d ->
-                    get_dim ~d:1 ()
+                    get_dim ~d:1 ~proj_id:49 ()
                 | Conv_input { stride; output = Dim s; kernel = Dim k; dilation }, Dim s'
                 | Dim s', Conv_input { stride; output = Dim s; kernel = Dim k; dilation }
                   when (stride * s.d) + (dilation * k.d) <> s'.d ->
-                    get_dim ~d:1 ()
+                    get_dim ~d:1 ~proj_id:50 ()
                 | ( Conv_input { stride = stride1; output = Dim s1; _ },
                     Conv_input { stride = stride2; output = Dim s2; _ } )
                   when !use_padding && stride1 * s1.d <> stride2 * s2.d ->
-                    get_dim ~d:1 ()
+                    get_dim ~d:1 ~proj_id:51 ()
                 | ( Conv_input
                       { stride = stride1; output = Dim s1; kernel = Dim k1; dilation = dilation1 },
                     Conv_input
                       { stride = stride2; output = Dim s2; kernel = Dim k2; dilation = dilation2 } )
                   when (stride1 * s1.d) + (dilation1 * k1.d) <> (stride2 * s2.d) + (dilation2 * k2.d)
                   ->
-                    get_dim ~d:1 ()
+                    get_dim ~d:1 ~proj_id:52 ()
                 | Var _, _ -> d1
                 | _, Var _ -> d2
                 | _, Dim _ -> d2
@@ -2193,15 +2198,14 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) (e
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } ->
       (Row_ineq { cur; subr; origin } :: ineqs, env)
 
-let%debug5_sexp close_dim_terminal ~(stage : stage) origin (env : environment) (dim : dim) :
-    constraint_ list =
+let%debug5_sexp close_dim_terminal ~(stage : stage) origin env (dim : dim) : constraint_ list =
   match dim with
   | Dim _ -> []
   | Var v -> (
       match Map.find env.dim_env v with
       | Some (Solved_dim _) -> assert false
       | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage3_up stage ->
-          [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 (); origin } ]
+          [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
       | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
           [ Dim_eq { d1 = dim; d2 = lub; origin } ]
       | _ when not (is_stage5_up stage) -> [ Terminal_dim (dim, origin) ]
@@ -2217,7 +2221,7 @@ let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
 
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
-    (constr : row_constraint) (env : environment) : constraint_ list * environment =
+    (constr : row_constraint) env : constraint_ list * _ =
   if depth > 16 then ([], env)
   else
     match rows_to_row_or_vars rows with
@@ -2268,7 +2272,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : r
         | _ -> ([ Rows_constr { r = rows; constr; origin } ], env))
 
 and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (r : row)
-    (constr : row_constraint) env : constraint_ list * environment =
+    (constr : row_constraint) env : constraint_ list * _ =
   let keep_constr () =
     let ineqs, env = apply_row_constraint ~depth stage origin r constr env in
     List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
@@ -2293,14 +2297,14 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           | Num_elems 1, vs, _ when is_stage5_up stage ->
               ( no_further_axes
                 :: List.map vs ~f:(fun v ->
-                       let d2 = get_dim ~d:1 () in
+                       let d2 = get_dim ~d:1 ~proj_id:54 () in
                        Dim_eq { d1 = Var v; d2; origin }),
                 env )
           | Num_elems d, [], None when d <> 1 && is_stage3_up stage ->
-              let dim = get_dim ~d () in
+              let dim = get_dim ~d ~proj_id:55 () in
               ([ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id }; origin } ], env)
           | Num_elems d, [], Some { dims; _ } when d <> 1 && last_dim_is dims (( = ) d) ->
-              let dim = get_dim ~d () in
+              let dim = get_dim ~d ~proj_id:56 () in
               ([ Row_eq { r1; r2 = { dims = [ dim ]; bcast = Broadcastable; id }; origin } ], env)
           | Num_elems _, [], Some lub ->
               let ineqs, env =
@@ -2377,8 +2381,8 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
       | Exact dims -> ([ Row_eq { r1; r2 = { dims; bcast = Broadcastable; id }; origin } ], env)
       | Unconstrained -> ([], env))
 
-let%track5_sexp close_row_terminal ~(stage : stage) origin (env : environment)
-    ({ dims; bcast; id } as _r : row) : constraint_ list =
+let%track5_sexp close_row_terminal ~(stage : stage) origin env ({ dims; bcast; id } as _r : row) :
+    constraint_ list =
   let suffix () = List.map dims ~f:(fun d -> Terminal_dim (d, origin)) in
   (* TODO: can this be simplified? Should we return the environment? *)
   match bcast with
@@ -2422,14 +2426,15 @@ let%debug5_sexp eliminate_dim_entry ~final origin v ~lub constr =
            ( [%string "dereferenced at dimension %{d2#Int}, higher than use site"],
              [ Dim_mismatch [ lub; Var v ] ] )
   | Some _, At_least_dim 0 ->
-      if final then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin }) else None
+      if final then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:57 (); origin }) else None
   | Some lub, At_least_dim _ -> Some (Dim_eq { d1 = Var v; d2 = lub; origin })
-  | None, At_least_dim d when final -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d (); origin })
-  | _ when final -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin })
+  | None, At_least_dim d when final ->
+      Some (Dim_eq { d1 = Var v; d2 = get_dim ~d ~proj_id:58 (); origin })
+  | _ when final -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:59 (); origin })
   | _ -> None
 
-let%track5_sexp process_shape_row ~(stage : stage) origin (env : environment)
-    ({ dims; bcast; id } as r : row) : constraint_ list * environment =
+let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; id } as r : row) :
+    constraint_ list * _ =
   let final = is_stage7 stage in
   let rec finalize_upper_lower_bound = function
     | Dim _ -> []
@@ -2440,7 +2445,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin (env : environment)
         | Some (Bounds_dim { lub; constr; _ }) when is_stage4_up stage ->
             Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
         | Some (Solved_dim _) -> assert false
-        | _ when final -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d:1 (); origin } ]
+        | _ when final -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:60 (); origin } ]
         | _ -> [])
   in
   let rec has_dim_var = function
@@ -2486,14 +2491,15 @@ let%track5_sexp process_shape_row ~(stage : stage) origin (env : environment)
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
-let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) (env : environment) :
-    constraint_ list * environment =
-  let rec solve (ineqs : constraint_ list) (env : environment) : constraint_ list * environment =
+let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) env :
+    constraint_ list * _ =
+  let rec solve ineqs env : constraint_ list * _ =
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with
       | Dim_eq { d1; d2; origin } ->
           (* Substituted inside unify_dim. *)
+          let _debug_eq : constraint_ = ineq in
           unify_dim ~stage origin (d1, d2) env
       | Row_eq { r1; r2; origin } ->
           (* Substituted inside unify_row. *)
@@ -2636,8 +2642,8 @@ type proj_env = {
 type proj_equation = Proj_eq of proj * proj | Iterated of proj | Non_iterated of proj
 [@@deriving compare, equal, sexp]
 
-let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env
-    (env : environment) : proj_equation list =
+let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
+    proj_equation list =
   (* The difference between to_proj and dim_to_proj is that here we do not have a projection
      environment. *)
   let rec to_proj : dim -> proj = function

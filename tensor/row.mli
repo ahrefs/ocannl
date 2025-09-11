@@ -22,7 +22,8 @@ val use_padding : bool ref
 
 type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
-(** A single axis in a shape. *)
+(** A single axis in a shape. [proj_id] is used for projection inference, and abused for provenance
+    tracking during shape inference. *)
 
 type dim =
   | Var of dim_var
@@ -32,7 +33,7 @@ type dim =
           the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-val get_dim : d:int -> ?label:string -> unit -> dim
+val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
 val dim_to_int_exn : dim -> int
 
 type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
@@ -116,7 +117,6 @@ type row_entry =
     }
 [@@deriving sexp_of]
 
-
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
   | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
@@ -149,7 +149,10 @@ type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
 
 val subst_row : environment -> t -> t
-val unify_row : stage:stage -> constraint_origin list -> t * t -> environment -> constraint_ list * environment
+
+val unify_row :
+  stage:stage -> constraint_origin list -> t * t -> environment -> constraint_ list * environment
+
 val empty_env : environment
 val get_dim_from_env : environment -> dim_var -> int option
 val get_row_from_env : environment -> row_var -> t option
