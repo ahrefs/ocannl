@@ -903,6 +903,26 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) 
 
 let row_of_var v id = { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
 
+let unsolved_constraints env =
+  let dims = Map.to_alist env.dim_env in
+  let rows = Map.to_alist env.row_env in
+  let dims =
+    List.filter_map dims ~f:(fun (var, entry) ->
+        match entry with
+        | Solved_dim _ -> None
+        | Bounds_dim { constr = Unconstrained_dim; _ } -> None
+        | Bounds_dim { constr; origin; _ } -> Some (Dim_constr { d = Var var; constr; origin }))
+  in
+  let rows =
+    List.filter_map rows ~f:(fun (var, entry) ->
+        match entry with
+        | Solved_row _ -> None
+        | Bounds_row { constr = Unconstrained; _ } -> None
+        | Bounds_row { constr; origin; _ } ->
+            Some (Rows_constr { r = [ row_of_var var phantom_row_id ]; constr; origin }))
+  in
+  dims @ rows
+
 let check_empty_row ~origin r =
   if not (List.is_empty r.dims) then
     raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ]);
@@ -1612,7 +1632,13 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
           let row_env = Map.map env.row_env ~f in
           let unsolved, env =
             if beg_handled then
-              ([], { env with row_env = Map.set row_env ~key:v ~data:(Solved_row value) })
+              let constr =
+                match Map.find env.row_env v with
+                | Some (Bounds_row { constr; origin; _ }) ->
+                    [ Rows_constr { r = [ value ]; constr; origin } ]
+                | _ -> []
+              in
+              (constr, { env with row_env = Map.set row_env ~key:v ~data:(Solved_row value) })
             else
               ( [
                   Row_eq
@@ -2221,8 +2247,8 @@ let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
 
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
-    (constr : row_constraint) env : constraint_ list * _ =
-  if depth > 16 then ([], env)
+    (constr : row_constraint) env : constraint_ list * environment =
+  if depth > 4 then ([Rows_constr { r = rows; constr; origin }], env)
   else
     match rows_to_row_or_vars rows with
     | Either.First single_row ->
@@ -2272,7 +2298,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : r
         | _ -> ([ Rows_constr { r = rows; constr; origin } ], env))
 
 and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (r : row)
-    (constr : row_constraint) env : constraint_ list * _ =
+    (constr : row_constraint) env : constraint_ list * environment =
   let keep_constr () =
     let ineqs, env = apply_row_constraint ~depth stage origin r constr env in
     List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
@@ -2493,7 +2519,7 @@ let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (mod
 
 let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) env :
     constraint_ list * _ =
-  let rec solve ineqs env : constraint_ list * _ =
+  let rec solve ineqs (env : environment) : constraint_ list * _ =
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with

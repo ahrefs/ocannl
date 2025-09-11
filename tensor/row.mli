@@ -156,6 +156,7 @@ val unify_row :
 val empty_env : environment
 val get_dim_from_env : environment -> dim_var -> int option
 val get_row_from_env : environment -> row_var -> t option
+val unsolved_constraints : environment -> constraint_ list
 
 val solve_inequalities :
   stage:stage -> constraint_ list -> environment -> constraint_ list * environment
