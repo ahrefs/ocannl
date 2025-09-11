@@ -184,6 +184,10 @@ prev_run_prefix=
 # before comparison when highlighting differences between runs, allowing certain differences to be ignored.
 diff_ignore_pattern_pcre=
 
+# If not empty, should be a number giving the depth till which non-highlighted ppx_minidebug
+# logs are pruned. Useful when enabling logging (e.g. shape inference) for non-toy examples.
+debug_log_prune_upto=
+
 # For ppx_minidebug: (minimal) width of the search band for the minimal edit distance algorithm.
 diff_max_distance_factor=
 

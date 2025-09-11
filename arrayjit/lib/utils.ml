@@ -412,6 +412,10 @@ let get_local_debug_runtime =
     let arg = get_global_arg ~default:"" ~arg_name:"debug_log_truncate_children" in
     if String.is_empty arg then None else Some (Int.of_string arg)
   in
+  let prune_upto =
+    let arg = get_global_arg ~default:"" ~arg_name:"debug_log_prune_upto" in
+    if String.is_empty arg then None else Some (Int.of_string arg)
+  in
   let name = get_global_arg ~default:"debug" ~arg_name:"log_file_stem" in
   match (flushing, filename) with
   | true, None ->
@@ -432,7 +436,7 @@ let get_local_debug_runtime =
         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
-        ~exclude_on_path:Re.(str "env")
+        ~exclude_on_path:Re.(str "env") ?prune_upto
         ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
         ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
 
