@@ -50,37 +50,8 @@ let () =
   (* Forward pass *)
   let output = transformer_model ~train_step:None ~src ~tgt ~mask in
 
-  let _ctx = Ocannl.Train.forward_once ~output_cd_file:true ctx output in
+  let _ctx = Ocannl.Train.forward_once ctx output in
 
   (* Verify output shape *)
   Stdio.printf "Output shape:\n%s\n%!"
     (Sexp.to_string_hum ([%sexp_of: Shape.t] output.Tensor.shape))
-
-(* ;
-
-   (* Test transformer components *) Stdio.printf "\nTesting transformer components\n";
-
-   let d_model = 32 in let num_heads = 2 in let seq_len = 5 in let batch_size = 1 in
-
-   (* Test multi-head attention *) let%op mha = Ocannl.Nn_blocks.multi_head_attention ~label:[
-   "test_mha" ] ~num_heads ~d_attention:(d_model / num_heads) () in
-
-   let input = Tensor.ndarray ~label:[ "input" ] ~grad_spec:Tensor.Prohibit_grad [| Array.init
-   batch_size ~f:(fun _ -> Array.init seq_len ~f:(fun _ -> Array.init d_model ~f:(fun _ ->
-   Random.float 1.0))); |] in
-
-   let mha_output = mha ~train_step:None input in
-
-   (* Test layer norm *) let%op ln = Nn_blocks.layer_norm ~label:[ "test_ln" ] () in let ln_output =
-   ln input in
-
-   (* Test feed forward *) let%op ffn = Nn_blocks.feed_forward ~label:[ "test_ffn" ] ~d_model
-   ~d_ff:64 () in let ffn_output = ffn input in
-
-   (* Verify shapes *) Stdio.printf "MHA output shape: %s\n" (Sexp.to_string_hum ([%sexp_of: int
-   array] (Tensor.shape mha_output).output_dims)); Stdio.printf "Layer norm output shape: %s\n"
-   (Sexp.to_string_hum ([%sexp_of: int array] (Tensor.shape ln_output).output_dims)); Stdio.printf
-   "FFN output shape: %s\n" (Sexp.to_string_hum ([%sexp_of: int array] (Tensor.shape
-   ffn_output).output_dims));
-
-   Stdio.printf "\nAll tests completed successfully!\n" *)

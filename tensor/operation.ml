@@ -594,6 +594,9 @@ struct
 
   (** The default initialization operation for {!param} calls. *)
   let default_param_init = ref (uniform ~grad_spec:Require_grad)
+  (* Useful for debugging: *)
+  (* let default_param_init =
+    ref (fun () -> Tensor.term ~grad_spec:Require_grad ?init_data:None ~fetch_op:(Constant 0.)) *)
 
   let param ?value ?values ?param_init =
     let t =
