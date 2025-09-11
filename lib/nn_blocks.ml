@@ -77,7 +77,7 @@ let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_r
   in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
   (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h ..." [ "e" ] v)
+  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ] v)
 
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
@@ -111,7 +111,7 @@ let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate =
   Shape.set_dim e d_v;
   let attn_weights = softmax ~spec:" ... | t -> ..." ?temperature () scores in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h ..." [ "e" ] v)
+  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ] v)
 
 let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
   let masked_mha = multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads ~d_k ~d_v () in
