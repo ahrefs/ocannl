@@ -176,6 +176,11 @@ val unsafe_reinitialize : unit -> unit
 
 (** {2 Internal-ish API.} *)
 
+val set_terminal : t -> unit
+(** Mark the shape as terminal, so that its rows can be closed to Least Upper Bounds (LUBs). This
+    function is only intended for parameters shapes, which would otherwise not be terminal because
+    of the initialization expressions of the parameters. *)
+
 (** How to propagate shape updates and do the last update of [Tensor.t.shape] when finalizing the
     tensor. Axes are broadcast-expanded on a bottom-up update to fit the incoming shape. *)
 type logic =

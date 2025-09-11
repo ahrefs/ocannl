@@ -589,6 +589,7 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
      update computations. *)
   let g = (Option.value_exn ~here:[%here] t.diff).grad in
   Tn.update_memory_mode g Never_virtual 26;
+  Shape.set_terminal t.shape;
   remove_fwd_root t;
   { t with params = Set.singleton (module T) t }
 

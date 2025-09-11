@@ -1377,6 +1377,23 @@ let set_equal delayed_ref1 delayed_ref2 =
           }
         :: !active_constraints
 
+let set_terminal sh =
+  let get_origin kind =
+    Row.
+      {
+        lhs_name = sh.debug_name;
+        lhs_kind = kind;
+        rhs_name = "(parameter)";
+        rhs_kind = kind;
+        operation = Some "set_terminal";
+      }
+  in
+  active_constraints :=
+    Row.Terminal_row (sh.batch, [ get_origin `Batch ])
+    :: Row.Terminal_row (sh.input, [ get_origin `Input ])
+    :: Row.Terminal_row (sh.output, [ get_origin `Output ])
+    :: !active_constraints
+
 let unsafe_reinitialize () =
   update_uid := 0;
   state := Row.empty_env;
@@ -1473,7 +1490,6 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   iter_shapes update_step ~f:(apply_env_t !state);
   let _, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
-  let _debug_new_active_update_steps : update_step list = !active_update_steps in
   active_constraints := ineqs @ !active_constraints;
   let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in

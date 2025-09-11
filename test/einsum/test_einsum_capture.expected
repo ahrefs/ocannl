@@ -73,7 +73,7 @@ Test 1 - Matrix multiply with constraint-driven shapes:
   Captured dimensions: i=3, j=4, k=5
 
 Test 2 - Chain operations with constraint propagation:
-  base inferred shape: 1,1
+  base inferred shape: 6,8
   transposed inferred shape: 8,6
   multiplied inferred shape: 8,10
   final inferred shape: 6,10
