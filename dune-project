@@ -100,9 +100,9 @@
   ; (ocamlformat
   ;  (>= 0.26.2)
   ;  :with-dev-setup)
-  ; Here we mean (arrayjit (= 0.5.3)), but we must be compatible with arrayjit.dev during installation.
+  ; Here we mean (arrayjit (= 0.6.1)), but we must be compatible with arrayjit.dev during installation.
   (arrayjit
-   (>= 0.5.3))
+   (>= 0.6.1))
   (printbox
    (>= 0.12))
   ; FIXME: Depend on printbox-text > 0.12.0 when it is released.

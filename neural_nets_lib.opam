@@ -17,7 +17,7 @@ depends: [
   "dune" {>= "3.18"}
   "dune-site"
   "base" {>= "v0.17.0"}
-  "arrayjit" {>= "0.5.3"}
+  "arrayjit" {>= "0.6.1"}
   "printbox" {>= "0.12"}
   "printbox-text" {>= "0.12"}
   "printbox-ext-plot" {>= "0.12"}
