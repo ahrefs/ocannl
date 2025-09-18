@@ -28,8 +28,8 @@ type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
-      (** The offset is implicit, automatically derived. If [!use_padding] is [true], the offset is
+  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim; use_padding : bool }
+      (** The offset is implicit, automatically derived. If [use_padding] is [true], the offset is
           the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
 [@@deriving equal, hash, compare, sexp, variants]
 

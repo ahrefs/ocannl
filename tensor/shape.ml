@@ -417,7 +417,7 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
                    Row.get_var ~label:kernel_label ()))
         in
-        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
+        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim; use_padding = !Row.use_padding }
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -1795,7 +1795,7 @@ let shape_spec_to_dims_bio labels =
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
                    Row.get_var ~label:kernel_label ()))
         in
-        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
+        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim; use_padding = !Row.use_padding }
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels

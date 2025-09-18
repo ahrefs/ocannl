@@ -67,7 +67,7 @@ type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 type dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
+  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim; use_padding : bool }
 [@@deriving equal, hash, compare, sexp, variants]
 
 let equal_dim d1 d2 =
@@ -121,7 +121,7 @@ let rec dim_to_string style = function
   | Dim solved_dim -> solved_dim_to_string style solved_dim
   | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
   | Var { id; label = None } -> "$" ^ Int.to_string id
-  | Conv_input { stride; output; dilation; kernel } ->
+  | Conv_input { stride; output; dilation; kernel; use_padding = _ } ->
       let output_str = dim_to_string style output in
       let output_str = if stride = 1 then output_str else Int.to_string stride ^ "*" ^ output_str in
       if dilation = 0 then output_str
@@ -326,20 +326,20 @@ let dim_to_int_exn = function
 let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
   match in_ with
   | Var v2 when equal_dim_var v v2 -> value
-  | Conv_input { stride; output; dilation; kernel } -> (
+  | Conv_input { stride; output; dilation; kernel; use_padding } -> (
       let output = s_dim_one ~keep_conv v ~value ~in_:output in
       let kernel = s_dim_one ~keep_conv v ~value ~in_:kernel in
-      match Conv_input { stride; output; dilation; kernel } with
+      match Conv_input { stride; output; dilation; kernel; use_padding } with
       | res when keep_conv -> res
-      | Conv_input { stride = 1; _ } when !use_padding -> output
-      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation } when not !use_padding ->
+      | Conv_input { stride = 1; use_padding = true; _ } -> output
+      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation; use_padding = false; _ } ->
           Dim
             {
               d = (s.d * stride) + (dilation * k.d);
               label = Option.first_some s.label k.label;
               proj_id = None;
             }
-      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation = _ } when !use_padding ->
+      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation = _; use_padding = true; _ } ->
           Dim { d = s.d * stride; label = Option.first_some s.label k.label; proj_id = None }
       | res -> res)
   | Dim _ | Var _ -> in_
@@ -391,11 +391,11 @@ let dim_conjunction constr1 constr2 =
 let rec collect_dim_factors (known, vars) = function
   | Dim { d; _ } -> Some (d * known, vars)
   | Var v -> Some (known, v :: vars)
-  | Conv_input { stride; output; _ } when !use_padding ->
+  | Conv_input { stride; output; use_padding = true; _ } ->
       Option.map
         (collect_dim_factors (known, vars) output)
         ~f:(fun (known, vars) -> (known * stride, vars))
-  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+  | Conv_input { stride; output; dilation = 0; kernel = _; use_padding = _ } ->
       Option.map
         (collect_dim_factors (known, vars) output)
         ~f:(fun (known, vars) -> (known * stride, vars))
@@ -472,7 +472,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                         d1 = Var v1;
                         d2 =
                           Conv_input
-                            { stride = k; output = Var v2; dilation = 0; kernel = get_dim ~d:0 () };
+                            { stride = k; output = Var v2; dilation = 0; kernel = get_dim ~d:0 (); use_padding = false };
                         origin;
                       };
                   ],
@@ -488,7 +488,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                         d1 = Var v2;
                         d2 =
                           Conv_input
-                            { stride = k; output = Var v1; dilation = 0; kernel = get_dim ~d:0 () };
+                            { stride = k; output = Var v1; dilation = 0; kernel = get_dim ~d:0 (); use_padding = false };
                         origin;
                       };
                   ],
@@ -732,6 +732,7 @@ let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
                                     output = Var single_var;
                                     dilation = 0;
                                     kernel = get_dim ~d:0 ();
+                                    use_padding = false;
                                   };
                               origin;
                             };
@@ -756,10 +757,10 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Conv_input { stride; output; dilation; kernel }, At_least_dim d_min -> (
+    | Conv_input { stride; output; dilation; kernel; use_padding }, At_least_dim d_min -> (
         let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
         match kernel with
-        | Dim { d = d_k; _ } when not !use_padding ->
+        | Dim { d = d_k; _ } when not use_padding ->
             let d_min = d_min - (dilation * d_k) in
             if d_min <= 0 then ([], Unconstrained_dim)
             else
@@ -1055,8 +1056,8 @@ let s_dim_one_in_row_entry stage v ~value ~key ~data =
 let rec vars_of_dim = function
   | Dim _ -> Set.empty (module Dim_var)
   | Var v -> Set.singleton (module Dim_var) v
-  | Conv_input { output; dilation; _ } when dilation = 0 -> vars_of_dim output
-  | Conv_input { output; kernel; _ } -> Set.union (vars_of_dim output) (vars_of_dim kernel)
+  | Conv_input { output; dilation; use_padding = _; _ } when dilation = 0 -> vars_of_dim output
+  | Conv_input { output; kernel; use_padding = _; _ } -> Set.union (vars_of_dim output) (vars_of_dim kernel)
 
 let subst_dim ?(keep_conv = false) env dim =
   let vars = vars_of_dim dim in
@@ -1440,12 +1441,11 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | (Conv_input { stride = 1; output; _ }, dim | dim, Conv_input { stride = 1; output; _ })
-    when !use_padding ->
+  | (Conv_input { stride = 1; output; use_padding = true; _ }, dim | dim, Conv_input { stride = 1; output; use_padding = true; _ }) ->
       unify_dim ~stage origin (output, dim) env
-  | ( Conv_input { stride = stride1; output = output1; dilation = dilation1; kernel = kernel1 },
-      Conv_input { stride = stride2; output = output2; dilation = dilation2; kernel = kernel2 } )
-    when !use_padding && (stride1 % stride2 = 0 || stride2 % stride1 = 0) ->
+  | ( Conv_input { stride = stride1; output = output1; dilation = dilation1; kernel = kernel1; use_padding = true },
+      Conv_input { stride = stride2; output = output2; dilation = dilation2; kernel = kernel2; use_padding = true } )
+    when stride1 % stride2 = 0 || stride2 % stride1 = 0 ->
       unify_dim ~stage origin
         ( Conv_input
             {
@@ -1453,20 +1453,20 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               output = (if stride1 > stride2 then output1 else output2);
               kernel = (if stride1 > stride2 then kernel1 else kernel2);
               dilation = (if stride1 > stride2 then dilation1 else dilation2);
+              use_padding = true;
             },
           if stride1 > stride2 then output2 else output1 )
         env
-  | (Conv_input { stride; output = Dim s; _ }, dim | dim, Conv_input { stride; output = Dim s; _ })
-    when !use_padding ->
+  | (Conv_input { stride; output = Dim s; use_padding = true; _ }, dim | dim, Conv_input { stride; output = Dim s; use_padding = true; _ }) ->
       unify_dim ~stage origin (get_dim ~d:(stride * s.d) (), dim) env
-  | (Conv_input { stride; output; _ }, Dim s | Dim s, Conv_input { stride; output; _ })
-    when !use_padding && s.d % stride = 0 ->
+  | (Conv_input { stride; output; use_padding = true; _ }, Dim s | Dim s, Conv_input { stride; output; use_padding = true; _ })
+    when s.d % stride = 0 ->
       unify_dim ~stage origin (get_dim ~d:(s.d / stride) (), output) env
-  | Conv_input { stride; output = Dim s; dilation; kernel = Dim k }, dim
-  | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k } ->
+  | Conv_input { stride; output = Dim s; dilation; kernel = Dim k; use_padding = false }, dim
+  | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k; use_padding = false } ->
       unify_dim ~stage origin (get_dim ~d:((stride * s.d) + (dilation * k.d)) (), dim) env
-  | Conv_input { stride; output; dilation; kernel = Dim k }, Dim s
-  | Dim s, Conv_input { stride; output; dilation; kernel = Dim k }
+  | Conv_input { stride; output; dilation; kernel = Dim k; use_padding = false }, Dim s
+  | Dim s, Conv_input { stride; output; dilation; kernel = Dim k; use_padding = false }
     when (s.d - (dilation * k.d)) % stride = 0 ->
       unify_dim ~stage origin (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
   | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
@@ -2178,22 +2178,22 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 | Dim { d = 1; _ }, _ -> d1
                 | _, Dim { d = 1; _ } -> d2
                 | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ~proj_id:48 ()
-                | Conv_input { stride; output = Dim s; _ }, Dim s'
-                | Dim s', Conv_input { stride; output = Dim s; _ }
-                  when !use_padding && stride * s.d <> s'.d ->
+                | Conv_input { stride; output = Dim s; use_padding = true; _ }, Dim s'
+                | Dim s', Conv_input { stride; output = Dim s; use_padding = true; _ }
+                  when stride * s.d <> s'.d ->
                     get_dim ~d:1 ~proj_id:49 ()
-                | Conv_input { stride; output = Dim s; kernel = Dim k; dilation }, Dim s'
-                | Dim s', Conv_input { stride; output = Dim s; kernel = Dim k; dilation }
+                | Conv_input { stride; output = Dim s; kernel = Dim k; dilation; use_padding = false }, Dim s'
+                | Dim s', Conv_input { stride; output = Dim s; kernel = Dim k; dilation; use_padding = false }
                   when (stride * s.d) + (dilation * k.d) <> s'.d ->
                     get_dim ~d:1 ~proj_id:50 ()
-                | ( Conv_input { stride = stride1; output = Dim s1; _ },
-                    Conv_input { stride = stride2; output = Dim s2; _ } )
-                  when !use_padding && stride1 * s1.d <> stride2 * s2.d ->
+                | ( Conv_input { stride = stride1; output = Dim s1; use_padding = true; _ },
+                    Conv_input { stride = stride2; output = Dim s2; use_padding = true; _ } )
+                  when stride1 * s1.d <> stride2 * s2.d ->
                     get_dim ~d:1 ~proj_id:51 ()
                 | ( Conv_input
-                      { stride = stride1; output = Dim s1; kernel = Dim k1; dilation = dilation1 },
+                      { stride = stride1; output = Dim s1; kernel = Dim k1; dilation = dilation1; use_padding = _ },
                     Conv_input
-                      { stride = stride2; output = Dim s2; kernel = Dim k2; dilation = dilation2 } )
+                      { stride = stride2; output = Dim s2; kernel = Dim k2; dilation = dilation2; use_padding = _ } )
                   when (stride1 * s1.d) + (dilation1 * k1.d) <> (stride2 * s2.d) + (dilation2 * k2.d)
                   ->
                     get_dim ~d:1 ~proj_id:52 ()
@@ -2464,7 +2464,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; id
   let final = is_stage7 stage in
   let rec finalize_upper_lower_bound = function
     | Dim _ -> []
-    | Conv_input { output; kernel; _ } ->
+    | Conv_input { output; kernel; use_padding = _; _ } ->
         finalize_upper_lower_bound output @ finalize_upper_lower_bound kernel
     | Var v -> (
         match Map.find env.dim_env v with
@@ -2476,7 +2476,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; id
   in
   let rec has_dim_var = function
     | Dim _ -> false
-    | Conv_input { output; kernel; _ } -> has_dim_var output || has_dim_var kernel
+    | Conv_input { output; kernel; use_padding = _; _ } -> has_dim_var output || has_dim_var kernel
     | Var _ -> true
   in
   let process_dims dims = List.concat_map dims ~f:finalize_upper_lower_bound in
@@ -2621,8 +2621,8 @@ let fresh_row_proj r =
   let rec fresh_dim = function
     | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (Proj_id.fresh ()) }
     | Var _ as d -> d
-    | Conv_input { stride; output; dilation; kernel } ->
-        Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
+    | Conv_input { stride; output; dilation; kernel; use_padding } ->
+        Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel; use_padding }
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
@@ -2641,6 +2641,7 @@ type proj =
       kernel : proj;
       kernel_size : int;
       mutable input_id : proj_id option;
+      use_padding : bool;
     }
 [@@deriving compare, equal, sexp]
 
@@ -2676,7 +2677,7 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { d = 0; _ } -> Solved (Fixed_idx 0)
     | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
-    | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+    | Conv_input { stride; output; dilation = 0; kernel = _; use_padding } ->
         (* Strided iteration: ignore kernel since dilation=0 *)
         Conv_input
           {
@@ -2687,8 +2688,9 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
             (* dummy kernel *)
             kernel_size = 0;
             input_id = None;
+            use_padding;
           }
-    | Conv_input { stride; output; dilation; kernel } ->
+    | Conv_input { stride; output; dilation; kernel; use_padding } ->
         let kernel_size =
           match subst_dim env kernel with
           | Var v as dim ->
@@ -2712,6 +2714,7 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
             kernel = to_proj kernel;
             kernel_size;
             input_id = None;
+            use_padding;
           }
     | d -> (
         match subst_dim env d with
@@ -2792,7 +2795,7 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                       :: Proj_eq
                            ( to_proj
                                (Conv_input
-                                  { stride; output; dilation = 0; kernel = get_dim ~d:0 () }),
+                                  { stride; output; dilation = 0; kernel = get_dim ~d:0 (); use_padding = false }),
                              input )
                       :: List.map other_dims ~f:(fun d -> Proj_eq (to_proj d, Solved Sub_axis)))
             else assert false
@@ -2818,7 +2821,7 @@ let get_proj_index proj_env =
         | (0 | 1), None -> Fixed_idx 0
         | _ -> unknown_projection proj_id d)
     | Solved idx -> idx
-    | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _ } -> (
+    | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _; use_padding = _ } -> (
         (* Strided iteration: skip kernel computation since dilation=0 *)
         let output_idx = loop output in
         let symbols = ref [] in
@@ -2850,7 +2853,7 @@ let get_proj_index proj_env =
         | [] -> Idx.Fixed_idx !offset
         | [ (1, s) ] when !offset = 0 -> Idx.Iterator s
         | _ -> Idx.Affine { symbols; offset = !offset })
-    | Conv_input { stride; output; dilation; kernel; kernel_size; input_id } -> (
+    | Conv_input { stride; output; dilation; kernel; kernel_size; input_id; use_padding } -> (
         let output_idx = loop output in
         let kernel_idx = loop kernel in
         let symbols = ref [] in
@@ -2875,7 +2878,7 @@ let get_proj_index proj_env =
 
         (* Subtract padding if use_padding is true *)
         let offset =
-          if !use_padding then (
+          if use_padding then (
             (* Left padding smaller than right when split needed *)
             let right_padding = (kernel_size + 1) / 2 in
             let left_padding = kernel_size - right_padding in
@@ -2954,7 +2957,7 @@ let rec dim_to_proj proj_env : dim -> proj = function
   | Var v -> Var v
   | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
   | Dim s -> Proj (Proj_id.fresh (), s)
-  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+  | Conv_input { stride; output; dilation = 0; kernel = _; use_padding } ->
       (* Strided iteration: ignore kernel since dilation=0 *)
       Conv_input
         {
@@ -2965,8 +2968,9 @@ let rec dim_to_proj proj_env : dim -> proj = function
           (* dummy kernel *)
           kernel_size = 0;
           input_id = None;
+          use_padding;
         }
-  | Conv_input { stride; output; dilation; kernel } ->
+  | Conv_input { stride; output; dilation; kernel; use_padding } ->
       (* FIXME: is this sufficient? *)
       let kernel_size = match kernel with Dim { d; _ } -> d | _ -> assert false in
       Conv_input
@@ -2977,6 +2981,7 @@ let rec dim_to_proj proj_env : dim -> proj = function
           kernel = dim_to_proj proj_env kernel;
           kernel_size;
           input_id = None;
+          use_padding;
         }
 
 let get_dim_index proj_env =
@@ -3041,8 +3046,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
     | Proj_eq ((Conv_input _ as conv_input), Solved idx) ->
         verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
     | Proj_eq
-        ( (Conv_input { stride = stride1; output = output1; _ } as conv_input1),
-          (Conv_input { stride = stride2; output = output2; _ } as conv_input2) )
+        ( (Conv_input { stride = stride1; output = output1; use_padding = _; _ } as conv_input1),
+          (Conv_input { stride = stride2; output = output2; use_padding = _; _ } as conv_input2) )
       when stride1 = stride2 ->
         loop (Proj_eq (output1, output2));
         if equal_proj conv_input1 conv_input2 then ()
@@ -3062,15 +3067,15 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | Some p2 -> loop (Proj_eq (p, p2)))
     | Non_iterated p -> (
         match p with
-        | Proj (proj_id, _) | Conv_input { input_id = Some proj_id; _ } ->
+        | Proj (proj_id, _) | Conv_input { input_id = Some proj_id; use_padding = _; _ } ->
             non_product := Set.add !non_product proj_id
         | _ -> ())
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
-    | Iterated (Conv_input { output; dilation = 0; kernel = _; _ }) ->
+    | Iterated (Conv_input { output; dilation = 0; kernel = _; use_padding = _; _ }) ->
         (* Strided iteration: only process output since dilation=0 *)
         loop (Iterated output)
-    | Iterated (Conv_input { output; kernel; _ }) ->
+    | Iterated (Conv_input { output; kernel; use_padding = _; _ }) ->
         loop (Iterated output);
         loop (Iterated kernel)
     | Iterated (Var v) -> (
