@@ -89,11 +89,11 @@ let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   ({ gamma = 1. } *. normalized) + { beta = 0. }
 
 let%op transformer_encoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
-  let mha = multi_head_attention ~label:(label @ [ "mha" ]) ~num_heads ~d_k ~d_v () in
+  let mha = multi_head_attention ~label:("mha" :: label) ~num_heads ~d_k ~d_v () in
   (* Standard 2-layer FFN: expand to d_ff then contract back to d_model *)
-  let ffn = mlp ~label:(label @ [ "ffn" ]) ~hid_dims:[ d_ff ] () in
-  let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
-  let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
+  let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
+  let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
+  let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
   fun ~train_step input ->
     let x1 = ln1 (input + mha ~train_step input) in
     ln2 (x1 + ffn x1)
@@ -114,13 +114,13 @@ let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate =
   { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 
 let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
-  let masked_mha = multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads ~d_k ~d_v () in
-  let cross_mha = cross_attention ~label:(label @ [ "cross_mha" ]) ~num_heads ~d_k ~d_v () in
+  let masked_mha = multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v () in
+  let cross_mha = cross_attention ~label:("cross_mha" :: label) ~num_heads ~d_k ~d_v () in
   (* Standard 2-layer FFN: expand to d_ff then contract back to d_model *)
-  let ffn = mlp ~label:(label @ [ "ffn" ]) ~hid_dims:[ d_ff ] () in
-  let ln1 = layer_norm ~label:(label @ [ "ln1" ]) ~epsilon () in
-  let ln2 = layer_norm ~label:(label @ [ "ln2" ]) ~epsilon () in
-  let ln3 = layer_norm ~label:(label @ [ "ln3" ]) ~epsilon () in
+  let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
+  let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
+  let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
+  let ln3 = layer_norm ~label:("ln3" :: label) ~epsilon () in
   fun ~train_step target ~enc_output ~mask ->
     let x1 = ln1 (target + masked_mha ~train_step ~mask target) in
     let x2 = ln2 (x1 + cross_mha ~train_step x1 ~enc_output) in
@@ -130,7 +130,7 @@ let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_encoder_block
-          ~label:(label @ [ "layer" ^ Int.to_string i ])
+          ~label:(( "layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step x -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
@@ -139,7 +139,7 @@ let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_decoder_block
-          ~label:(label @ [ "layer" ^ Int.to_string i ])
+          ~label:(( "layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step target ~enc_output ~mask ->
@@ -150,11 +150,11 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
   let enc_att = [%oc d_enc / num_heads] in
   let dec_att = [%oc d_dec / num_heads] in
   let encoder =
-    transformer_encoder ~label:(label @ [ "encoder" ]) ~num_layers:num_encoder_layers ~num_heads
+    transformer_encoder ~label:("encoder" :: label) ~num_layers:num_encoder_layers ~num_heads
       ~d_k:enc_att ~d_v:enc_att ~d_ff ~epsilon ()
   in
   let decoder =
-    transformer_decoder ~label:(label @ [ "decoder" ]) ~num_layers:num_decoder_layers ~num_heads
+    transformer_decoder ~label:("decoder" :: label) ~num_layers:num_decoder_layers ~num_heads
       ~d_k:dec_att ~d_v:dec_att ~d_ff ~epsilon ()
   in
   (* All inline definitions, including for ds, dt, are lifted up to the unit parameter above. *)
@@ -249,22 +249,22 @@ let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x 
 
 (** Conv block with conv -> batch norm -> activation pattern *)
 let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) () =
-  let conv = conv2d ~label:(label @ [ "conv" ]) ~kernel_size ~stride () in
-  let bn = batch_norm2d ~label:(label @ [ "bn" ]) () in
+  let conv = conv2d ~label:("conv" :: label) ~kernel_size ~stride () in
+  let bn = batch_norm2d ~label:("bn" :: label) () in
   fun ~train_step x -> relu (bn ~train_step (conv x))
 
 (** Residual block for ResNet-style architectures. Features skip connections that help with gradient
     flow in deep networks. *)
 let%op resnet_block ~label ?(stride = 1) () =
-  let conv1 = conv2d ~label:(label @ [ "conv1" ]) ~kernel_size:3 ~stride () in
-  let bn1 = batch_norm2d ~label:(label @ [ "bn1" ]) () in
-  let conv2 = conv2d ~label:(label @ [ "conv2" ]) ~kernel_size:3 ~stride:1 () in
-  let bn2 = batch_norm2d ~label:(label @ [ "bn2" ]) () in
+  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:3 ~stride () in
+  let bn1 = batch_norm2d ~label:("bn1" :: label) () in
+  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:3 ~stride:1 () in
+  let bn2 = batch_norm2d ~label:("bn2" :: label) () in
   let identity =
     if stride > 1 then
       (* Need to downsample the skip connection *)
-      let downsample_conv = conv2d ~label:(label @ [ "downsample" ]) ~kernel_size:1 ~stride () in
-      let downsample_bn = batch_norm2d ~label:(label @ [ "downsample_bn" ]) () in
+      let downsample_conv = conv2d ~label:("downsample" :: label) ~kernel_size:1 ~stride () in
+      let downsample_bn = batch_norm2d ~label:("downsample_bn" :: label) () in
       fun train_step x -> downsample_bn ~train_step (downsample_conv x)
     else fun _train_step x -> x
   in
@@ -275,12 +275,12 @@ let%op resnet_block ~label ?(stride = 1) () =
 (** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:
     conv -> pool -> conv -> pool -> fc layers *)
 let%op lenet ~label ?(num_classes = 10) () =
-  let conv1 = conv2d ~label:(label @ [ "conv1" ]) ~kernel_size:5 () in
+  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:5 () in
   let pool1 = max_pool2d ~stride:2 () in
-  let conv2 = conv2d ~label:(label @ [ "conv2" ]) ~kernel_size:5 () in
+  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:5 () in
   let pool2 = max_pool2d ~stride:2 () in
-  let fc1 = mlp_layer ~label:(label @ [ "fc1" ]) ~hid_dim:120 () in
-  let fc2 = mlp_layer ~label:(label @ [ "fc2" ]) ~hid_dim:84 () in
+  let fc1 = mlp_layer ~label:("fc1" :: label) ~hid_dim:120 () in
+  let fc2 = mlp_layer ~label:("fc2" :: label) ~hid_dim:84 () in
   fun ~train_step:_ x ->
     let x = conv1 x |> relu |> pool1 |> conv2 |> relu |> pool2 |> fc1 |> fc2 in
     (* Final classification layer *)
@@ -290,7 +290,7 @@ let%op lenet ~label ?(num_classes = 10) () =
 let%op vgg_block ~label ~num_convs ?(kernel_size = 3) () =
   let convs =
     List.init num_convs ~f:(fun i ->
-        conv_bn_relu ~label:(label @ [ Printf.sprintf "conv%d" i ]) ~kernel_size ())
+        conv_bn_relu ~label:(("conv" ^ Int.to_string i) :: label) ~kernel_size ())
   in
   let pool = max_pool2d ~stride:2 () in
   fun ~train_step x ->
@@ -301,9 +301,9 @@ let%op vgg_block ~label ~num_convs ?(kernel_size = 3) () =
     and outputs action logits. *)
 let%op sokoban_cnn ~label ?(num_actions = 4) () =
   (* Process spatial features with conv layers *)
-  let conv1 = conv_bn_relu ~label:(label @ [ "conv1" ]) ~kernel_size:3 () in
-  let conv2 = conv_bn_relu ~label:(label @ [ "conv2" ]) ~kernel_size:3 () in
-  let conv3 = conv_bn_relu ~label:(label @ [ "conv3" ]) ~kernel_size:3 () in
+  let conv1 = conv_bn_relu ~label:("conv1" :: label) ~kernel_size:3 () in
+  let conv2 = conv_bn_relu ~label:("conv2" :: label) ~kernel_size:3 () in
+  let conv3 = conv_bn_relu ~label:("conv3" :: label) ~kernel_size:3 () in
   fun ~train_step ~grid_state ->
     let x = conv1 ~train_step grid_state |> conv2 ~train_step |> conv3 ~train_step in
 
@@ -324,15 +324,15 @@ let%op mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
   let _ = width_mult in
   (* TODO: implement channel width multiplier *)
   (* Initial standard conv *)
-  let conv_init = conv_bn_relu ~label:(label @ [ "conv_init" ]) ~kernel_size:3 ~stride:2 () in
+  let conv_init = conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 () in
 
   (* Depthwise separable blocks *)
-  let dw_block1 = depthwise_separable_conv2d ~label:(label @ [ "dw1" ]) ~stride:1 () in
-  let dw_block2 = depthwise_separable_conv2d ~label:(label @ [ "dw2" ]) ~stride:2 () in
-  let dw_block3 = depthwise_separable_conv2d ~label:(label @ [ "dw3" ]) ~stride:1 () in
-  let dw_block4 = depthwise_separable_conv2d ~label:(label @ [ "dw4" ]) ~stride:2 () in
+  let dw_block1 = depthwise_separable_conv2d ~label:("dw1" :: label) ~stride:1 () in
+  let dw_block2 = depthwise_separable_conv2d ~label:("dw2" :: label) ~stride:2 () in
+  let dw_block3 = depthwise_separable_conv2d ~label:("dw3" :: label) ~stride:1 () in
+  let dw_block4 = depthwise_separable_conv2d ~label:("dw4" :: label) ~stride:2 () in
 
-  let bn = batch_norm2d ~label:(label @ [ "bn_final" ]) () in
+  let bn = batch_norm2d ~label:("bn_final" :: label) () in
 
   fun ~train_step x ->
     let x =

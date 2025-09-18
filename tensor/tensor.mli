@@ -142,6 +142,7 @@ type op_fun =
   ?batch_dims:int list ->
   ?batch_axes:(string * int) list ->
   param_op_fun
+(** Labels are collected in tensor construction order, with more specific information first. *)
 
 val binop :
   ?compose_op:Shape.compose_type ->
