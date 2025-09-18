@@ -274,7 +274,20 @@ let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr
 
 let no_vbs = Map.empty (module String)
-let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 v2 -> v2))
+let reduce_vbss vbss =
+  List.reduce_exn vbss ~f:(fun acc vbs ->
+    Map.merge_skewed acc vbs ~combine:(fun ~key _v1 v2 ->
+      (* Get location from the value binding for better error reporting *)
+      let loc = v2.pvb_loc in
+      (* Create an error expression *)
+      let error_expr = 
+        Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc
+             "ppx_ocannl: name clash for inline definition or variable capture '%s' - the name is already defined"
+             key
+      in
+      (* Return a value binding with the error *)
+      { v2 with pvb_expr = error_expr }))
 
 let expr_expander_with_punning translate ~loc ~path:_ payload =
   match payload with
