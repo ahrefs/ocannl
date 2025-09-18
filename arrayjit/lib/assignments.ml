@@ -288,7 +288,7 @@ let%track4_sexp to_low_level code =
           let rhs_ll = get rhs rhs_idcs in
           let length =
             match op with
-            | Ops.Uint4x32_to_prec_uniform -> (
+            | Ops.Uint4x32_to_prec_uniform | Ops.Uint4x32_to_prec_normal -> (
                 (* Prevent over-eager guard against forcing precision. *)
                 ignore (Lazy.force lhs.dims);
                 let target_prec = Lazy.force lhs.prec in

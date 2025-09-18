@@ -14,6 +14,8 @@ let operators =
       ("threefry4x32", "threefry4x32");
       ("uint4x32_to_prec_uniform", "uint4x32_to_prec_uniform");
       ("uint4x32_to_prec_uniform1", "uint4x32_to_prec_uniform1");
+      ("uint4x32_to_prec_normal", "uint4x32_to_prec_normal");
+      ("uint4x32_to_prec_normal1", "uint4x32_to_prec_normal1");
       ("**.", "pointpow");
       ("relu", "relu");
       ("sat01", "sat01");

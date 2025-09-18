@@ -267,6 +267,32 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
       ?grad_spec (* Modifying the label would cause identifier pollution. *)
       ?label ~top_down_prec:true t1
 
+let uint4x32_to_prec_normal ?grad_spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_normal v1 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
+  fun t1 ?label ?top_down_prec ->
+    (* Ignore what the caller says, since we must learn the precision from the outside. *)
+    ignore (top_down_prec : bool option);
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
+      ~transpose_op:(Uint4x32_to_prec (lazy (assert false)))
+      ~op_asn ~grad_asn ?grad_spec (* Modifying the label would cause identifier pollution. *)
+      ?label ~top_down_prec:true t1
+
+let uint4x32_to_prec_normal1 ?grad_spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_normal1 v1 in
+  let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
+  fun t1 ?label ?top_down_prec ->
+    (* Ignore what the caller says, since we must learn the precision from the outside. *)
+    ignore (top_down_prec : bool option);
+    Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
+    Tensor.unop (* A placeholder that will be replaced by the actual precision by Tensor.op. *)
+      ~transpose_op:Pointwise_un ~op_asn ~grad_asn
+      ?grad_spec (* Modifying the label would cause identifier pollution. *)
+      ?label ~top_down_prec:true t1
+
 let lt ?(label = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
@@ -541,6 +567,44 @@ let uniform_at1 ?grad_spec counter =
           ~label:[ "range_over_offsets" ] ())
        ())
 
+(** Generates normal (Gaussian) random numbers using the Box-Muller transform.
+    Produces 4 normal random numbers from 4x32 random bits. *)
+let normal ?grad_spec () =
+  uint4x32_to_prec_normal ?grad_spec
+    (threefry4x32
+       (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
+(** Generates normal random numbers using a counter symbol for PRNG state.
+    This is useful for sequential sampling in recurrent contexts. *)
+let normal_at ?grad_spec counter =
+  uint4x32_to_prec_normal ?grad_spec
+    (threefry4x32
+       (threefry4x32 (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ()) counter ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
+(** A wasteful variant of {!normal} that produces a single value from each 4x32 random bits. *)
+let normal1 ?grad_spec () =
+  uint4x32_to_prec_normal1 ?grad_spec
+    (threefry4x32
+       (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
+(** A wasteful variant of {!normal_at} that produces a single value from each 4x32 random bits. *)
+let normal_at1 ?grad_spec counter =
+  uint4x32_to_prec_normal1 ?grad_spec
+    (threefry4x32
+       (threefry4x32 (threefry4x32 (embed_self_id ()) (Tensor.get_random_seed ()) ()) counter ())
+       (Tensor.term ~fetch_op:Range_over_offsets ~grad_spec:Prohibit_grad
+          ~label:[ "range_over_offsets" ] ())
+       ())
+
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
     omitted. Note: the data should have no padding and if padding is inferred, the data will be
     copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
@@ -590,6 +654,8 @@ struct
   let threefry4x32 = threefry4x32 ~grad_spec:Grad_spec.grad_spec
   let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Grad_spec.grad_spec
   let uint4x32_to_prec_uniform1 = uint4x32_to_prec_uniform1 ~grad_spec:Grad_spec.grad_spec
+  let uint4x32_to_prec_normal = uint4x32_to_prec_normal ~grad_spec:Grad_spec.grad_spec
+  let uint4x32_to_prec_normal1 = uint4x32_to_prec_normal1 ~grad_spec:Grad_spec.grad_spec
   let embed_self_id = embed_self_id ~grad_spec:Grad_spec.grad_spec
 
   (** The default initialization operation for {!param} calls. *)
@@ -671,6 +737,10 @@ struct
   let uniform_at = uniform_at ~grad_spec:Grad_spec.grad_spec
   let uniform1 = uniform1 ~grad_spec:Grad_spec.grad_spec
   let uniform_at1 = uniform_at1 ~grad_spec:Grad_spec.grad_spec
+  let normal = normal ~grad_spec:Grad_spec.grad_spec
+  let normal_at = normal_at ~grad_spec:Grad_spec.grad_spec
+  let normal1 = normal1 ~grad_spec:Grad_spec.grad_spec
+  let normal_at1 = normal_at1 ~grad_spec:Grad_spec.grad_spec
 
   module O = struct
     let ( * ) ?label t1 t2 = matmul ?label t1 t2 ()
@@ -679,6 +749,8 @@ struct
     let threefry4x32 ?label t1 t2 = threefry4x32 ?label t1 t2 ()
     let uint4x32_to_prec_uniform ?label t1 = uint4x32_to_prec_uniform ?label t1 ()
     let uint4x32_to_prec_uniform1 ?label t1 = uint4x32_to_prec_uniform1 ?label t1 ()
+    let uint4x32_to_prec_normal ?label t1 = uint4x32_to_prec_normal ?label t1 ()
+    let uint4x32_to_prec_normal1 ?label t1 = uint4x32_to_prec_normal1 ?label t1 ()
     let ( **. ) ?label base exp = pointpow ?label exp base ()
     let relu ?label t = relu ?label t ()
     let sat01 ?label t = sat01 ?label t ()
@@ -718,6 +790,10 @@ struct
     let uniform_at ?label counter = uniform_at ?label counter ()
     let uniform1 ?label () = uniform1 () ?label ()
     let uniform_at1 ?label counter = uniform_at1 ?label counter ()
+    let normal ?label () = normal () ?label ()
+    let normal_at ?label counter = normal_at ?label counter ()
+    let normal1 ?label () = normal1 () ?label ()
+    let normal_at1 ?label counter = normal_at1 ?label counter ()
   end
 end
 

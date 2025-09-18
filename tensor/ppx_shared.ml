@@ -200,6 +200,8 @@ let unary_ops =
       ("not", fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Not]));
       ( "uint4x32_to_prec_uniform1",
         fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_uniform1]) );
+      ( "uint4x32_to_prec_normal1",
+        fun loc -> ([%expr Shape.Pointwise_un], [%expr Ir.Ops.Uint4x32_to_prec_normal1]) );
     ]
 
 (** Vector unary primitive ops. *)
@@ -209,6 +211,8 @@ let vec_unary_ops =
     [
       ( "uint4x32_to_prec_uniform",
         fun loc -> ([%expr Shape.Uint4x32_to_prec], [%expr Ir.Ops.Uint4x32_to_prec_uniform]) );
+      ( "uint4x32_to_prec_normal",
+        fun loc -> ([%expr Shape.Uint4x32_to_prec], [%expr Ir.Ops.Uint4x32_to_prec_normal]) );
     ]
 
 (** Ternary primitive ops. *)

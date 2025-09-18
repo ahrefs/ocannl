@@ -183,6 +183,120 @@ let builtins =
   return result;
 }|},
       [ "uint4x32_t" ] );
+    ( "uint4x32_to_single_normal",
+      {|__device__ float uint4x32_to_single_normal(uint4x32_t x) {
+  float u1 = uint32_to_single_uniform(x.v[0]);
+  float u2 = uint32_to_single_uniform(x.v[1]);
+  if (u1 == 0.0f) u1 = 1.0f / 4294967296.0f;
+  float magnitude = sqrtf(-2.0f * logf(u1));
+  float angle = 2.0f * 3.14159265358979323846f * u2;
+  return magnitude * cosf(angle);
+}|},
+      [ "uint4x32_t"; "uint32_to_single_uniform" ] );
+    ( "uint4x32_to_double_normal",
+      {|__device__ double uint4x32_to_double_normal(uint4x32_t x) {
+  unsigned long long combined1 = __double_as_longlong(__hiloint2double(x.v[1], x.v[0]));
+  unsigned long long combined2 = __double_as_longlong(__hiloint2double(x.v[3], x.v[2]));
+  double u1 = __longlong_as_double(combined1) * (1.0 / 18446744073709551616.0);
+  double u2 = __longlong_as_double(combined2) * (1.0 / 18446744073709551616.0);
+  if (u1 == 0.0) u1 = 1.0 / 18446744073709551616.0;
+  double magnitude = sqrt(-2.0 * log(u1));
+  double angle = 2.0 * 3.14159265358979323846 * u2;
+  return magnitude * cos(angle);
+}|},
+      [ "uint4x32_t" ] );
+    ( "uint4x32_to_int32_normal",
+      {|__device__ int uint4x32_to_int32_normal(uint4x32_t x) {
+  return (int)(uint4x32_to_single_normal(x) * 2147483647.0f);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_int64_normal",
+      {|__device__ long long uint4x32_to_int64_normal(uint4x32_t x) {
+  return (long long)(uint4x32_to_double_normal(x) * 9223372036854775807.0);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_double_normal" ] );
+    ( "uint4x32_to_uint32_normal",
+      {|__device__ unsigned int uint4x32_to_uint32_normal(uint4x32_t x) {
+  float n = uint4x32_to_single_normal(x);
+  return (unsigned int)(n * 2147483647.0f + 2147483648.0f);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_uint64_normal",
+      {|__device__ unsigned long long uint4x32_to_uint64_normal(uint4x32_t x) {
+  double n = uint4x32_to_double_normal(x);
+  return (unsigned long long)(n * 9223372036854775807.0 + 9223372036854775808.0);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_double_normal" ] );
+    ( "uint4x32_to_byte_normal",
+      {|__device__ signed char uint4x32_to_byte_normal(uint4x32_t x) {
+  return (signed char)(uint4x32_to_single_normal(x) * 127.0f);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_uint16_normal",
+      {|__device__ unsigned short uint4x32_to_uint16_normal(uint4x32_t x) {
+  float n = uint4x32_to_single_normal(x);
+  return (unsigned short)(n * 32767.0f + 32768.0f);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_half_normal",
+      {|__device__ __half uint4x32_to_half_normal(uint4x32_t x) {
+  return __float2half(uint4x32_to_single_normal(x));
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_bfloat16_normal",
+      {|__device__ unsigned short uint4x32_to_bfloat16_normal(uint4x32_t x) {
+  float f = uint4x32_to_single_normal(x);
+  unsigned int bits = __float_as_uint(f);
+  unsigned int rounded = (bits + 0x00007FFF + ((bits >> 16) & 1)) >> 16;
+  return (unsigned short)rounded;
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_fp8_normal",
+      {|__device__ unsigned char uint4x32_to_fp8_normal(uint4x32_t x) {
+  float n = uint4x32_to_single_normal(x);
+  return (unsigned char)fminf(fmaxf(n * 127.0f + 128.0f, 0.0f), 255.0f);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_single_normal" ] );
+    ( "uint4x32_to_single_normal_vec",
+      {|__device__ float4_t uint4x32_to_single_normal_vec(uint4x32_t x) {
+  float4_t result;
+  float u1 = uint32_to_single_uniform(x.v[0]);
+  float u2 = uint32_to_single_uniform(x.v[1]);
+  float u3 = uint32_to_single_uniform(x.v[2]);
+  float u4 = uint32_to_single_uniform(x.v[3]);
+  
+  if (u1 == 0.0f) u1 = 1.0f / 4294967296.0f;
+  float mag1 = sqrtf(-2.0f * logf(u1));
+  float angle1 = 2.0f * 3.14159265358979323846f * u2;
+  result.v[0] = mag1 * cosf(angle1);
+  result.v[1] = mag1 * sinf(angle1);
+  
+  if (u3 == 0.0f) u3 = 1.0f / 4294967296.0f;
+  float mag2 = sqrtf(-2.0f * logf(u3));
+  float angle2 = 2.0f * 3.14159265358979323846f * u4;
+  result.v[2] = mag2 * cosf(angle2);
+  result.v[3] = mag2 * sinf(angle2);
+  
+  return result;
+}|},
+      [ "uint4x32_t"; "float4_t"; "uint32_to_single_uniform" ] );
+    ( "uint4x32_to_double_normal_vec",
+      {|__device__ double2_t uint4x32_to_double_normal_vec(uint4x32_t x) {
+  double2_t result;
+  unsigned long long combined1 = __double_as_longlong(__hiloint2double(x.v[1], x.v[0]));
+  unsigned long long combined2 = __double_as_longlong(__hiloint2double(x.v[3], x.v[2]));
+  double u1 = __longlong_as_double(combined1) * (1.0 / 18446744073709551616.0);
+  double u2 = __longlong_as_double(combined2) * (1.0 / 18446744073709551616.0);
+  
+  if (u1 == 0.0) u1 = 1.0 / 18446744073709551616.0;
+  double magnitude = sqrt(-2.0 * log(u1));
+  double angle = 2.0 * 3.14159265358979323846 * u2;
+  result.v[0] = magnitude * cos(angle);
+  result.v[1] = magnitude * sin(angle);
+  
+  return result;
+}|},
+      [ "uint4x32_t"; "double2_t" ] );
     ( "double_to_uint4x32",
       {|__device__ uint4x32_t double_to_uint4x32(double x) {
   unsigned long long bits = __double_as_longlong(x);

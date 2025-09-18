@@ -527,6 +527,221 @@ uint8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     return result;
 }
 
+/* Box-Muller transform for normal distribution */
+/* Constants for Box-Muller transform */
+#define PI 3.14159265358979323846
+
+/* Convert uint4x32 to single precision normal using Box-Muller - uses first 64 bits */
+float uint4x32_to_single_normal(uint4x32_t x) {
+    float u1 = uint32_to_single_uniform(x.v[0]);
+    float u2 = uint32_to_single_uniform(x.v[1]);
+    
+    /* Avoid log(0) by ensuring u1 is not exactly 0 */
+    if (u1 == 0.0f) u1 = 1.0f / 4294967296.0f;
+    
+    /* Box-Muller transform: z1 = sqrt(-2*log(u1)) * cos(2*pi*u2) */
+    float magnitude = sqrtf(-2.0f * logf(u1));
+    float angle = 2.0f * PI * u2;
+    return magnitude * cosf(angle);
+}
+
+/* Convert uint4x32 to double precision normal using Box-Muller - uses all 128 bits */
+double uint4x32_to_double_normal(uint4x32_t x) {
+    uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
+    uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
+    double u1 = combined1 * (1.0 / 18446744073709551616.0);
+    double u2 = combined2 * (1.0 / 18446744073709551616.0);
+    
+    /* Avoid log(0) by ensuring u1 is not exactly 0 */
+    if (u1 == 0.0) u1 = 1.0 / 18446744073709551616.0;
+    
+    /* Box-Muller transform: z1 = sqrt(-2*log(u1)) * cos(2*pi*u2) */
+    double magnitude = sqrt(-2.0 * log(u1));
+    double angle = 2.0 * PI * u2;
+    return magnitude * cos(angle);
+}
+
+/* Other precisions for normal distribution - convert through float or double */
+int32_t uint4x32_to_int32_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to int32 range */
+    return (int32_t)(uint4x32_to_single_normal(x) * 2147483647.0f);
+}
+
+int64_t uint4x32_to_int64_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to int64 range */
+    return (int64_t)(uint4x32_to_double_normal(x) * 9223372036854775807.0);
+}
+
+uint32_t uint4x32_to_uint32_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to uint32 range, shift mean to center */
+    float n = uint4x32_to_single_normal(x);
+    return (uint32_t)(n * 2147483647.0f + 2147483648.0f);
+}
+
+uint64_t uint4x32_to_uint64_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to uint64 range, shift mean to center */
+    double n = uint4x32_to_double_normal(x);
+    return (uint64_t)(n * 9223372036854775807.0 + 9223372036854775808.0);
+}
+
+int8_t uint4x32_to_byte_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to int8 range */
+    return (int8_t)(uint4x32_to_single_normal(x) * 127.0f);
+}
+
+uint16_t uint4x32_to_uint16_normal(uint4x32_t x) {
+    /* Scale normal(0,1) to uint16 range, shift mean to center */
+    float n = uint4x32_to_single_normal(x);
+    return (uint16_t)(n * 32767.0f + 32768.0f);
+}
+
+uint16_t uint4x32_to_bfloat16_normal(uint4x32_t x) {
+    float f = uint4x32_to_single_normal(x);
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(float));
+    /* Round to bfloat16 by truncating mantissa to 7 bits */
+    uint32_t rounded = (bits + 0x00007FFF + ((bits >> 16) & 1)) >> 16;
+    return (uint16_t)rounded;
+}
+
+uint16_t uint4x32_to_half_normal(uint4x32_t x) {
+    float f = uint4x32_to_single_normal(x);
+    return FLOAT_TO_HALF(f);
+}
+
+uint8_t uint4x32_to_fp8_normal(uint4x32_t x) {
+    /* For fp8, we need to scale the normal appropriately */
+    float n = uint4x32_to_single_normal(x);
+    /* Clamp to fp8 range and convert */
+    return (uint8_t)(fminf(fmaxf(n * 127.0f + 128.0f, 0.0f), 255.0f));
+}
+
+/* Vectorized Box-Muller transform functions */
+float4_t uint4x32_to_single_normal_vec(uint4x32_t x) {
+    float4_t result;
+    
+    /* Use all 4 uint32s to generate 2 normal values (Box-Muller gives pairs) */
+    float u1 = uint32_to_single_uniform(x.v[0]);
+    float u2 = uint32_to_single_uniform(x.v[1]);
+    float u3 = uint32_to_single_uniform(x.v[2]);
+    float u4 = uint32_to_single_uniform(x.v[3]);
+    
+    /* First pair */
+    if (u1 == 0.0f) u1 = 1.0f / 4294967296.0f;
+    float mag1 = sqrtf(-2.0f * logf(u1));
+    float angle1 = 2.0f * PI * u2;
+    result.v[0] = mag1 * cosf(angle1);
+    result.v[1] = mag1 * sinf(angle1);
+    
+    /* Second pair */
+    if (u3 == 0.0f) u3 = 1.0f / 4294967296.0f;
+    float mag2 = sqrtf(-2.0f * logf(u3));
+    float angle2 = 2.0f * PI * u4;
+    result.v[2] = mag2 * cosf(angle2);
+    result.v[3] = mag2 * sinf(angle2);
+    
+    return result;
+}
+
+double2_t uint4x32_to_double_normal_vec(uint4x32_t x) {
+    double2_t result;
+    
+    /* Use all 128 bits to generate 2 normal values */
+    uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
+    uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
+    double u1 = combined1 * (1.0 / 18446744073709551616.0);
+    double u2 = combined2 * (1.0 / 18446744073709551616.0);
+    
+    if (u1 == 0.0) u1 = 1.0 / 18446744073709551616.0;
+    double magnitude = sqrt(-2.0 * log(u1));
+    double angle = 2.0 * PI * u2;
+    result.v[0] = magnitude * cos(angle);
+    result.v[1] = magnitude * sin(angle);
+    
+    return result;
+}
+
+/* Other vectorized normal distributions */
+int32x4_t uint4x32_to_int32_normal_vec(uint4x32_t x) {
+    float4_t normals = uint4x32_to_single_normal_vec(x);
+    int32x4_t result;
+    for (int i = 0; i < 4; i++) {
+        result.v[i] = (int32_t)(normals.v[i] * 2147483647.0f);
+    }
+    return result;
+}
+
+int64x2_t uint4x32_to_int64_normal_vec(uint4x32_t x) {
+    double2_t normals = uint4x32_to_double_normal_vec(x);
+    int64x2_t result;
+    for (int i = 0; i < 2; i++) {
+        result.v[i] = (int64_t)(normals.v[i] * 9223372036854775807.0);
+    }
+    return result;
+}
+
+int8x16_t uint4x32_to_byte_normal_vec(uint4x32_t x) {
+    int8x16_t result;
+    /* Generate 16 normal values from multiple calls - less efficient but simpler */
+    for (int i = 0; i < 4; i++) {
+        uint4x32_t chunk = {{x.v[i], x.v[(i+1)%4], x.v[(i+2)%4], x.v[(i+3)%4]}};
+        float4_t normals = uint4x32_to_single_normal_vec(chunk);
+        for (int j = 0; j < 4; j++) {
+            result.v[i*4 + j] = (int8_t)(normals.v[j] * 127.0f);
+        }
+    }
+    return result;
+}
+
+uint16x8_t uint4x32_to_uint16_normal_vec(uint4x32_t x) {
+    uint16x8_t result;
+    /* Generate 4 normal floats, then duplicate to get 8 values */
+    float4_t normals = uint4x32_to_single_normal_vec(x);
+    for (int i = 0; i < 4; i++) {
+        float n = normals.v[i];
+        result.v[i*2] = (uint16_t)(n * 32767.0f + 32768.0f);
+        result.v[i*2 + 1] = (uint16_t)(n * 32767.0f + 32768.0f);
+    }
+    return result;
+}
+
+uint16x8_t uint4x32_to_bfloat16_normal_vec(uint4x32_t x) {
+    uint16x8_t result;
+    float4_t normals = uint4x32_to_single_normal_vec(x);
+    for (int i = 0; i < 4; i++) {
+        uint32_t bits;
+        memcpy(&bits, &normals.v[i], sizeof(float));
+        uint32_t rounded = (bits + 0x00007FFF + ((bits >> 16) & 1)) >> 16;
+        result.v[i*2] = (uint16_t)rounded;
+        result.v[i*2 + 1] = (uint16_t)rounded;
+    }
+    return result;
+}
+
+half8_t uint4x32_to_half_normal_vec(uint4x32_t x) {
+    half8_t result;
+    float4_t normals = uint4x32_to_single_normal_vec(x);
+    for (int i = 0; i < 4; i++) {
+        uint16_t h = FLOAT_TO_HALF(normals.v[i]);
+        result.v[i*2] = h;
+        result.v[i*2 + 1] = h;
+    }
+    return result;
+}
+
+uint8x16_t uint4x32_to_fp8_normal_vec(uint4x32_t x) {
+    uint8x16_t result;
+    for (int i = 0; i < 4; i++) {
+        uint4x32_t chunk = {{x.v[i], x.v[(i+1)%4], x.v[(i+2)%4], x.v[(i+3)%4]}};
+        float4_t normals = uint4x32_to_single_normal_vec(chunk);
+        for (int j = 0; j < 4; j++) {
+            float n = normals.v[j];
+            result.v[i*4 + j] = (uint8_t)(fminf(fmaxf(n * 127.0f + 128.0f, 0.0f), 255.0f));
+        }
+    }
+    return result;
+}
+
 /* Conversion functions from various precisions to uint4x32_t */
 uint4x32_t single_to_uint4x32(float x) {
     uint32_t bits;
@@ -862,6 +1077,95 @@ CAMLprim value arrayjit_uint4x32_to_fp8_uniform_ocaml(value v_x)
   CAMLparam1(v_x);
   uint4x32_t x = ocaml_array_to_uint4x32(v_x);
   uint8_t result = uint4x32_to_fp8_uniform(x);
+  CAMLreturn(Val_int(result));
+}
+
+/* Conversion from uint4x32 to normal distribution - OCaml wrappers */
+CAMLprim value arrayjit_uint4x32_to_single_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  float result = uint4x32_to_single_normal(x);
+  CAMLreturn(caml_copy_double((double)result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_double_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  double result = uint4x32_to_double_normal(x);
+  CAMLreturn(caml_copy_double(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_int32_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  int32_t result = uint4x32_to_int32_normal(x);
+  CAMLreturn(Val_long(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_int64_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  int64_t result = uint4x32_to_int64_normal(x);
+  CAMLreturn(caml_copy_int64(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_uint32_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint32_t result = uint4x32_to_uint32_normal(x);
+  CAMLreturn(Val_long(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_uint64_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint64_t result = uint4x32_to_uint64_normal(x);
+  CAMLreturn(caml_copy_int64((int64_t)result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_byte_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  int8_t result = uint4x32_to_byte_normal(x);
+  CAMLreturn(Val_int(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_uint16_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint16_t result = uint4x32_to_uint16_normal(x);
+  CAMLreturn(Val_int(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_bfloat16_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint16_t result = uint4x32_to_bfloat16_normal(x);
+  CAMLreturn(Val_int(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_half_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint16_t result = uint4x32_to_half_normal(x);
+  CAMLreturn(Val_int(result));
+}
+
+CAMLprim value arrayjit_uint4x32_to_fp8_normal_ocaml(value v_x)
+{
+  CAMLparam1(v_x);
+  uint4x32_t x = ocaml_array_to_uint4x32(v_x);
+  uint8_t result = uint4x32_to_fp8_normal(x);
   CAMLreturn(Val_int(result));
 }
 

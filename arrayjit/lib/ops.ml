@@ -423,6 +423,9 @@ type unop =
           single value of the output precision. Less bit-efficient but operates poitwise. For random
           bits, the result is uniform over the range of the precision for integer precisions, and
           over the range \[0.0, 1.0) for floating point precisions. *)
+  | Uint4x32_to_prec_normal1
+      (** Non-vectorized variant of [Uint4x32_to_prec_normal] that converts the given Uint4x32 to a
+          single normal distributed value of the output precision using Box-Muller transform. *)
 [@@deriving sexp, compare, equal]
 
 type vec_unop =
@@ -433,6 +436,11 @@ type vec_unop =
           pattern, the indices are converted to a byte offset depending on the given precision.
           NOTE: this operation, unlike any others, impacts projections and shape inference (one
           input cell corresponds to a few output cells). *)
+  | Uint4x32_to_prec_normal
+      (** Box-Muller transform: converts the given Uint4x32 to normal (Gaussian) distributed values.
+          Uses pairs of uniform random values to generate pairs of normal distributed values.
+          NOTE: this operation, like Uint4x32_to_prec_uniform, impacts projections and shape inference
+          (one input cell corresponds to a few output cells). *)
 [@@deriving sexp, compare, equal]
 
 type ternop =
@@ -510,6 +518,9 @@ let interpret_unop op v =
   | Uint4x32_to_prec_uniform1 ->
       invalid_arg
         "Ops.interpret_unop: Uint4x32_to_prec_uniform1 argument outside the domain of float"
+  | Uint4x32_to_prec_normal1 ->
+      invalid_arg
+        "Ops.interpret_unop: Uint4x32_to_prec_normal1 argument outside the domain of float"
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
@@ -675,8 +686,11 @@ let unop_cd_syntax = function
   | Tanh_approx -> "tanh"
   | Not -> "not"
   | Uint4x32_to_prec_uniform1 -> "uint4x32_to_prec_uniform1"
+  | Uint4x32_to_prec_normal1 -> "uint4x32_to_prec_normal1"
 
-let vec_unop_cd_syntax = function Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
+let vec_unop_cd_syntax = function 
+  | Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
+  | Uint4x32_to_prec_normal -> "uint4x32_to_prec_normal"
 
 let unop_c_syntax prec op =
   let fmax () =
@@ -762,12 +776,18 @@ let unop_c_syntax prec op =
   | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
   | Uint4x32_to_prec_uniform1, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
+  | Uint4x32_to_prec_normal1, Uint4x32_prec _ ->
+      invalid_arg "Ops.unop_c_syntax: Uint4x32_to_prec_normal1 not supported for Uint4x32"
+  | Uint4x32_to_prec_normal1, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_normal(", ")")
 
 let vec_unop_c_syntax prec op =
   match (op, prec) with
   | Uint4x32_to_prec_uniform, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform not supported for Uint4x32"
   | Uint4x32_to_prec_uniform, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
+  | Uint4x32_to_prec_normal, Uint4x32_prec _ ->
+      invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_normal not supported for Uint4x32"
+  | Uint4x32_to_prec_normal, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_normal_vec(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
 let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
@@ -925,6 +945,29 @@ external uint4x32_to_bfloat16_uniform : int array -> int
 external uint4x32_to_half_uniform : int array -> int = "arrayjit_uint4x32_to_half_uniform_ocaml"
 external uint4x32_to_fp8_uniform : int array -> int = "arrayjit_uint4x32_to_fp8_uniform_ocaml"
 
+(** Conversion from uint4x32 to various normal distributions *)
+external uint4x32_to_single_normal : int array -> float
+  = "arrayjit_uint4x32_to_single_normal_ocaml"
+
+external uint4x32_to_double_normal : int array -> float
+  = "arrayjit_uint4x32_to_double_normal_ocaml"
+
+external uint4x32_to_int32_normal : int array -> int = "arrayjit_uint4x32_to_int32_normal_ocaml"
+external uint4x32_to_int64_normal : int array -> int64 = "arrayjit_uint4x32_to_int64_normal_ocaml"
+external uint4x32_to_uint32_normal : int array -> int = "arrayjit_uint4x32_to_uint32_normal_ocaml"
+
+external uint4x32_to_uint64_normal : int array -> int64
+  = "arrayjit_uint4x32_to_uint64_normal_ocaml"
+
+external uint4x32_to_byte_normal : int array -> int = "arrayjit_uint4x32_to_byte_normal_ocaml"
+external uint4x32_to_uint16_normal : int array -> int = "arrayjit_uint4x32_to_uint16_normal_ocaml"
+
+external uint4x32_to_bfloat16_normal : int array -> int
+  = "arrayjit_uint4x32_to_bfloat16_normal_ocaml"
+
+external uint4x32_to_half_normal : int array -> int = "arrayjit_uint4x32_to_half_normal_ocaml"
+external uint4x32_to_fp8_normal : int array -> int = "arrayjit_uint4x32_to_fp8_normal_ocaml"
+
 external single_to_uint4x32 : float -> int array = "arrayjit_single_to_uint4x32_ocaml"
 (** Conversion to uint4x32 from various types *)
 
@@ -945,12 +988,14 @@ external fp8_to_uint4x32 : int -> int array = "arrayjit_fp8_to_uint4x32_ocaml"
     converted to the result precision. *)
 let is_homogeneous_prec_unop = function
   | Uint4x32_to_prec_uniform1 -> false (* Heterogeneous: argument must be uint4x32 *)
+  | Uint4x32_to_prec_normal1 -> false (* Heterogeneous: argument must be uint4x32 *)
   | _ -> true (* All other unary operations are homogeneous *)
 
 (** Returns true if the vec_unop operation is homogeneous in precision, meaning its argument should
     be converted to the result precision. *)
 let is_homogeneous_prec_vec_unop = function
   | Uint4x32_to_prec_uniform -> false (* Heterogeneous: argument must be uint4x32 *)
+  | Uint4x32_to_prec_normal -> false (* Heterogeneous: argument must be uint4x32 *)
 
 (** Returns true if the binary operation is homogeneous in precision, meaning its arguments should
     be converted to the result precision. *)
