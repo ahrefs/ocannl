@@ -10,7 +10,7 @@ let test_print_styles () =
     {
       dims = [ get_dim ~d:32 ~label:"width" () ];
       bcast = Broadcastable;
-      id = row_id ~sh_id:1 ~kind:`Output;
+      id = provenance ~sh_id:1 ~kind:`Output;
     }
   in
   let row_with_proj = fresh_row_proj row_with_dim in

@@ -156,7 +156,7 @@ type bcast = Row_var of { v : row_var; beg_dims : dim list } | Broadcastable
 
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 
-module Row_id = struct
+module ProvenanceOrigin = struct
   type t = { sh_id : int; kind : kind } [@@deriving sexp, compare, equal, hash]
 
   include Comparator.Make (struct
@@ -167,18 +167,27 @@ module Row_id = struct
   end)
 end
 
-type row_id = Row_id.t [@@deriving sexp, compare, equal, hash]
-type row_cmp = Row_id.comparator_witness
+module Provenance = struct
+  (* List of origins, maintained as deduplicated and sorted *)
+  type t = ProvenanceOrigin.t list [@@deriving sexp, compare, equal, hash]
+end
 
-let row_id ~sh_id ~kind = Row_id.{ sh_id; kind }
-let phantom_row_id = row_id ~sh_id:(-1) ~kind:`Output
-(* let row_map_empty = Map.empty (module Row_id) *)
+type provenance = Provenance.t [@@deriving sexp, compare, equal, hash]
+type row_cmp = ProvenanceOrigin.comparator_witness
 
-type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
+let provenance ~sh_id ~kind = [ ProvenanceOrigin.{ sh_id; kind } ]
+let phantom_provenance = provenance ~sh_id:(-1) ~kind:`Output
+
+(* Merge two provenances by combining and deduplicating their origins *)
+let merge_provenance p1 p2 =
+  List.dedup_and_sort ~compare:ProvenanceOrigin.compare (p1 @ p2)
+(* let row_map_empty = Map.empty (module Provenance) *)
+
+type t = { dims : dim list; bcast : bcast; id : provenance } [@@deriving equal, hash, compare, sexp]
 type row = t [@@deriving equal, sexp]
 
-let get_row_for_var ?(row_id = phantom_row_id) v =
-  { dims = []; bcast = Row_var { v; beg_dims = [] }; id = row_id }
+let get_row_for_var ?(provenance = phantom_provenance) v =
+  { dims = []; bcast = Row_var { v; beg_dims = [] }; id = provenance }
 
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
@@ -407,7 +416,7 @@ let collect_factors dims =
 
 let known_dims_product dims = match collect_factors dims with Some (_, []) -> true | _ -> false
 
-let rec row_conjunction ?(id = phantom_row_id) ~origin stage constr1 constr2 =
+let rec row_conjunction ?(id = phantom_provenance) ~origin stage constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise
     @@ Shape_error
@@ -850,8 +859,8 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
     row variables. Returns Either.First with a single row if there are zero or one row variables.
     Returns Either.Second with (all_dims, row_vars) if there are multiple row variables, where
     all_dims is a concatenation of all dims and beg_dims in proper order, and row_vars is a list of
-    (row_var * row_id) pairs. *)
-let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) list) Either.t =
+    (row_var * provenance) pairs. *)
+let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * provenance) list) Either.t =
   let rec collect_info before_dims row_vars rows =
     match rows with
     | [] -> (List.rev before_dims, List.rev row_vars)
@@ -873,10 +882,10 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * row_id) 
       let first_id =
         match
           List.find_map rows ~f:(function
-            | { id = { kind = `Output; _ } as id; _ } -> Some id
+            | { id; _ } when List.exists id ~f:(fun (origin : ProvenanceOrigin.t) -> equal_kind origin.kind `Output) -> Some id
             | _ -> None)
         with
-        | None -> phantom_row_id
+        | None -> phantom_provenance
         | Some id -> id
       in
       Either.First { dims = all_dims; bcast = Broadcastable; id = first_id }
@@ -919,7 +928,7 @@ let unsolved_constraints env =
         | Solved_row _ -> None
         | Bounds_row { constr = Unconstrained; _ } -> None
         | Bounds_row { constr; origin; _ } ->
-            Some (Rows_constr { r = [ row_of_var var phantom_row_id ]; constr; origin }))
+            Some (Rows_constr { r = [ row_of_var var phantom_provenance ]; constr; origin }))
   in
   dims @ rows
 
@@ -1044,7 +1053,7 @@ let s_dim_one_in_row_entry stage v ~value ~key ~data =
         let constr = s_dim_one_in_row_constr stage v ~value constr in
         if !reapply_rows_constr then
           ineqs_from_reapply_rows_constr :=
-            Rows_constr { r = [ row_of_var key phantom_row_id ]; constr; origin }
+            Rows_constr { r = [ row_of_var key phantom_provenance ]; constr; origin }
             :: !ineqs_from_reapply_rows_constr;
         reapply_rows_constr := false;
         Bounds_row
@@ -1218,8 +1227,9 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
             | { dims = []; bcast = Broadcastable; id = _ } :: more_rows ->
                 apply_rows_constraint ~depth:(depth + 1) ~stage origin (List.rev more_rows) constr
                   env
-            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Input; _ } as id }
-              :: more_rows ->
+            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
+              :: more_rows
+              when List.exists id ~f:(fun (origin : ProvenanceOrigin.t) -> equal_kind origin.kind `Input) ->
                 let more_eqs, env =
                   apply_rows_constraint ~depth:(depth + 1) ~stage origin (List.rev more_rows) constr
                     env
@@ -1228,8 +1238,9 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
                     { r1 = row_of_var v id; r2 = { dims = []; bcast = Broadcastable; id }; origin }
                   :: more_eqs,
                   env )
-            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id = { kind = `Output; _ } as id }
-              :: more_rows ->
+            | { dims = []; bcast = Row_var { v; beg_dims = [] }; id }
+              :: more_rows
+              when List.exists id ~f:(fun (origin : ProvenanceOrigin.t) -> equal_kind origin.kind `Output) ->
                 ( Row_eq
                     {
                       r1 = row_of_var v id;
@@ -1238,8 +1249,8 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
                     }
                   :: List.concat_map ~f:(check_empty_row ~origin) more_rows,
                   env )
-            | { dims = _; bcast = Row_var { v = _; beg_dims = _ }; id = { kind = `Output; _ } } :: _
-              ->
+            | { dims = _; bcast = Row_var { v = _; beg_dims = _ }; id } :: _
+              when List.exists id ~f:(fun (origin : ProvenanceOrigin.t) -> equal_kind origin.kind `Output) ->
                 assert false
             | _ ->
                 raise @@ Shape_error ("apply_rows_constraint: shape too big", [ Row_mismatch rows ])
@@ -2258,13 +2269,12 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : r
         let rev_row_vars = List.rev row_vars in
         match
           ( constr,
-            List.findi rev_row_vars ~f:(fun _ -> function
-              | _, { Row_id.kind = `Output; _ } -> true
-              | _ -> false) )
+            List.findi rev_row_vars ~f:(fun _ (_, id) ->
+              List.exists id ~f:(fun (origin : ProvenanceOrigin.t) -> equal_kind origin.kind `Output)) )
         with
         | Total_elems _, Some (idx, (v, _id)) when is_stage3_up stage ->
             (* TODO: in stage 3, consider restricting to a strided dimension variable case. *)
-            let other_vars : (row_var * Row_id.t) list =
+            let other_vars : (row_var * provenance) list =
               List.filteri rev_row_vars ~f:(fun i _ -> i <> idx)
             in
             let other_eqs : constraint_ list =

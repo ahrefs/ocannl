@@ -42,10 +42,11 @@ type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_a
 val solved_dim_to_string : print_style -> solved_dim -> string
 val dim_to_string : print_style -> dim -> string
 
-type row_id [@@deriving sexp, compare, equal, hash]
+type provenance [@@deriving sexp, compare, equal, hash]
 type row_cmp
 
-val row_id : sh_id:int -> kind:kind -> row_id
+val provenance : sh_id:int -> kind:kind -> provenance
+val merge_provenance : provenance -> provenance -> provenance
 
 type row_var [@@deriving sexp, compare, equal, hash]
 
@@ -59,10 +60,10 @@ type bcast =
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-type t = { dims : dim list; bcast : bcast; id : row_id } [@@deriving equal, hash, compare, sexp]
+type t = { dims : dim list; bcast : bcast; id : provenance } [@@deriving equal, hash, compare, sexp]
 
 val dims_label_assoc : t -> (string * dim) list
-val get_row_for_var : ?row_id:row_id -> row_var -> t
+val get_row_for_var : ?provenance:provenance -> row_var -> t
 
 type environment [@@deriving sexp_of]
 
