@@ -36,7 +36,7 @@
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder_block"><a href="#val-transformer_encoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -57,7 +57,7 @@
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">enc_output</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder_block"><a href="#val-transformer_decoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -69,7 +69,7 @@
   <span><span class="label">enc_output</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">mask</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder"><a href="#val-transformer_encoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -80,7 +80,7 @@
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_decoder"><a href="#val-transformer_decoder" class="anchor"></a><code><span><span class="keyword">val</span> transformer_decoder : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.String.t <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_layers</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -139,14 +139,14 @@
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Batch normalization for CNN layers - normalizes across the batch dimension for each channel. Typically applied after convolutions and before activations.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-conv_bn_relu"><a href="#val-conv_bn_relu" class="anchor"></a><code><span><span class="keyword">val</span> conv_bn_relu : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Conv block with conv -&gt; batch norm -&gt; activation pattern</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-resnet_block"><a href="#val-resnet_block" class="anchor"></a><code><span><span class="keyword">val</span> resnet_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -158,7 +158,7 @@
   <span><span class="label">train_step</span>:<span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture: conv -&gt; pool -&gt; conv -&gt; pool -&gt; fc layers</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-vgg_block"><a href="#val-vgg_block" class="anchor"></a><code><span><span class="keyword">val</span> vgg_block : 
-  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_convs</span>:int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
