@@ -899,14 +899,21 @@ resp. <code>TDSL.einsum</code>, and <code>++</code> binding to
 <code>NTDSL.einsum1</code> resp. <code>TDSL.einsum1</code>.
 <code>+*</code> is a “ternary” operator, binary wrt. tensor arguments,
 and <code>++</code> is a binary operator, unary postfix wrt. tensor
-arguments. The einsum specification string should directly follow
-<code>+*</code> and <code>++</code>.</p>
-<p>Both <code>+*</code> and <code>++</code> use addition for the
-accumulation operation; <code>+*</code> uses multiplication. You can
-verify that looking at the <code>Operation.einsum</code> and
-<code>Operation.einsum1</code> definitions. You can find examples of
-<code>+*</code> and <code>++</code> behavior in the test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a>. A frequent use-case
-for <code>++</code> is to sum out all axes of a tensor:</p>
+arguments. There are even more einsum operators: binary <code>@^+</code>
+and <code>+++</code>; unary <code>@^^</code>. When the einsum
+specification is a literal string, we support two syntax patterns: the
+string can either directly follow the operator (infix-style notation),
+or the string can follow the second argument (mixfix-style notation).
+When the spec string is an identifier, it must directly follow the
+operator.</p>
+<p><code>+*</code>, <code>+++</code> and <code>++</code> use addition
+for the accumulation operation; <code>@^+</code> and <code>@^^</code>
+use maximum. You can verify that looking at the definitions of
+<code>Operation.einsum</code>, <code>Operation.einsum1</code>, etc. You
+can find examples of <code>+*</code> and <code>++</code> behavior in the
+test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a> and in
+<a href="lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
+<code>++</code> is to sum out all axes of a tensor:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; 0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
 <p>where <code>(!..)</code> converts an integer into a constant
