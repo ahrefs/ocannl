@@ -64,7 +64,7 @@ let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_r
   let k = { w_k } * x in
   let v = { w_v } * x in
   let scores =
-    (q +* " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ] k) /. sqrt (dim d)
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
   in
   Shape.set_dim h num_heads;
   (* NOTE: often d_k = d_v = d_model / num_heads, but we allow for other values. *)
@@ -77,7 +77,7 @@ let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_r
   in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
   (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ] v)
+  { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
@@ -104,14 +104,14 @@ let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate =
   let k = { w_k } * enc_output in
   let v = { w_v } * enc_output in
   let scores =
-    (q +* " ... s | h d; ... t | h d => ... s | t -> h " [ "h"; "d" ] k) /. sqrt (dim d)
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h " [ "h"; "d" ]) /. sqrt (dim d)
   in
   Shape.set_dim h num_heads;
   Shape.set_dim d d_k;
   Shape.set_dim e d_v;
   let attn_weights = softmax ~spec:" ... | t -> ..." ?temperature () scores in
   let attn_weights = dropout ~rate:dropout_rate () ~train_step attn_weights in
-  { w_o } * (attn_weights +* " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ] v)
+  { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 
 let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
   let masked_mha = multi_head_attention ~label:(label @ [ "masked_mha" ]) ~num_heads ~d_k ~d_v () in
@@ -176,8 +176,9 @@ let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
   x
-  +* "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw, ..ic.. -> ..oc.. => ... | oh, ow, ..oc.."
-       [ "kh"; "kw" ] { kernel }
+  +* { kernel }
+       "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw, ..ic.. -> ..oc.. => ... | oh, ow, ..oc.."
+       [ "kh"; "kw" ]
   + { bias = 0. }
 
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
@@ -188,12 +189,13 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) () x =
   Shape.set_dim kw kernel_size;
   let depthwise =
     x
-    +* "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw -> ..ic.. => ... | oh, ow, ..ic.."
-         [ "kh"; "kw" ] { dw_kernel }
+    +* { dw_kernel }
+         "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw -> ..ic.. => ... | oh, ow, ..ic.."
+         [ "kh"; "kw" ]
   in
   (* Pointwise: 1x1 conv to mix channels *)
   depthwise
-  +* "... | h, w, ..ic..; ..ic.. -> ..oc.. => ... | h, w, ..oc.." { pw_kernel }
+  +* { pw_kernel } "... | h, w, ..ic..; ..ic.. -> ..oc.. => ... | h, w, ..oc.."
   + { bias = 0. }
 
 (** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values. *)
