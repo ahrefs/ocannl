@@ -541,6 +541,72 @@ let uniform_at1 ?grad_spec counter =
           ~label:[ "range_over_offsets" ] ())
        ())
 
+(** Generates normally distributed random numbers using the Box-Muller transform.
+    This is more efficient than {!normal1} as it produces two values from two uniform samples. *)
+let normal ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims
+    ?input_axes ?output_axes () =
+  let u1 = uniform ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  let u2 = uniform ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  (* Box-Muller transform: Z = sqrt(-2 * log(U1)) * cos(2π * U2)
+     We shift u1 slightly to avoid log(0) *)
+  let epsilon = Tensor.number ?grad_spec (Float.ldexp 1. (-24)) in  (* 2^-24 for avoiding log(0) *)
+  let u1_safe = add ?grad_spec u1 (pointmul ?grad_spec epsilon (sub ?grad_spec (Tensor.number ?grad_spec 1.) u1 ()) ()) () in  
+  let r = sqrt ?grad_spec (pointmul ?grad_spec (Tensor.number ?grad_spec (-2.)) (log ?grad_spec u1_safe ()) ()) () in
+  let theta = pointmul ?grad_spec (Tensor.number ?grad_spec (2. *. Float.pi)) u2 () in
+  pointmul ?grad_spec r (cos ?grad_spec theta ()) ()
+
+(** A single-value variant of {!normal} that produces one normal value.
+    Less efficient as it discards the second value from Box-Muller. *)
+let normal1 ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims
+    ?input_axes ?output_axes () =
+  let u1 = uniform1 ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  let u2 = uniform1 ?grad_spec () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  (* Box-Muller transform: Z = sqrt(-2 * log(U1)) * cos(2π * U2)
+     We shift u1 slightly to avoid log(0) *)
+  let epsilon = Tensor.number ?grad_spec (Float.ldexp 1. (-24)) in  (* 2^-24 for avoiding log(0) *)
+  let u1_safe = add ?grad_spec u1 (pointmul ?grad_spec epsilon (sub ?grad_spec (Tensor.number ?grad_spec 1.) u1 ()) ()) () in  
+  let r = sqrt ?grad_spec (pointmul ?grad_spec (Tensor.number ?grad_spec (-2.)) (log ?grad_spec u1_safe ()) ()) () in
+  let theta = pointmul ?grad_spec (Tensor.number ?grad_spec (2. *. Float.pi)) u2 () in
+  pointmul ?grad_spec r (cos ?grad_spec theta ()) ()
+
+(** Generates normally distributed random numbers using a counter for PRNG state.
+    Useful for sequential sampling in recurrent contexts. *)
+let normal_at ?grad_spec counter ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims
+    ?input_axes ?output_axes () =
+  let u1 = uniform_at ?grad_spec counter ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  let counter_plus_one = add ~grad_spec:Prohibit_grad counter (Tensor.number ~grad_spec:Prohibit_grad 1.) () in
+  let u2 = uniform_at ?grad_spec counter_plus_one ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  (* Box-Muller transform: Z = sqrt(-2 * log(U1)) * cos(2π * U2)
+     We shift u1 slightly to avoid log(0) *)
+  let epsilon = Tensor.number ?grad_spec (Float.ldexp 1. (-24)) in  (* 2^-24 for avoiding log(0) *)
+  let u1_safe = add ?grad_spec u1 (pointmul ?grad_spec epsilon (sub ?grad_spec (Tensor.number ?grad_spec 1.) u1 ()) ()) () in  
+  let r = sqrt ?grad_spec (pointmul ?grad_spec (Tensor.number ?grad_spec (-2.)) (log ?grad_spec u1_safe ()) ()) () in
+  let theta = pointmul ?grad_spec (Tensor.number ?grad_spec (2. *. Float.pi)) u2 () in
+  pointmul ?grad_spec r (cos ?grad_spec theta ()) ()
+
+(** A single-value variant of {!normal_at} that produces one normal value using a counter.
+    Less efficient as it uses the wasteful uniform1 operations. *)
+let normal_at1 ?grad_spec counter ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims
+    ?input_axes ?output_axes () =
+  let u1 = uniform_at1 ?grad_spec counter ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  let counter_plus_one = add ~grad_spec:Prohibit_grad counter (Tensor.number ~grad_spec:Prohibit_grad 1.) () in
+  let u2 = uniform_at1 ?grad_spec counter_plus_one ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims 
+           ?output_dims ?input_axes ?output_axes () in
+  (* Box-Muller transform: Z = sqrt(-2 * log(U1)) * cos(2π * U2)
+     We shift u1 slightly to avoid log(0) *)
+  let epsilon = Tensor.number ?grad_spec (Float.ldexp 1. (-24)) in  (* 2^-24 for avoiding log(0) *)
+  let u1_safe = add ?grad_spec u1 (pointmul ?grad_spec epsilon (sub ?grad_spec (Tensor.number ?grad_spec 1.) u1 ()) ()) () in  
+  let r = sqrt ?grad_spec (pointmul ?grad_spec (Tensor.number ?grad_spec (-2.)) (log ?grad_spec u1_safe ()) ()) () in
+  let theta = pointmul ?grad_spec (Tensor.number ?grad_spec (2. *. Float.pi)) u2 () in
+  pointmul ?grad_spec r (cos ?grad_spec theta ()) ()
+
 (** The input [i] dimensions default to empty. The batch and output dimensions will be inferred if
     omitted. Note: the data should have no padding and if padding is inferred, the data will be
     copied; otherwise, the resulting tensor value shares host memory with the ndarray. *)
@@ -671,6 +737,10 @@ struct
   let uniform_at = uniform_at ~grad_spec:Grad_spec.grad_spec
   let uniform1 = uniform1 ~grad_spec:Grad_spec.grad_spec
   let uniform_at1 = uniform_at1 ~grad_spec:Grad_spec.grad_spec
+  let normal = normal ~grad_spec:Grad_spec.grad_spec
+  let normal1 = normal1 ~grad_spec:Grad_spec.grad_spec
+  let normal_at = normal_at ~grad_spec:Grad_spec.grad_spec
+  let normal_at1 = normal_at1 ~grad_spec:Grad_spec.grad_spec
 
   module O = struct
     let ( * ) ?label t1 t2 = matmul ?label t1 t2 ()
@@ -718,6 +788,10 @@ struct
     let uniform_at ?label counter = uniform_at ?label counter ()
     let uniform1 ?label () = uniform1 () ?label ()
     let uniform_at1 ?label counter = uniform_at1 ?label counter ()
+    let normal ?label () = normal () ?label ()
+    let normal_at ?label counter = normal_at ?label counter ()
+    let normal1 ?label () = normal1 () ?label ()
+    let normal_at1 ?label counter = normal_at1 ?label counter ()
   end
 end
 
