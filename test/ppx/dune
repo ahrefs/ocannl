@@ -19,10 +19,25 @@
   (run ./%{pp} --impl %{input} -o %{targets})))
 
 (rule
+ (targets test_ppx_name_conflict_actual.ml)
+ (package neural_nets_lib)
+ (deps
+  (:pp pp.exe)
+  (:input test_ppx_name_conflict.ml))
+ (action
+  (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
  (alias runtest)
  (package neural_nets_lib)
  (action
   (diff test_ppx_op_expected.ml test_ppx_op_actual.ml)))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff test_ppx_name_conflict_expected.ml test_ppx_name_conflict_actual.ml)))
 
 (test
  (name test_ppx_op)

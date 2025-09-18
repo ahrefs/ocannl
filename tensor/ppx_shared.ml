@@ -274,7 +274,22 @@ let let_opt ~loc vbs expr =
   if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr
 
 let no_vbs = Map.empty (module String)
-let reduce_vbss = List.reduce_exn ~f:(Map.merge_skewed ~combine:(fun ~key:_ _v1 v2 -> v2))
+
+let reduce_vbss vbss =
+  List.reduce_exn vbss ~f:(fun acc vbs ->
+      Map.merge_skewed acc vbs ~combine:(fun ~key _v1 v2 ->
+          (* Get location from the value binding for better error reporting *)
+          let loc = v2.pvb_loc in
+          (* Create an error expression *)
+          let error_expr =
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl: name clash for inline definition or variable capture '%s' - the name \
+                  is already defined"
+                 key
+          in
+          (* Return a value binding with the error *)
+          { v2 with pvb_expr = error_expr }))
 
 let expr_expander_with_punning translate ~loc ~path:_ payload =
   match payload with
@@ -346,6 +361,16 @@ let collect_capture_labels ~loc head rest =
             @@ Location.error_extensionf ~loc:expr.pexp_loc
                  "ppx_ocannl %%op: expected a string literal"))
   in
+  let capture_labels, more_errors =
+    List.fold_left capture_labels ~init:([], []) ~f:(fun (labels, errors) ((loc, label) as arg) ->
+        if List.mem labels arg ~equal:(fun (_, a) (_, b) -> String.equal a b) then
+          ( labels,
+            (Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc "ppx_ocannl %%op: repeated variable capture '%s'"
+                 label)
+            :: errors )
+        else (arg :: labels, errors))
+  in
   let capture_refs, capture_bindings =
     List.map capture_labels ~f:(fun (loc, label) ->
         let ref_expr = [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]] in
@@ -357,6 +382,6 @@ let collect_capture_labels ~loc head rest =
         (Ast_builder.Default.evar ~loc label, (label, binding)))
     |> List.unzip
   in
-  let capture_dims_expr = Ast_builder.Default.elist ~loc (errors @ capture_refs) in
+  let capture_dims_expr = Ast_builder.Default.elist ~loc (more_errors @ errors @ capture_refs) in
   let capture_vbs = Map.of_alist_exn (module String) capture_bindings in
   (capture_vbs, capture_dims_expr)

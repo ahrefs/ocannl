@@ -374,7 +374,8 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
           let name = { loc = first_label.loc; txt = tensor_name } in
           let pat, vb = make_vb ~opt_label ?param_init ~extra_args ~loc name in
           (* Combine with any bindings from the initialization *)
-          let all_vbs = Map.add_exn init_vbs ~key:tensor_name ~data:vb in
+          let tensor_vbs = Map.singleton (module String) tensor_name vb in
+          let all_vbs = reduce_vbss [ init_vbs; tensor_vbs ] in
           (all_vbs, pat2expr pat)
       | _ ->
           ( no_vbs,
