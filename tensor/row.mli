@@ -45,6 +45,7 @@ val dim_to_string : print_style -> dim -> string
 type provenance [@@deriving sexp, compare, equal, hash]
 
 val provenance : sh_id:int -> kind:kind -> provenance
+val empty_provenance : provenance
 val merge_provenance : provenance -> provenance -> provenance
 
 type row_var [@@deriving sexp, compare, equal, hash]
@@ -59,10 +60,11 @@ type bcast =
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-type t = { dims : dim list; bcast : bcast; prov : provenance } [@@deriving equal, hash, compare, sexp]
+type t = { dims : dim list; bcast : bcast; prov : provenance }
+[@@deriving equal, hash, compare, sexp]
 
 val dims_label_assoc : t -> (string * dim) list
-val get_row_for_var : ?prov:provenance -> row_var -> t
+val get_row_for_var : provenance -> row_var -> t
 
 type environment [@@deriving sexp_of]
 

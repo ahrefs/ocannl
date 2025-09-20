@@ -1267,7 +1267,7 @@ let set_dim delayed_var_ref dim =
           {
             (* TODO: actually, the Row.provenance should be the one of the shape that the row variable
                is in, should be stored in `Row and in env_row_var. *)
-            r = [ Row.get_row_for_var row_var ];
+            r = [ Row.get_row_for_var Row.empty_provenance row_var ];
             constr = Total_elems { numerator = Num_elems dim; divided_by = [] };
             origin =
               [
@@ -1283,6 +1283,7 @@ let set_dim delayed_var_ref dim =
         :: !active_constraints
 
 let set_equal delayed_ref1 delayed_ref2 =
+  (* TODO: use provenance from the row variables once we have it there. *)
   match (delayed_ref1, delayed_ref2) with
   | { var_ref = { solved_dim = Some dim1; _ }; _ }, { var_ref = { solved_dim = Some dim2; _ }; _ }
     ->
@@ -1331,8 +1332,8 @@ let set_equal delayed_ref1 delayed_ref2 =
       active_constraints :=
         Row.Row_eq
           {
-            r1 = Row.get_row_for_var row_var1;
-            r2 = Row.get_row_for_var row_var2;
+            r1 = Row.get_row_for_var Row.empty_provenance row_var1;
+            r2 = Row.get_row_for_var Row.empty_provenance row_var2;
             origin =
               [
                 {
@@ -1351,7 +1352,7 @@ let set_equal delayed_ref1 delayed_ref2 =
       active_constraints :=
         Row.Rows_constr
           {
-            r = [ Row.get_row_for_var row_var ];
+            r = [ Row.get_row_for_var Row.empty_provenance row_var ];
             constr =
               Total_elems
                 {

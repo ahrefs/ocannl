@@ -160,6 +160,7 @@ type provenance_origin = { sh_id : int; kind : kind } [@@deriving sexp, compare,
 (* List of origins, maintained as deduplicated and sorted *)
 type provenance = provenance_origin list [@@deriving sexp, compare, equal, hash]
 
+let empty_provenance = []
 let provenance ~sh_id ~kind = [ { sh_id; kind } ]
 
 (* Merge two provenances by combining and deduplicating their origins *)
@@ -171,7 +172,7 @@ type t = { dims : dim list; bcast : bcast; prov : provenance }
 
 type row = t [@@deriving equal, sexp]
 
-let get_row_for_var ?(prov = []) v = { dims = []; bcast = Row_var { v; beg_dims = [] }; prov }
+let get_row_for_var prov v = { dims = []; bcast = Row_var { v; beg_dims = [] }; prov }
 
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
@@ -400,7 +401,7 @@ let collect_factors dims =
 
 let known_dims_product dims = match collect_factors dims with Some (_, []) -> true | _ -> false
 
-let rec row_conjunction ?(prov = []) ~origin stage constr1 constr2 =
+let rec row_conjunction ~prov ~origin stage constr1 constr2 =
   let elems_mismatch n1 n2 =
     raise
     @@ Shape_error
