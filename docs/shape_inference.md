@@ -32,7 +32,7 @@ type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 
-type row = Row.t = { dims : dim list; bcast : bcast; id : row_id }
+type row = Row.t = { dims : dim list; bcast : bcast; id : provenance }
 
 type shape = Shape.t = {
   mutable batch : row;

@@ -6,8 +6,10 @@ Output shape:
   ((dims
     ((Dim ((d 2) (label ()) (proj_id ((Proj_id 2194)))))
      (Dim ((d 8) (label ()) (proj_id ((Proj_id 2195)))))))
-   (bcast Broadcastable) (id ((sh_id 830) (kind Batch)))))
- (input ((dims ()) (bcast Broadcastable) (id ((sh_id 830) (kind Input)))))
- (output ((dims ()) (bcast Broadcastable) (id ((sh_id 830) (kind Output)))))
+   (bcast Broadcastable) (prov (((sh_id 830) (kind Batch))))))
+ (input
+  ((dims ()) (bcast Broadcastable) (prov (((sh_id 830) (kind Input))))))
+ (output
+  ((dims ()) (bcast Broadcastable) (prov (((sh_id 830) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (id 830)
  (debug_name transformer))

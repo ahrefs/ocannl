@@ -363,7 +363,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   in
   let to_row kind v dims beg_dims =
     let bcast, beg_dims = to_bcast kind v beg_dims in
-    { Row.dims = beg_dims @ to_dim kind dims; bcast; id = Row.row_id ~sh_id ~kind }
+    { Row.dims = beg_dims @ to_dim kind dims; bcast; prov = Row.provenance ~sh_id ~kind }
   in
   let batch = to_row `Batch labels.bcast_batch b_dims beg_b_dims in
   let input = to_row `Input labels.bcast_input i_dims beg_i_dims in
@@ -826,13 +826,13 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             {
               dims = slice_var :: cur_sh.batch.dims;
               bcast = cur_sh.batch.bcast;
-              id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+              prov = Row.provenance ~sh_id:cur_sh.id ~kind:`Batch;
             }
         | Row_var { v; beg_dims } ->
             {
               dims = cur_sh.batch.dims;
               bcast = Row_var { v; beg_dims = slice_var :: beg_dims };
-              id = Row.row_id ~sh_id:cur_sh.id ~kind:`Batch;
+              prov = Row.provenance ~sh_id:cur_sh.id ~kind:`Batch;
             }
       in
       let get_origin kind =
@@ -1265,7 +1265,7 @@ let set_dim delayed_var_ref dim =
       active_constraints :=
         Row.Rows_constr
           {
-            (* TODO: actually, the Row.row_id should be the one of the shape that the row variable
+            (* TODO: actually, the Row.provenance should be the one of the shape that the row variable
                is in, should be stored in `Row and in env_row_var. *)
             r = [ Row.get_row_for_var row_var ];
             constr = Total_elems { numerator = Num_elems dim; divided_by = [] };
@@ -1546,7 +1546,7 @@ let%debug4_sexp row_to_dims (row : Row.t) : int array =
            ( "Not enough shape information: unresolved row variable "
              ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
              [ Row_mismatch [ row ] ] )
-  | { dims; bcast = Broadcastable; id = _ } -> Array.of_list_map dims ~f
+  | { dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map dims ~f
 
 let to_dims (sh : t) : int array =
   finish_inference ();
@@ -1693,21 +1693,21 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     {
       dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
       bcast = Broadcastable;
-      id = row_id ~sh_id:id ~kind;
+      prov = provenance ~sh_id:id ~kind;
     }
   in
   let make_axes kind ds =
     {
       dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
       bcast = Broadcastable;
-      id = row_id ~sh_id:id ~kind;
+      prov = provenance ~sh_id:id ~kind;
     }
   in
   let make_unknown kind =
     {
       dims = [];
       bcast = Row_var { v = get_row_var (); beg_dims = [] };
-      id = row_id ~sh_id:id ~kind;
+      prov = provenance ~sh_id:id ~kind;
     }
   in
   let batch =
