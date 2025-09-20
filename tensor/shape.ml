@@ -1265,8 +1265,8 @@ let set_dim delayed_var_ref dim =
       active_constraints :=
         Row.Rows_constr
           {
-            (* TODO: actually, the Row.provenance should be the one of the shape that the row variable
-               is in, should be stored in `Row and in env_row_var. *)
+            (* TODO: actually, the Row.provenance should be the one of the shape that the row
+               variable is in, should be stored in `Row and in env_row_var. *)
             r = [ Row.get_row_for_var Row.empty_provenance row_var ];
             constr = Total_elems { numerator = Num_elems dim; divided_by = [] };
             origin =

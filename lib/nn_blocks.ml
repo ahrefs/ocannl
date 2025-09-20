@@ -2,20 +2,19 @@
 
     This file contains basic building blocks for neural networks, with limited functionality. Feel
     free to copy-paste and modify as needed.
-      
+
     Design principles, OCANNL fundamentals, and common patterns:
-      - "Principle of least commitment": use row variables where axis count doesn't matter
-      - Einsum specs here often use single-char mode (no commas) but with spaces for readability
-      - Pooling uses constant kernels (0.5 + 0.5) to propagate window dimensions
-      - conv2d uses convolution syntax: "stride*out+kernel," (often in multi-char mode) 
-      - Input axes (before →) for kernels show intent (and end up rightmost for memory locality)
-      - Inline params { } are always learnable and are lifted to unit parameter ()
-      - Introduce inputs to a block after sub-block construction
-        (sub-blocks have no automatic lifting like there is for inline definitions of params)
-      - Always use literal strings with einsum operators when capturing variables
-      - Avoid unnecessary variable captures in einsum operators, be mindful they can shadow
-        other identifiers
-*)
+    - "Principle of least commitment": use row variables where axis count doesn't matter
+    - Einsum specs here often use single-char mode (no commas) but with spaces for readability
+    - Pooling uses constant kernels (0.5 + 0.5) to propagate window dimensions
+    - conv2d uses convolution syntax: "stride*out+kernel," (often in multi-char mode)
+    - Input axes (before →) for kernels show intent (and end up rightmost for memory locality)
+    - Inline params \{ \} are always learnable and are lifted to unit parameter ()
+    - Introduce inputs to a block after sub-block construction (sub-blocks have no automatic lifting
+      like there is for inline definitions of params)
+    - Always use literal strings with einsum operators when capturing variables
+    - Avoid unnecessary variable captures in einsum operators, be mindful they can shadow other
+      identifiers *)
 
 open! Base
 open Ocannl_tensor.Operation.DSL_modules
@@ -130,7 +129,7 @@ let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_encoder_block
-          ~label:(( "layer" ^ Int.to_string i) :: label)
+          ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step x -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
@@ -139,7 +138,7 @@ let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_decoder_block
-          ~label:(( "layer" ^ Int.to_string i) :: label)
+          ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
   in
   fun ~train_step target ~enc_output ~mask ->
