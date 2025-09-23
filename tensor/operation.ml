@@ -572,14 +572,16 @@ module Make_DSL (Grad_spec : sig
   val grad_spec : Tensor.grad_spec
 end) =
 struct
-  let term = Tensor.term ~grad_spec:Grad_spec.grad_spec
-  let number = Tensor.number ~grad_spec:Grad_spec.grad_spec
-  let bits = Tensor.bits ~grad_spec:Grad_spec.grad_spec
-  let ndarray = Tensor.ndarray ~grad_spec:Grad_spec.grad_spec
-  let threefry4x32 = threefry4x32 ~grad_spec:Grad_spec.grad_spec
-  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec:Grad_spec.grad_spec
-  let uint4x32_to_prec_uniform1 = uint4x32_to_prec_uniform1 ~grad_spec:Grad_spec.grad_spec
-  let embed_self_id = embed_self_id ~grad_spec:Grad_spec.grad_spec
+  include Grad_spec
+
+  let term = Tensor.term ~grad_spec
+  let number = Tensor.number ~grad_spec
+  let bits = Tensor.bits ~grad_spec
+  let ndarray = Tensor.ndarray ~grad_spec
+  let threefry4x32 = threefry4x32 ~grad_spec
+  let uint4x32_to_prec_uniform = uint4x32_to_prec_uniform ~grad_spec
+  let uint4x32_to_prec_uniform1 = uint4x32_to_prec_uniform1 ~grad_spec
+  let embed_self_id = embed_self_id ~grad_spec
 
   (** The default initialization operation for {!param} calls. *)
   let default_param_init = ref (uniform ~grad_spec:Require_grad)
@@ -607,21 +609,21 @@ struct
     in
     Tensor.param ~t
 
-  let einsum = einsum ~grad_spec:Grad_spec.grad_spec
-  let outer_sum = outer_sum ~grad_spec:Grad_spec.grad_spec
-  let einsum1 = einsum1 ~grad_spec:Grad_spec.grad_spec
-  let einmax1 = einmax1 ~grad_spec:Grad_spec.grad_spec
-  let tropical = tropical ~grad_spec:Grad_spec.grad_spec
-  let offsets = offsets ~grad_spec:Grad_spec.grad_spec
-  let range = range ~grad_spec:Grad_spec.grad_spec
-  let range_of_shape = range_of_shape ~grad_spec:Grad_spec.grad_spec
+  let einsum = einsum ~grad_spec
+  let outer_sum = outer_sum ~grad_spec
+  let einsum1 = einsum1 ~grad_spec
+  let einmax1 = einmax1 ~grad_spec
+  let tropical = tropical ~grad_spec
+  let offsets = offsets ~grad_spec
+  let range = range ~grad_spec
+  let range_of_shape = range_of_shape ~grad_spec
   let stop_gradient = stop_gradient
-  let reshape = reshape ~grad_spec:Grad_spec.grad_spec
-  let wrap = wrap ~grad_spec:Grad_spec.grad_spec
-  let wrap_padded = wrap_padded ~grad_spec:Grad_spec.grad_spec
-  let rebatch = rebatch ~grad_spec:Grad_spec.grad_spec
-  let init = init ~grad_spec:Grad_spec.grad_spec
-  let uniform = uniform ~grad_spec:Grad_spec.grad_spec
+  let reshape = reshape ~grad_spec
+  let wrap = wrap ~grad_spec
+  let wrap_padded = wrap_padded ~grad_spec
+  let rebatch = rebatch ~grad_spec
+  let init = init ~grad_spec
+  let uniform = uniform ~grad_spec
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
@@ -635,40 +637,37 @@ struct
     in
     Tensor.param ?input_dims:i ?output_dims:o ~t l
 
-  let matmul = matmul ~grad_spec:Grad_spec.grad_spec
-  let pointmul = pointmul ~grad_spec:Grad_spec.grad_spec
-  let add = add ~grad_spec:Grad_spec.grad_spec
-  let pointpow = pointpow ~grad_spec:Grad_spec.grad_spec
-  let relu = relu ~grad_spec:Grad_spec.grad_spec
-  let sat01 = sat01 ~grad_spec:Grad_spec.grad_spec
-  let fma = fma ~grad_spec:Grad_spec.grad_spec
-
-  let number_int ?label ?axis_label i =
-    Tensor.number ?label ?axis_label ~grad_spec:Grad_spec.grad_spec (Float.of_int i)
-
-  let embed_symbol = embed_symbol ~grad_spec:Grad_spec.grad_spec
-  let embed_dim = embed_dim ~grad_spec:Grad_spec.grad_spec
-  let sub = sub ~grad_spec:Grad_spec.grad_spec
-  let pointdiv = pointdiv ~grad_spec:Grad_spec.grad_spec
-  let slice = slice ~grad_spec:Grad_spec.grad_spec
-  let exp = exp ~grad_spec:Grad_spec.grad_spec
-  let log = log ~grad_spec:Grad_spec.grad_spec
-  let log2 = log2 ~grad_spec:Grad_spec.grad_spec
-  let sin = sin ~grad_spec:Grad_spec.grad_spec
-  let cos = cos ~grad_spec:Grad_spec.grad_spec
-  let neg = neg ~grad_spec:Grad_spec.grad_spec
-  let sqrt = sqrt ~grad_spec:Grad_spec.grad_spec
-  let recip = recip ~grad_spec:Grad_spec.grad_spec
-  let recip_sqrt = recip_sqrt ~grad_spec:Grad_spec.grad_spec
-  let tanh = tanh ~grad_spec:Grad_spec.grad_spec
-  let where = where ~grad_spec:Grad_spec.grad_spec
-  let not = not ~grad_spec:Grad_spec.grad_spec
-  let lt = lt ~grad_spec:Grad_spec.grad_spec
-  let eq = eq ~grad_spec:Grad_spec.grad_spec
-  let ne = ne ~grad_spec:Grad_spec.grad_spec
-  let uniform_at = uniform_at ~grad_spec:Grad_spec.grad_spec
-  let uniform1 = uniform1 ~grad_spec:Grad_spec.grad_spec
-  let uniform_at1 = uniform_at1 ~grad_spec:Grad_spec.grad_spec
+  let matmul = matmul ~grad_spec
+  let pointmul = pointmul ~grad_spec
+  let add = add ~grad_spec
+  let pointpow = pointpow ~grad_spec
+  let relu = relu ~grad_spec
+  let sat01 = sat01 ~grad_spec
+  let fma = fma ~grad_spec
+  let number_int ?label ?axis_label i = Tensor.number ?label ?axis_label ~grad_spec (Float.of_int i)
+  let embed_symbol = embed_symbol ~grad_spec
+  let embed_dim = embed_dim ~grad_spec
+  let sub = sub ~grad_spec
+  let pointdiv = pointdiv ~grad_spec
+  let slice = slice ~grad_spec
+  let exp = exp ~grad_spec
+  let log = log ~grad_spec
+  let log2 = log2 ~grad_spec
+  let sin = sin ~grad_spec
+  let cos = cos ~grad_spec
+  let neg = neg ~grad_spec
+  let sqrt = sqrt ~grad_spec
+  let recip = recip ~grad_spec
+  let recip_sqrt = recip_sqrt ~grad_spec
+  let tanh = tanh ~grad_spec
+  let where = where ~grad_spec
+  let not = not ~grad_spec
+  let lt = lt ~grad_spec
+  let eq = eq ~grad_spec
+  let ne = ne ~grad_spec
+  let uniform_at = uniform_at ~grad_spec
+  let uniform1 = uniform1 ~grad_spec
+  let uniform_at1 = uniform_at1 ~grad_spec
 
   module O = struct
     let ( * ) ?label t1 t2 = matmul ?label t1 t2 ()

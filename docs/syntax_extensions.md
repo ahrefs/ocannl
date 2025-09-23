@@ -535,7 +535,9 @@ let mlp ~label ~hid_dims () =
 
 ## The syntax extension %%extend_dsls
 
-This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL`, `PDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. One unique feature of `%%extend_dsls` parsing is that inline tensor definitions, like in `%cd`, do not introduce gradients for the tensors, but, like `%op`, they do introduce initialization for the inline-defined tensors.
+This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL`, `PDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. The identifiers of the root operator functions of the definitions, if unqualified, are prefixed with the appropriate module, similarly to the behavior of inline definitions. Another unique feature of `%%extend_dsls` parsing is that inline tensor definitions, like in `%cd`, do not introduce gradients for the tensors, but, like `%op`, they do introduce initialization for the inline-defined tensors.
+
+The DSL modules expose the value `grad_spec` that can be useful for defining operators via a "scheme" function. See the example using the `box_muller` helper at the beginning of `lib/nn_blocks.ml`. The definitions there use the `%oc` escape extension to avoid the prefixing mentioned above.
 
 ## Implementation details
 
