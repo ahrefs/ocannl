@@ -144,6 +144,8 @@ inline declarations: inline output dimensions, initial values</a></li>
 to lift the applications of configuration arguments (up to the unit
 parameter)</a></li>
 </ul></li>
+<li><a href="#the-syntax-extension-extend_dsls" id="toc-the-syntax-extension-extend_dsls">The syntax extension
+%%extend_dsls</a></li>
 <li><a href="#implementation-details" id="toc-implementation-details">Implementation details</a>
 <ul>
 <li><a href="#the-hard-coded-to-the-power-of-operator" id="toc-the-hard-coded-to-the-power-of-operator">The hard-coded
@@ -194,6 +196,8 @@ inline declarations: inline output dimensions, initial values</a></li>
 of the applications of config arguments: if an error, refactor your
 code</a></li>
 </ul></li>
+<li><a href="#the-syntax-extension-extend_dsls">The syntax extension
+%%extend_dsls</a></li>
 <li><a href="#implementation-details">Implementation details</a>
 <ul>
 <li><a href="#the-hard-coded-to-the-power-of-operator">The hard-coded
@@ -1212,6 +1216,20 @@ architectures:</p>
 <span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        mlp_layer ~label:[ <span class="st">&quot;L&quot;</span> ^ <span class="dt">Int</span>.to_string i ] ~hid_dim ())</span>
 <span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
 <span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; <span class="dt">List</span>.fold layers ~init:x ~f:(<span class="kw">fun</span> x layer -&gt; layer x)</span></code></pre></div>
+<h2 id="the-syntax-extension-extend_dsls">The syntax extension
+%%extend_dsls</h2>
+<p>This syntax extension creates a module <code>DSL_modules</code> with
+the same submodules as <code>Operation.DSL_modules</code>. It removes
+the boilerplate associated with introducing new operators into the
+modules <code>TDSL</code>, <code>NTDSL</code>, <code>PDSL</code> and
+their <code>O</code> submodules. The payload (i.e. content) of
+<code>%%extend_dsls</code> must be non-recursive let-bindings. They are
+parsed using a slight variant of the <code>%op</code> syntax, and are
+inserted into the DSL modules. One unique feature of
+<code>%%extend_dsls</code> parsing is that inline tensor definitions,
+like in <code>%cd</code>, do not introduce gradients for the tensors,
+but, like <code>%op</code>, they do introduce initialization for the
+inline-defined tensors.</p>
 <h2 id="implementation-details">Implementation details</h2>
 <h3 id="the-hard-coded-to-the-power-of-operator">The hard-coded
 to-the-power-of operator</h3>
