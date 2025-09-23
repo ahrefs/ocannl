@@ -295,6 +295,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             | { pexp_desc = Pexp_ident { txt = Lident val_ident; _ }; _ }
               when String.equal val_ident tensor_name ->
                 (no_vbs, None)
+            | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } -> (no_vbs, Some first_value)
             | _ ->
                 let vbs, e = loop first_value in
                 (vbs, Some e)

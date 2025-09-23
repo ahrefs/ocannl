@@ -394,13 +394,7 @@ let operators =
       ("*", "matmul");
       ("*.", "pointmul");
       ("+", "add");
-      ("threefry4x32", "threefry4x32");
-      ("uint4x32_to_prec_uniform", "uint4x32_to_prec_uniform");
-      ("uint4x32_to_prec_uniform1", "uint4x32_to_prec_uniform1");
       ("**.", "pointpow");
-      ("relu", "relu");
-      ("sat01", "sat01");
-      ("fma", "fma");
       ("!.", "number");
       ("!..", "number_int");
       ("!%", "bits");
@@ -410,37 +404,17 @@ let operators =
       ("~-", "num_neg");
       ("/.", "pointdiv");
       ("@|", "slice");
-      ("exp", "exp");
-      ("log", "log");
-      ("log2", "log2");
-      ("sin", "sin");
-      ("cos", "cos");
-      ("neg", "neg");
-      ("not", "not");
-      ("sqrt", "sqrt");
-      ("recip", "recip");
-      ("recip_sqrt", "recip_sqrt");
-      ("tanh", "tanh");
-      ("where", "where");
       ("<", "lt");
       ("=", "eq");
       ("<>", "ne");
-      ("embed_self_id", "embed_self_id");
-      ("einsum", "einsum");
-      ("einsum1", "einsum1");
-      ("offsets", "offsets");
-      ("uniform", "uniform");
-      ("uniform_at", "uniform_at");
-      ("uniform1", "uniform1");
-      ("uniform_at1", "uniform_at1");
     ]
 
 let add_module_qualifier_to_applied_function ?(module_name = "PDSL") expr =
   let qualify_if_needed fn =
     match fn.pexp_desc with
-    | Pexp_ident { txt = Lident name; loc } when Hashtbl.mem operators name ->
-        Ast_builder.Default.pexp_ident ~loc
-          { txt = Ldot (Lident module_name, Hashtbl.find_exn operators name); loc }
+    | Pexp_ident { txt = Lident name; loc } ->
+        let op_name = Option.value ~default:name @@ Hashtbl.find operators name in
+        Ast_builder.Default.pexp_ident ~loc { txt = Ldot (Lident module_name, op_name); loc }
     | _ -> fn
   in
   let rec decompose_app expr acc =
@@ -476,6 +450,7 @@ let add_module_qualifier_to_applied_function ?(module_name = "PDSL") expr =
           List.map cases ~f:(fun case -> { case with pc_rhs = process_expr case.pc_rhs })
         in
         Ast_builder.Default.pexp_function ~loc params cnstr (Pfunction_cases (cases, loc, attrs))
+    | Pexp_extension ({ txt = "oc"; _ }, PStr [ { pstr_desc = Pstr_eval (e, _); _ } ]) -> e
     | _ -> expr
   in
   process_expr expr

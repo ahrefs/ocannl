@@ -347,6 +347,10 @@ For `%op`, the declaration is allowed anywhere. If there is a unit `()` paramete
 let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })
 ```
 
+### Implementation strategy for the initialization syntax
+
+To maintain the familiar concise syntax, yet allow for configurability during initialization, the `%op` syntax substitutes the operator function applied at the root of the initialization expression by prefixing the function identifier with `PDSL` (or by `NTDSL` when invoked from [the `%%extend_dsl` syntax](#the-syntax-extension-extend_dsls)). Only unqualified identifiers get prefixed, and `%oc` is an escape hatch to prevent perfixing even for unqualified identifiers.
+
 ## Using OCANNL's generalized einsum notation
 
 As we mentioned above, in the `%cd` syntax you can set up an arbitrary assignment with projections derived from a generalized einsum specification, by passing the specification as a string with the `~logic` label. However, both the `%cd` and `%op` syntaxes support built-in operators that take an einsum specification: `+*` binding to `NTDSL.einsum` resp. `TDSL.einsum`, and `++` binding to `NTDSL.einsum1` resp. `TDSL.einsum1`. `+*` is a "ternary" operator, binary wrt. tensor arguments, and `++` is a binary operator, unary postfix wrt. tensor arguments. There are even more einsum operators: binary `@^+` and `+++`; unary `@^^`. When the einsum specification is a literal string, we support two syntax patterns: the string can either directly follow the operator (infix-style notation), or the string can follow the second argument (mixfix-style notation). When the spec string is an identifier, it must directly follow the operator.
