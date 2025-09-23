@@ -107,16 +107,14 @@ let rec pointpow ?grad_spec p t1 : Tensor.op_fun =
   end in
   let p_t = NTDSL.number p in
   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
-  
-    let%cd grad_asn =
-      if is_prohibit_grad grad_spec then fun ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ ->
-        Asgns.empty_comp
-      else if Float.equal p 2.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
-      else if Float.equal p 1.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
-      else fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
-    in
-    Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 p_t ?grad_spec
-      ~op_label:"**."
+
+  let%cd grad_asn =
+    if is_prohibit_grad grad_spec then fun ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Asgns.empty_comp
+    else if Float.equal p 2.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g
+    else if Float.equal p 1.0 then fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ g
+    else fun ~t:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. (t1 **. (p -. 1.)) * g
+  in
+  Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn t1 p_t ?grad_spec ~op_label:"**."
 
 module NDO_before_div = struct
   include NDO_before_pow
@@ -146,8 +144,8 @@ let rec pointdiv ?grad_spec t1 t2 : Tensor.op_fun =
     g1 =+ g / v2;
     g2 =+ g * (-1 *. t1 /. (t2 **. 2))
   in
-  
-    Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn ?grad_spec t1 t2 ~op_label:"/."
+
+  Tensor.binop ~compose_op:Pointwise_bin ~op_asn ~grad_asn ?grad_spec t1 t2 ~op_label:"/."
 
 let relu =
   let module NTDSL = Initial_NTDSL in
@@ -193,8 +191,8 @@ let rec sin ?grad_spec =
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
     g1 =+ g * (cos ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ()
   in
-  
-    Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn ~op_label:"sin"
+
+  Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn ~op_label:"sin"
 
 and cos ?grad_spec : Tensor.t -> Tensor.op_fun =
   let module NTDSL = NTDSL_before_div in
@@ -202,8 +200,7 @@ and cos ?grad_spec : Tensor.t -> Tensor.op_fun =
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
     g1 =+ g * (-1 *. (sin ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ())
   in
-  fun t ->
-    Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn t ~op_label:"cos"
+  fun t -> Tensor.unop ?grad_spec ~transpose_op:Pointwise_un ~op_asn ~grad_asn t ~op_label:"cos"
 
 let sqrt =
   let module NTDSL = NTDSL_before_div in
@@ -292,8 +289,7 @@ let threefry4x32_crypto =
   fun t1 t2 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
-    fun
-      ?grad_spec
+    fun ?grad_spec
       ?label
       ?batch_dims
       ?batch_axes
@@ -320,8 +316,7 @@ let threefry4x32_light =
   fun t1 t2 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
     Tn.update_prec t2.Tensor.value Ir.Ops.uint4x32;
-    fun
-      ?grad_spec
+    fun ?grad_spec
       ?label
       ?batch_dims
       ?batch_axes
@@ -355,8 +350,7 @@ let fma ~grad_spec t1 t2 t3 =
     g2 =+ g * v1;
     g3 =+ g
   in
-  Tensor.ternop ~op_label:"fma" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
-    t2 t3
+  Tensor.ternop ~op_label:"fma" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1 t2 t3
 
 let where ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
@@ -365,8 +359,7 @@ let where ~grad_spec t1 t2 t3 =
     g2 =+ where v1 g 0;
     g3 =+ where v1 0 g
   in
-  Tensor.ternop ~op_label:"where" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1
-    t2 t3
+  Tensor.ternop ~op_label:"where" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1 t2 t3
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -401,9 +394,7 @@ let einsum1 ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop
-    ~transpose_op:(Shape.Permute (spec, capture_dims))
-    ~op_asn ~grad_asn ~op_label:"=>"
+  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
 
 module NDO_before_einmax1 = struct
   let ( + ) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
@@ -420,9 +411,7 @@ let einmax1 ?(capture_dims = []) spec =
   end in
   let%cd op_asn ~v ~t1 ~projections = v =:@^ v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ where (t = t1) g 0 in
-  Tensor.unop
-    ~transpose_op:(Shape.Permute (spec, capture_dims))
-    ~op_asn ~grad_asn ~op_label:"@^=>"
+  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
 (** This generalizes the tropical matrix multiplication to arbitrary indices combinations. *)
 let tropical ?(capture_dims = []) spec =
@@ -435,9 +424,7 @@ let tropical ?(capture_dims = []) spec =
     g1 =+ where (t = t1 + t2) g 0;
     g2 =+ where (t = t1 + t2) g 0
   in
-  Tensor.binop
-    ~compose_op:(Shape.Einsum (spec, capture_dims))
-    ~op_asn ~grad_asn ~op_label:"@^=>+"
+  Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
 
 (** A fully-shape-inferred tensor that is initialized with the offset of each cell. *)
 let offsets = Tensor.term ~fetch_op:Range_over_offsets ?init_data:None
@@ -492,8 +479,8 @@ let slice (batch_idx : Idx.static_symbol) =
          }
   in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  
-    Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~op_label:"@|"
+
+  Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~op_label:"@|"
 
 let embed_symbol ?grad_spec ?(label = []) static_sym =
   Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label) ~batch_dims:[]
@@ -601,12 +588,21 @@ struct
     ref (fun () -> Tensor.term ~grad_spec:Require_grad ?init_data:None ~fetch_op:(Constant 0.)) *)
 
   let param ?value ?values ?param_init =
+    let grad_spec =
+      if Tensor.is_prohibit_grad Grad_spec.grad_spec then Tensor.Prohibit_grad else Require_grad
+    in
     let t =
       match (value, values, param_init) with
-      | Some value, None, None -> Tensor.term_init ~grad_spec:Require_grad [| value |]
-      | None, Some values, None -> Tensor.term_init ~grad_spec:Require_grad values
+      | Some value, None, None -> Tensor.term_init ~grad_spec [| value |]
+      | None, Some values, None -> Tensor.term_init ~grad_spec values
       | None, None, Some param_init -> param_init
-      | None, None, None -> !default_param_init ()
+      | None, None, None ->
+          if Tensor.is_prohibit_grad Grad_spec.grad_spec then
+            raise
+            @@ Utils.User_error
+                 "Operation.Make_DSL.param: in non-grad contexts like %%extend_dsls, inline \
+                  definitions with initialization require explicit initialization"
+          else !default_param_init ()
       | _ -> invalid_arg "TDSL.param: at most one of value, values, and param_init can be set"
     in
     Tensor.param ~t

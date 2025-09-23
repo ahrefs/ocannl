@@ -385,3 +385,97 @@ let collect_capture_labels ~loc head rest =
   let capture_dims_expr = Ast_builder.Default.elist ~loc (more_errors @ errors @ capture_refs) in
   let capture_vbs = Map.of_alist_exn (module String) capture_bindings in
   (capture_vbs, capture_dims_expr)
+
+let operators =
+  (* TODO: Auto-generate this list from Operation.Make_DSL.O. *)
+  Hashtbl.of_alist_exn
+    (module String)
+    [
+      ("*", "matmul");
+      ("*.", "pointmul");
+      ("+", "add");
+      ("threefry4x32", "threefry4x32");
+      ("uint4x32_to_prec_uniform", "uint4x32_to_prec_uniform");
+      ("uint4x32_to_prec_uniform1", "uint4x32_to_prec_uniform1");
+      ("**.", "pointpow");
+      ("relu", "relu");
+      ("sat01", "sat01");
+      ("fma", "fma");
+      ("!.", "number");
+      ("!..", "number_int");
+      ("!%", "bits");
+      ("!@", "embed_symbol");
+      ("dim", "embed_dim");
+      ("-", "sub");
+      ("~-", "num_neg");
+      ("/.", "pointdiv");
+      ("@|", "slice");
+      ("exp", "exp");
+      ("log", "log");
+      ("log2", "log2");
+      ("sin", "sin");
+      ("cos", "cos");
+      ("neg", "neg");
+      ("not", "not");
+      ("sqrt", "sqrt");
+      ("recip", "recip");
+      ("recip_sqrt", "recip_sqrt");
+      ("tanh", "tanh");
+      ("where", "where");
+      ("<", "lt");
+      ("=", "eq");
+      ("<>", "ne");
+      ("embed_self_id", "embed_self_id");
+      ("einsum", "einsum");
+      ("einsum1", "einsum1");
+      ("offsets", "offsets");
+      ("uniform", "uniform");
+      ("uniform_at", "uniform_at");
+      ("uniform1", "uniform1");
+      ("uniform_at1", "uniform_at1");
+    ]
+
+let add_module_qualifier_to_applied_function ?(module_name = "PDSL") expr =
+  let qualify_if_needed fn =
+    match fn.pexp_desc with
+    | Pexp_ident { txt = Lident name; loc } when Hashtbl.mem operators name ->
+        Ast_builder.Default.pexp_ident ~loc
+          { txt = Ldot (Lident module_name, Hashtbl.find_exn operators name); loc }
+    | _ -> fn
+  in
+  let rec decompose_app expr acc =
+    match expr.pexp_desc with
+    | Pexp_apply (fn, args) -> decompose_app fn (args @ acc)
+    | _ -> (expr, acc)
+  in
+  let rec process_expr expr =
+    let loc = expr.pexp_loc in
+    match expr.pexp_desc with
+    | Pexp_apply (_, _) ->
+        let fn, args = decompose_app expr [] in
+        let qualified_fn = qualify_if_needed fn in
+        Ast_builder.Default.pexp_apply ~loc qualified_fn args
+    | Pexp_ifthenelse (cond, then_expr, else_expr) ->
+        let processed_then = process_expr then_expr in
+        let processed_else = Option.map else_expr ~f:process_expr in
+        Ast_builder.Default.pexp_ifthenelse ~loc cond processed_then processed_else
+    | Pexp_sequence (expr1, expr2) ->
+        let processed_expr2 = process_expr expr2 in
+        Ast_builder.Default.pexp_sequence ~loc expr1 processed_expr2
+    | Pexp_let (recflag, bindings, body) ->
+        let processed_body = process_expr body in
+        Ast_builder.Default.pexp_let ~loc recflag bindings processed_body
+    | Pexp_open (decl, expr) ->
+        let processed_expr = process_expr expr in
+        Ast_builder.Default.pexp_open ~loc decl processed_expr
+    | Pexp_function (params, cnstr, Pfunction_body body) ->
+        let body = process_expr body in
+        Ast_builder.Default.pexp_function ~loc params cnstr (Pfunction_body body)
+    | Pexp_function (params, cnstr, Pfunction_cases (cases, loc, attrs)) ->
+        let cases =
+          List.map cases ~f:(fun case -> { case with pc_rhs = process_expr case.pc_rhs })
+        in
+        Ast_builder.Default.pexp_function ~loc params cnstr (Pfunction_cases (cases, loc, attrs))
+    | _ -> expr
+  in
+  process_expr expr

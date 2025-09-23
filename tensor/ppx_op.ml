@@ -3,88 +3,7 @@ open Ppxlib
 open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
-let operators =
-  (* TODO: Auto-generate this list from Operation.Make_DSL.O. *)
-  Hashtbl.of_alist_exn
-    (module String)
-    [
-      ("*", "matmul");
-      ("*.", "pointmul");
-      ("+", "add");
-      ("threefry4x32", "threefry4x32");
-      ("uint4x32_to_prec_uniform", "uint4x32_to_prec_uniform");
-      ("uint4x32_to_prec_uniform1", "uint4x32_to_prec_uniform1");
-      ("**.", "pointpow");
-      ("relu", "relu");
-      ("sat01", "sat01");
-      ("fma", "fma");
-      ("!.", "number");
-      ("!..", "number_int");
-      ("!%", "bits");
-      ("!@", "embed_symbol");
-      ("dim", "embed_dim");
-      ("-", "sub");
-      ("~-", "num_neg");
-      ("/.", "pointdiv");
-      ("@|", "slice");
-      ("exp", "exp");
-      ("log", "log");
-      ("log2", "log2");
-      ("sin", "sin");
-      ("cos", "cos");
-      ("neg", "neg");
-      ("not", "not");
-      ("sqrt", "sqrt");
-      ("recip", "recip");
-      ("recip_sqrt", "recip_sqrt");
-      ("tanh", "tanh");
-      ("where", "where");
-      ("<", "lt");
-      ("=", "eq");
-      ("<>", "ne");
-      ("embed_self_id", "embed_self_id");
-      ("einsum", "einsum");
-      ("einsum1", "einsum1");
-      ("offsets", "offsets");
-      ("uniform", "uniform");
-      ("uniform_at", "uniform_at");
-      ("uniform1", "uniform1");
-      ("uniform_at1", "uniform_at1");
-    ]
-
-let add_module_qualifier_to_applied_function expr =
-  let qualify_if_needed fn =
-    match fn.pexp_desc with
-    | Pexp_ident { txt = Lident name; loc } when Hashtbl.mem operators name ->
-        Ast_builder.Default.pexp_ident ~loc
-          { txt = Ldot (Lident "PDSL", Hashtbl.find_exn operators name); loc }
-    | _ -> fn
-  in
-  let rec decompose_app expr acc =
-    match expr.pexp_desc with
-    | Pexp_apply (fn, args) -> decompose_app fn (args @ acc)
-    | _ -> (expr, acc)
-  in
-  let rec process_expr expr =
-    let loc = expr.pexp_loc in
-    match expr.pexp_desc with
-    | Pexp_apply (_, _) ->
-        let fn, args = decompose_app expr [] in
-        let qualified_fn = qualify_if_needed fn in
-        let processed_args = List.map args ~f:(fun (label, arg) -> (label, process_expr arg)) in
-        Ast_builder.Default.pexp_apply ~loc qualified_fn processed_args
-    | Pexp_ifthenelse (cond, then_expr, else_expr) ->
-        let processed_then = process_expr then_expr in
-        let processed_else = Option.map else_expr ~f:process_expr in
-        Ast_builder.Default.pexp_ifthenelse ~loc cond processed_then processed_else
-    | Pexp_sequence (expr1, expr2) ->
-        let processed_expr2 = process_expr expr2 in
-        Ast_builder.Default.pexp_sequence ~loc expr1 processed_expr2
-    | _ -> expr
-  in
-  process_expr expr
-
-let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
+let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let more_label =
     match opt_label with
     | Some label_pat -> [%expr Some [%e pat2expr label_pat]]
@@ -94,7 +13,9 @@ let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
     match param_init with
-    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function c]]
+    | Some c ->
+        let module_name = if no_grad then "NTDSL" else "PDSL" in
+        [%expr Some [%e add_module_qualifier_to_applied_function ~module_name c]]
     | None -> [%expr None]
   in
   let extra_args =
@@ -111,9 +32,10 @@ let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
                    "inline-definition fields must be simple identifiers" ))
   in
   let name = Ast_helper.Exp.constant ~loc (Pconst_string (name.txt, name.loc, None)) in
+  let param_op = if no_grad then [%expr NTDSL.param] else [%expr TDSL.param] in
   let base_expr =
     [%expr
-      TDSL.param ?more_label:[%e more_label] ?value:[%e value] ?values:[%e values]
+      [%e param_op] ?more_label:[%e more_label] ?value:[%e value] ?values:[%e values]
         ?param_init:[%e param_init] [%e name]]
   in
   let with_extra_args =
@@ -121,13 +43,13 @@ let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   in
   [%expr [%e with_extra_args] ()]
 
-let make_vb ~opt_label ?value ?param_init ~extra_args ~loc name =
+let make_vb ~no_grad ~opt_label ?value ?param_init ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
-  let v = make_p ~opt_label ~loc ?value ?param_init ~extra_args name in
+  let v = make_p ~no_grad ~opt_label ~loc ?value ?param_init ~extra_args name in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name =
+let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
@@ -144,14 +66,14 @@ let make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name =
         :: ({ txt = Lident "output_dims"; loc }, output_dims_expr)
         :: extra_args
       in
-      make_p ~opt_label ~loc ~values ~extra_args name
+      make_p ~no_grad ~opt_label ~loc ~values ~extra_args name
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
+let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~num_configs ~is_toplevel:false ~opt_label in
+  let loop = translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label in
   match expr with
   | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, payload); _ } -> (
       (* %oc anti-quotation: preserve the expression without transformation *)
@@ -309,7 +231,9 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
+          let pat, vb =
+            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
+          in
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -328,7 +252,9 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       | Lident tensor_name ->
           let value = [%expr Float.of_int [%e int_val]] in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
+          let pat, vb =
+            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
+          in
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -349,7 +275,9 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name in
+          let pat, vb =
+            make_vb_nd ~no_grad:no_grads_for_inline_defs ~opt_label ~init_nd ~extra_args ~loc name
+          in
           (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
           (Map.singleton (module String) tensor_name vb, pat2expr pat)
       | _ ->
@@ -372,7 +300,9 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
                 (vbs, Some e)
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~opt_label ?param_init ~extra_args ~loc name in
+          let pat, vb =
+            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ?param_init ~extra_args ~loc name
+          in
           (* Combine with any bindings from the initialization *)
           let tensor_vbs = Map.singleton (module String) tensor_name vb in
           let all_vbs = reduce_vbss [ init_vbs; tensor_vbs ] in
@@ -476,7 +406,8 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
               | [], Pfunction_body body -> body
               | _ -> { expr with pexp_desc = Pexp_function (after_unit, constr, body) }
             in
-            translate ~num_configs ~is_toplevel:false ~opt_label ?label body
+            translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label ?label
+              body
           in
           let inner_body = let_opt ~loc vbs inner_body in
           ( no_vbs,
@@ -626,9 +557,9 @@ let rec translate ~num_configs ~is_toplevel ~opt_label ?label expr =
       (no_vbs, [%expr [%e expr] ?label:[%e opt_expr ~loc label]])
   | expr -> (no_vbs, expr)
 
-let translate ?ident_label expr =
+let translate ?(no_grads_for_inline_defs = false) ?ident_label expr =
   let vbs, expr =
-    translate ~num_configs:(ref 0) ~is_toplevel:true ~opt_label:None
+    translate ~no_grads_for_inline_defs ~num_configs:(ref 0) ~is_toplevel:true ~opt_label:None
       ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
       expr
   in
@@ -645,5 +576,8 @@ let translate ?ident_label expr =
           let open! TDSL.O in
           [%e expr]] )
 
-let expr_expander ~loc ~path = expr_expander_with_punning translate ~loc ~path
-let str_expander ~loc ~path = str_expander_with_punning translate ~loc ~path
+let expr_expander ~loc ~path =
+  expr_expander_with_punning (translate ?no_grads_for_inline_defs:None) ~loc ~path
+
+let str_expander ~loc ~path =
+  str_expander_with_punning (translate ?no_grads_for_inline_defs:None) ~loc ~path
