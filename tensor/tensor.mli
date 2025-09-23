@@ -145,6 +145,7 @@ type op_fun =
 (** Labels are collected in tensor construction order, with more specific information first. *)
 
 val binop :
+  ?op_label:string ->
   ?compose_op:Shape.compose_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
@@ -154,9 +155,10 @@ val binop :
   op_fun
 (** The defaults are pointwise operations. The [grad_asn] function receives the non-differentiable
     variant of the tensor as an argument, which can be used to access the tensor's value in a tensor
-    expression. *)
+    expression. [op_label] is prepended to [label] of the {!op_fun} signature. *)
 
 val unop :
+  ?op_label:string ->
   ?transpose_op:Shape.transpose_type ->
   op_asn:(v:tn -> t1:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> projections:projections -> comp) ->
@@ -166,6 +168,7 @@ val unop :
 (** See {!binop} -- same comments apply. *)
 
 val ternop :
+  ?op_label:string ->
   ?ternary_op:Shape.ternary_type ->
   op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->

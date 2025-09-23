@@ -439,30 +439,36 @@ type op_fun =
   ?batch_axes:(string * int) list ->
   param_op_fun
 
-let%track7_sexp binop ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = []) ?top_down_prec
-    ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+let%track7_sexp binop ?op_label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = [])
+    ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
+    ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
-  op ~label ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
+  op
+    ~label:(Option.to_list op_label @ label)
+    ?compose_op ?transpose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2 ]
 
-let%track7_sexp ternop ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = [])
+let%track7_sexp ternop ?op_label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
-  op ~label ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
+  op
+    ~label:(Option.to_list op_label @ label)
+    ?ternary_op ?compose_op:None ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1; t2; t3 ]
 
-let%track7_sexp unop ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = []) ?top_down_prec
-    ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
+let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
+    ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
+    ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
-  op ~label ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ?top_down_prec
+  op ~label:(Option.to_list op_label @ label) ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1 ]
