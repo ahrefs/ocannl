@@ -18,6 +18,7 @@
     - [Label from function argument](#label-from-function-argument)
     - [Configuring inline declarations: inline output dimensions, initial values](#configuring-inline-declarations-inline-output-dimensions-initial-values)
     - [Lifting of the applications of config arguments: if an error, refactor your code](#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code)
+  - [The syntax extension %%extend_dsls](#the-syntax-extension-extend_dsls)
   - [Implementation details](#implementation-details)
     - [The hard-coded to-the-power-of operator](#the-hard-coded-to-the-power-of-operator)
     - [Intricacies of the syntax extension %cd](#intricacies-of-the-syntax-extension-cd)
@@ -527,6 +528,10 @@ let mlp ~label ~hid_dims () =
   in
   fun x -> List.fold layers ~init:x ~f:(fun x layer -> layer x)
 ```
+
+## The syntax extension %%extend_dsls
+
+This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL`, `PDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. One unique feature of `%%extend_dsls` parsing is that inline tensor definitions, like in `%cd`, do not introduce gradients for the tensors, but, like `%op`, they do introduce initialization for the inline-defined tensors.
 
 ## Implementation details
 

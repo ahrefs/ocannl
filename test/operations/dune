@@ -314,6 +314,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
+(test
+ (name test_extend_dsls)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_extend_dsls)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_expect)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

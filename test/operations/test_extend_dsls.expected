@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+HERE: test/operations/test_extend_dsls.ml:23:21
+[23]: relu shape 0:$80  <not-in-yet>
+
+HERE: test/operations/test_extend_dsls.ml:29:21
+[46]: relu shape 0:$161  <not-in-yet>
+
+HERE: test/operations/test_extend_dsls.ml:35:21
+[75]: relu shape 0:$242  <not-in-yet>
+grad_relu <not-in-yet>

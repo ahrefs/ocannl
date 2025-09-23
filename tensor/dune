@@ -36,7 +36,7 @@
  (name ppx_ocannl)
  (public_name neural_nets_lib.ppx_ocannl)
  (kind ppx_rewriter)
- (modules ppx_shared ppx_cd ppx_op ppx_ocannl)
+ (modules ppx_shared ppx_cd ppx_op ppx_extend_dsls ppx_ocannl)
  (libraries base ppxlib str ppx_arrayjit)
  (preprocess
   (pps ppxlib.metaquot)))

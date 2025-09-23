@@ -18,6 +18,10 @@ let rules =
     @@ Extension.declare "op" Extension.Context.structure_item
          Ast_pattern.(pstr __)
          Ppx_op.str_expander;
+    Ppxlib.Context_free.Rule.extension
+    @@ Extension.declare "extend_dsls" Extension.Context.structure_item
+         Ast_pattern.(pstr __)
+         Ppx_extend_dsls.str_expander;
   ]
 
 let () = Driver.register_transformation ~rules "ppx_ocannl"
