@@ -3,7 +3,7 @@ open Ocannl
 module Tn = Ir.Tnode
 module IDX = Train.IDX
 module CDSL = Train.CDSL
-open Operation.DSL_modules
+open Nn_blocks.DSL_modules
 
 (* FIXME: expose backend by name from Context *)
 

@@ -2,7 +2,7 @@
 
 open Base
 module Train = Ocannl.Train
-open Ocannl.Operation.DSL_modules
+open Ocannl.Nn_blocks.DSL_modules
 module Tn = Ir.Tnode
 
 let () =

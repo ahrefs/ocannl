@@ -2,7 +2,7 @@ open Base
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 module Ndarray = Ir.Ndarray
-open Ocannl.Operation.DSL_modules
+open Ocannl.Nn_blocks.DSL_modules
 
 let uniform1_basic_test () =
   Tensor.unsafe_reinitialize ();
@@ -63,7 +63,7 @@ let uniform1_basic_test () =
 let uniform_at1_test () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let open Ocannl.Operation.DSL_modules in
+  let open Ocannl.Nn_blocks.DSL_modules in
   let module O = TDSL.O in
   (* Create a counter tensor *)
   let counter = TDSL.range 5 in
@@ -91,7 +91,7 @@ let uniform_at1_test () =
 let uniform1_shape_preservation_test () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let open Ocannl.Operation.DSL_modules in
+  let open Ocannl.Nn_blocks.DSL_modules in
   let module O = TDSL.O in
   (* Test that uniform1 preserves shape (1:1 mapping) *)
   let input_size = 24 in

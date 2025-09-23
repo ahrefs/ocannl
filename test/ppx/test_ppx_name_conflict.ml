@@ -1,5 +1,5 @@
 open Ocannl
-open Operation.DSL_modules
+open Nn_blocks.DSL_modules
 
 let%op test_inline_defs x =
   let q = { w } * x in

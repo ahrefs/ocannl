@@ -2,7 +2,7 @@ open Base
 open Ocannl
 module IDX = Train.IDX
 module CDSL = Train.CDSL
-open Operation.DSL_modules
+open Nn_blocks.DSL_modules
 
 module type Backend = Ir.Backend_intf.Backend
 

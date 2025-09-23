@@ -1,7 +1,7 @@
 (* A simple demo of using the Threefry4x32 PRNG in OCANNL *)
 
 open Base
-open Ocannl.Operation.DSL_modules
+open Ocannl.Nn_blocks.DSL_modules
 module O = TDSL.O
 
 let () =

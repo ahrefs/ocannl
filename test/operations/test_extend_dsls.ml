@@ -1,5 +1,5 @@
 open! Base
-open Ocannl.Operation.DSL_modules
+open Ocannl.Nn_blocks.DSL_modules
 
 (* Test module-level expansion *)
 [%%extend_dsls

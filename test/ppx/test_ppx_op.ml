@@ -1,6 +1,6 @@
 open Base
 open Ocannl
-open Operation.DSL_modules
+open Nn_blocks.DSL_modules
 
 let%op y0 = (2 *. { hey1 }) + 3
 let%op y1 x = ({ hey2 } * 2) + x

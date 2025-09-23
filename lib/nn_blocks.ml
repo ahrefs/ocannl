@@ -20,6 +20,22 @@ open! Base
 open Ocannl_tensor.Operation.DSL_modules
 module Tn = Ir.Tnode
 
+let%op box_muller grad_spec init_f () =
+  let epsilon = [%oc Float.ldexp 1. (-24)] in
+  let u1 = init_f () in
+  let u2 = init_f () in
+  Ocannl_tensor.Operation.pointmul ~grad_spec
+    (sqrt (-2. *. log (u1 + (!.epsilon *. (1. - u1)))))
+    (cos (2. *. !.Float.pi *. u2))
+
+[%%extend_dsls
+let normal () = [%oc box_muller grad_spec uniform ()]
+let normal1 () = [%oc box_muller grad_spec uniform1 ()]
+let normal_at counter = [%oc box_muller grad_spec (fun () -> uniform_at counter) ()]
+let normal_at1 counter = [%oc box_muller grad_spec (fun () -> uniform_at1 counter) ()]]
+
+open DSL_modules
+
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [ hid_dim ] })
 
 (** Masks and scales by 1/keep_prob to maintain expected value. When [train_step = None], the

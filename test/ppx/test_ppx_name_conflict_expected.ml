@@ -1,5 +1,5 @@
 open Ocannl
-open Operation.DSL_modules
+open Nn_blocks.DSL_modules
 let test_inline_defs =
   let w =
     [%ocaml.error

@@ -2,7 +2,7 @@ open Base
 open Ocannl
 
 let capture_for_computation () =
-  let open Operation.DSL_modules in
+  let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let%op x = { x = uniform1 (); o = [ 2; 3 ] } in
@@ -51,7 +51,7 @@ let capture_for_computation () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false dim_calc
 
 let test_set_dim_and_set_equal () =
-  let open Operation.DSL_modules in
+  let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
   Stdio.printf "\n=== Testing set_dim and set_equal functionality ===\n";
 
@@ -139,7 +139,7 @@ let test_set_dim_and_set_equal () =
   Stdio.printf "=== All tests completed ===\n"
 
 let capture_for_shape_validation () =
-  let open Operation.DSL_modules in
+  let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
   Shape.unsafe_reinitialize ();
   let ctx = Context.auto () in
@@ -253,7 +253,7 @@ let capture_for_shape_validation () =
   Stdio.printf "=== Shape inference integration tests completed ===\n"
 
 let capture_for_shape_inference () =
-  let open Operation.DSL_modules in
+  let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
   Shape.unsafe_reinitialize ();
   let ctx = Context.auto () in
