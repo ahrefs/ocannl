@@ -468,7 +468,9 @@ let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(l
     ?deduced () : t =
   let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
-  op ~label:(Option.to_list op_label @ label) ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ?top_down_prec
+  op
+    ~label:(Option.to_list op_label @ label)
+    ?compose_op:None ?transpose_op ~op_asn ~grad_asn ?grad_spec ?top_down_prec
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     [ t1 ]
@@ -593,8 +595,9 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
   Tn.update_memory_mode v (Hosted Nonconstant) 24;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
      update computations. *)
-  let g = (Option.value_exn ~here:[%here] t.diff).grad in
-  Tn.update_memory_mode g Never_virtual 26;
+  (match t.diff with
+  | Some diff -> Tn.update_memory_mode diff.grad Never_virtual 26
+  | None -> ());
   Shape.set_terminal t.shape;
   remove_fwd_root t;
   { t with params = Set.singleton (module T) t }

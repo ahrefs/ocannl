@@ -123,7 +123,7 @@ val raw_unop :
   logic:Shape.transpose_type ->
   asgns
 
-type grad_spec = Require_grad | Prohibit_grad | If_needed
+type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp_of]
 
 val is_prohibit_grad : grad_spec -> bool
 
@@ -181,7 +181,6 @@ val ternop :
 
 val term :
   ?init_data:Ir.Assignments.init_data -> ?fetch_op:fetch_op -> ?grad_spec:grad_spec -> op_fun
-
 (** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
     is the same as in {!Shape.make}, and by default the shape will be inferred. At most one of
     [init_data] or [fetch_op] should be provided. If [init_data] is provided, it is used to
@@ -208,11 +207,13 @@ val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
     over to populate the [value] node. *)
 
 val param : t:op_fun -> string -> ?more_label:string list -> param_op_fun
-(** For proper parameters, [t] should produce a tensor with no batch axes; input and output axes
-    should by default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed
-    string, appended by [more_label] if any, other parameters are forwarded to [t]. This function
-    returns [t]'s result with the field {!field:params} replaced by a singleton set containing that
-    result, and it also updates the memory modes. *)
+(** [param] is intended for all tensors with initialization; these typically are parameters, but
+    [param] is also used for non-differentiable tensors that need to be initialized. For proper
+    parameters, [t] should produce a tensor with no batch axes; input and output axes should by
+    default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed string,
+    appended by [more_label] if any, other parameters are forwarded to [t]. This function returns
+    [t]'s result with the field {!field:params} replaced by a singleton set containing that result,
+    and it also updates the memory modes. *)
 
 val term_init : ?grad_spec:grad_spec -> float array -> op_fun
 (** A {!term} wrapper that sets up the value node initialization (it generalizes {!ndarray} to
