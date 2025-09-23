@@ -112,7 +112,11 @@ N-dimensional array literals</a></li>
 <li><a href="#wildcard-bindings" id="toc-wildcard-bindings">Wildcard
 bindings</a></li>
 <li><a href="#inline-declarations" id="toc-inline-declarations">Inline
-declarations</a></li>
+declarations</a>
+<ul>
+<li><a href="#implementation-strategy-for-the-initialization-syntax" id="toc-implementation-strategy-for-the-initialization-syntax">Implementation
+strategy for the initialization syntax</a></li>
+</ul></li>
 <li><a href="#using-ocannls-generalized-einsum-notation" id="toc-using-ocannls-generalized-einsum-notation">Using OCANNL’s
 generalized einsum notation</a>
 <ul>
@@ -891,6 +895,16 @@ their labels. Example showing two param tensors declared inline, with
 scope delimited by <code>()</code> and labels enriched by the
 <code>label</code> parameter:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</span></code></pre></div>
+<h3 id="implementation-strategy-for-the-initialization-syntax">Implementation
+strategy for the initialization syntax</h3>
+<p>To maintain the familiar concise syntax, yet allow for
+configurability during initialization, the <code>%op</code> syntax
+substitutes the operator function applied at the root of the
+initialization expression by prefixing the function identifier with
+<code>PDSL</code> (or by <code>NTDSL</code> when invoked from <a href="#the-syntax-extension-extend_dsls">the <code>%%extend_dsl</code>
+syntax</a>). Only unqualified identifiers get prefixed, and
+<code>%oc</code> is an escape hatch to prevent perfixing even for
+unqualified identifiers.</p>
 <h2 id="using-ocannls-generalized-einsum-notation">Using OCANNL’s
 generalized einsum notation</h2>
 <p>As we mentioned above, in the <code>%cd</code> syntax you can set up
@@ -1225,11 +1239,19 @@ modules <code>TDSL</code>, <code>NTDSL</code>, <code>PDSL</code> and
 their <code>O</code> submodules. The payload (i.e. content) of
 <code>%%extend_dsls</code> must be non-recursive let-bindings. They are
 parsed using a slight variant of the <code>%op</code> syntax, and are
-inserted into the DSL modules. One unique feature of
-<code>%%extend_dsls</code> parsing is that inline tensor definitions,
-like in <code>%cd</code>, do not introduce gradients for the tensors,
-but, like <code>%op</code>, they do introduce initialization for the
-inline-defined tensors.</p>
+inserted into the DSL modules. The identifiers of the root operator
+functions of the definitions, if unqualified, are prefixed with the
+appropriate module, similarly to the behavior of inline definitions.
+Another unique feature of <code>%%extend_dsls</code> parsing is that
+inline tensor definitions, like in <code>%cd</code>, do not introduce
+gradients for the tensors, but, like <code>%op</code>, they do introduce
+initialization for the inline-defined tensors.</p>
+<p>The DSL modules expose the value <code>grad_spec</code> that can be
+useful for defining operators via a “scheme” function. See the example
+using the <code>box_muller</code> helper at the beginning of
+<code>lib/nn_blocks.ml</code>. The definitions there use the
+<code>%oc</code> escape extension to avoid the prefixing mentioned
+above.</p>
 <h2 id="implementation-details">Implementation details</h2>
 <h3 id="the-hard-coded-to-the-power-of-operator">The hard-coded
 to-the-power-of operator</h3>
