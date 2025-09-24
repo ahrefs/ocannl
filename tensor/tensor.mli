@@ -291,6 +291,7 @@ type array_print_style =
         and [()] as axis delimiters, but the delimiter for the outermost (i.e. leftmost) axis is
         omitted. The output axes use [;] as a separator and [[]] as axis delimiters (obligatory).
         The batch axes use [;] as a separator and [[||]] as axis delimiters (obligatory). *) ]
+[@@deriving sexp_of]
 (** We print out up to 5 axes when printing a tensor, as a grid (outer rectangle) of (inner)
     rectangles, possibly repeated (screens). *)
 

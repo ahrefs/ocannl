@@ -2,7 +2,7 @@
 
 module Backends_deprecated = Backends
 
-type t
+type t [@@deriving sexp_of]
 (** Execution context managing device, compilation, and buffers *)
 
 type routine

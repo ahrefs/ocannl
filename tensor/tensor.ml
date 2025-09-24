@@ -611,7 +611,7 @@ let consume_forward_code t =
     raise
     @@ Session_error
          ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value
-           ^ " (maybe uninitialized?)",
+           ^ " (maybe you're trying to forward a param?)",
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
@@ -720,9 +720,10 @@ let lazy_optional_payload ~force ~present ~missing v =
 
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
+[@@deriving sexp_of]
 
-let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force ~with_shape
-    ~with_id ~with_value ~with_grad t =
+let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force
+    ~with_shape ~with_id ~with_value ~with_grad t =
   (* First scan to identify which tensors appear embedded anywhere *)
   let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
   let rec scan_for_embedded { subtensor = t; embedded } =
@@ -850,7 +851,8 @@ let%debug_sexp log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let to_doc ~force ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
+let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
+    (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix_str =

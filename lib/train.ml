@@ -183,7 +183,7 @@ let every_non_literal_on_host =
 
 module Lazy = Utils.Lazy
 
-let to_routine (ctx : Context.t) ?(hosted = true) bindings comp =
+let%track7_sexp to_routine (ctx : Context.t) ?(hosted = true) bindings comp =
   if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
   let _ctx, routine = Context.compile ctx comp bindings in
   (* Return just the routine for backward compatibility - ctx is discarded here *)
@@ -234,7 +234,7 @@ type example_train_result = {
     true, and the update code is output to a file before shape inference potentially crashes at
     [init_params]. *)
 let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init = false) ?reinit_all
-    ?(bindings = IDX.empty) ~f ctx t =
+    ?(bindings = IDX.empty) ~f ctx (t : Tensor.t) : Context.t =
   if hosted then set_hosted t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
@@ -275,8 +275,8 @@ let update_once ?output_cd_file ?(hosted = true) ?(skip_init = false) ?reinit_al
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
-let printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
-    ?(style = `Default) t =
+let%debug7_sexp printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
+    ?(style = `Default) (t : Tensor.t) : unit =
   Tensor.print ?here ~force:true ~with_grad ~with_code ~with_low_level style t
 
 (** [printf_tree] is a wrapper around {!Tensor.print_tree} that assumes [~force:true], and by

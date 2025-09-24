@@ -454,9 +454,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
     ]
   in
   match logic with
-  | Terminal { is_param; logic = Fetch Range_over_offsets } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch Range_over_offsets } ->
+      (Row.dim_map_empty, mark_terminal is_param)
   | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal is_param)
-  | Terminal { is_param; logic = Fetch (Constant_bits _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Constant_bits _) } ->
+      (Row.dim_map_empty, mark_terminal is_param)
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
         Rows_constr
@@ -563,7 +565,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             }
           :: mark_terminal is_param )
       else (Row.dim_map_empty, mark_terminal is_param)
-  | Terminal { is_param; logic = Fetch (Embed_symbol _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
+      (Row.dim_map_empty, mark_terminal is_param)
   | Terminal { is_param; logic = Fetch (Embed_dim _) } -> (Row.dim_map_empty, mark_terminal is_param)
   | Terminal { is_param; logic = Fetch Embed_self_id } -> (Row.dim_map_empty, mark_terminal is_param)
   | Transpose (Transpose, sh) ->
