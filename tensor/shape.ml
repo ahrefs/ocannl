@@ -1866,6 +1866,12 @@ let to_string_hum ?(style = Row.Axis_size) (sh : t) =
 (** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
     [force_to_dims] semantics. *)
 let axis_keys_to_idcs (sh : t) : int axis_map =
+  if
+    not
+      (Row.is_broadcastable sh.input.bcast
+      && Row.is_broadcastable sh.output.bcast
+      && Row.is_broadcastable sh.batch.bcast)
+  then raise @@ Utils.User_error "Shape.axis_keys_to_idcs: shape not fully inferred";
   let b_dims =
     (* Enumerate axes backwards. *)
     Array.of_list_rev_mapi sh.batch.dims ~f:(fun i _ ->
