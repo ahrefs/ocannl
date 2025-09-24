@@ -264,7 +264,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of terminal_type
+  | Terminal of { is_param : bool; logic : terminal_type }
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -446,18 +446,18 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         operation = Some operation;
       }
   in
-  let mark_terminal () =
+  let mark_terminal is_param =
     [
-      Terminal_row (cur_sh.batch, [ get_origin `Batch cur_sh `Batch "terminal" ]);
-      Terminal_row (cur_sh.input, [ get_origin `Input cur_sh `Input "terminal" ]);
-      Terminal_row (cur_sh.output, [ get_origin `Output cur_sh `Output "terminal" ]);
+      Terminal_row (is_param, cur_sh.batch, [ get_origin `Batch cur_sh `Batch "terminal" ]);
+      Terminal_row (is_param, cur_sh.input, [ get_origin `Input cur_sh `Input "terminal" ]);
+      Terminal_row (is_param, cur_sh.output, [ get_origin `Output cur_sh `Output "terminal" ]);
     ]
   in
   match logic with
-  | Terminal (Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Constant_bits _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Data (Reshape nd)) ->
+  | Terminal { is_param; logic = Fetch Range_over_offsets } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Constant_bits _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
         Rows_constr
           {
@@ -479,8 +479,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Data (Keep_shape_no_padding nd)) ->
+        :: mark_terminal is_param )
+  | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
         Rows_constr
@@ -499,8 +499,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Data (Padded { data; padding; padded_value })) ->
+        :: mark_terminal is_param )
+  | Terminal { is_param; logic = Data (Padded { data; padding; padded_value }) } ->
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
       ( dim_map_empty,
@@ -520,8 +520,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Fetch (Constant_fill values)) ->
+        :: mark_terminal is_param )
+  | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
         Rows_constr
@@ -539,8 +539,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
+        :: mark_terminal is_param )
+  | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
           Rows_constr
@@ -561,11 +561,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   };
                 ];
             }
-          :: mark_terminal () )
-      else (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Embed_dim _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch Embed_self_id) -> (Row.dim_map_empty, mark_terminal ())
+          :: mark_terminal is_param )
+      else (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Embed_symbol _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch (Embed_dim _) } -> (Row.dim_map_empty, mark_terminal is_param)
+  | Terminal { is_param; logic = Fetch Embed_self_id } -> (Row.dim_map_empty, mark_terminal is_param)
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -1390,9 +1390,9 @@ let set_terminal sh =
       }
   in
   active_constraints :=
-    Row.Terminal_row (sh.batch, [ get_origin `Batch ])
-    :: Row.Terminal_row (sh.input, [ get_origin `Input ])
-    :: Row.Terminal_row (sh.output, [ get_origin `Output ])
+    Row.Terminal_row (false, sh.batch, [ get_origin `Batch ])
+    :: Row.Terminal_row (false, sh.input, [ get_origin `Input ])
+    :: Row.Terminal_row (false, sh.output, [ get_origin `Output ])
     :: !active_constraints
 
 let unsafe_reinitialize () =
@@ -1508,7 +1508,7 @@ let%debug4_sexp finish_inference (() : unit) : unit =
     |> List.dedup_and_sort ~compare:(fun (r1, _) (r2, _) -> Row.compare r1 r2)
   in
   let unsolved =
-    List.map ~f:(fun (ro, o) -> Row.Shape_row (ro, [ o ])) all_update_rows @ unsolved
+    List.map ~f:(fun (ro, o) -> Row.Shape_row (false, ro, [ o ])) all_update_rows @ unsolved
   in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in

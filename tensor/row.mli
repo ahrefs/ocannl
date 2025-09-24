@@ -128,10 +128,14 @@ type constraint_ =
   | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
-  | Terminal_dim of dim * constraint_origin list
-  | Terminal_row of t * constraint_origin list
-      (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors). *)
-  | Shape_row of t * constraint_origin list  (** A row of a shape of interest. *)
+  | Terminal_dim of bool * dim * constraint_origin list
+      (** A terminal dimension with is_param flag indicating if it's a parameter requiring gradient. *)
+  | Terminal_row of bool * t * constraint_origin list
+      (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors).
+          The bool flag indicates if it's a parameter requiring gradient. *)
+  | Shape_row of bool * t * constraint_origin list  
+      (** A row of a shape of interest.
+          The bool flag indicates if it's a parameter requiring gradient. *)
 [@@deriving compare, equal, sexp_of, variants]
 
 type error_trace = ..

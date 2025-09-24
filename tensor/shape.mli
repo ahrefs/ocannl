@@ -194,8 +194,9 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
-  | Terminal of terminal_type
-      (** Extracts any available shape information from the initialization. *)
+  | Terminal of { is_param : bool; logic : terminal_type }
+      (** Extracts any available shape information from the initialization. 
+          The [is_param] field indicates if this is a parameter tensor that requires gradients. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]

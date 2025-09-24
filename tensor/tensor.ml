@@ -281,10 +281,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
+    let is_param = equal_grad_spec grad_spec Require_grad in
     match terminal_op with
-    | None -> Terminal (Fetch (Asgns.Constant 0.0))
-    | Some (Fetch fetch_op) -> Terminal (Fetch fetch_op)
-    | Some (Data init_data) -> Terminal (Data init_data)
+    | None -> Terminal { is_param; logic = Fetch (Asgns.Constant 0.0) }
+    | Some (Fetch fetch_op) -> Terminal { is_param; logic = Fetch fetch_op }
+    | Some (Data init_data) -> Terminal { is_param; logic = Data init_data }
   in
   let dims = lazy_to_dims shape in
   let padding = lazy (Shape.to_padding shape) in
