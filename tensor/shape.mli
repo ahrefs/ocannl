@@ -176,7 +176,7 @@ val unsafe_reinitialize : unit -> unit
 
 (** {2 Internal-ish API.} *)
 
-val set_terminal : t -> unit
+val set_terminal : is_param:bool -> t -> unit
 (** Mark the shape as terminal, so that its rows can be closed to Least Upper Bounds (LUBs). This
     function is only intended for parameters shapes, which would otherwise not be terminal because
     of the initialization expressions of the parameters. *)

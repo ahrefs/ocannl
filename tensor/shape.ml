@@ -446,7 +446,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         operation = Some operation;
       }
   in
-  let mark_terminal is_param =
+  let mark_terminal ~is_param =
     [
       Terminal_row (is_param, cur_sh.batch, [ get_origin `Batch cur_sh `Batch "terminal" ]);
       Terminal_row (is_param, cur_sh.input, [ get_origin `Input cur_sh `Input "terminal" ]);
@@ -455,10 +455,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   in
   match logic with
   | Terminal { is_param; logic = Fetch Range_over_offsets } ->
-      (Row.dim_map_empty, mark_terminal is_param)
-  | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal is_param)
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal ~is_param)
   | Terminal { is_param; logic = Fetch (Constant_bits _) } ->
-      (Row.dim_map_empty, mark_terminal is_param)
+      (Row.dim_map_empty, mark_terminal ~is_param)
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
         Rows_constr
@@ -481,7 +481,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal is_param )
+        :: mark_terminal ~is_param )
   | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
@@ -501,7 +501,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal is_param )
+        :: mark_terminal ~is_param )
   | Terminal { is_param; logic = Data (Padded { data; padding; padded_value }) } ->
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
@@ -522,7 +522,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal is_param )
+        :: mark_terminal ~is_param )
   | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
@@ -541,7 +541,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal is_param )
+        :: mark_terminal ~is_param )
   | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
@@ -563,12 +563,12 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   };
                 ];
             }
-          :: mark_terminal is_param )
-      else (Row.dim_map_empty, mark_terminal is_param)
+          :: mark_terminal ~is_param )
+      else (Row.dim_map_empty, mark_terminal ~is_param)
   | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
-      (Row.dim_map_empty, mark_terminal is_param)
-  | Terminal { is_param; logic = Fetch (Embed_dim _) } -> (Row.dim_map_empty, mark_terminal is_param)
-  | Terminal { is_param; logic = Fetch Embed_self_id } -> (Row.dim_map_empty, mark_terminal is_param)
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Embed_dim _) } -> (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch Embed_self_id } -> (Row.dim_map_empty, mark_terminal ~is_param)
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -1381,7 +1381,7 @@ let set_equal delayed_ref1 delayed_ref2 =
           }
         :: !active_constraints
 
-let set_terminal sh =
+let set_terminal ~is_param sh =
   let get_origin kind =
     Row.
       {
@@ -1393,9 +1393,9 @@ let set_terminal sh =
       }
   in
   active_constraints :=
-    Row.Terminal_row (false, sh.batch, [ get_origin `Batch ])
-    :: Row.Terminal_row (false, sh.input, [ get_origin `Input ])
-    :: Row.Terminal_row (false, sh.output, [ get_origin `Output ])
+    Row.Terminal_row (is_param, sh.batch, [ get_origin `Batch ])
+    :: Row.Terminal_row (is_param, sh.input, [ get_origin `Input ])
+    :: Row.Terminal_row (is_param, sh.output, [ get_origin `Output ])
     :: !active_constraints
 
 let unsafe_reinitialize () =

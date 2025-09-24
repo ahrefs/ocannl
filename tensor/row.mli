@@ -100,6 +100,7 @@ type constraint_origin = {
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of {
+      is_in_param : bool;
       cur : dim_var list;
       subr : dim_var list;
       lub : dim option;
@@ -111,6 +112,7 @@ type dim_entry =
 type row_entry =
   | Solved_row of t
   | Bounds_row of {
+      is_in_param : bool;
       cur : row_var list;
       subr : row_var list;
       lub : t option;
@@ -129,13 +131,14 @@ type constraint_ =
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
   | Terminal_dim of bool * dim * constraint_origin list
-      (** A terminal dimension with is_param flag indicating if it's a parameter requiring gradient. *)
+      (** A terminal dimension with is_param flag indicating if it's a parameter requiring gradient.
+      *)
   | Terminal_row of bool * t * constraint_origin list
       (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors).
           The bool flag indicates if it's a parameter requiring gradient. *)
-  | Shape_row of bool * t * constraint_origin list  
-      (** A row of a shape of interest.
-          The bool flag indicates if it's a parameter requiring gradient. *)
+  | Shape_row of bool * t * constraint_origin list
+      (** A row of a shape of interest. The bool flag indicates if it's a parameter requiring
+          gradient. *)
 [@@deriving compare, equal, sexp_of, variants]
 
 type error_trace = ..

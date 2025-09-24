@@ -599,7 +599,7 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
   (match t.diff with
   | Some diff -> Tn.update_memory_mode diff.grad Never_virtual 26
   | None -> ());
-  Shape.set_terminal t.shape;
+  Shape.set_terminal ~is_param:(Option.is_some t.diff) t.shape;
   remove_fwd_root t;
   { t with params = Set.singleton (module T) t }
 
