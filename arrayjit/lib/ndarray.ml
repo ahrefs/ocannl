@@ -672,11 +672,10 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
             else
               concise_float ~prec:Utils.settings.print_decimals_precision (get_as_float arr indices)
           with Invalid_argument _ ->
-            raise
-            @@ Utils.User_error
-                 [%string
-                   "Invalid indices: %{int_dims_to_string indices} into array: \
-                    %{(int_dims_to_string dims)}"])
+            failwith
+              [%string
+                "Invalid indices: %{int_dims_to_string indices} into array: %{(int_dims_to_string \
+                 dims)}"])
     in
     let tag ?pos label ind =
       if ind = -1 then ""

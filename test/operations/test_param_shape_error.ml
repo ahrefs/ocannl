@@ -1,22 +1,25 @@
-open Base
+open! Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 
-let%expect_test "param without hidden dims should raise error" =
+let raises_error_without_hidden_dims () =
+  Tensor.unsafe_reinitialize ();
   (* This should raise an error because we have a parameter with unspecified dimensions *)
-  (try
-    let _w_o = PDSL.param ~label:"w_o" () in
-    print_endline "ERROR: Should have raised an exception"
-  with
-  | Shape.Shape_error (msg, _) ->
-      Printf.printf "Got expected error: %s\n" msg);
-  
-  [%expect {| Got expected error: You forgot to specify the hidden dimension(s) |}]
+  try
+    let w_o = PDSL.param "w_o" () in
+    let _ctx = Train.run_once (Context.auto ()) w_o in
+    Train.printf w_o;
+    Stdio.print_endline "\nERROR: Should have raised an exception"
+  with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 
-let%expect_test "param with specified dims should work" =
+let all_dims_specified () =
+  Tensor.unsafe_reinitialize ();
   (* This should work because we specify the dimensions *)
-  let _w_o = PDSL.param ~label:"w_o" ~output_dims:[256] ~input_dims:[128] () in
+  let w_o = PDSL.param "w_o" ~output_dims:[ 256 ] ~input_dims:[ 128 ] () in
+  let _ctx = Train.run_once (Context.auto ()) w_o in
   (* Just check it doesn't raise an exception during construction *)
-  print_endline "Parameter created successfully";
-  
-  [%expect {| Parameter created successfully |}]
+  Stdio.print_endline "Parameter created successfully"
+
+let () =
+  raises_error_without_hidden_dims ();
+  all_dims_specified ()

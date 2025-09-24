@@ -79,6 +79,7 @@ opam install cudajit  # for CUDA backend
    - Row variables (`..d..`) enable flexible axis handling and broadcasting
    - Einsum notation supports convolutions, reductions, and arbitrary permutations
    - "Principle of least commitment": use row variables where axis count doesn't matter
+   - Shape inference completion is forced by lowering: via `Context.compile`, or wrappers such as `Train.to_routine`, `Train.run_once` or `Train.forward_once`
 
 3. **Backend Architecture**: Unified interface supporting CPU (multicore), CUDA, and Metal backends
 
@@ -90,8 +91,8 @@ opam install cudajit  # for CUDA backend
 
 - Tests are implemented either as inline expectations using `ppx_expect`; or as cram-style tests using Dune's `test` stanza where an `.ml` file is compiled, executed, and its output compared against an `.expected` file
 - The two approaches are exclusive: a test using using `.expected` file target cannot also use `%expect` inline expectations
-- `.expected` tests are easier to debug, `%expect` tests should only be used when the outputs are illustrative
-- Tutorial files, i.e. `%expect` tests, in `test/` serve as both documentation and integration tests
+- `.expected` tests, i.e. using the `test` stanza, are easier to debug, use them for testing new features
+- Tutorial files, i.e. `%expect` tests, in `test/` serve as both documentation and integration tests, should only be used when the outputs are illustrative
 
 **Running Tests**:
 - `dune runtest` - runs all tests including inline tests and cram-style tests

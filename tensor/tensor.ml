@@ -610,7 +610,8 @@ let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
+         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value
+           ^ " (maybe uninitialized?)",
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in

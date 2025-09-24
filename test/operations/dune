@@ -96,12 +96,11 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(library
- (name test_param_shape_error_lib)
+(test
+ (name test_param_shape_error)
  (package neural_nets_lib)
  (modules test_param_shape_error)
  (libraries base ocannl stdio)
- (inline_tests)
  (preprocess
   (pps ppx_here ppx_ocannl ppx_expect)))
 
