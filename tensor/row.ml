@@ -2457,6 +2457,16 @@ let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | 
 let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
 
+let row_var_is_in_param v env =
+  match Map.find env.row_env v with
+  | Some (Bounds_row { is_in_param; _ }) -> is_in_param
+  | _ -> false
+
+let dim_var_is_in_param v env =
+  match Map.find env.dim_env v with
+  | Some (Bounds_dim { is_in_param; _ }) -> is_in_param
+  | _ -> false
+
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
     (constr : row_constraint) env : constraint_ list * environment =
   if depth > 4 then ([ Rows_constr { r = rows; constr; origin } ], env)
@@ -2485,9 +2495,8 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : r
                     ||
                     match Map.find env.row_env v with
                     | None
-                    | Some
-                        (Bounds_row { lub = None | Some { dims = []; bcast = Broadcastable; _ }; _ })
-                      ->
+                    | Some (Bounds_row { is_in_param = false; lub = None; _ })
+                    | Some (Bounds_row { lub = Some { dims = []; bcast = Broadcastable; _ }; _ }) ->
                         true
                     | _ -> false
                   then
@@ -2525,7 +2534,13 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
   | { bcast = Broadcastable; _ } -> keep_constr ()
   | { bcast = Row_var { v; beg_dims }; dims; prov } -> (
       let r1 = row_of_var v prov in
-      let no_further_axes =
+      let opt_row_error () =
+        if row_var_is_in_param v env then
+          raise
+          @@ Shape_error ("You forgot to specify the hidden dimension(s)", [ Row_mismatch [ r ] ])
+      in
+      let no_further_axes ~guess () =
+        if guess then opt_row_error ();
         Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin }
       in
       (* Note: the reduced constraint applies to just the row variable. *)
@@ -2534,7 +2549,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           let _divided_by : dim_var list = divided_by in
           match (numerator, divided_by, lub) with
           | Num_elems 1, vs, _ when is_stage5_up stage ->
-              ( no_further_axes
+              ( no_further_axes ~guess:false ()
                 :: List.map vs ~f:(fun v ->
                        let d2 = get_dim ~d:1 ~proj_id:54 () in
                        Dim_eq { d1 = Var v; d2; origin }),
@@ -2559,13 +2574,16 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                       in
                       (ineqs @ ineqs', env)
                   | ineq -> ([ ineq ], env))
-          | Num_elems d, [ v ], None when is_stage4_up stage ->
-              (no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d (); origin } ], env)
+          | Num_elems d, [ dv ], None when is_stage4_up stage ->
+              ( no_further_axes ~guess:true ()
+                :: [ Dim_eq { d1 = Var dv; d2 = get_dim ~d (); origin } ],
+                env )
           | Num_elems d, [ v ], Some ({ dims; _ } as r2)
             when last_dim_is dims (fun d2 -> d % d2 = 0) ->
               let d2 = match List.last dims with Some (Dim { d; _ }) -> d | _ -> assert false in
               let row_eq =
-                if d = d2 && is_stage5_up stage then no_further_axes else Row_eq { r1; r2; origin }
+                if d = d2 && is_stage5_up stage then no_further_axes ~guess:false ()
+                else Row_eq { r1; r2; origin }
               in
               (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) (); origin } ], env)
           | Strided_var { coeff; var; denom }, [], None
@@ -2576,6 +2594,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
               let d = denom / gcd in
               let d2 = get_dim ~d () in
               let d3 = get_dim ~d:(coeff / gcd) () in
+              (* opt_row_error (); *)
               ( [
                   Dim_eq { d1 = Var var; d2; origin };
                   Row_eq { r1; r2 = { dims = [ d3 ]; bcast = Broadcastable; prov }; origin };
@@ -2584,11 +2603,11 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           | Strided_var { coeff; var; denom }, [], _
             when is_stage6_up stage && denom % Utils.safe_force coeff = 0 ->
               let d2 = get_dim ~d:(denom / Utils.safe_force coeff) () in
-              ( [
-                  Dim_eq { d1 = Var var; d2; origin };
-                  Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin };
-                ],
-                env )
+              if dim_var_is_in_param var env then
+                raise
+                @@ Shape_error
+                     ("You forgot to specify the hidden dimension(s)", [ Dim_mismatch [ Var var ] ])
+              else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
           | ( Strided_var { coeff; var = _; denom },
               [],
               Some ({ dims = lub_dims; bcast = _; prov = lub_prov } as lub) )
@@ -2693,6 +2712,9 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
         finalize_upper_lower_bound output @ finalize_upper_lower_bound kernel
     | Var v -> (
         match Map.find env.dim_env v with
+        | Some (Bounds_dim { is_in_param = true; _ }) when final ->
+            raise
+            @@ Shape_error ("You forgot to specify the hidden dimension(s)", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; _ }) when is_stage4_up stage ->
             Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
         | Some (Solved_dim _) -> assert false
@@ -2742,6 +2764,62 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
       | _ -> (Shape_row (false, r, origin) :: dim_eqs, env))
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
+
+let update_dim_is_param d is_p env =
+  if not is_p then env
+  else
+    match d with
+    | Var v -> (
+        match Map.find env.dim_env v with
+        | None ->
+            {
+              env with
+              dim_env =
+                Map.set env.dim_env ~key:v
+                  ~data:
+                    (Bounds_dim
+                       {
+                         is_in_param = true;
+                         cur = [];
+                         subr = [];
+                         lub = None;
+                         constr = Unconstrained_dim;
+                         origin = [];
+                       });
+            }
+        | Some (Bounds_dim b) ->
+            let b = Bounds_dim { b with is_in_param = true } in
+            { env with dim_env = Map.set env.dim_env ~key:v ~data:b }
+        | _ -> env)
+    | _ -> env
+
+let update_row_is_param r is_p env =
+  if not is_p then env
+  else
+    match r with
+    | { bcast = Row_var { v; _ }; _ } -> (
+        match Map.find env.row_env v with
+        | None ->
+            {
+              env with
+              row_env =
+                Map.set env.row_env ~key:v
+                  ~data:
+                    (Bounds_row
+                       {
+                         is_in_param = true;
+                         cur = [];
+                         subr = [];
+                         lub = None;
+                         constr = Unconstrained;
+                         origin = [];
+                       });
+            }
+        | Some (Bounds_row b) ->
+            let b = Bounds_row { b with is_in_param = true } in
+            { env with row_env = Map.set env.row_env ~key:v ~data:b }
+        | _ -> env)
+    | _ -> env
 
 let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) env :
     constraint_ list * _ =
@@ -2794,9 +2872,11 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) e
           in
           (more_ineqs, env)
       | Terminal_dim (is_param, d, origin) ->
+          let env = update_dim_is_param d is_param env in
           let more_ineqs = close_dim_terminal ~stage ~is_param origin env @@ subst_dim env d in
           (more_ineqs, env)
       | Terminal_row (is_param, r, origin) ->
+          let env = update_row_is_param r is_param env in
           let more_ineqs = close_row_terminal ~stage ~is_param origin env @@ subst_row env r in
           (more_ineqs, env)
       | Shape_row (_is_param, r, origin) -> process_shape_row ~stage origin env @@ subst_row env r

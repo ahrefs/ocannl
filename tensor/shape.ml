@@ -567,8 +567,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       else (Row.dim_map_empty, mark_terminal ~is_param)
   | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
       (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch (Embed_dim _) } -> (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch Embed_self_id } -> (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Embed_dim _) } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch Embed_self_id } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
   | Transpose (Transpose, sh) ->
       ( Row.dim_map_empty,
         [
@@ -1428,11 +1430,12 @@ let all_rows_w_origin update_step =
         operation = Some "remaining rows";
       }
   in
+  let is_param = match update_step.logic with Terminal { is_param; _ } -> is_param | _ -> false in
   let rows_sh sh =
     [
-      (sh.batch, get_origin sh `Batch);
-      (sh.input, get_origin sh `Input);
-      (sh.output, get_origin sh `Output);
+      (is_param, sh.batch, get_origin sh `Batch);
+      (is_param, sh.input, get_origin sh `Input);
+      (is_param, sh.output, get_origin sh `Output);
     ]
   in
   rows_sh update_step.shape
@@ -1507,11 +1510,12 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let all_update_rows =
     List.concat_map ~f:all_rows_w_origin !active_update_steps
-    |> List.map ~f:(fun (r, o) -> (Row.subst_row env r, o))
-    |> List.dedup_and_sort ~compare:(fun (r1, _) (r2, _) -> Row.compare r1 r2)
+    |> List.map ~f:(fun (ip, r, o) -> (ip, Row.subst_row env r, o))
+    |> List.dedup_and_sort ~compare:(fun (_, r1, _) (_, r2, _) -> Row.compare r1 r2)
   in
   let unsolved =
-    List.map ~f:(fun (ro, o) -> Row.Shape_row (false, ro, [ o ])) all_update_rows @ unsolved
+    List.map ~f:(fun (is_param, ro, o) -> Row.Shape_row (is_param, ro, [ o ])) all_update_rows
+    @ unsolved
   in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
