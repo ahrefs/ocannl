@@ -136,7 +136,7 @@ type constraint_ =
   | Terminal_row of bool * t * constraint_origin list
       (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors).
           The bool flag indicates if it's a parameter requiring gradient. *)
-  | Shape_row of bool * t * constraint_origin list
+  | Shape_row of t * constraint_origin list
       (** A row of a shape of interest. The bool flag indicates if it's a parameter requiring
           gradient. *)
 [@@deriving compare, equal, sexp_of, variants]
