@@ -896,25 +896,66 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
-      List.iter dim_refs ~f:(fun delayed_ref ->
-          let label = delayed_ref.var_ref.ref_label in
-          (* Check if it's in one of the environments *)
-          match Hashtbl.find dim_var_env label with
-          | Some var -> delayed_ref.var <- `Dim var
-          | None -> (
-              match Hashtbl.find row_var_env label with
-              | Some var -> delayed_ref.var <- `Row var
-              | None ->
-                  raise
-                  @@ Row.Shape_error
-                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                         [ Shape_mismatch [ cur_sh; sh ] ] )));
+      let extras_dim_refs =
+        List.filter_map dim_refs ~f:(fun delayed_ref ->
+            let label = delayed_ref.var_ref.ref_label in
+            (* Check if it's in one of the environments *)
+            match Hashtbl.find dim_var_env label with
+            | Some var ->
+                delayed_ref.var <- `Dim var;
+                Option.map
+                  ~f:(fun solved_dim ->
+                    Dim_eq
+                      {
+                        d1 = Row.Var var;
+                        d2 = Row.get_dim ~d:solved_dim ();
+                        origin =
+                          [
+                            {
+                              lhs_name = label;
+                              lhs_kind = `Output;
+                              rhs_name = delayed_ref.var_ref.ref_label;
+                              rhs_kind = `Output;
+                              operation = Some "set_dim";
+                            };
+                          ];
+                      })
+                  delayed_ref.var_ref.solved_dim
+            | None -> (
+                match Hashtbl.find row_var_env label with
+                | Some var ->
+                    delayed_ref.var <- `Row var;
+                    Option.map
+                      ~f:(fun solved_dim ->
+                        Rows_constr
+                          {
+                            r = [ Row.get_row_for_var Row.empty_provenance var ];
+                            constr =
+                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            origin =
+                              [
+                                {
+                                  lhs_name = label;
+                                  lhs_kind = `Output;
+                                  rhs_name = delayed_ref.var_ref.ref_label;
+                                  rhs_kind = `Output;
+                                  operation = Some "set_dim";
+                                };
+                              ];
+                          })
+                      delayed_ref.var_ref.solved_dim
+                | None ->
+                    raise
+                    @@ Row.Shape_error
+                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                           [ Shape_mismatch [ cur_sh; sh ] ] )))
+      in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
       ( proj_env,
-        extras_rhs @ extras_lhs
+        extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
             Row_ineq
               {
@@ -1073,19 +1114,61 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
-      List.iter dim_refs ~f:(fun delayed_ref ->
-          let label = delayed_ref.var_ref.ref_label in
-          (* Check if it's in one of the environments *)
-          match Hashtbl.find dim_var_env label with
-          | Some var -> delayed_ref.var <- `Dim var
-          | None -> (
-              match Hashtbl.find row_var_env label with
-              | Some var -> delayed_ref.var <- `Row var
-              | None ->
-                  raise
-                  @@ Row.Shape_error
-                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                         [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )));
+      (* TODO: refactor to avoid duplication with the one for unary einsum *)
+      let extras_dim_refs =
+        List.filter_map dim_refs ~f:(fun delayed_ref ->
+            let label = delayed_ref.var_ref.ref_label in
+            (* Check if it's in one of the environments *)
+            match Hashtbl.find dim_var_env label with
+            | Some var ->
+                delayed_ref.var <- `Dim var;
+                Option.map
+                  ~f:(fun solved_dim ->
+                    Dim_eq
+                      {
+                        d1 = Row.Var var;
+                        d2 = Row.get_dim ~d:solved_dim ();
+                        origin =
+                          [
+                            {
+                              lhs_name = label;
+                              lhs_kind = `Output;
+                              rhs_name = delayed_ref.var_ref.ref_label;
+                              rhs_kind = `Output;
+                              operation = Some "set_dim";
+                            };
+                          ];
+                      })
+                  delayed_ref.var_ref.solved_dim
+            | None -> (
+                match Hashtbl.find row_var_env label with
+                | Some var ->
+                    delayed_ref.var <- `Row var;
+                    Option.map
+                      ~f:(fun solved_dim ->
+                        Rows_constr
+                          {
+                            r = [ Row.get_row_for_var Row.empty_provenance var ];
+                            constr =
+                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            origin =
+                              [
+                                {
+                                  lhs_name = label;
+                                  lhs_kind = `Output;
+                                  rhs_name = delayed_ref.var_ref.ref_label;
+                                  rhs_kind = `Output;
+                                  operation = Some "set_dim";
+                                };
+                              ];
+                          })
+                      delayed_ref.var_ref.solved_dim
+                | None ->
+                    raise
+                    @@ Row.Shape_error
+                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                           [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )))
+      in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs1
@@ -1093,7 +1176,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
-        extras_rhs1 @ extras_rhs2 @ extras_lhs
+        extras_dim_refs @ extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
             Row_ineq
               {
@@ -1472,12 +1555,17 @@ let update_delayed_var_refs env update_step =
         | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
         | `Dim dim_var -> (
             match Row.get_dim_from_env env dim_var with
-            | Some d -> delayed_ref.var_ref.solved_dim <- Some d
+            | Some d ->
+                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
+                    assert (solved_dim = d));
+                delayed_ref.var_ref.solved_dim <- Some d
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
             | Some row ->
                 let product = compute_row_product env row in
+                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
+                    assert (solved_dim = product));
                 delayed_ref.var_ref.solved_dim <- Some product
             | None -> () (* Not yet resolved *)))
   in
