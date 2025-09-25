@@ -334,6 +334,17 @@
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
 (test
+ (name attention_test)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules attention_test)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_sexp_conv)))
+
+(test
  (name test_extend_dsls)
  (package neural_nets_lib)
  (deps
