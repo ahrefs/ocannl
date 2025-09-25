@@ -281,7 +281,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
-    let is_param = equal_grad_spec grad_spec Require_grad in
+    (* Note: parameters will get their terminal logic set via Shape.set_terminal. *)
+    let is_param = false in
     match terminal_op with
     | None -> Terminal { is_param; logic = Fetch (Asgns.Constant 0.0) }
     | Some (Fetch fetch_op) -> Terminal { is_param; logic = Fetch fetch_op }
