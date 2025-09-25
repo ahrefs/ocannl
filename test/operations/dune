@@ -344,6 +344,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl ppx_expect)))
 
+(test
+ (name hello_world_dim1x1)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hello_world_dim1x1)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_expect)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)
