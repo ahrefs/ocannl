@@ -2032,6 +2032,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
 let global_template_cache = Hashtbl.Poly.create ()
+let thick_templates = Hash_set.create (module Row_var)
 
 let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) env :
     constraint_ list * _ =
@@ -2276,11 +2277,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
       in
       (* The key of the template cache reflects that cur_v will end up substituted by
          {dims=more_dims; bcast=Row_var templ_v}. TODO: should we cache more_dims also? *)
-      let templ_v : row_var =
-        Hashtbl.find_or_add global_template_cache
-          (cur_v, subr_dims_l - cur_dims_l, subr_beg_dims_l - cur_beg_dims_l)
-          ~default:get_row_var
+      let templ_key : row_var * int * int =
+        (cur_v, subr_dims_l - cur_dims_l, subr_beg_dims_l - cur_beg_dims_l)
       in
+      let templ_v : row_var =
+        Hashtbl.find_or_add global_template_cache templ_key ~default:get_row_var
+      in
+      if (more_dims_l > 0) then Hash_set.add thick_templates templ_v;
       let template : t =
         {
           dims = more_dims @ dims;
@@ -2441,7 +2444,7 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : 
           if is_param || is_in_param then
             raise
             @@ Shape_error
-                 ("You forgot to specify the hidden dimension(s)", [ Dim_mismatch [ dim ] ])
+                 ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
           else [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
       | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
           [ Dim_eq { d1 = dim; d2 = lub; origin } ]
@@ -2535,9 +2538,9 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
   | { bcast = Row_var { v; beg_dims }; dims; prov } -> (
       let r1 = row_of_var v prov in
       let opt_row_error () =
-        if row_var_is_in_param v env then
+        if row_var_is_in_param v env && not (Hash_set.mem thick_templates v) then
           raise
-          @@ Shape_error ("You forgot to specify the hidden dimension(s)", [ Row_mismatch [ r ] ])
+          @@ Shape_error ("You forgot to specify the hidden dimension(s) 2", [ Row_mismatch [ r ] ])
       in
       let no_further_axes ~guess () =
         if guess then opt_row_error ();
@@ -2606,7 +2609,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
               if dim_var_is_in_param var env then
                 raise
                 @@ Shape_error
-                     ("You forgot to specify the hidden dimension(s)", [ Dim_mismatch [ Var var ] ])
+                     ("You forgot to specify the hidden dimension(s) 3", [ Dim_mismatch [ Var var ] ])
               else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
           | ( Strided_var { coeff; var = _; denom },
               [],
@@ -2656,8 +2659,8 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
       match Map.find env.row_env v with
       | Some (Bounds_row { is_in_param; lub = None; constr = Unconstrained; _ })
         when is_stage4_up stage ->
-          if is_param || is_in_param then
-            raise @@ Shape_error ("You forgot to specify the hidden dimension(s)", [])
+          if (is_param || is_in_param) && not (Hash_set.mem thick_templates v) then
+            raise @@ Shape_error ("You forgot to specify the hidden dimension(s) 4", [])
           else (
             [%log6 "terminal row: closing", (_r : row)];
             no_further_axes :: term_dims ())
@@ -2712,7 +2715,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
         match Map.find env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
             raise
-            @@ Shape_error ("You forgot to specify the hidden dimension(s)", [ Row_mismatch [ r ] ])
+            @@ Shape_error ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; _ }) when is_stage4_up stage ->
             Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
         | Some (Solved_dim _) -> assert false

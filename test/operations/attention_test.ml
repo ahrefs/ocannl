@@ -40,7 +40,7 @@ let () =
   in
 
   (* Forward pass *)
-  let output = attention_model ~train_step:None ~mask seq in
+  let%op output = seq + attention_model ~train_step:None ~mask seq in
 
   let _ctx = Ocannl.Train.forward_once ctx output in
 

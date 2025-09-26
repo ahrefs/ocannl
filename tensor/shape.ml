@@ -1319,7 +1319,7 @@ let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
 
-let set_dim delayed_var_ref dim =
+let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   match delayed_var_ref with
   | { var_ref = { solved_dim = Some dim2; _ }; _ } when dim2 = dim -> ()
   | { var_ref = { solved_dim = Some dim2; ref_label; _ }; _ } ->
