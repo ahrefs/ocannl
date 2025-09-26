@@ -65,6 +65,7 @@ type t = { dims : dim list; bcast : bcast; prov : provenance }
 
 val dims_label_assoc : t -> (string * dim) list
 val get_row_for_var : provenance -> row_var -> t
+val row_shapes : t -> int list
 
 type environment [@@deriving sexp_of]
 
@@ -100,6 +101,7 @@ type constraint_origin = {
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of {
+      is_in_param : bool;
       cur : dim_var list;
       subr : dim_var list;
       lub : dim option;
@@ -111,6 +113,7 @@ type dim_entry =
 type row_entry =
   | Solved_row of t
   | Bounds_row of {
+      is_in_param : bool;
       cur : row_var list;
       subr : row_var list;
       lub : t option;
@@ -128,10 +131,15 @@ type constraint_ =
   | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not
           affect the constraint (i.e. there is no "subtyping", it resembles Row_eq). *)
-  | Terminal_dim of dim * constraint_origin list
-  | Terminal_row of t * constraint_origin list
-      (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors). *)
-  | Shape_row of t * constraint_origin list  (** A row of a shape of interest. *)
+  | Terminal_dim of bool * dim * constraint_origin list
+      (** A terminal dimension with is_param flag indicating if it's a parameter requiring gradient.
+      *)
+  | Terminal_row of bool * t * constraint_origin list
+      (** A row of the shape of a terminal tensor (i.e. a tensor that does not have sub-tensors).
+          The bool flag indicates if it's a parameter requiring gradient. *)
+  | Shape_row of t * constraint_origin list
+      (** A row of a shape of interest. The bool flag indicates if it's a parameter requiring
+          gradient. *)
 [@@deriving compare, equal, sexp_of, variants]
 
 type error_trace = ..
@@ -149,6 +157,18 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 (** Removed duplicate helper functions *)
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
+
+val add_safe_to_guess : row_var -> unit
+(** Mark a row variable as allowed to be empty even if it's in a parameter. *)
+
+val add_used_in_spec_or_compose : row_var -> unit
+(** Mark a row variable as used in an einsum spec or compose shape update. Meant specifically for
+    input rows, to indicate that the variable should not be guessed empty when it ends up in a
+    parameter. *)
+
+val add_used_in_pointwise : row_var -> unit
+(** Mark a row variable as used in a pointwise shape update. Meant specifically for input rows, to
+    indicate that the variable can be guessed empty when it ends up in a parameter. *)
 
 val subst_row : environment -> t -> t
 

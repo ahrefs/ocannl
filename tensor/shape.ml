@@ -264,7 +264,7 @@ type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
-  | Terminal of terminal_type
+  | Terminal of { is_param : bool; logic : terminal_type }
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -359,6 +359,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
     let beg_dims = to_dim kind beg_dims in
     Option.value_map v ~default:(Row.Broadcastable, beg_dims) ~f:(fun vname ->
         let v = Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.get_row_var ()) in
+        Row.add_used_in_spec_or_compose v;
         (Row.Row_var { v; beg_dims }, []))
   in
   let to_row kind v dims beg_dims =
@@ -424,8 +425,17 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
 
+let add_var_used_in_spec_or_compose row =
+  match row with Row.Row_var { v; _ } -> Row.add_used_in_spec_or_compose v | _ -> ()
+
+let add_var_used_in_pointwise row =
+  match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
+
+let unused_shapes = Hash_set.create (module Int)
+
 let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
+  Hash_set.remove unused_shapes cur_sh.id;
   let generative =
     [
       (`Batch, List.is_empty cur_sh.batch.dims);
@@ -446,18 +456,20 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         operation = Some operation;
       }
   in
-  let mark_terminal () =
+  let mark_terminal ~is_param =
     [
-      Terminal_row (cur_sh.batch, [ get_origin `Batch cur_sh `Batch "terminal" ]);
-      Terminal_row (cur_sh.input, [ get_origin `Input cur_sh `Input "terminal" ]);
-      Terminal_row (cur_sh.output, [ get_origin `Output cur_sh `Output "terminal" ]);
+      Terminal_row (is_param, cur_sh.batch, [ get_origin `Batch cur_sh `Batch "terminal" ]);
+      Terminal_row (is_param, cur_sh.input, [ get_origin `Input cur_sh `Input "terminal" ]);
+      Terminal_row (is_param, cur_sh.output, [ get_origin `Output cur_sh `Output "terminal" ]);
     ]
   in
   match logic with
-  | Terminal (Fetch Range_over_offsets) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Constant _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Constant_bits _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Data (Reshape nd)) ->
+  | Terminal { is_param; logic = Fetch Range_over_offsets } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Constant_bits _) } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
         Rows_constr
           {
@@ -479,8 +491,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Data (Keep_shape_no_padding nd)) ->
+        :: mark_terminal ~is_param )
+  | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
         Rows_constr
@@ -499,8 +511,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Data (Padded { data; padding; padded_value })) ->
+        :: mark_terminal ~is_param )
+  | Terminal { is_param; logic = Data (Padded { data; padding; padded_value }) } ->
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
       ( dim_map_empty,
@@ -520,8 +532,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Fetch (Constant_fill values)) ->
+        :: mark_terminal ~is_param )
+  | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
         Rows_constr
@@ -539,8 +551,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                 };
               ];
           }
-        :: mark_terminal () )
-  | Terminal (Fetch (Slice { sliced = tn; batch_idx = _ })) ->
+        :: mark_terminal ~is_param )
+  | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
           Rows_constr
@@ -561,12 +573,16 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                   };
                 ];
             }
-          :: mark_terminal () )
-      else (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Embed_symbol _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch (Embed_dim _)) -> (Row.dim_map_empty, mark_terminal ())
-  | Terminal (Fetch Embed_self_id) -> (Row.dim_map_empty, mark_terminal ())
+          :: mark_terminal ~is_param )
+      else (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch (Embed_dim _) } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch Embed_self_id } ->
+      (Row.dim_map_empty, mark_terminal ~is_param)
   | Transpose (Transpose, sh) ->
+      Hash_set.remove unused_shapes sh.id;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -589,6 +605,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Transpose (Pointwise_un, sh) ->
+      Hash_set.remove unused_shapes sh.id;
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -611,6 +630,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Compose, sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -654,6 +676,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Pointwise_bin, sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh1.input.bcast;
+      add_var_used_in_pointwise sh2.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -694,6 +721,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      Hash_set.remove unused_shapes sh3.id;
+      add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -755,6 +786,13 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      Hash_set.remove unused_shapes sh3.id;
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh1.input.bcast;
+      add_var_used_in_pointwise sh2.input.bcast;
+      add_var_used_in_pointwise sh3.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -813,6 +851,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
+      Hash_set.remove unused_shapes sh.id;
       let slice_v = get_var () in
       let slice_var = Var slice_v in
       let proj_axis_env =
@@ -870,6 +909,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
+      Hash_set.remove unused_shapes sh.id;
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
@@ -891,25 +933,66 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
-      List.iter dim_refs ~f:(fun delayed_ref ->
-          let label = delayed_ref.var_ref.ref_label in
-          (* Check if it's in one of the environments *)
-          match Hashtbl.find dim_var_env label with
-          | Some var -> delayed_ref.var <- `Dim var
-          | None -> (
-              match Hashtbl.find row_var_env label with
-              | Some var -> delayed_ref.var <- `Row var
-              | None ->
-                  raise
-                  @@ Row.Shape_error
-                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                         [ Shape_mismatch [ cur_sh; sh ] ] )));
+      let extras_dim_refs =
+        List.filter_map dim_refs ~f:(fun delayed_ref ->
+            let label = delayed_ref.var_ref.ref_label in
+            (* Check if it's in one of the environments *)
+            match Hashtbl.find dim_var_env label with
+            | Some var ->
+                delayed_ref.var <- `Dim var;
+                Option.map
+                  ~f:(fun solved_dim ->
+                    Dim_eq
+                      {
+                        d1 = Row.Var var;
+                        d2 = Row.get_dim ~d:solved_dim ();
+                        origin =
+                          [
+                            {
+                              lhs_name = label;
+                              lhs_kind = `Output;
+                              rhs_name = delayed_ref.var_ref.ref_label;
+                              rhs_kind = `Output;
+                              operation = Some "set_dim";
+                            };
+                          ];
+                      })
+                  delayed_ref.var_ref.solved_dim
+            | None -> (
+                match Hashtbl.find row_var_env label with
+                | Some var ->
+                    delayed_ref.var <- `Row var;
+                    Option.map
+                      ~f:(fun solved_dim ->
+                        Rows_constr
+                          {
+                            r = [ Row.get_row_for_var Row.empty_provenance var ];
+                            constr =
+                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            origin =
+                              [
+                                {
+                                  lhs_name = label;
+                                  lhs_kind = `Output;
+                                  rhs_name = delayed_ref.var_ref.ref_label;
+                                  rhs_kind = `Output;
+                                  operation = Some "set_dim";
+                                };
+                              ];
+                          })
+                      delayed_ref.var_ref.solved_dim
+                | None ->
+                    raise
+                    @@ Row.Shape_error
+                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                           [ Shape_mismatch [ cur_sh; sh ] ] )))
+      in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
       ( proj_env,
-        extras_rhs @ extras_lhs
+        extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
             Row_ineq
               {
@@ -1044,6 +1127,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      add_var_used_in_spec_or_compose sh1.input.bcast;
+      add_var_used_in_spec_or_compose sh2.input.bcast;
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
@@ -1068,19 +1156,61 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
-      List.iter dim_refs ~f:(fun delayed_ref ->
-          let label = delayed_ref.var_ref.ref_label in
-          (* Check if it's in one of the environments *)
-          match Hashtbl.find dim_var_env label with
-          | Some var -> delayed_ref.var <- `Dim var
-          | None -> (
-              match Hashtbl.find row_var_env label with
-              | Some var -> delayed_ref.var <- `Row var
-              | None ->
-                  raise
-                  @@ Row.Shape_error
-                       ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                         [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )));
+      (* TODO: refactor to avoid duplication with the one for unary einsum *)
+      let extras_dim_refs =
+        List.filter_map dim_refs ~f:(fun delayed_ref ->
+            let label = delayed_ref.var_ref.ref_label in
+            (* Check if it's in one of the environments *)
+            match Hashtbl.find dim_var_env label with
+            | Some var ->
+                delayed_ref.var <- `Dim var;
+                Option.map
+                  ~f:(fun solved_dim ->
+                    Dim_eq
+                      {
+                        d1 = Row.Var var;
+                        d2 = Row.get_dim ~d:solved_dim ();
+                        origin =
+                          [
+                            {
+                              lhs_name = label;
+                              lhs_kind = `Output;
+                              rhs_name = delayed_ref.var_ref.ref_label;
+                              rhs_kind = `Output;
+                              operation = Some "set_dim";
+                            };
+                          ];
+                      })
+                  delayed_ref.var_ref.solved_dim
+            | None -> (
+                match Hashtbl.find row_var_env label with
+                | Some var ->
+                    delayed_ref.var <- `Row var;
+                    Option.map
+                      ~f:(fun solved_dim ->
+                        Rows_constr
+                          {
+                            r = [ Row.get_row_for_var Row.empty_provenance var ];
+                            constr =
+                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            origin =
+                              [
+                                {
+                                  lhs_name = label;
+                                  lhs_kind = `Output;
+                                  rhs_name = delayed_ref.var_ref.ref_label;
+                                  rhs_kind = `Output;
+                                  operation = Some "set_dim";
+                                };
+                              ];
+                          })
+                      delayed_ref.var_ref.solved_dim
+                | None ->
+                    raise
+                    @@ Row.Shape_error
+                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                           [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )))
+      in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
         Map.merge_skewed ~combine proj_env_rhs1
@@ -1088,7 +1218,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
-        extras_rhs1 @ extras_rhs2 @ extras_lhs
+        extras_dim_refs @ extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
             Row_ineq
               {
@@ -1231,7 +1361,7 @@ let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
 
-let set_dim delayed_var_ref dim =
+let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   match delayed_var_ref with
   | { var_ref = { solved_dim = Some dim2; _ }; _ } when dim2 = dim -> ()
   | { var_ref = { solved_dim = Some dim2; ref_label; _ }; _ } ->
@@ -1378,7 +1508,8 @@ let set_equal delayed_ref1 delayed_ref2 =
           }
         :: !active_constraints
 
-let set_terminal sh =
+let set_terminal ~is_param (sh : t) =
+  Hash_set.add unused_shapes sh.id;
   let get_origin kind =
     Row.
       {
@@ -1390,9 +1521,9 @@ let set_terminal sh =
       }
   in
   active_constraints :=
-    Row.Terminal_row (sh.batch, [ get_origin `Batch ])
-    :: Row.Terminal_row (sh.input, [ get_origin `Input ])
-    :: Row.Terminal_row (sh.output, [ get_origin `Output ])
+    Row.Terminal_row (is_param, sh.batch, [ get_origin `Batch ])
+    :: Row.Terminal_row (is_param, sh.input, [ get_origin `Input ])
+    :: Row.Terminal_row (is_param, sh.output, [ get_origin `Output ])
     :: !active_constraints
 
 let unsafe_reinitialize () =
@@ -1467,12 +1598,17 @@ let update_delayed_var_refs env update_step =
         | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
         | `Dim dim_var -> (
             match Row.get_dim_from_env env dim_var with
-            | Some d -> delayed_ref.var_ref.solved_dim <- Some d
+            | Some d ->
+                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
+                    assert (solved_dim = d));
+                delayed_ref.var_ref.solved_dim <- Some d
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
             | Some row ->
                 let product = compute_row_product env row in
+                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
+                    assert (solved_dim = product));
                 delayed_ref.var_ref.solved_dim <- Some product
             | None -> () (* Not yet resolved *)))
   in
@@ -1498,9 +1634,15 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   state := env
 
 let%debug4_sexp finish_inference (() : unit) : unit =
+  let unsolved =
+    List.filter !active_constraints ~f:(function
+      | Shape_row (r, _) | Terminal_row (_, r, _) ->
+          not (List.exists (Row.row_shapes r) ~f:(Hash_set.mem unused_shapes))
+      | _ -> true)
+  in
   (* TODO: optimize to keep all needed information in unsolved, rather than starting with all
      constraints. *)
-  let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage2 unsolved !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let all_update_rows =
     List.concat_map ~f:all_rows_w_origin !active_update_steps
@@ -1866,6 +2008,12 @@ let to_string_hum ?(style = Row.Axis_size) (sh : t) =
 (** Given a fully-inferred shape, maps axes to their corresponding positions in an index using the
     [force_to_dims] semantics. *)
 let axis_keys_to_idcs (sh : t) : int axis_map =
+  if
+    not
+      (Row.is_broadcastable sh.input.bcast
+      && Row.is_broadcastable sh.output.bcast
+      && Row.is_broadcastable sh.batch.bcast)
+  then raise @@ Utils.User_error "Shape.axis_keys_to_idcs: shape not fully inferred";
   let b_dims =
     (* Enumerate axes backwards. *)
     Array.of_list_rev_mapi sh.batch.dims ~f:(fun i _ ->

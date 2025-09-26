@@ -281,10 +281,12 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
+    (* Note: parameters will get their terminal logic set via Shape.set_terminal. *)
+    let is_param = false in
     match terminal_op with
-    | None -> Terminal (Fetch (Asgns.Constant 0.0))
-    | Some (Fetch fetch_op) -> Terminal (Fetch fetch_op)
-    | Some (Data init_data) -> Terminal (Data init_data)
+    | None -> Terminal { is_param; logic = Fetch (Asgns.Constant 0.0) }
+    | Some (Fetch fetch_op) -> Terminal { is_param; logic = Fetch fetch_op }
+    | Some (Data init_data) -> Terminal { is_param; logic = Data init_data }
   in
   let dims = lazy_to_dims shape in
   let padding = lazy (Shape.to_padding shape) in
@@ -598,7 +600,7 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
   (match t.diff with
   | Some diff -> Tn.update_memory_mode diff.grad Never_virtual 26
   | None -> ());
-  Shape.set_terminal t.shape;
+  Shape.set_terminal ~is_param:(Option.is_some t.diff) t.shape;
   remove_fwd_root t;
   { t with params = Set.singleton (module T) t }
 
@@ -609,7 +611,8 @@ let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value,
+         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value
+           ^ " (maybe you're trying to forward a param?)",
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
@@ -718,9 +721,10 @@ let lazy_optional_payload ~force ~present ~missing v =
 
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
+[@@deriving sexp_of]
 
-let to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force ~with_shape
-    ~with_id ~with_value ~with_grad t =
+let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force
+    ~with_shape ~with_id ~with_value ~with_grad t =
   (* First scan to identify which tensors appear embedded anywhere *)
   let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
   let rec scan_for_embedded { subtensor = t; embedded } =
@@ -848,7 +852,8 @@ let%debug_sexp log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let to_doc ~force ~with_grad ~with_code ?(with_low_level = false) (style : array_print_style) t =
+let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
+    (style : array_print_style) t =
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix_str =

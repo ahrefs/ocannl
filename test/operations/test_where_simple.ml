@@ -7,8 +7,8 @@ let () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   (* Simple test: where(true, x, y) should have gradient flow to x only *)
-  let x = Tensor.term_init [| 2.0 |] ~grad_spec:Require_grad () in
-  let y = Tensor.term_init [| 3.0 |] ~grad_spec:Require_grad () in
+  let x = Tensor.number  ~grad_spec:Require_grad 2.0 in
+  let y = Tensor.number ~grad_spec:Require_grad 3.0 in
   let cond = Tensor.number 1.0 in
   (* true *)
   let result = Operation.where ~grad_spec:If_needed cond x y () in
@@ -33,8 +33,8 @@ let () =
 
   (* Now test with condition false *)
   Stdio.printf "\nTest 2: where(false, x, y)\n";
-  let x2 = Tensor.term_init [| 2.0 |] ~grad_spec:Require_grad () in
-  let y2 = Tensor.term_init [| 3.0 |] ~grad_spec:Require_grad () in
+  let x2 = Tensor.number ~grad_spec:Require_grad 2.0 in
+  let y2 = Tensor.number ~grad_spec:Require_grad 3.0 in
   let cond2 = Tensor.number 0.0 in
   (* false *)
   let result2 = Operation.where ~grad_spec:If_needed cond2 x2 y2 () in

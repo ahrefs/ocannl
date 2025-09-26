@@ -167,12 +167,16 @@ let provenance ~sh_id ~kind = [ { sh_id; kind } ]
 let merge_provenance p1 p2 = List.dedup_and_sort ~compare:compare_provenance_origin (p1 @ p2)
 (* let row_map_empty = Map.empty (module Provenance) *)
 
+let provenance_shapes prov =
+  List.map prov ~f:(fun origin -> origin.sh_id) |> List.dedup_and_sort ~compare:Int.compare
+
 type t = { dims : dim list; bcast : bcast; prov : provenance }
 [@@deriving equal, hash, compare, sexp]
 
 type row = t [@@deriving equal, sexp]
 
 let get_row_for_var prov v = { dims = []; bcast = Row_var { v; beg_dims = [] }; prov }
+let row_shapes row = provenance_shapes row.prov
 
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
@@ -206,6 +210,7 @@ type constraint_origin = {
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of {
+      is_in_param : bool;
       cur : dim_var list;
       subr : dim_var list;
       lub : dim option;
@@ -217,6 +222,7 @@ type dim_entry =
 type row_entry =
   | Solved_row of t
   | Bounds_row of {
+      is_in_param : bool;
       cur : row_var list;
       subr : row_var list;
       lub : t option;
@@ -248,8 +254,8 @@ type constraint_ =
   | Row_ineq of { cur : t; subr : t; origin : constraint_origin list }
   | Dim_constr of { d : dim; constr : dim_constraint; origin : constraint_origin list }
   | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
-  | Terminal_dim of dim * constraint_origin list
-  | Terminal_row of t * constraint_origin list
+  | Terminal_dim of bool * dim * constraint_origin list
+  | Terminal_row of bool * t * constraint_origin list
   | Shape_row of t * constraint_origin list
 [@@deriving compare, equal, sexp_of, variants]
 
@@ -942,7 +948,7 @@ let check_empty_row ~origin r =
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
   match in_ with
   | Solved_dim in_ -> ([], Solved_dim (s_dim_one v ~value ~in_))
-  | Bounds_dim { cur; subr; lub; constr; origin } ->
+  | Bounds_dim { is_in_param; cur; subr; lub; constr; origin } ->
       let find_v side = List.partition_tf side ~f:(equal_dim_var v) in
       let cur_v, cur = find_v cur in
       let subr_v, subr = find_v subr in
@@ -962,6 +968,7 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds_dim
           {
+            is_in_param;
             cur;
             subr;
             lub = Option.map lub ~f:(fun in_ -> s_dim_one v ~value ~in_);
@@ -1043,15 +1050,15 @@ let s_dim_one_in_row_entry stage v ~value ~key ~data =
   let result =
     match data with
     | Solved_row in_ -> Solved_row (s_dim_one_in_row v ~value in_)
-    | Bounds_row { cur; subr; lub; constr; origin } ->
+    | Bounds_row { is_in_param; cur; subr; lub; constr; origin } ->
         let constr = s_dim_one_in_row_constr stage v ~value constr in
         if !reapply_rows_constr then
           ineqs_from_reapply_rows_constr :=
             Rows_constr { r = [ row_of_var key [] ]; constr; origin }
             :: !ineqs_from_reapply_rows_constr;
         reapply_rows_constr := false;
-        Bounds_row
-          { cur; subr; lub = Option.map lub ~f:(s_dim_one_in_row v ~value); constr; origin }
+        let lub = Option.map lub ~f:(s_dim_one_in_row v ~value) in
+        Bounds_row { is_in_param; cur; subr; lub; constr; origin }
   in
   result
 
@@ -1088,7 +1095,7 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
     constraint_ list * row_entry =
   match in_ with
   | Solved_row in_ -> ([], Solved_row (s_row_one v ~value ~in_))
-  | Bounds_row { cur; subr; lub; constr; origin } ->
+  | Bounds_row { is_in_param; cur; subr; lub; constr; origin } ->
       (* TODO: audit code to ensure we don't lose the constraints associated with the bounds
          variables. *)
       let find_v side = List.partition_tf side ~f:(equal_row_var v) in
@@ -1112,15 +1119,8 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
               Row_ineq { subr = row_of_var subr value.prov; cur = value; origin })
       in
       let constr = s_row_one_in_row_constr v ~value ~in_:constr in
-      ( ineqs0 @ ineqs1 @ ineqs2,
-        Bounds_row
-          {
-            cur;
-            subr;
-            lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_);
-            constr;
-            origin;
-          } )
+      let lub = Option.map lub ~f:(fun in_ -> s_row_one v ~value ~in_) in
+      (ineqs0 @ ineqs1 @ ineqs2, Bounds_row { is_in_param; cur; subr; lub; constr; origin })
 
 let subst_row env ({ dims; bcast; prov } : t) : t =
   let s_dims = List.map ~f:(subst_dim env) in
@@ -1283,16 +1283,11 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
                 {
                   env with
                   row_env =
-                    Map.set env.row_env ~key:v
-                      ~data:
-                        (Bounds_row
-                           {
-                             constr = reduce constr ~beg_dims ~dims;
-                             cur = [];
-                             subr = [];
-                             lub = None;
-                             origin;
-                           });
+                    (let constr = reduce constr ~beg_dims ~dims in
+                     Map.set env.row_env ~key:v
+                       ~data:
+                         (Bounds_row
+                            { is_in_param = false; constr; cur = []; subr = []; lub = None; origin }));
                 },
                 true,
                 false )
@@ -1506,7 +1501,7 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               row_env = Map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
             }
         | Some (Solved_dim _) -> assert false
-        | Some (Bounds_dim { cur; subr; lub; constr; origin = origin1 }) ->
+        | Some (Bounds_dim { is_in_param = _; cur; subr; lub; constr; origin = origin1 }) ->
             let origin = merge_origins origin origin1 in
             let dim_env = Map.map env.dim_env ~f in
             List.iter cur ~f:(fun cur ->
@@ -1544,6 +1539,12 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
 
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
+let safe_to_guess = Hash_set.create (module Row_var)
+let add_safe_to_guess v = Hash_set.add safe_to_guess v
+let used_in_spec_or_compose = Hash_set.create (module Row_var)
+let used_in_pointwise = Hash_set.create (module Row_var)
+let add_used_in_spec_or_compose v = Hash_set.add used_in_spec_or_compose v
+let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
@@ -1602,6 +1603,12 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let (beg_handled : bool), (ineqs, env), (value : row) =
           match r2.bcast with
           | Row_var { v = v2; beg_dims = beg_dims2 } ->
+              if Hash_set.mem safe_to_guess v2 then add_safe_to_guess v;
+              if Hash_set.mem used_in_spec_or_compose v2 then add_used_in_spec_or_compose v;
+              if Hash_set.mem used_in_pointwise v2 then add_used_in_pointwise v;
+              if Hash_set.mem safe_to_guess v then add_safe_to_guess v2;
+              if Hash_set.mem used_in_spec_or_compose v then add_used_in_spec_or_compose v2;
+              if Hash_set.mem used_in_pointwise v then add_used_in_pointwise v2;
               let result =
                 try unify_suffix ([], env) dims1 r2.dims dims1_l
                 with Shape_error (s, trace) ->
@@ -1680,7 +1687,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         match Map.find env.row_env v with
         | None -> result env
         | Some (Solved_row _) -> assert false
-        | Some (Bounds_row { cur; subr; lub; constr; origin = origin1 }) ->
+        | Some (Bounds_row { is_in_param = _; cur; subr; lub; constr; origin = origin1 }) ->
             let origin = merge_origins origin origin1 in
             let env =
               if beg_handled then (
@@ -1754,6 +1761,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param = false;
                             lub = None;
                             cur = [];
                             subr = [ subr_v ];
@@ -1764,6 +1772,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param = false;
                             lub = None;
                             cur = [ cur_v ];
                             subr = [];
@@ -1773,7 +1782,15 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
             } )
       | Some (Solved_dim _), _ | _, Some (Solved_dim _) -> assert false
       | ( Some
-            (Bounds_dim { cur = cur1; subr = subr1; lub = lub1; constr = constr1; origin = origin1 }),
+            (Bounds_dim
+               {
+                 is_in_param;
+                 cur = cur1;
+                 subr = subr1;
+                 lub = lub1;
+                 constr = constr1;
+                 origin = origin1;
+               }),
           None ) ->
           let origin = merge_origins origin origin1 in
           let from_lub =
@@ -1792,6 +1809,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param;
                             lub = lub1;
                             cur = cur1;
                             subr = nonredundant subr_v subr1;
@@ -1801,23 +1819,54 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 |> Map.add_exn ~key:subr_v
                      ~data:
                        (Bounds_dim
-                          { lub = None; cur = [ cur_v ]; subr = []; constr = constr2; origin });
+                          {
+                            is_in_param = false;
+                            lub = None;
+                            cur = [ cur_v ];
+                            subr = [];
+                            constr = constr2;
+                            origin;
+                          });
             } )
-      | ( Some (Bounds_dim { cur = _; subr = [ subr1 ]; lub = None; constr = _; origin = origin1 }),
-          Some (Bounds_dim { cur = [ cur2 ]; subr = _; lub = None; constr = _; origin = origin2 }) )
+      | ( Some
+            (Bounds_dim
+               {
+                 is_in_param = _;
+                 cur = _;
+                 subr = [ subr1 ];
+                 lub = None;
+                 constr = _;
+                 origin = origin1;
+               }),
+          Some
+            (Bounds_dim
+               {
+                 is_in_param = _;
+                 cur = [ cur2 ];
+                 subr = _;
+                 lub = None;
+                 constr = _;
+                 origin = origin2;
+               }) )
         when is_stage2_up stage && equal_dim_var subr_v subr1 && equal_dim_var cur_v cur2 ->
           let origin = merge_origins origin (merge_origins origin1 origin2) in
           (* A heuristic to reduce template variables coming from e.g. einsum notation expansion. *)
           ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
-      | ( Some (Bounds_dim { cur = curs; subr = _; lub = _; constr = _; origin = origin1 }),
-          Some (Bounds_dim _) )
+      | Some (Bounds_dim { cur = curs; origin = origin1; _ }), Some (Bounds_dim _)
         when cyclic ~subr_v ~curs ->
           let origin = merge_origins origin origin1 in
           ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
       | ( None,
           Some
-            (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2; origin = origin2 })
-        ) ->
+            (Bounds_dim
+               {
+                 is_in_param;
+                 cur = cur2;
+                 subr = subr2;
+                 lub = lub2;
+                 constr = constr2;
+                 origin = origin2;
+               }) ) ->
           let origin = merge_origins origin origin2 in
           let from_constr1, constr1 =
             apply_dim_constraint ~source:Subr ~stage subr Unconstrained_dim env
@@ -1831,11 +1880,19 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 |> Map.add_exn ~key:cur_v
                      ~data:
                        (Bounds_dim
-                          { lub = None; cur = []; subr = [ subr_v ]; constr = constr1; origin })
+                          {
+                            is_in_param;
+                            lub = None;
+                            cur = [];
+                            subr = [ subr_v ];
+                            constr = constr1;
+                            origin;
+                          })
                 |> Map.set ~key:subr_v
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param;
                             lub = lub2;
                             cur = nonredundant cur_v cur2;
                             subr = subr2;
@@ -1844,10 +1901,25 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                           });
             } )
       | ( Some
-            (Bounds_dim { cur = cur1; subr = subr1; lub = lub1; constr = constr1; origin = origin1 }),
+            (Bounds_dim
+               {
+                 is_in_param = iip1;
+                 cur = cur1;
+                 subr = subr1;
+                 lub = lub1;
+                 constr = constr1;
+                 origin = origin1;
+               }),
           Some
-            (Bounds_dim { cur = cur2; subr = subr2; lub = lub2; constr = constr2; origin = origin2 })
-        ) ->
+            (Bounds_dim
+               {
+                 is_in_param = iip2;
+                 cur = cur2;
+                 subr = subr2;
+                 lub = lub2;
+                 constr = constr2;
+                 origin = origin2;
+               }) ) ->
           let origin = merge_origins origin (merge_origins origin1 origin2) in
           let from_lub =
             Option.to_list lub1 |> List.map ~f:(fun cur -> Dim_ineq { cur; subr; origin })
@@ -1863,6 +1935,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param = iip1;
                             lub = lub1;
                             cur = cur1;
                             subr = nonredundant ~more:subr2 subr_v subr1;
@@ -1873,6 +1946,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                      ~data:
                        (Bounds_dim
                           {
+                            is_in_param = iip2;
                             lub = lub2;
                             cur = nonredundant ~more:cur1 cur_v cur2;
                             subr = subr2;
@@ -1890,12 +1964,26 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 Map.add_exn env.dim_env ~key:subr_v
                   ~data:
                     (Bounds_dim
-                       { lub = Some cur; cur = []; subr = []; constr = Unconstrained_dim; origin });
+                       {
+                         is_in_param = false;
+                         lub = Some cur;
+                         cur = [];
+                         subr = [];
+                         constr = Unconstrained_dim;
+                         origin;
+                       });
             } )
       | Some (Solved_dim _) -> assert false
       | Some
           (Bounds_dim
-             { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2; origin = origin2 }) ->
+             {
+               is_in_param;
+               cur = cur2;
+               subr = subr2;
+               lub = Some lub2;
+               constr = constr2;
+               origin = origin2;
+             }) ->
           let origin = merge_origins origin origin2 in
           let lub, lub_forcing =
             match (cur, lub2) with
@@ -1916,11 +2004,25 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 Map.set env.dim_env ~key:subr_v
                   ~data:
                     (Bounds_dim
-                       { lub = Some lub; cur = cur2; subr = subr2; constr = constr2; origin });
+                       {
+                         is_in_param;
+                         lub = Some lub;
+                         cur = cur2;
+                         subr = subr2;
+                         constr = constr2;
+                         origin;
+                       });
             } )
       | Some
-          (Bounds_dim { cur = cur2; subr = subr2; lub = None; constr = constr2; origin = origin2 })
-        ->
+          (Bounds_dim
+             {
+               is_in_param;
+               cur = cur2;
+               subr = subr2;
+               lub = None;
+               constr = constr2;
+               origin = origin2;
+             }) ->
           let origin = merge_origins origin origin2 in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr
@@ -1931,7 +2033,14 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 Map.set env.dim_env ~key:subr_v
                   ~data:
                     (Bounds_dim
-                       { lub = Some cur; cur = cur2; subr = subr2; constr = constr2; origin });
+                       {
+                         is_in_param;
+                         lub = Some cur;
+                         cur = cur2;
+                         subr = subr2;
+                         constr = constr2;
+                         origin;
+                       });
             } ))
   | Var _, Dim _ (* when d2 > 1 *) -> ([ Dim_eq { d1 = cur; d2 = subr; origin } ], env)
   | Dim _, Dim _ ->
@@ -2019,6 +2128,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            is_in_param = false;
                             cur = [];
                             subr = [ subr_v ];
                             lub = None;
@@ -2028,10 +2138,25 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 |> Map.add_exn ~key:subr_v
                      ~data:
                        (Bounds_row
-                          { cur = [ cur_v ]; subr = []; lub = None; constr = Unconstrained; origin });
+                          {
+                            is_in_param = false;
+                            cur = [ cur_v ];
+                            subr = [];
+                            lub = None;
+                            constr = Unconstrained;
+                            origin;
+                          });
             } )
       | ( Some
-            (Bounds_row { cur = cur1; subr = subr1; lub = lub1; constr = constr1; origin = origin1 }),
+            (Bounds_row
+               {
+                 is_in_param;
+                 cur = cur1;
+                 subr = subr1;
+                 lub = lub1;
+                 constr = constr1;
+                 origin = origin1;
+               }),
           None ) ->
           let origin = merge_origins origin origin1 in
           ( ineqs,
@@ -2043,6 +2168,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            is_in_param;
                             cur = cur1;
                             subr = nonredundant subr_v subr1;
                             lub = lub1;
@@ -2052,12 +2178,26 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 |> Map.add_exn ~key:subr_v
                      ~data:
                        (Bounds_row
-                          { cur = [ cur_v ]; subr = []; lub = None; constr = Unconstrained; origin });
+                          {
+                            is_in_param = false;
+                            cur = [ cur_v ];
+                            subr = [];
+                            lub = None;
+                            constr = Unconstrained;
+                            origin;
+                          });
             } )
       | ( None,
           Some
-            (Bounds_row { cur = cur2; subr = subr2; lub = lub2; constr = constr2; origin = origin2 })
-        ) ->
+            (Bounds_row
+               {
+                 is_in_param;
+                 cur = cur2;
+                 subr = subr2;
+                 lub = lub2;
+                 constr = constr2;
+                 origin = origin2;
+               }) ) ->
           let origin = merge_origins origin origin2 in
           ( ineqs,
             {
@@ -2068,6 +2208,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            is_in_param;
                             cur = nonredundant cur_v cur2;
                             subr = subr2;
                             lub = lub2;
@@ -2078,6 +2219,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            (* The upper bound shouldn't collapse on the param below. *)
+                            is_in_param;
                             cur = [];
                             subr = [ subr_v ];
                             lub = None;
@@ -2086,10 +2229,25 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                           });
             } )
       | ( Some
-            (Bounds_row { cur = cur1; subr = subr1; lub = lub1; constr = constr1; origin = origin1 }),
+            (Bounds_row
+               {
+                 is_in_param = iip1;
+                 cur = cur1;
+                 subr = subr1;
+                 lub = lub1;
+                 constr = constr1;
+                 origin = origin1;
+               }),
           Some
-            (Bounds_row { cur = cur2; subr = subr2; lub = lub2; constr = constr2; origin = origin2 })
-        ) ->
+            (Bounds_row
+               {
+                 is_in_param = iip2;
+                 cur = cur2;
+                 subr = subr2;
+                 lub = lub2;
+                 constr = constr2;
+                 origin = origin2;
+               }) ) ->
           let origin = merge_origins origin (merge_origins origin1 origin2) in
           ( ineqs,
             {
@@ -2100,6 +2258,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            is_in_param = iip1 || iip2;
                             cur = cur1;
                             subr = nonredundant subr_v subr1;
                             lub = lub1;
@@ -2110,6 +2269,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                      ~data:
                        (Bounds_row
                           {
+                            is_in_param = iip2;
                             cur = nonredundant cur_v cur2;
                             subr = subr2;
                             lub = lub2;
@@ -2132,11 +2292,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
       in
       (* The key of the template cache reflects that cur_v will end up substituted by
          {dims=more_dims; bcast=Row_var templ_v}. TODO: should we cache more_dims also? *)
-      let templ_v : row_var =
-        Hashtbl.find_or_add global_template_cache
-          (cur_v, subr_dims_l - cur_dims_l, subr_beg_dims_l - cur_beg_dims_l)
-          ~default:get_row_var
+      let templ_key : row_var * int * int =
+        (cur_v, subr_dims_l - cur_dims_l, subr_beg_dims_l - cur_beg_dims_l)
       in
+      let templ_v : row_var =
+        Hashtbl.find_or_add global_template_cache templ_key ~default:get_row_var
+      in
+      if more_dims_l > 0 then add_safe_to_guess templ_v;
       let template : t =
         {
           dims = more_dims @ dims;
@@ -2171,11 +2333,25 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 Map.add_exn env.row_env ~key:subr_v
                   ~data:
                     (Bounds_row
-                       { cur = []; subr = []; lub = Some r_cur; constr = Unconstrained; origin });
+                       {
+                         is_in_param = false;
+                         cur = [];
+                         subr = [];
+                         lub = Some r_cur;
+                         constr = Unconstrained;
+                         origin;
+                       });
             } )
       | Some
-          (Bounds_row { cur = cur2; subr = subr2; lub = None; constr = constr2; origin = origin2 })
-        ->
+          (Bounds_row
+             {
+               is_in_param;
+               cur = cur2;
+               subr = subr2;
+               lub = None;
+               constr = constr2;
+               origin = origin2;
+             }) ->
           let origin = merge_origins origin origin2 in
           ( ineqs,
             {
@@ -2185,11 +2361,25 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 |> Map.set ~key:subr_v
                      ~data:
                        (Bounds_row
-                          { cur = cur2; subr = subr2; lub = Some r_cur; constr = constr2; origin });
+                          {
+                            is_in_param;
+                            cur = cur2;
+                            subr = subr2;
+                            lub = Some r_cur;
+                            constr = constr2;
+                            origin;
+                          });
             } )
       | Some
           (Bounds_row
-             { cur = cur2; subr = subr2; lub = Some lub2; constr = constr2; origin = origin2 }) -> (
+             {
+               is_in_param;
+               cur = cur2;
+               subr = subr2;
+               lub = Some lub2;
+               constr = constr2;
+               origin = origin2;
+             }) -> (
           let origin = merge_origins origin origin2 in
           let len1 = List.length r_cur.dims and len2 = List.length lub2.dims in
           let lub_len = min len1 len2 in
@@ -2234,7 +2424,14 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
             |> Map.set ~key:subr_v
                  ~data:
                    (Bounds_row
-                      { cur = cur2; subr = subr2; lub = Some lub; constr = constr2; origin })
+                      {
+                        is_in_param;
+                        cur = cur2;
+                        subr = subr2;
+                        lub = Some lub;
+                        constr = constr2;
+                        origin;
+                      })
           in
           match lub with
           | { dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; prov = _ } ->
@@ -2250,17 +2447,23 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
   | { bcast = Row_var _ | Broadcastable; _ }, { bcast = Row_var _ | Broadcastable; _ } ->
       (Row_ineq { cur; subr; origin } :: ineqs, env)
 
-let%debug5_sexp close_dim_terminal ~(stage : stage) origin env (dim : dim) : constraint_ list =
+let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : dim) :
+    constraint_ list =
   match dim with
   | Dim _ -> []
   | Var v -> (
       match Map.find env.dim_env v with
       | Some (Solved_dim _) -> assert false
-      | Some (Bounds_dim { lub = None; constr = Unconstrained_dim; _ }) when is_stage3_up stage ->
-          [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
+      | Some (Bounds_dim { is_in_param; lub = None; constr = Unconstrained_dim; _ })
+        when is_stage3_up stage ->
+          if is_param || is_in_param then
+            raise
+            @@ Shape_error
+                 ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
+          else [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
       | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
           [ Dim_eq { d1 = dim; d2 = lub; origin } ]
-      | _ when not (is_stage5_up stage) -> [ Terminal_dim (dim, origin) ]
+      | _ when not (is_stage5_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Conv_input _ ->
       (* The input dimension itself cannot be dim-1, and the output dimension doesn't become
@@ -2271,6 +2474,20 @@ let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | 
 
 let r_dims r =
   match r.bcast with Broadcastable -> r.dims | Row_var { beg_dims; _ } -> beg_dims @ r.dims
+
+let row_var_is_in_param v env =
+  match Map.find env.row_env v with
+  | Some (Bounds_row { is_in_param; _ }) -> is_in_param
+  | _ -> false
+
+let dim_var_is_in_param v env =
+  match Map.find env.dim_env v with
+  | Some (Bounds_dim { is_in_param; _ }) -> is_in_param
+  | _ -> false
+
+let is_safe_to_guess v =
+  Hash_set.mem safe_to_guess v
+  || (Hash_set.mem used_in_pointwise v && not (Hash_set.mem used_in_spec_or_compose v))
 
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
     (constr : row_constraint) env : constraint_ list * environment =
@@ -2300,9 +2517,8 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : r
                     ||
                     match Map.find env.row_env v with
                     | None
-                    | Some
-                        (Bounds_row { lub = None | Some { dims = []; bcast = Broadcastable; _ }; _ })
-                      ->
+                    | Some (Bounds_row { is_in_param = false; lub = None; _ })
+                    | Some (Bounds_row { lub = Some { dims = []; bcast = Broadcastable; _ }; _ }) ->
                         true
                     | _ -> false
                   then
@@ -2340,7 +2556,13 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
   | { bcast = Broadcastable; _ } -> keep_constr ()
   | { bcast = Row_var { v; beg_dims }; dims; prov } -> (
       let r1 = row_of_var v prov in
-      let no_further_axes =
+      let opt_row_error () =
+        if row_var_is_in_param v env && not (is_safe_to_guess v) then
+          raise
+          @@ Shape_error ("You forgot to specify the hidden dimension(s) 2", [ Row_mismatch [ r ] ])
+      in
+      let no_further_axes ~guess () =
+        if guess then opt_row_error ();
         Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin }
       in
       (* Note: the reduced constraint applies to just the row variable. *)
@@ -2349,7 +2571,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           let _divided_by : dim_var list = divided_by in
           match (numerator, divided_by, lub) with
           | Num_elems 1, vs, _ when is_stage5_up stage ->
-              ( no_further_axes
+              ( no_further_axes ~guess:false ()
                 :: List.map vs ~f:(fun v ->
                        let d2 = get_dim ~d:1 ~proj_id:54 () in
                        Dim_eq { d1 = Var v; d2; origin }),
@@ -2374,13 +2596,16 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                       in
                       (ineqs @ ineqs', env)
                   | ineq -> ([ ineq ], env))
-          | Num_elems d, [ v ], None when is_stage4_up stage ->
-              (no_further_axes :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d (); origin } ], env)
+          | Num_elems d, [ dv ], None when is_stage4_up stage ->
+              ( no_further_axes ~guess:true ()
+                :: [ Dim_eq { d1 = Var dv; d2 = get_dim ~d (); origin } ],
+                env )
           | Num_elems d, [ v ], Some ({ dims; _ } as r2)
             when last_dim_is dims (fun d2 -> d % d2 = 0) ->
               let d2 = match List.last dims with Some (Dim { d; _ }) -> d | _ -> assert false in
               let row_eq =
-                if d = d2 && is_stage5_up stage then no_further_axes else Row_eq { r1; r2; origin }
+                if d = d2 && is_stage5_up stage then no_further_axes ~guess:false ()
+                else Row_eq { r1; r2; origin }
               in
               (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) (); origin } ], env)
           | Strided_var { coeff; var; denom }, [], None
@@ -2391,6 +2616,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
               let d = denom / gcd in
               let d2 = get_dim ~d () in
               let d3 = get_dim ~d:(coeff / gcd) () in
+              (* opt_row_error (); *)
               ( [
                   Dim_eq { d1 = Var var; d2; origin };
                   Row_eq { r1; r2 = { dims = [ d3 ]; bcast = Broadcastable; prov }; origin };
@@ -2399,11 +2625,12 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           | Strided_var { coeff; var; denom }, [], _
             when is_stage6_up stage && denom % Utils.safe_force coeff = 0 ->
               let d2 = get_dim ~d:(denom / Utils.safe_force coeff) () in
-              ( [
-                  Dim_eq { d1 = Var var; d2; origin };
-                  Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin };
-                ],
-                env )
+              if dim_var_is_in_param var env then
+                raise
+                @@ Shape_error
+                     ( "You forgot to specify the hidden dimension(s) 3",
+                       [ Dim_mismatch [ Var var ] ] )
+              else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
           | ( Strided_var { coeff; var = _; denom },
               [],
               Some ({ dims = lub_dims; bcast = _; prov = lub_prov } as lub) )
@@ -2435,22 +2662,28 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
       | Exact dims -> ([ Row_eq { r1; r2 = { dims; bcast = Broadcastable; prov }; origin } ], env)
       | Unconstrained -> ([], env))
 
-let%track5_sexp close_row_terminal ~(stage : stage) origin env ({ dims; bcast; prov } as _r : row) :
-    constraint_ list =
-  let suffix () = List.map dims ~f:(fun d -> Terminal_dim (d, origin)) in
+let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
+    ({ dims; bcast; prov } as _r : row) : constraint_ list =
+  let suffix () = List.map dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) in
   (* TODO: can this be simplified? Should we return the environment? *)
   match bcast with
   | Broadcastable -> if is_stage6_up stage then [] else suffix ()
   | Row_var { v; beg_dims } -> (
-      let term_dims () = List.map beg_dims ~f:(fun d -> Terminal_dim (d, origin)) @ suffix () in
+      let term_dims () =
+        List.map beg_dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) @ suffix ()
+      in
       let r1 : row = row_of_var v prov in
       let no_further_axes =
         Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin }
       in
       match Map.find env.row_env v with
-      | Some (Bounds_row { lub = None; constr = Unconstrained; _ }) when is_stage4_up stage ->
-          [%log6 "terminal row: closing", (_r : row)];
-          no_further_axes :: term_dims ()
+      | Some (Bounds_row { is_in_param; lub = None; constr = Unconstrained; _ })
+        when is_stage4_up stage ->
+          if (is_param || is_in_param) && not (is_safe_to_guess v) then
+            raise @@ Shape_error ("You forgot to specify the hidden dimension(s) 4", [])
+          else (
+            [%log6 "terminal row: closing", (_r : row)];
+            no_further_axes :: term_dims ())
       | Some (Bounds_row { lub = None; constr; _ })
         when is_stage2_up stage && not (equal_row_constraint constr Unconstrained) ->
           let ineqs, _env =
@@ -2460,7 +2693,9 @@ let%track5_sexp close_row_terminal ~(stage : stage) origin env ({ dims; bcast; p
             with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1 ] :: trace)
           in
           (* FIXME: at which stage should we drop the terminal row? *)
-          let keep_terminal = if is_stage6_up stage then [] else [ Terminal_row (r1, origin) ] in
+          let keep_terminal =
+            if is_stage6_up stage then [] else [ Terminal_row (is_param, r1, origin) ]
+          in
           ineqs @ term_dims () @ keep_terminal
       | Some (Solved_row _) -> assert false
       | Some (Bounds_row { lub = Some _; constr = Total_elems { numerator = Num_elems 1; _ }; _ })
@@ -2472,7 +2707,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) origin env ({ dims; bcast; p
       | _ when is_stage6_up stage -> []
       | _ ->
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
-          Terminal_row (r1, origin) :: term_dims ())
+          Terminal_row (is_param, r1, origin) :: term_dims ())
 
 let%debug5_sexp eliminate_dim_entry ~final origin v ~lub constr =
   match (lub, constr) with
@@ -2498,6 +2733,10 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
         finalize_upper_lower_bound output @ finalize_upper_lower_bound kernel
     | Var v -> (
         match Map.find env.dim_env v with
+        | Some (Bounds_dim { is_in_param = true; _ }) when final ->
+            raise
+            @@ Shape_error
+                 ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; _ }) when is_stage4_up stage ->
             Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
         | Some (Solved_dim _) -> assert false
@@ -2547,6 +2786,62 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
 
 let empty_env = { dim_env = Map.empty (module Dim_var); row_env = Map.empty (module Row_var) }
 
+let update_dim_is_param d is_p env =
+  if not is_p then env
+  else
+    match d with
+    | Var v -> (
+        match Map.find env.dim_env v with
+        | None ->
+            {
+              env with
+              dim_env =
+                Map.set env.dim_env ~key:v
+                  ~data:
+                    (Bounds_dim
+                       {
+                         is_in_param = true;
+                         cur = [];
+                         subr = [];
+                         lub = None;
+                         constr = Unconstrained_dim;
+                         origin = [];
+                       });
+            }
+        | Some (Bounds_dim b) ->
+            let b = Bounds_dim { b with is_in_param = true } in
+            { env with dim_env = Map.set env.dim_env ~key:v ~data:b }
+        | _ -> env)
+    | _ -> env
+
+let update_row_is_param r is_p env =
+  if not is_p then env
+  else
+    match r with
+    | { bcast = Row_var { v; _ }; _ } -> (
+        match Map.find env.row_env v with
+        | None ->
+            {
+              env with
+              row_env =
+                Map.set env.row_env ~key:v
+                  ~data:
+                    (Bounds_row
+                       {
+                         is_in_param = true;
+                         cur = [];
+                         subr = [];
+                         lub = None;
+                         constr = Unconstrained;
+                         origin = [];
+                       });
+            }
+        | Some (Bounds_row b) ->
+            let b = Bounds_row { b with is_in_param = true } in
+            { env with row_env = Map.set env.row_env ~key:v ~data:b }
+        | _ -> env)
+    | _ -> env
+
 let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) env :
     constraint_ list * _ =
   let rec solve ineqs (env : environment) : constraint_ list * _ =
@@ -2581,7 +2876,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) e
                       | Some (Bounds_dim bounds) ->
                           let origin = merge_origins origin bounds.origin in
                           Bounds_dim { bounds with constr; origin }
-                      | None -> Bounds_dim { constr; lub = None; cur = []; subr = []; origin });
+                      | None ->
+                          Bounds_dim
+                            { is_in_param = false; constr; lub = None; cur = []; subr = []; origin });
                 }
           in
           (extras, env)
@@ -2595,11 +2892,13 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) e
             else apply_rows_constraint ~depth:0 ~stage origin substituted_rows constr env
           in
           (more_ineqs, env)
-      | Terminal_dim (d, origin) ->
-          let more_ineqs = close_dim_terminal ~stage origin env @@ subst_dim env d in
+      | Terminal_dim (is_param, d, origin) ->
+          let env = update_dim_is_param d is_param env in
+          let more_ineqs = close_dim_terminal ~stage ~is_param origin env @@ subst_dim env d in
           (more_ineqs, env)
-      | Terminal_row (r, origin) ->
-          let more_ineqs = close_row_terminal ~stage origin env @@ subst_row env r in
+      | Terminal_row (is_param, r, origin) ->
+          let env = update_row_is_param r is_param env in
+          let more_ineqs = close_row_terminal ~stage ~is_param origin env @@ subst_row env r in
           (more_ineqs, env)
       | Shape_row (r, origin) -> process_shape_row ~stage origin env @@ subst_row env r
     in
@@ -2790,8 +3089,9 @@ let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
              | Proj_eq (proj1, (Proj (_, { d = 1; _ }) as proj2)) ->
                  [ Iterated proj1; Proj_eq (proj2, Solved (Fixed_idx 0)) ]
              | eq -> [ eq ])
-    | Terminal_dim (d, _origin) -> [ Iterated (to_proj d) ]
-    | Terminal_row (r, _origin) -> List.map ~f:(fun d -> Iterated (to_proj d)) (expand_dims r)
+    | Terminal_dim (_is_param, d, _origin) -> [ Iterated (to_proj d) ]
+    | Terminal_row (_is_param, r, _origin) ->
+        List.map ~f:(fun d -> Iterated (to_proj d)) (expand_dims r)
     | Shape_row _ -> []
     | Rows_constr
         {

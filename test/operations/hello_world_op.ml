@@ -41,7 +41,6 @@ let%expect_test "Matrix multiplication dims 1x1" =
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ({ hey = 7.0 } * 'q' 2.0) + 'p' 1.0 in
   let _ctx = Train.forward_once ctx y in
-  (* Punning for ["hey"] above introduced the [hey] identifier. *)
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|

@@ -97,6 +97,14 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_param_shape_error)
+ (package neural_nets_lib)
+ (modules test_param_shape_error)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_expect)))
+
+(test
  (name top_down_prec)
  (package neural_nets_lib)
  (deps
@@ -326,12 +334,45 @@
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
 (test
+ (name attention_test)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules attention_test)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_sexp_conv)))
+
+(test
+ (name layer_norm_test)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules layer_norm_test)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_sexp_conv)))
+
+(test
  (name test_extend_dsls)
  (package neural_nets_lib)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_extend_dsls)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_expect)))
+
+(test
+ (name hello_world_dim1x1)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hello_world_dim1x1)
  (libraries base ocannl stdio)
  (preprocess
   (pps ppx_here ppx_ocannl ppx_expect)))

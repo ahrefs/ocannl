@@ -176,7 +176,7 @@ val unsafe_reinitialize : unit -> unit
 
 (** {2 Internal-ish API.} *)
 
-val set_terminal : t -> unit
+val set_terminal : is_param:bool -> t -> unit
 (** Mark the shape as terminal, so that its rows can be closed to Least Upper Bounds (LUBs). This
     function is only intended for parameters shapes, which would otherwise not be terminal because
     of the initialization expressions of the parameters. *)
@@ -194,8 +194,9 @@ type logic =
       (** Permutes the axes of a shape. One case of [Transpose] is to swap inputs with outputs of
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
-  | Terminal of terminal_type
-      (** Extracts any available shape information from the initialization. *)
+  | Terminal of { is_param : bool; logic : terminal_type }
+      (** Extracts any available shape information from the initialization. 
+          The [is_param] field indicates if this is a parameter tensor that requires gradients. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]

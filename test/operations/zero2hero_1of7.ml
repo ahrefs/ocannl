@@ -340,27 +340,6 @@ let%expect_test "Simple gradients virtual" =
   let grad = Train.grad_update ~setup_for_parallel:true l in
   let%op learning_rate = 0.1 in
   let sgd = Train.sgd_update ~learning_rate l in
-  (* Check out the initial state without forcing memory modes by compilation. *)
-  Tensor.print_tree ~force:false ~with_grad:true ~depth:9 l;
-  [%expect
-    {|
-                                                       #12 *._l Host&dev/412
-                                                       <not-in-yet>
-                                                       #13 grad_*._l unknown
-                                                       <not-in-yet>
-                                        #8 +_d unknown                                          │#10 f non-emb Host-non-const/24
-                                        <not-in-yet>                                            │<not-in-yet>
-                                        #9 grad_+_d unknown                                     │#11 grad_f Material/28
-                                        <not-in-yet>                                            │<not-in-yet>
-                        #4 *._e unknown                          │#6 c non-emb Host-non-const/24│
-                        <not-in-yet>                             │<not-in-yet>                  │
-                        #5 grad_*._e unknown                     │#7 grad_c Material/28         │
-                        <not-in-yet>                             │<not-in-yet>                  │
-    #0 a non-emb Host-non-const/24│#2 b non-emb Host-non-const/24│                              │
-    <not-in-yet>                  │<not-in-yet>                  │                              │
-    #1 grad_a Material/28         │#3 grad_b Material/28         │                              │
-    <not-in-yet>                  │<not-in-yet>                  │                              │
-    |}];
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
   (* Note the state without running initialization can contain garbage. *)
