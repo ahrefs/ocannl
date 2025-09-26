@@ -359,6 +359,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
     let beg_dims = to_dim kind beg_dims in
     Option.value_map v ~default:(Row.Broadcastable, beg_dims) ~f:(fun vname ->
         let v = Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.get_row_var ()) in
+        Row.add_used_in_spec_or_compose v;
         (Row.Row_var { v; beg_dims }, []))
   in
   let to_row kind v dims beg_dims =
@@ -423,6 +424,12 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
   (!extras, !proj_env_update, result)
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
+
+let add_var_used_in_spec_or_compose row =
+  match row with Row.Row_var { v; _ } -> Row.add_used_in_spec_or_compose v | _ -> ()
+
+let add_var_used_in_pointwise row =
+  match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
 
 let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
@@ -594,6 +601,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Transpose (Pointwise_un, sh) ->
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -616,6 +625,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Compose, sh1, sh2) ->
+      add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -659,6 +669,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Pointwise_bin, sh1, sh2) ->
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh1.input.bcast;
+      add_var_used_in_pointwise sh2.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -699,6 +712,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
+      add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -760,6 +774,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
+      add_var_used_in_pointwise cur_sh.input.bcast;
+      add_var_used_in_pointwise sh1.input.bcast;
+      add_var_used_in_pointwise sh2.input.bcast;
+      add_var_used_in_pointwise sh3.input.bcast;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -875,6 +893,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
@@ -1090,6 +1110,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      add_var_used_in_spec_or_compose sh1.input.bcast;
+      add_var_used_in_spec_or_compose sh2.input.bcast;
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
         | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)

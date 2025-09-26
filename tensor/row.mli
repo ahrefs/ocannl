@@ -157,6 +157,18 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
 
+val add_safe_to_guess : row_var -> unit
+(** Mark a row variable as allowed to be empty even if it's in a parameter. *)
+
+val add_used_in_spec_or_compose : row_var -> unit
+(** Mark a row variable as used in an einsum spec or compose shape update. Meant specifically for
+    input rows, to indicate that the variable should not be guessed empty when it ends up in a
+    parameter. *)
+
+val add_used_in_pointwise : row_var -> unit
+(** Mark a row variable as used in a pointwise shape update. Meant specifically for input rows, to
+    indicate that the variable can be guessed empty when it ends up in a parameter. *)
+    
 val subst_row : environment -> t -> t
 
 val unify_row :

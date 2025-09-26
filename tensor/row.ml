@@ -1535,6 +1535,12 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
 
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
+let safe_to_guess = Hash_set.create (module Row_var)
+let add_safe_to_guess v = Hash_set.add safe_to_guess v
+let used_in_spec_or_compose = Hash_set.create (module Row_var)
+let used_in_pointwise = Hash_set.create (module Row_var)
+let add_used_in_spec_or_compose v = Hash_set.add used_in_spec_or_compose v
+let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
@@ -1593,6 +1599,12 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let (beg_handled : bool), (ineqs, env), (value : row) =
           match r2.bcast with
           | Row_var { v = v2; beg_dims = beg_dims2 } ->
+              if Hash_set.mem safe_to_guess v2 then add_safe_to_guess v;
+              if Hash_set.mem used_in_spec_or_compose v2 then add_used_in_spec_or_compose v;
+              if Hash_set.mem used_in_pointwise v2 then add_used_in_pointwise v;
+              if Hash_set.mem safe_to_guess v then add_safe_to_guess v2;
+              if Hash_set.mem used_in_spec_or_compose v then add_used_in_spec_or_compose v2;
+              if Hash_set.mem used_in_pointwise v then add_used_in_pointwise v2;
               let result =
                 try unify_suffix ([], env) dims1 r2.dims dims1_l
                 with Shape_error (s, trace) ->
@@ -2032,7 +2044,6 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
 
 let global_template_cache = Hashtbl.Poly.create ()
-let thick_templates = Hash_set.create (module Row_var)
 
 let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) env :
     constraint_ list * _ =
@@ -2283,7 +2294,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
       let templ_v : row_var =
         Hashtbl.find_or_add global_template_cache templ_key ~default:get_row_var
       in
-      if (more_dims_l > 0) then Hash_set.add thick_templates templ_v;
+      if more_dims_l > 0 then add_safe_to_guess templ_v;
       let template : t =
         {
           dims = more_dims @ dims;
@@ -2470,6 +2481,10 @@ let dim_var_is_in_param v env =
   | Some (Bounds_dim { is_in_param; _ }) -> is_in_param
   | _ -> false
 
+let is_safe_to_guess v =
+  Hash_set.mem safe_to_guess v
+  || (Hash_set.mem used_in_pointwise v && not (Hash_set.mem used_in_spec_or_compose v))
+
 let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~lub (rows : row list)
     (constr : row_constraint) env : constraint_ list * environment =
   if depth > 4 then ([ Rows_constr { r = rows; constr; origin } ], env)
@@ -2538,7 +2553,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
   | { bcast = Row_var { v; beg_dims }; dims; prov } -> (
       let r1 = row_of_var v prov in
       let opt_row_error () =
-        if row_var_is_in_param v env && not (Hash_set.mem thick_templates v) then
+        if row_var_is_in_param v env && not (is_safe_to_guess v) then
           raise
           @@ Shape_error ("You forgot to specify the hidden dimension(s) 2", [ Row_mismatch [ r ] ])
       in
@@ -2609,7 +2624,8 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
               if dim_var_is_in_param var env then
                 raise
                 @@ Shape_error
-                     ("You forgot to specify the hidden dimension(s) 3", [ Dim_mismatch [ Var var ] ])
+                     ( "You forgot to specify the hidden dimension(s) 3",
+                       [ Dim_mismatch [ Var var ] ] )
               else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
           | ( Strided_var { coeff; var = _; denom },
               [],
@@ -2659,7 +2675,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
       match Map.find env.row_env v with
       | Some (Bounds_row { is_in_param; lub = None; constr = Unconstrained; _ })
         when is_stage4_up stage ->
-          if (is_param || is_in_param) && not (Hash_set.mem thick_templates v) then
+          if (is_param || is_in_param) && not (is_safe_to_guess v) then
             raise @@ Shape_error ("You forgot to specify the hidden dimension(s) 4", [])
           else (
             [%log6 "terminal row: closing", (_r : row)];
@@ -2715,7 +2731,8 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
         match Map.find env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
             raise
-            @@ Shape_error ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
+            @@ Shape_error
+                 ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; _ }) when is_stage4_up stage ->
             Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
         | Some (Solved_dim _) -> assert false
