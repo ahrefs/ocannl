@@ -30,8 +30,16 @@
     <span><span class="label">origin</span>:<span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
     <a href="../index.html#type-constraint_">constraint_</a>)</span>
     <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-terminal_dim"><a href="#val-terminal_dim" class="anchor"></a><code><span><span class="keyword">val</span> terminal_dim : 
-  <span><span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-terminal_row"><a href="#val-terminal_row" class="anchor"></a><code><span><span class="keyword">val</span> terminal_row : 
-  <span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-shape_row"><a href="#val-shape_row" class="anchor"></a><code><span><span class="keyword">val</span> shape_row : 
+  <span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+    <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
+    <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+    <a href="../index.html#type-constraint_">constraint_</a>)</span>
+    <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-terminal_row"><a href="#val-terminal_row" class="anchor"></a><code><span><span class="keyword">val</span> terminal_row : 
+  <span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+    <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
+    <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+    <a href="../index.html#type-constraint_">constraint_</a>)</span>
+    <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-shape_row"><a href="#val-shape_row" class="anchor"></a><code><span><span class="keyword">val</span> shape_row : 
   <span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-fold"><a href="#val-fold" class="anchor"></a><code><span><span class="keyword">val</span> fold : 
   <span><span class="label">init</span>:<span class="type-var">'acc__0</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">dim_eq</span>:
@@ -84,11 +92,19 @@
       <span class="type-var">'acc__6</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_dim</span>:
     <span>(<span><span class="type-var">'acc__6</span> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+        <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
+        <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+        <a href="../index.html#type-constraint_">constraint_</a>)</span>
+        <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'acc__7</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_row</span>:
     <span>(<span><span class="type-var">'acc__7</span> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+        <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
+        <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+        <a href="../index.html#type-constraint_">constraint_</a>)</span>
+        <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'acc__8</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">shape_row</span>:
     <span>(<span><span class="type-var">'acc__8</span> <span class="arrow">&#45;&gt;</span></span>
@@ -138,10 +154,18 @@
        <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="xref-unresolved">Base</span>.unit)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_dim</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="xref-unresolved">Base</span>.unit)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_row</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="xref-unresolved">Base</span>.unit)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">shape_row</span>:
     <span>(<span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
@@ -209,12 +233,22 @@
       <span><span class="label">origin</span>:<span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'result__</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_dim</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'result__</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_row</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'result__</span>)</span> <span class="arrow">&#45;&gt;</span></span>
@@ -297,13 +331,21 @@
       <span class="type-var">'result__</span>)</span>
       * <span class="type-var">'acc__6</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_dim</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span class="type-var">'acc__6</span> <span class="arrow">&#45;&gt;</span></span>
-      <span>(<span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <span class="type-var">'result__</span>)</span> * <span class="type-var">'acc__7</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+      <span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span> <span><a href="../index.html#type-dim">dim</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <span class="type-var">'result__</span>)</span> * <span class="type-var">'acc__7</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">terminal_row</span>:
-    <span>(<span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
+    <span>(<span><span><span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+       <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
+       <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+       <a href="../index.html#type-constraint_">constraint_</a>)</span>
+       <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span class="type-var">'acc__7</span> <span class="arrow">&#45;&gt;</span></span>
-      <span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <span class="type-var">'result__</span>)</span> * <span class="type-var">'acc__8</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+      <span>(<span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span> <span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <span class="type-var">'result__</span>)</span> * <span class="type-var">'acc__8</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">shape_row</span>:
     <span>(<span><span><span>(<span><a href="../index.html#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span><a href="../index.html#type-constraint_origin">constraint_origin</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span> <a href="../index.html#type-constraint_">constraint_</a>)</span> <span class="xref-unresolved">Variantslib</span>.Variant.t</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span class="type-var">'acc__8</span> <span class="arrow">&#45;&gt;</span></span>
