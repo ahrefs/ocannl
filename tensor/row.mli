@@ -65,6 +65,7 @@ type t = { dims : dim list; bcast : bcast; prov : provenance }
 
 val dims_label_assoc : t -> (string * dim) list
 val get_row_for_var : provenance -> row_var -> t
+val row_shapes : t -> int list
 
 type environment [@@deriving sexp_of]
 
@@ -168,7 +169,7 @@ val add_used_in_spec_or_compose : row_var -> unit
 val add_used_in_pointwise : row_var -> unit
 (** Mark a row variable as used in a pointwise shape update. Meant specifically for input rows, to
     indicate that the variable can be guessed empty when it ends up in a parameter. *)
-    
+
 val subst_row : environment -> t -> t
 
 val unify_row :

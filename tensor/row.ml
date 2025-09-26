@@ -167,12 +167,16 @@ let provenance ~sh_id ~kind = [ { sh_id; kind } ]
 let merge_provenance p1 p2 = List.dedup_and_sort ~compare:compare_provenance_origin (p1 @ p2)
 (* let row_map_empty = Map.empty (module Provenance) *)
 
+let provenance_shapes prov =
+  List.map prov ~f:(fun origin -> origin.sh_id) |> List.dedup_and_sort ~compare:Int.compare
+
 type t = { dims : dim list; bcast : bcast; prov : provenance }
 [@@deriving equal, hash, compare, sexp]
 
 type row = t [@@deriving equal, sexp]
 
 let get_row_for_var prov v = { dims = []; bcast = Row_var { v; beg_dims = [] }; prov }
+let row_shapes row = provenance_shapes row.prov
 
 let dims_label_assoc dims =
   let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in

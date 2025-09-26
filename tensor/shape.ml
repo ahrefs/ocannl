@@ -431,8 +431,11 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
 
+let unused_shapes = Hash_set.create (module Int)
+
 let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
+  Hash_set.remove unused_shapes cur_sh.id;
   let generative =
     [
       (`Batch, List.is_empty cur_sh.batch.dims);
@@ -579,6 +582,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   | Terminal { is_param; logic = Fetch Embed_self_id } ->
       (Row.dim_map_empty, mark_terminal ~is_param)
   | Transpose (Transpose, sh) ->
+      Hash_set.remove unused_shapes sh.id;
       ( Row.dim_map_empty,
         [
           Row_ineq
@@ -601,6 +605,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Transpose (Pointwise_un, sh) ->
+      Hash_set.remove unused_shapes sh.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh.input.bcast;
       ( Row.dim_map_empty,
@@ -625,6 +630,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Compose, sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
@@ -669,6 +676,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Pointwise_bin, sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -712,6 +721,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      Hash_set.remove unused_shapes sh3.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       ( Row.dim_map_empty,
         [
@@ -774,6 +786,9 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      Hash_set.remove unused_shapes sh3.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -836,6 +851,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
+      Hash_set.remove unused_shapes sh.id;
       let slice_v = get_var () in
       let slice_var = Var slice_v in
       let proj_axis_env =
@@ -893,6 +909,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
+      Hash_set.remove unused_shapes sh.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
@@ -1110,6 +1127,8 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
             };
         ] )
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
@@ -1489,7 +1508,8 @@ let set_equal delayed_ref1 delayed_ref2 =
           }
         :: !active_constraints
 
-let set_terminal ~is_param sh =
+let set_terminal ~is_param (sh : t) =
+  Hash_set.add unused_shapes sh.id;
   let get_origin kind =
     Row.
       {
@@ -1614,9 +1634,15 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   state := env
 
 let%debug4_sexp finish_inference (() : unit) : unit =
+  let unsolved =
+    List.filter !active_constraints ~f:(function
+      | Shape_row (r, _) | Terminal_row (_, r, _) ->
+          not (List.exists (Row.row_shapes r) ~f:(Hash_set.mem unused_shapes))
+      | _ -> true)
+  in
   (* TODO: optimize to keep all needed information in unsolved, rather than starting with all
      constraints. *)
-  let unsolved, env = Row.solve_inequalities ~stage:Stage2 !active_constraints !state in
+  let unsolved, env = Row.solve_inequalities ~stage:Stage2 unsolved !state in
   let unsolved, env = Row.solve_inequalities ~stage:Stage3 unsolved env in
   let all_update_rows =
     List.concat_map ~f:all_rows_w_origin !active_update_steps
