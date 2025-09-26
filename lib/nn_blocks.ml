@@ -180,6 +180,26 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     let tgt_embedded = ({ tgt_embed; o = [ d_dec ] } * tgt) + pos_encoding_tgt in
     { w_out } * decoder ~train_step tgt_embedded ~enc_output ~mask
 
+(** Transformer with teacher forcing for autoregressive training.
+
+    TODO: Simplify once tensor shifting/slicing is better supported in shape inference. Currently
+    requires pre-shifted tgt_input (all but last token) and tgt_target (all but first token). During
+    training, the model learns to predict tgt_target given tgt_input. *)
+let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt_target ~mask =
+  (* Get model predictions for the input sequence *)
+  let logits = model ~train_step ~src ~tgt:tgt_input ~mask in
+
+  (* Compute cross-entropy loss between predictions and target *)
+  (* softmax over vocabulary dimension *)
+  let log_probs = log (softmax ~spec:"... | v" () logits) in
+
+  (* Negative log likelihood loss: -sum(target * log_probs) *)
+  (* tgt_target should be one-hot encoded or use label smoothing *)
+  let loss = -(tgt_target *. log_probs) ++ "...|... => 0" in
+
+  (* Return both loss and logits for potential additional metrics *)
+  (loss, logits)
+
 (** {2 Convolutional Neural Network Building Blocks} *)
 
 (** 2D convolution layer with flexible padding and stride options. *)
