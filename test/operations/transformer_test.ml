@@ -13,8 +13,8 @@ let () =
   let d_ff = 128 in
   let src_vocab_size = 100 in
   let tgt_vocab_size = 100 in
-  let num_encoder_layers = 2 in
-  let num_decoder_layers = 2 in
+  let num_encoder_layers = 1 in
+  let num_decoder_layers = 1 in
 
   Stdio.printf "Testing transformer with teacher forcing\n";
 
@@ -75,8 +75,7 @@ let () =
   in
 
   (* Forward pass to check shapes and loss *)
-  let ctx = Ocannl.Train.init_params ctx bindings loss in
-  let _ctx = Ocannl.Train.forward_once ctx loss in
+  let _ctx = Ocannl.Train.forward_once ~output_cd_file:true ~bindings ctx loss in
 
   (* Verify shapes *)
   Stdio.printf "Loss shape:\n%s\n"

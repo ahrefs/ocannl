@@ -1,5 +1,4 @@
 hyperlink_prefix=vscode://file//wsl.localhost/ubuntu-24.04/home/lukstafi/ocannl/
-snapshot_every_sec=
 debug_highlights=
 time_tagged=clock
 elapsed_times=milliseconds
@@ -16,7 +15,7 @@ randomness_lib=for_tests
 automatic_host_transfers=true
 # only for DEBUG:
 log_level=9
-# debug_backend=flushing
+# debug_backend=db
 output_debug_files_in_build_directory=true
 debug_log_from_routines=true
 debug_log_to_stream_files=true

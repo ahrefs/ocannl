@@ -130,7 +130,7 @@ randomness_lib=stdlib
 # Low-level-code identifier syntax. Options: heuristic, name_and_label, name_only.
 ll_ident_style=heuristic
 
-# For ppx_minidebug non-flushing backends, when non-empty, enables snapshotting of ongoing
+# For ppx_minidebug non-flushing static backends, when non-empty, enables snapshotting of ongoing
 # logging into a file, with the given frequency.
 snapshot_every_sec=
 
@@ -146,8 +146,10 @@ elapsed_times=not_reported
 # no_location, file_only, beg_line, beg_pos, range_line, range_pos.
 location_format=beg_pos
 
-# The ppx_minidebug logging backend (i.e. format). Options: text, html, markdown, flushing.
-debug_backend=html
+# The ppx_minidebug logging backend (i.e. format). Options: db, text, html, markdown, flushing.
+# The db backend requires a rendering client from ppx_minidebug, the other backends
+# generate static (rendered) artifacts.
+debug_backend=db
 
 # For ppx_minidebug: a prefix for file positions relative to the project root.
 # A more elaborate example:

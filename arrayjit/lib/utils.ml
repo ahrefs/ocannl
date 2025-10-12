@@ -326,17 +326,19 @@ let get_local_debug_runtime =
         @@ "ocannl_location_format setting should be one of: no_location, file_only, beg_line, \
             beg_pos, range_line, range_pos; found: " ^ s
   in
-  let flushing, toc_flame_graph, backend =
+  let backend, toc_flame_graph, printbox_backend =
     match
-      String.lowercase @@ String.strip @@ get_global_arg ~default:"html" ~arg_name:"debug_backend"
+      String.lowercase @@ String.strip @@ get_global_arg ~default:"db" ~arg_name:"debug_backend"
     with
-    | "text" -> (false, false, `Text)
-    | "html" -> (false, true, `Html Minidebug_runtime.default_html_config)
-    | "markdown" -> (false, false, `Markdown Minidebug_runtime.default_md_config)
-    | "flushing" -> (true, false, `Text)
+    | "text" -> (`Printbox, false, `Text)
+    | "html" -> (`Printbox, true, `Html Minidebug_runtime.default_html_config)
+    | "markdown" -> (`Printbox, false, `Markdown Minidebug_runtime.default_md_config)
+    | "flushing" -> (`Flushing, true, `Text)
+    | "db" -> (`Db, false, `Text)
     | s ->
         invalid_arg
-        @@ "ocannl_debug_backend setting should be text, html, markdown or flushing; found: " ^ s
+        @@ "ocannl_debug_backend setting should be text, html, markdown, flushing or db; found: "
+        ^ s
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
   let print_entry_ids = get_global_flag ~default:false ~arg_name:"logs_print_entry_ids" in
@@ -348,7 +350,7 @@ let get_local_debug_runtime =
     if log_main_domain_to_stdout then None
     else Some (get_global_arg ~default:"debug" ~arg_name:"log_file_stem")
   in
-  let filename = Option.map file_stem ~f:(fun stem -> diagn_log_file @@ stem) in
+  let filename = Option.map file_stem ~f:diagn_log_file in
   let prev_run_file =
     let prefix = str_nonempty ~f:Fn.id @@ get_global_arg ~default:"" ~arg_name:"prev_run_prefix" in
     Option.map2 prefix file_stem ~f:(fun prefix stem -> diagn_log_file @@ prefix ^ stem ^ ".raw")
@@ -417,28 +419,35 @@ let get_local_debug_runtime =
     if String.is_empty arg then None else Some (Int.of_string arg)
   in
   let name = get_global_arg ~default:"debug" ~arg_name:"log_file_stem" in
-  match (flushing, filename) with
-  | true, None ->
+  match (backend, filename) with
+  | `Flushing, None ->
       Minidebug_runtime.prefixed_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
         ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
-  | true, Some filename ->
+  | `Flushing, Some filename ->
       Minidebug_runtime.local_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
         ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level
         filename
-  | false, None ->
+  | `Printbox, None ->
       Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format
         ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_entry
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
         ~log_level:original_log_level ?snapshot_every_sec ()
-  | false, Some filename ->
+  | `Printbox, Some filename ->
       Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
         ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
-        ?prune_upto ~backend ~log_level:original_log_level ?snapshot_every_sec ?prev_run_file
-        ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
+        ?prune_upto ~backend:printbox_backend ~log_level:original_log_level ?snapshot_every_sec
+        ?prev_run_file ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
+  | `Db, None -> failwith "DB backend does not support no filename"
+  | `Db, Some filename ->
+      let db =
+        Minidebug_db.debug_db_file ~time_tagged ~elapsed_times ~print_entry_ids ~verbose_entry_ids
+          ~run_name:name ~log_level:original_log_level filename
+      in
+      fun () -> db
 
 let _get_local_debug_runtime = get_local_debug_runtime
 

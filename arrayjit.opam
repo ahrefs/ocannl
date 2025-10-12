@@ -33,7 +33,7 @@ depends: [
   "ppx_string"
   "ppx_variants_conv"
   "ppx_expect"
-  "ppx_minidebug" {>= "2.3.0"}
+  "ppx_minidebug" {>= "3.0.0"}
   "metal" {os = "macos"}
   "odoc" {with-doc}
 ]

@@ -69,7 +69,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.3.0))
+   (>= 3.0.0))
   (metal
    (= :os macos)))
  (depopts
@@ -131,7 +131,7 @@
   ppx_variants_conv
   ppx_expect
   (ppx_minidebug
-   (>= 2.3.0))
+   (>= 3.0.0))
   (odoc :with-doc)
   (md2mld :with-doc)
   (slipshow :with-doc))

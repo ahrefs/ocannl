@@ -4,7 +4,7 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL))
  (modules utils)
- (libraries base stdio pprint ppx_minidebug.runtime)
+ (libraries base stdio pprint ppx_minidebug.runtime ppx_minidebug.db)
  (preprocess
   (pps
    ppx_compare
@@ -32,7 +32,8 @@
   ctypes.foreign
   saturn_lockfree
   utils
-  ppx_minidebug.runtime)
+  ppx_minidebug.runtime
+  ppx_minidebug.db)
  (foreign_stubs
   (language c)
   (names builtins))
@@ -117,7 +118,8 @@
    from
    (metal_backend -> metal_backend_impl.metal.ml)
    (-> metal_backend_impl.missing.ml))
-  ppx_minidebug.runtime)
+  ppx_minidebug.runtime
+  ppx_minidebug.db)
  (preprocess
   (pps
    ppx_compare
