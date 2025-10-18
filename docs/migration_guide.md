@@ -429,20 +429,23 @@ def inference(model, test_input):
 
 **OCANNL:**
 ```ocaml
-let inference ctx model test_input =
+let inference ctx model =
   (* Define inference computation - use %cd to avoid initialization *)
   let%cd output = model { test_input } in
   Train.set_on_host output.value;
   
   (* Compile inference routine *)
-  let infer_routine = Train.to_routine ctx IDX.empty output in
+  let ctx, routine = Context.compile ctx output IDX.empty in
   
-  (* Run inference *)
-  Tn.set_values test_input.value input_data;
-  Train.run ctx infer_routine;
+  fun input_data ->
+    (* Run inference *)
+    Tn.set_values test_input.value input_data;
+    Train.run ctx infer_routine;
   
-  (* Extract predictions *)
-  output.@{[| (* indices *) |]}
+    (* Before OCANNL v0.7, to get all cells flattened: *)
+    Tn.get_values output.value
+    (* Or starting with the future OCANNL v0.7 to get a bigarray: *)
+    Context.get ctx output.value
 ```
 
 ### Key API Functions
