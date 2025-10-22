@@ -157,10 +157,10 @@ debug_backend=db
 hyperlink_prefix=./
 
 # For ppx_minidebug: whether to print IDs for log entries.
-logs_print_entry_ids=false
+logs_print_scope_ids=false
 
 # For ppx_minidebug.
-logs_verbose_entry_ids=false
+logs_verbose_scope_ids=false
 
 # For ppx_minidebug, whether logging from the main domain, `Domain.is_main ()`,
 # should be directed to stdout rather than to a file.
@@ -195,7 +195,7 @@ diff_max_distance_factor=
 
 # For ppx_minidebug: semicolon-separated list of comma-separated entry IDs from
 # the previous and current run, that should be considered the same by the diffing algorithm.
-debug_entry_id_pairs=
+debug_scope_id_pairs=
 
 # For ppx_minidebug: for generating file names. If empty, all logging will be done to stdout,
 # regardless of the value of `log_main_domain_to_stdout`.

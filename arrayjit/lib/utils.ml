@@ -341,8 +341,8 @@ let get_local_debug_runtime =
         ^ s
   in
   let hyperlink = get_global_arg ~default:"./" ~arg_name:"hyperlink_prefix" in
-  let print_entry_ids = get_global_flag ~default:false ~arg_name:"logs_print_entry_ids" in
-  let verbose_entry_ids = get_global_flag ~default:false ~arg_name:"logs_verbose_entry_ids" in
+  let print_scope_ids = get_global_flag ~default:false ~arg_name:"logs_print_scope_ids" in
+  let verbose_scope_ids = get_global_flag ~default:false ~arg_name:"logs_verbose_scope_ids" in
   let log_main_domain_to_stdout =
     get_global_flag ~default:false ~arg_name:"log_main_domain_to_stdout"
   in
@@ -398,8 +398,8 @@ let get_local_debug_runtime =
   let max_distance_factor =
     str_nonempty ~f:Int.of_string @@ get_global_arg ~default:"" ~arg_name:"diff_max_distance_factor"
   in
-  let entry_id_pairs =
-    let pairs_str = get_global_arg ~default:"" ~arg_name:"debug_entry_id_pairs" in
+  let scope_id_pairs =
+    let pairs_str = get_global_arg ~default:"" ~arg_name:"debug_scope_id_pairs" in
     if String.is_empty pairs_str then []
     else
       String.split pairs_str ~on:';'
@@ -421,30 +421,30 @@ let get_local_debug_runtime =
   let name = get_global_arg ~default:"debug" ~arg_name:"log_file_stem" in
   match (backend, filename) with
   | `Flushing, None ->
-      Minidebug_runtime.prefixed_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
-        ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
+      Minidebug_runtime.prefixed_runtime_flushing ~time_tagged ~elapsed_times ~print_scope_ids
+        ~verbose_scope_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level ()
   | `Flushing, Some filename ->
-      Minidebug_runtime.local_runtime_flushing ~time_tagged ~elapsed_times ~print_entry_ids
-        ~verbose_entry_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level
+      Minidebug_runtime.local_runtime_flushing ~time_tagged ~elapsed_times ~print_scope_ids
+        ~verbose_scope_ids ~global_prefix:name ~for_append:false ~log_level:original_log_level
         filename
   | `Printbox, None ->
       Minidebug_runtime.prefixed_runtime ~time_tagged ~elapsed_times ~location_format
-        ~print_entry_ids ~verbose_entry_ids ~global_prefix:name ~toc_entry
+        ~print_scope_ids ~verbose_scope_ids ~global_prefix:name ~toc_entry
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
         ~log_level:original_log_level ?snapshot_every_sec ()
   | `Printbox, Some filename ->
-      Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_entry_ids
-        ~verbose_entry_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
+      Minidebug_runtime.local_runtime ~time_tagged ~elapsed_times ~location_format ~print_scope_ids
+        ~verbose_scope_ids ~global_prefix:name ~toc_flame_graph ~flame_graph_separation:50
         ~toc_entry ~for_append:false ~max_inline_sexp_length:120 ~hyperlink
         ~toc_specific_hyperlink:"" ~highlight_terms ?truncate_children
         ~exclude_on_path:Re.(str "env")
         ?prune_upto ~backend:printbox_backend ~log_level:original_log_level ?snapshot_every_sec
-        ?prev_run_file ?diff_ignore_pattern ?max_distance_factor ~entry_id_pairs filename
+        ?prev_run_file ?diff_ignore_pattern ?max_distance_factor ~scope_id_pairs filename
   | `Db, None -> failwith "DB backend does not support no filename"
   | `Db, Some filename ->
       let db =
-        Minidebug_db.debug_db_file ~time_tagged ~elapsed_times ~print_entry_ids ~verbose_entry_ids
+        Minidebug_db.debug_db_file ~time_tagged ~elapsed_times ~print_scope_ids ~verbose_scope_ids
           ~run_name:name ~log_level:original_log_level filename
       in
       fun () -> db
