@@ -218,6 +218,18 @@ module Tree_map = struct
         f ~key:n.key ~data:n.value;
         iter n.right ~f
 
+  let rec map t ~f =
+    match t with
+    | Empty -> Empty
+    | Node n ->
+        create n.key (f n.value) (map n.left ~f) (map n.right ~f)
+
+  let rec mapi t ~f =
+    match t with
+    | Empty -> Empty
+    | Node n ->
+        create n.key (f ~key:n.key ~data:n.value) (mapi n.left ~f) (mapi n.right ~f)
+
   let to_alist t = List.rev (fold t ~init:[] ~f:(fun ~key ~data acc -> (key, data) :: acc))
 
   let of_alist ~compare lst =

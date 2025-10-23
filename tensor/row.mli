@@ -176,7 +176,7 @@ val unify_row :
   stage:stage -> constraint_origin list -> t * t -> environment -> constraint_ list * environment
 
 val empty_env : environment
-val get_dim_from_env : environment -> dim_var -> int option
+val get_dim_val : environment -> dim_var -> int option
 val get_row_from_env : environment -> row_var -> t option
 val unsolved_constraints : environment -> constraint_ list
 

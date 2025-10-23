@@ -1584,7 +1584,7 @@ let rec compute_row_product env (row : Row.t) : int =
         match dim with
         | Row.Dim { d; _ } -> d
         | Row.Var v -> (
-            match Row.get_dim_from_env env v with
+            match Row.get_dim_val env v with
             | Some d -> d
             | None -> 1 (* Variable not yet resolved *))
         | Row.Conv_input _ -> 1 (* TODO: handle convolution input dimensions *)
@@ -1597,7 +1597,7 @@ let update_delayed_var_refs env update_step =
         match delayed_ref.var with
         | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
         | `Dim dim_var -> (
-            match Row.get_dim_from_env env dim_var with
+            match Row.get_dim_val env dim_var with
             | Some d ->
                 Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
                     assert (solved_dim = d));
