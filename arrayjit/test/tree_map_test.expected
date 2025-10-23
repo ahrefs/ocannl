@@ -1,0 +1,17 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Tree structure:
+(Node (key 5) (value five)
+ (left
+  (Node (key 3) (value three)
+   (left (Node (key 2) (value two) (left Empty) (right Empty)))
+   (right (Node (key 4) (value four) (left Empty) (right Empty)))))
+ (right
+  (Node (key 7) (value seven)
+   (left (Node (key 6) (value six) (left Empty) (right Empty)))
+   (right (Node (key 8) (value eight) (left Empty) (right Empty))))))
+
+Finding key 4: four
+Finding key 10: not found
+
+As alist (in-order): ((2 two) (3 three) (4 four) (5 five) (6 six) (7 seven) (8 eight))

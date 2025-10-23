@@ -1,26 +1,15 @@
-(executable
+(test
  (name test_numerical_types)
  (package arrayjit)
- (public_name arrayjit.test_numerical_types)
  (modules test_numerical_types)
  (libraries base stdio arrayjit.ir)
  (preprocess
   (pps ppx_here)))
 
-(rule
- (target test_numerical_types.output)
+(test
+ (name tree_map_test)
  (package arrayjit)
- (deps
-  test_numerical_types.exe
-  ocannl_config
-  (env_var OCANNL_BACKEND))
- (action
-  (with-stdout-to
-   %{target}
-   (run %{deps}))))
-
-(rule
- (alias runtest)
- (package arrayjit)
- (action
-  (diff test_numerical_types.expected test_numerical_types.output)))
+ (modules tree_map_test)
+ (libraries base stdio arrayjit.utils)
+ (preprocess
+  (pps ppx_sexp_conv ppx_here)))
