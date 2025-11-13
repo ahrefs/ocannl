@@ -38,8 +38,6 @@ jobs:
 
       - name: Setup project
         run: |
-          # FIXME: We need to pin printbox-text until > 0.12.0 is released.
-          opam pin -n printbox-text https://github.com/c-cube/printbox.git
           opam pin -n .
           opam install . -y --deps-only --with-test --with-doc
 
@@ -53,11 +51,11 @@ jobs:
           additional_permissions: |
             actions: read
           
-          # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4.1)
-          model: "claude-opus-4-1-20250805"
+          # Optional: Specify model (defaults to Claude Sonnet, uncomment for Claude Opus 4.1)
+          # model: "claude-opus-4-1-20250805"
           
           # Optional: Customize the trigger phrase (default: @claude)
-          trigger_phrase: "@claude-opus"
+          # trigger_phrase: "@claude-opus"
           
           # Optional: Trigger when specific user is assigned to an issue
           assignee_trigger: "claude-bot"

@@ -1,5 +1,5 @@
 profile = default
-version = 0.27.0
+version = 0.28.1
 margin = 100
 parse-docstrings = true
 wrap-comments = true
