@@ -328,6 +328,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let kernel_prep_line =
       "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"
 
+    (* Use native CUDA types for loop indices and arguments instead of stdint.h types *)
+    let loop_index_type =
+      if Utils.settings.big_models then "unsigned long long " else "unsigned int "
+
+    let arg_int_prefix =
+      if Utils.settings.big_models then "const unsigned long long " else "const unsigned int "
+
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"
       | Ops.Uint16_prec _ -> "unsigned short"
@@ -340,6 +347,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Single_prec _ -> "float"
       | Ops.Double_prec _ -> "double"
       | Ops.Void_prec -> "void"
+      | Ops.Uint32_prec _ -> "unsigned int"
+      | Ops.Uint64_prec _ -> "unsigned long long"
 
     let vec_typ_of_prec ~length prec =
       match (prec, length) with
@@ -647,6 +656,56 @@ end) : Ir.Backend_impl.Lowered_backend = struct
                       "CUDA backend: Threefry4x32_light requires target precision to be uint4x32, \
                        but got %s"
                       (Ops.prec_string prec)))
+      | ToPowOf, (Uint32_prec _ | Uint64_prec _) ->
+          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
+      | Relu_gate, Uint32_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0u"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0u")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0u"))))
+      | Relu_gate, Uint64_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0ULL"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0ULL")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0ULL"))))
+      | Satur01_gate, Uint32_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0u && " ^^ v1 ^^ string " < 1u"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0u")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0u"))))
+      | Satur01_gate, Uint64_prec _ ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0ULL && " ^^ v1 ^^ string " < 1ULL"))
+                 ^^ ifflat
+                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
+                     ^^ string "0ULL")
+                      (nest 2
+                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
+                        ^^ string "0ULL"))))
+      | Max, Uint32_prec _ -> func "max"
+      | Max, Uint64_prec _ -> func "max"
+      | Min, Uint32_prec _ -> func "min"
+      | Min, Uint64_prec _ -> func "min"
 
     let unop_syntax prec v =
       let open PPrint in
@@ -708,6 +767,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       | Tanh_approx, Single_prec _ -> func "__tanhf"
       | Tanh_approx, _ -> func "tanh"
       | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
+      | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
+          invalid_arg
+            "Cuda_backend.unop_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
+      | Uint4x32_to_prec_uniform1, _ -> func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
 
     let vec_unop_syntax prec op v =
       let open PPrint in
@@ -790,7 +853,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let cuda_includes =
       {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>|}
+#include <cuda_bf16.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif|}
       ^
       if Utils.debug_log_from_routines () then
         "\n__device__ int printf (const char * format, ... );"
@@ -819,7 +890,15 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let final_doc = PPrint.(separate hardline all_proc_docs) in
     let cuda_includes =
       {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>|}
+#include <cuda_bf16.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif|}
       ^
       if Utils.debug_log_from_routines () then
         "\n__device__ int printf (const char * format, ... );"

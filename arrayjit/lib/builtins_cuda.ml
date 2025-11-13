@@ -54,6 +54,16 @@ let builtins =
   return (unsigned long long)__double_as_longlong(__hiloint2double(x.v[1], x.v[0]));
 }|},
       [ "uint4x32_t" ] );
+    ( "uint4x32_to_uint32_uniform",
+      {|__device__ unsigned int uint4x32_to_uint32_uniform(uint4x32_t x) {
+  return uint4x32_to_u32_uniform(x);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_u32_uniform" ] );
+    ( "uint4x32_to_uint64_uniform",
+      {|__device__ unsigned long long uint4x32_to_uint64_uniform(uint4x32_t x) {
+  return uint4x32_to_u64_uniform(x);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_u64_uniform" ] );
     ( "uint4x32_to_i8_uniform",
       {|__device__ signed char uint4x32_to_i8_uniform(uint4x32_t x) {
   return (signed char)(x.v[0] & 0xFF);
@@ -64,12 +74,33 @@ let builtins =
   return (unsigned char)(x.v[0] & 0xFF);
 }|},
       [ "uint4x32_t" ] );
+    ( "uint4x32_to_byte_uniform",
+      {|__device__ unsigned char uint4x32_to_byte_uniform(uint4x32_t x) {
+  return uint4x32_to_u8_uniform(x);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_u8_uniform" ] );
+    ( "uint4x32_to_uint16_uniform",
+      {|__device__ unsigned short uint4x32_to_uint16_uniform(uint4x32_t x) {
+  return (unsigned short)(x.v[0] & 0xFFFF);
+}|},
+      [ "uint4x32_t" ] );
+    ( "uint4x32_to_int64_uniform",
+      {|__device__ long long uint4x32_to_int64_uniform(uint4x32_t x) {
+  return uint4x32_to_i64_uniform(x);
+}|},
+      [ "uint4x32_t"; "uint4x32_to_i64_uniform" ] );
     ( "uint4x32_to_bfloat16_uniform",
       {|__device__ unsigned short uint4x32_to_bfloat16_uniform(uint4x32_t x) {
   float f = uint32_to_single_uniform(x.v[0]);
   return (unsigned short)(__float_as_uint(f) >> 16);
 }|},
       [ "uint4x32_t"; "uint32_to_single_uniform" ] );
+    ( "uint4x32_to_fp8_uniform",
+      {|__device__ unsigned char uint4x32_to_fp8_uniform(uint4x32_t x) {
+  /* FP8 E5M2 format conversion from uniform random bits */
+  return (unsigned char)(x.v[0] & 0xFF);
+}|},
+      [ "uint4x32_t" ] );
     ( "uint4x32_to_half_uniform",
       {|__device__ __half uint4x32_to_half_uniform(uint4x32_t x) {
   float f = uint32_to_single_uniform(x.v[0]);

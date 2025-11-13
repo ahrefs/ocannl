@@ -1,5 +1,13 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif
 extern "C" __global__ void d_fwd(
     __half *a,
     __half *b,

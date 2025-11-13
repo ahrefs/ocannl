@@ -1,1 +1,24 @@
-FIXME: soon we will update the CUDA backend wholesale to catch up with recent work
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+
+/* Define math constants that would normally come from <math.h> */
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+#ifndef NAN
+#define NAN __int_as_float(0x7fffffff)
+#endif
+extern "C" __global__ void where_fwd(
+    __half *a_then_val,
+    __nv_bfloat16 *b_else_val,
+    float *where,
+    unsigned char *cond_condition) {
+  /* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; };
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  /* where fwd */
+  where[0] = (cond_condition[0]) ? (float)(a_then_val[0]) : (float)(b_else_val[0]);
+  /* end */
+}

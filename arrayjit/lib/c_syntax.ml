@@ -26,6 +26,7 @@ module type C_syntax_config = sig
   val buffer_prefix : string
   val buffer_suffix : pos:int -> string
   val arg_int_prefix : string
+  val loop_index_type : string
   val extra_args : string list
   val typ_of_prec : Ops.prec -> string
   val vec_typ_of_prec : length:int -> Ops.prec -> string
@@ -91,6 +92,7 @@ struct
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
   let arg_int_prefix = if Utils.settings.big_models then "const uint64_t " else "const uint32_t "
+  let loop_index_type = if Utils.settings.big_models then "uint64_t " else "uint32_t "
   let extra_args = []
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
@@ -311,8 +313,7 @@ module C_syntax (B : C_syntax_config) = struct
         if PPrint.is_empty d1 then d2 else if PPrint.is_empty d2 then d1 else d1 ^^ hardline ^^ d2
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
         let header =
-          let idx_type = if Utils.settings.big_models then "uint64_t " else "uint32_t " in
-          string ("for (" ^ idx_type)
+          string ("for (" ^ B.loop_index_type)
           ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space ^^ pp_symbol i
           ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space ^^ string "++" ^^ pp_symbol i
           ^^ string ")"
