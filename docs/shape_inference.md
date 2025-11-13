@@ -61,6 +61,32 @@ The shape and projection inference handles `Conv_input` terms differently depend
 
 Shape inference does not maintain padding for axes of individual tensor nodes, these padding values are computed and updated during projections inference.
 
+### Preventing Premature Guessing with Total_elems Constraints
+
+A critical aspect of shape inference is avoiding premature "guessing" of dimension variables to minimal values (dimension-1 or no-further-axes for rows) when such guessing would make pending constraints unsatisfiable. This is particularly important for `Total_elems` constraints of the form:
+
+```ocaml
+Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
+```
+
+where `var` appears in the numerator and other variables appear in `divided_by`.
+
+The problem: If we guess `var` to be 1 prematurely (before the constraint is resolved), and the denominator variables are later inferred to have values > 1, the constraint becomes unsatisfiable. For example, if the constraint states `total = (64 * var) / [d1, d2]` and we guess `var = 1`, but later infer `d1 = 4` and `d2 = 1`, we get `total = 64 / 4 = 16`, which might not match the actual required total.
+
+The solution: We use the `has_uniq_constr_unless` field in `Bounds_dim` entries to track these dependencies:
+
+1. **Marking Phase**: When a `Total_elems` constraint with a `Strided_var` numerator is encountered, `mark_total_elems_vars` is called to mark the numerator variable with `has_uniq_constr_unless = Some (Set.of_list divided_by)`.
+
+2. **Checking Phase**: Before guessing a variable to 1 in `close_dim_terminal` at Stage 3, we call `can_guess_dim_to_one` to check:
+   - If `has_uniq_constr_unless = None`: guessing is allowed (no restriction)
+   - If `has_uniq_constr_unless = Some unless_vars`: guessing is allowed only if at least one variable in `unless_vars` is also prevented from guessing (has its own `has_uniq_constr_unless` set)
+
+3. **Cycle Breaking**: The "unless at least one is also prevented" condition prevents infinite prevention chains. If both numerator and denominator variables would block each other indefinitely, the condition allows progress by permitting guessing when mutual prevention is detected.
+
+4. **Deferred Closing**: If a variable cannot be guessed, `close_dim_terminal` returns `Terminal_dim (is_param, dim, origin)` instead of `Dim_eq`, allowing later stages to retry after more constraints are resolved.
+
+This mechanism ensures that `Total_elems` constraints with stride-based numerators are fully resolved before any involved variables are closed to minimal values, preventing the "shape cannot be strided" errors that would otherwise occur.
+
 ### Inference strategy
 
 The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature. The subtyping stems merely from the fact that a dimension-1 axis can be used in the context of any dimension due to per-axis broadcasting. Row polymorphism stems from broadcasting to more axes: for example, when unifying an unknown (shape) row with a known one, we cannot assume that the unknown row will have just the axes of the known one, because maybe the known row is meant to be broadcasted here to more axes. The combination of row polymorphism with nominal subtyping means that the constraints we are solving are inequalities, both inequalities between rows (the `Row.t` type, i.e. the `row` type above), and between axes/dimensions (the `Row.dim` type). We maintain the inequality ordering between variables in the environment to compute the transitive closure during simplification. We also maintain a least upper bound on the solution.
@@ -68,7 +94,18 @@ The actual shape inference combines row polymorphism with (nominal) subtyping, a
 ```ocaml
 type dim_entry =
   | Solved_dim of dim
-  | Bounds_dim of { cur : dim_var list; subr : dim_var list; lub : dim option; constr : dim_constraint }
+  | Bounds_dim of {
+      is_in_param : bool;
+      has_uniq_constr_unless : dim_var_set option;
+          (** If set, the variable should not be guessed 1 unless a variable from the set is also
+              prevented from being guessed 1. Used to prevent premature guessing for variables in
+              Total_elems numerators. *)
+      cur : dim_var list;
+      subr : dim_var list;
+      lub : dim option;
+      constr : dim_constraint;
+      origin : constraint_origin list;
+    }
 
 type row_entry =
   | Solved_row of t
@@ -174,7 +211,7 @@ Simplification of an inequality, and constraint propagation, can generate more c
 
 * Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
 * Stage 2, forces coefficients coming from precision byte sizes.
-* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds LUB (if any), but for rows only if they don't have a `Total_elems 1` constraint. It substitutes dimension variables in terminal shapes that do not have a LUB by dim 1. It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint. In Total_elems constraints with multiple row variables, it substitutes row variables originating from axes of non-output kind, and which do not have a LUB, by no-further-axes -- otherwise these constraints can be too hard to unlock.
+* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds LUB (if any), but for rows only if they don't have a `Total_elems 1` constraint. It substitutes dimension variables in terminal shapes that do not have a LUB by dim 1, **except** when the variable has `has_uniq_constr_unless` set (indicating it's in the numerator of a `Total_elems` constraint) and none of the denominator variables are also prevented from guessing -- this prevents premature guessing that would make `Total_elems` constraints unsatisfiable. It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint. In Total_elems constraints with multiple row variables, it substitutes row variables originating from axes of non-output kind, and which do not have a LUB, by no-further-axes -- otherwise these constraints can be too hard to unlock.
 * Stage 4 sets yet-unknown dimensions with >1 lower bounds from direct accesses, or terminal ones, to their LUBs if they have any. It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at stage 6 to all variables.) At this stage, we inject `Shape_row` constraints into the inequalities, so that we can re-process the variables of interest without traversing the whole environment.
 * Stage 5 addresses `Total_elems` and `Exact` constraints with yet-unknown row variables. For `Total_elems` and a single row variable: if the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension. For multiple row variables, if one is of the Output kind, sets the other variables to no-further-axes, and retries.
 * Stage 6 sets row variables in the remaining inequalities and updated shapes to no-further-axes values. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality. In row constraints, this also unlocks inference for the embedded dim variables.
@@ -190,7 +227,9 @@ Let's explain the shape inference functions.
 * `apply_dim_constraint` resp. `apply_row_constraint`: if they cannot make any progress on the constraint, they return `None`. Otherwise, they return a list of derived constraints, and an updated `dim_constraint` resp. `row_constraint`.
 * `solve_dim_ineq`: solves a single inequality between two values of type `dim`; returns derived equations and inequalities. It maintains the between-variable bounds and the least-upper-bound (LUB). But there can only be one LUB (a dimension > 1) without forcing the bound variable itself to a solved form (with dimension = 1).
 * `solve_row_ineq`: solves a single inequality between two rows; returns derived equations and inequalities. It derives between-`dim` inequalities from the known parts of the compared rows. It maintains between-row-variable bounds (when known parts of the rows match) and the LUB. It forces the `cur` side to have at least the number of axes of the `subr` side (via a variables-only `template`). It updates the LUB by computing dimensions-wise LUBs.
-* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~stage:true`.
+* `mark_total_elems_vars`: when a `Total_elems` constraint with `Strided_var { var; _ }` in the numerator and non-empty `divided_by` list is encountered, this function marks `var` with `has_uniq_constr_unless = Some (Set.of_list divided_by)`. This tracking ensures that numerator variables aren't prematurely guessed to 1, which would make the constraint unsatisfiable.
+* `can_guess_dim_to_one`: checks if a dimension variable can be guessed to 1. A variable with `has_uniq_constr_unless` can only be guessed if at least one of the "unless" (denominator) variables is also prevented from guessing. This cycle-breaking condition prevents infinite prevention chains where both numerator and denominator would block each other.
+* `close_dim_terminal` and `close_row_terminal`: produce the equal-to-LUB constraint when available, from `Terminal_dim` and `Terminal_row` constraints produced for shapes of leaf tensors in tensor expressions, but only when `~stage:true`. `close_dim_terminal` now calls `can_guess_dim_to_one` before guessing a variable to 1, ensuring `Total_elems` constraints can be satisfied.
 * `solve_inequalities`: solves equations, inequalities, and row constraints, until only row constraints remain. Row constraints can "pass" if there is not enough information, rather than reflecting their effect in the environment. Calls `close_dim_terminal` and `close_row_terminal` as appropriate.
 
 The rationale behind only closing leaf (terminal) tensor shapes to their LUBs, while closing the remaining ones to dim-1:

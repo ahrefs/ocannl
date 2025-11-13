@@ -102,6 +102,9 @@ type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of {
       is_in_param : bool;
+      has_uniq_constr_unless : dim_var_set option;
+          (** If set, the variable should not be guessed 1 unless a variable from the set is also
+              prevented from being guessed 1. *)
       cur : dim_var list;
       subr : dim_var list;
       lub : dim option;
