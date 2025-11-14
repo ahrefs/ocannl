@@ -70,6 +70,10 @@ This is very tentative.
   * Add convnet examples: MNIST and CIFAR.
   * Bindings to a tokenizer (e.g. _llama.cpp_).
   * Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
+* **0.6.5: shape manipulation enhancements.**
+  * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
+    * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
+  * Draft an academic-style paper e.g. for the OCaml Workshop.
 * **0.7: CPU-style performance and memory efficiency.**
   * Cleanup of deprecated streams functionality.
   * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
@@ -82,10 +86,6 @@ This is very tentative.
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
   * Milestone phrasing: GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now.
-* **0.8.1: shape understanding and manipulation enhancements.**
-  * Verify or rethink usefulness of dimension labels aka. dimension units, and whether to introduce axis labels.
-  * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
-  * An academic-style paper e.g. for the OCaml Workshop.
 * **0.9: Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
@@ -95,6 +95,9 @@ This is very tentative.
   * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   * Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
+* **1.1: shape inference and safety enhancements.**
+  * Consider introducing axis labels (as opposed to dimension units).
+  * Consider introducing shape schemes for tensor functions.
 
 ### Releases
 
