@@ -58,18 +58,24 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 This is very tentative.
 
-* **0.6.2: Shape inference improvements, convolution NNs, toy generative transformer.**
+* **0.6.2: "you forgot to specify a hidden dimension".**
+  * Detection of user errors where there is missing information about a hidden dimension: disables guessing "no axes" or "dimension 1" for shapes of parameters.
+  * RoPE embeddings.
   * Transformer for the Names dataset.
+* **0.6.3: Padding inference for convolutions; HIP backend.**
   * Padding inference during shape inference.
-  * Add convnet examples starting with MNIST.
+  * A standalone bindings package for HIP (AMD hardware), and a backend using the bindings.
+  * Sokoban RL policy gradient example with a CNN.
+* **0.6.4: Real world examples.**
+  * Add convnet examples: MNIST and CIFAR.
+  * Bindings to a tokenizer (e.g. _llama.cpp_).
+  * Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
 * **0.7: CPU-style performance and memory efficiency.**
   * Cleanup of deprecated streams functionality.
   * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   * Optimizations: loop invariant lifting and common subexpression elimination.
   * Universal Pool Allocator.
   * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
-* **0.7.1: Real-life transformer inference. HIP backend (AMD hardware) and WebGPU backend.**
-  * Add a GPT-2 or Llama style example. Tokenization using llama.cpp extracted tokenizer.
 * **0.8: GPU-style performance -- low hanging fruit.**
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
@@ -79,6 +85,7 @@ This is very tentative.
 * **0.8.1: shape understanding and manipulation enhancements.**
   * Verify or rethink usefulness of dimension labels aka. dimension units, and whether to introduce axis labels.
   * Add concatenation to the einsum syntax (an axis that isq a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
+  * An academic-style paper e.g. for the OCaml Workshop.
 * **0.9: Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
