@@ -2795,7 +2795,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
           Terminal_row (is_param, r1, origin) :: term_dims ())
 
-let%debug5_sexp eliminate_dim_entry ~final origin v ~lub constr =
+let%debug5_sexp eliminate_dim_entry stage origin v ~lub constr =
   match (lub, constr) with
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
       raise
@@ -2803,11 +2803,16 @@ let%debug5_sexp eliminate_dim_entry ~final origin v ~lub constr =
            ( [%string "dereferenced at dimension %{d2#Int}, higher than use site"],
              [ Dim_mismatch [ lub; Var v ] ] )
   | Some _, At_least_dim 0 ->
-      if final then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:57 (); origin }) else None
-  | Some lub, At_least_dim _ -> Some (Dim_eq { d1 = Var v; d2 = lub; origin })
-  | None, At_least_dim d when final ->
+      (* Direct access at 0 is a strong heuristic for dimension 1 axis (e.g. result of a
+         reduction). *)
+      if is_stage7 stage then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:57 (); origin })
+      else None
+  | Some lub, (At_least_dim _ | Unconstrained_dim) when is_stage6_up stage ->
+      Some (Dim_eq { d1 = Var v; d2 = lub; origin })
+  | None, At_least_dim d when is_stage7 stage ->
       Some (Dim_eq { d1 = Var v; d2 = get_dim ~d ~proj_id:58 (); origin })
-  | _ when final -> Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:59 (); origin })
+  | None, _ when is_stage7 stage ->
+      Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:59 (); origin })
   | _ -> None
 
 let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; prov } as r : row) :
@@ -2825,7 +2830,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
                  ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; has_uniq_constr_unless; _ })
           when is_stage4_up stage && can_guess_dim_to_one env has_uniq_constr_unless ->
-            Option.to_list @@ eliminate_dim_entry ~final origin v ~lub constr
+            Option.to_list @@ eliminate_dim_entry stage origin v ~lub constr
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { has_uniq_constr_unless; _ })
           when final && can_guess_dim_to_one env has_uniq_constr_unless ->
@@ -2849,6 +2854,8 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
       let dim_eqs = process_dims beg_dims @ process_dims dims in
       let r1 : row = row_of_var v prov in
       match find_row env.row_env v with
+      | Some (Bounds_row { lub = Some lub; constr = Unconstrained; _ }) when is_stage6_up stage ->
+          (Row_eq { r1; r2 = lub; origin } :: dim_eqs, env)
       | Some (Bounds_row { constr = Unconstrained; _ }) when not final ->
           (Shape_row (r, origin) :: dim_eqs, env)
       | Some (Bounds_row { constr = Unconstrained; _ }) when final ->
