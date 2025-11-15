@@ -74,8 +74,8 @@ let () =
       ~train_step:(Some train_step_n) ~src ~tgt_input ~tgt_target ~mask
   in
 
-  (* Forward pass to check shapes and loss *)
-  let _ctx = Ocannl.Train.forward_once ~output_cd_file:true ~bindings ctx loss in
+  (* Forward pass to check shapes and loss; set [output_cd_file] to true for debugging. *)
+  let _ctx = Ocannl.Train.forward_once ~output_cd_file:false ~bindings ctx loss in
 
   (* Verify shapes *)
   Stdio.printf "Loss shape:\n%s\n"

@@ -2,6 +2,9 @@
  (name test_numerical_types)
  (package arrayjit)
  (modules test_numerical_types)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir)
  (preprocess
   (pps ppx_here)))
@@ -10,6 +13,9 @@
  (name tree_map_test)
  (package arrayjit)
  (modules tree_map_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.utils)
  (preprocess
   (pps ppx_sexp_conv ppx_here)))
