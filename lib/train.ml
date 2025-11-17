@@ -183,7 +183,19 @@ let every_non_literal_on_host =
 
 module Lazy = Utils.Lazy
 
-let%track7_sexp to_routine (ctx : Context.t) ?(hosted = true) bindings comp =
+let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted = true) bindings comp =
+  if output_cd_file then (
+    let name = Asgns.get_name_exn comp.Asgns.asgns in
+    if not Utils.settings.output_debug_files_in_build_directory then
+      raise
+      @@ Utils.User_error
+           "Train.to_routine: output_cd_file is true, but output_debug_files_in_build_directory is \
+            false";
+    let cd_source = Utils.output_to_build_file ~fname:(name ^ "-debug.cd") in
+    let static_indices = Idx.bound_symbols bindings in
+    match cd_source with
+    | None -> ()
+    | Some callback -> callback (Asgns.to_doc ~name ~static_indices () comp.Asgns.asgns));
   if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
   let _ctx, routine = Context.compile ctx comp bindings in
   (* Return just the routine for backward compatibility - ctx is discarded here *)

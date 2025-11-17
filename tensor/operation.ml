@@ -557,7 +557,8 @@ let wrap_padded ~l ?b ?(i = []) ?o ~padding ~padded_value ndarray =
     copied if padding is inferred. See also: {!reshape} and {!wrap}. *)
 let rebatch ~l ndarray =
   let output_dims = Ir.Ndarray.dims ndarray |> Array.to_list |> List.tl_exn in
-  Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ~output_dims
+  Tensor.term ~init_data:(Reshape ndarray) ~label:[ l ] ~input_dims:[] ?input_axes:None ~output_dims
+    ?output_axes:None
 
 (** Creates a tensor by initializing values using a function from indices to values. The dimensions
     are split into axis kinds as specified, there is no shape inference. Recall that input axes are
