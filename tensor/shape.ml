@@ -1922,12 +1922,13 @@ let shape_spec_to_dims_bio labels =
   let dim_var_env = Hashtbl.create (module String) in
   let f _kind = function
     | Label s when String.contains s '=' -> (
-        let label, dim =
+        let _label, dim =
           match String.split s ~on:'=' with
           | [ l; d ] -> (l, d)
           | _ -> invalid_arg "shape_spec_to_dims_bio: too many '='"
         in
-        try Row.get_dim ~d:(Int.of_string dim) ~label ()
+        (* This is not a dimension label i.e. unit! *)
+        try Row.get_dim ~d:(Int.of_string dim) ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
     | Label name ->
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
