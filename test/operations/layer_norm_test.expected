@@ -4,13 +4,13 @@ Testing basic mini decoder model
 Output shape:
 ((batch
   ((dims
-    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 424)))))
-     (Dim ((d 8) (label ()) (proj_id ((Proj_id 425)))))))
+    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 422)))))
+     (Dim ((d 8) (label ()) (proj_id ((Proj_id 423)))))))
    (bcast Broadcastable) (prov (((sh_id 154) (kind Batch))))))
  (input
   ((dims ()) (bcast Broadcastable) (prov (((sh_id 154) (kind Input))))))
  (output
-  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 426)))))))
+  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 424)))))))
    (bcast Broadcastable) (prov (((sh_id 154) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (id 154)
  (debug_name layer_norm))

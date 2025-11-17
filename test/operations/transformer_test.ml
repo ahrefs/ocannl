@@ -33,32 +33,34 @@ let () =
   (* For teacher forcing: create shifted versions of target sequence *)
   (* tgt_input: positions 0 to tgt_seq_len-2 (all but last) *)
   let tgt_input =
-    TDSL.range_of_shape ~label:[ "tgt_input" ] ~batch_dims:[ batch_size; tgt_seq_len - 1 ]
+    TDSL.range_of_shape ~label:[ "tgt_input" ]
+      ~batch_dims:[ batch_size; tgt_seq_len - 1 ]
       ~input_dims:[] ~output_dims:[ tgt_vocab_size ] ()
   in
 
   (* tgt_target: positions 1 to tgt_seq_len-1 (all but first) *)
   (* In practice, this would be shifted token IDs, here we use one-hot for simplicity *)
   let tgt_target =
-    NTDSL.init ~l:"tgt_target" ~prec:Ir.Ops.single ~b:[ batch_size; tgt_seq_len - 1 ] ~i:[]
-      ~o:[ tgt_vocab_size ]
+    NTDSL.init ~l:"tgt_target" ~prec:Ir.Ops.single
+      ~b:[ batch_size; tgt_seq_len - 1 ]
+      ~i:[] ~o:[ tgt_vocab_size ]
       ~f:(function
         | [| _b; s; v |] ->
             (* Create a simple one-hot pattern for testing *)
             if v = Int.((s + 1) % tgt_vocab_size) then 1. else 0.
-        | idcs ->
-            failwith @@ "Invalid indices: "
-            ^ Sexp.to_string_hum ([%sexp_of: int array] idcs))
+        | idcs -> failwith @@ "Invalid indices: " ^ Sexp.to_string_hum ([%sexp_of: int array] idcs))
       ()
   in
 
   (* Create a causal mask for the decoder input (shifted target sequence) *)
   (* Mask should be 0 for positions to mask out, 1 for positions to keep *)
   let mask =
-    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ batch_size; tgt_seq_len - 1 ]
-      ~i:[ tgt_seq_len - 1 ] ~o:[ 1 ]
+    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single
+      ~b:[ tgt_seq_len - 1 ]
+      ~i:[ tgt_seq_len - 1 ]
+      ~o:[]
       ~f:(function
-        | [| _; s; _; t |] -> if s >= t then 1. else 0.
+        | [| s; t |] -> if s >= t then 1. else 0.
         | idcs ->
             failwith @@ "Invalid indices: expected [| _; s; _; t |], got "
             ^ Sexp.to_string_hum ([%sexp_of: int array] idcs))
@@ -78,7 +80,6 @@ let () =
   let _ctx = Ocannl.Train.forward_once ~output_cd_file:false ~bindings ctx loss in
 
   (* Verify shapes *)
-  Stdio.printf "Loss shape:\n%s\n"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] loss.Tensor.shape));
+  Stdio.printf "Loss shape:\n%s\n" (Sexp.to_string_hum ([%sexp_of: Shape.t] loss.Tensor.shape));
   Stdio.printf "Logits shape:\n%s\n%!"
     (Sexp.to_string_hum ([%sexp_of: Shape.t] logits.Tensor.shape))

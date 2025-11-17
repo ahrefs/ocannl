@@ -42,10 +42,9 @@ let () =
   (* Mask should be 0 for positions to mask out, 1 for positions to keep *)
   (* This creates an upper triangular matrix where future positions are masked *)
   let mask =
-    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ batch_size; tgt_seq_len ] ~i:[ tgt_seq_len ]
-      ~o:[ 1 ]
+    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ tgt_seq_len ] ~i:[ tgt_seq_len ] ~o:[]
       ~f:(function
-        | [| _; s; _; t |] -> if s >= t then 1. else 0.
+        | [| s; t |] -> if s >= t then 1. else 0.
         | idcs ->
             failwith @@ "Invalid indices length: expected [| _; s; _; t |], got "
             ^ Sexp.to_string_hum ([%sexp_of: int array] idcs))
