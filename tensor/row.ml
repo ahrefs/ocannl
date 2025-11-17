@@ -1816,8 +1816,8 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       @@ Shape_error
            ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
-  | _, Dim { d = 1; _ } -> ([], env)
-  | (Dim { d = 1; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
+  | _, Dim { d = 1; label = None; _ } -> ([], env)
+  | (Dim { d = 1; label = None; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Var cur_v, Var subr_v -> (
       match (find_dim env.dim_env cur_v, find_dim env.dim_env subr_v) with
@@ -2488,9 +2488,16 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
             List.map2_exn (take_from_end r_cur.dims lub_len) (take_from_end lub2.dims lub_len)
               ~f:(fun d1 d2 ->
                 match (d1, d2) with
-                | Dim { d = 1; _ }, _ -> d1
-                | _, Dim { d = 1; _ } -> d2
+                (* Prefer dimensions without labels (more general), then prefer d=1 (more general
+                   size) *)
+                | Dim { d = 1; label = None; _ }, _ -> d1
+                | _, Dim { d = 1; label = None; _ } -> d2
+                | Dim { d = 1; label = Some _; _ }, Dim { label = None; _ } -> d2
+                | Dim { label = None; _ }, Dim { d = 1; label = Some _; _ } -> d1
                 | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ~proj_id:48 ()
+                | Dim { label = Some l1; _ }, Dim { label = Some l2; _ }
+                  when not (String.equal l1 l2) ->
+                    get_dim ~d:1 ~proj_id:63 ()
                 | Conv_input { stride; output = Dim s; _ }, Dim s'
                 | Dim s', Conv_input { stride; output = Dim s; _ }
                   when !use_padding && stride * s.d <> s'.d ->

@@ -328,7 +328,7 @@ let axis_map_to_dims_bio (type a) ?(default : a option) (idcs : a axis_map) =
       let back_axes, front_axes =
         Map.to_alist axes
         |> List.partition_map ~f:(fun ({ AxisKey.from_end; pos = i; _ }, v) ->
-               if from_end then Either.First (i, v) else Second (i, v))
+            if from_end then Either.First (i, v) else Second (i, v))
       in
       let back_size = List.fold back_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
       let front_size = List.fold front_axes ~init:0 ~f:(fun accu (i, _) -> max i accu) in
@@ -888,21 +888,21 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       ( proj_axis_env,
         (Option.to_list static_range
         |> List.map ~f:(fun range ->
-               Dim_eq
-                 {
-                   d1 = get_dim ~d:range ();
-                   d2 = slice_var;
-                   origin =
-                     [
-                       {
-                         lhs_name = sh.debug_name;
-                         lhs_kind = `Batch;
-                         rhs_name = Idx.symbol_ident static_symbol;
-                         rhs_kind = `Batch;
-                         operation = Some "Slice";
-                       };
-                     ];
-                 }))
+            Dim_eq
+              {
+                d1 = get_dim ~d:range ();
+                d2 = slice_var;
+                origin =
+                  [
+                    {
+                      lhs_name = sh.debug_name;
+                      lhs_kind = `Batch;
+                      rhs_name = Idx.symbol_ident static_symbol;
+                      rhs_kind = `Batch;
+                      operation = Some "Slice";
+                    };
+                  ];
+              }))
         @ [
             Row_eq { r1 = expanded_batch; r2 = sh.batch; origin = get_origin `Batch };
             Row_eq { r1 = cur_sh.input; r2 = sh.input; origin = get_origin `Input };
@@ -1832,12 +1832,21 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =
   let open Row in
+  let known_no_batch =
+    match (batch_dims, batch_axes) with Some [], None -> true | None, Some [] -> true | _ -> false
+  in
+  let num_dim1_output = Option.to_list output_dims |> List.join |> List.count ~f:(fun d -> d = 1) in
+  let f kind d =
+    match kind with
+    | `Batch | `Input -> get_dim ~d ()
+    | `Output ->
+        if not known_no_batch && num_dim1_output = 1 && d = 1 then
+          let label = debug_name ^ "_output" in
+          get_dim ~d ~label ()
+        else get_dim ~d ()
+  in
   let make_dims kind ds =
-    {
-      dims = List.map ~f:(fun d -> get_dim ~d ()) ds;
-      bcast = Broadcastable;
-      prov = provenance ~sh_id:id ~kind;
-    }
+    { dims = List.map ~f:(f kind) ds; bcast = Broadcastable; prov = provenance ~sh_id:id ~kind }
   in
   let make_axes kind ds =
     {
@@ -1987,15 +1996,12 @@ let to_string_hum ?(style = Row.Axis_size) (sh : t) =
     let dims = (row_of_kind kind sh).dims in
     String.concat ~sep:","
     @@ List.mapi dims ~f:(fun i d ->
-           let num =
-             match kind with
-             | `Input -> n_batch + n_outputs + i
-             | `Output -> n_batch + i
-             | `Batch -> i
-           in
-           match style with
-           | Row.Only_labels | Axis_size | Projection_and_size -> Row.dim_to_string style d
-           | Axis_number_and_size -> Int.to_string num ^ ":" ^ Row.dim_to_string style d)
+        let num =
+          match kind with `Input -> n_batch + n_outputs + i | `Output -> n_batch + i | `Batch -> i
+        in
+        match style with
+        | Row.Only_labels | Axis_size | Projection_and_size -> Row.dim_to_string style d
+        | Axis_number_and_size -> Int.to_string num ^ ":" ^ Row.dim_to_string style d)
   in
   let batch_dims = dims_to_string `Batch in
   let input_dims = dims_to_string `Input in

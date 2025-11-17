@@ -44,28 +44,28 @@ let%expect_test "Matrix multiplication dims 1x1" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:45:21
-    ┌────────────────────────┐
-    │[0]: hey shape 1:1->0:1 │
-    │┌──────┬──────┐         │
-    ││      │axis 1│         │
-    │├──────┼──────┤         │
-    ││axis 0│ 7.00 │         │
-    │└──────┴──────┘         │
-    └────────────────────────┘
+    HERE: test/operations/hello_world_op.ml:44:21
+    ┌────────────────────────────┐
+    │[0]: hey shape 1:q=1->0:p=1 │
+    │┌────────┬────────┐         │
+    ││        │axis q=1│         │
+    │├────────┼────────┤         │
+    ││axis p=0│ 7.00   │         │
+    │└────────┴────────┘         │
+    └────────────────────────────┘
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:58:21
-    ┌───────────────────┐
-    │[6]: +_y shape 0:1 │
-    │┌┬─────────┐       │
-    │││axis 0   │       │
-    │├┼─────────┤       │
-    │││ 1.50e+1 │       │
-    │└┴─────────┘       │
-    └───────────────────┘
+    HERE: test/operations/hello_world_op.ml:57:21
+    ┌─────────────────────┐
+    │[6]: +_y shape 0:p=1 │
+    │┌┬─────────┐         │
+    │││axis p=0 │         │
+    │├┼─────────┤         │
+    │││ 1.50e+1 │         │
+    │└┴─────────┘         │
+    └─────────────────────┘
     |}]
 
 let%expect_test "Print tensor too early" =
@@ -79,10 +79,10 @@ let%expect_test "Print tensor too early" =
   Tensor.print ~here:[%here] ~force:false ~with_code:false ~with_grad:false `Inline b;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:79:21
+    HERE: test/operations/hello_world_op.ml:78:21
     [0]: 1,2,3,4_a shape 0:4|  <not-in-yet>
 
-    HERE: test/operations/hello_world_op.ml:80:21
+    HERE: test/operations/hello_world_op.ml:79:21
     [1]: 2,3,4,5_b shape 0:4|  <not-in-yet>
     |}];
   let%op c = a *. b in
@@ -91,7 +91,7 @@ let%expect_test "Print tensor too early" =
   Train.printf ~here:[%here] c;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:92:21
+    HERE: test/operations/hello_world_op.ml:91:21
     ┌─────────────────────────────────┐
     │[2]: *._c shape 0:4|             │
     │┌┬──────────────────────────────┐│
@@ -112,7 +112,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:113:21
+    HERE: test/operations/hello_world_op.ml:112:21
     [0]: 1,2,3,4,5..._hey shape 1:3->0:2  [
        1.00 , 2.00 , 3.00
       ;  4.00 , 5.00 , 6.00
@@ -121,7 +121,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:122:21
+    HERE: test/operations/hello_world_op.ml:121:21
     ┌─────────────────────────────────────┐
     │[0]: 1,2,3,4,5..._hey shape 1:3->0:2 │
     │┌──────┬──────────────────┐          │
@@ -137,7 +137,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:138:21
+    HERE: test/operations/hello_world_op.ml:137:21
     [1]: 1,2,3,4,5..._hoo shape 0:2|1:3  [|
       [ 1.00 ; 2.00 ; 3.00 ]
       ; [ 4.00 ; 5.00 ; 6.00 ]
@@ -146,7 +146,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:147:21
+    HERE: test/operations/hello_world_op.ml:146:21
     ┌────────────────────────────────────┐
     │[1]: 1,2,3,4,5..._hoo shape 0:2|1:3 │
     │┌──────┬──────────────────┐         │
@@ -169,7 +169,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false @@ hey2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:170:21
+    HERE: test/operations/hello_world_op.ml:169:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: 1,2,3,4,5..._hey2 shape 1:2,2:3->0:4                       │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -186,7 +186,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:187:21
+    HERE: test/operations/hello_world_op.ml:186:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: 1,2,3,4,5..._hey2 shape 1:2,2:3->0:4                       │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -212,7 +212,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:213:21
+    HERE: test/operations/hello_world_op.ml:212:21
     [3]: 1,2,3,4,5..._hoo2 shape 0:4|1:2,2:3  [|
       [ [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] ]
       ; [ [ 7.00 ; 8.00 ; 9.00 ] ; [ 10.00 ; 11.00 ; 12.00 ] ]
@@ -223,7 +223,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:224:21
+    HERE: test/operations/hello_world_op.ml:223:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[3]: 1,2,3,4,5..._hoo2 shape 0:4|1:2,2:3                                                                       │
     │┌──────┬──────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -247,7 +247,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:248:21
+    HERE: test/operations/hello_world_op.ml:247:21
     [4]: 1,2,3,4,5..._heyhoo shape 0:4,1:2|2:3  [|
       [| [ 1.00 ; 2.00 ; 3.00 ] ; [ 4.00 ; 5.00 ; 6.00 ] |]
       ; [| [ 7.00 ; 8.00 ; 9.00 ] ; [ 10.00 ; 11.00 ; 12.00 ] |]
@@ -258,7 +258,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:259:21
+    HERE: test/operations/hello_world_op.ml:258:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[4]: 1,2,3,4,5..._heyhoo shape 0:4,1:2|2:3                                                                     │
     │┌──────┬──────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐│
@@ -282,7 +282,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:283:21
+    HERE: test/operations/hello_world_op.ml:282:21
     [5]: 1,31,2,32,3..._heyhoo2 shape 0:4,1:2|2:3,3:2  [|
       [|
         [ [ 1.00 ; 31.00 ] ; [ 2.00 ; 32.00 ] ; [ 3.00 ; 33.00 ] ]
@@ -305,7 +305,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo2;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:306:21
+    HERE: test/operations/hello_world_op.ml:305:21
     ┌──────────────────────────────────────────────────┐
     │[5]: 1,31,2,32,3..._heyhoo2 shape 0:4,1:2|2:3,3:2 │
     │┌──────┬──────────────────┬──────────────────┐    │
@@ -346,7 +346,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo3;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:347:21
+    HERE: test/operations/hello_world_op.ml:346:21
     [6]: 1,31,2,32,3..._heyhoo3 shape 0:2,1:2|2:2,3:3,4:2  [|
       [|
         [
@@ -373,7 +373,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo3;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:374:21
+    HERE: test/operations/hello_world_op.ml:373:21
     ┌──────────────────────────────────────────────────────┐
     │[6]: 1,31,2,32,3..._heyhoo3 shape 0:2,1:2|2:2,3:3,4:2 │
     │┌──────┬───────────────┬──────────────────┐           │
@@ -419,7 +419,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo4;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:420:21
+    HERE: test/operations/hello_world_op.ml:419:21
     [7]: 1,31,2,32,3..._heyhoo4 shape 0:2|4:2->1:2,2:2,3:3  [|
       [
         [
@@ -446,7 +446,7 @@ let%expect_test "Print constant tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo4;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:447:21
+    HERE: test/operations/hello_world_op.ml:446:21
     ┌───────────────────────────────────────────────────────┐
     │[7]: 1,31,2,32,3..._heyhoo4 shape 0:2|4:2->1:2,2:2,3:3 │
     │┌──────┬───────────────┬──────────────────┐            │
@@ -487,7 +487,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:488:21
+    HERE: test/operations/hello_world_op.ml:487:21
     ┌────────────────────────┐
     │[0]: hey shape 1:2->0:3 │
     │┌──────┬────────────┐   │
@@ -502,7 +502,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:503:21
+    HERE: test/operations/hello_world_op.ml:502:21
     ┌──────────────────────────────┐
     │[6]: +_y shape 0:3            │
     │┌┬───────────────────────────┐│
@@ -525,7 +525,7 @@ let%expect_test "Big matrix" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:526:21
+    HERE: test/operations/hello_world_op.ml:525:21
     ┌──────────────────────────────────────────────────┐
     │[0]: hey shape 1:20->0:20                         │
     │┌──────┬─────────────────────────────────────────┐│
@@ -542,7 +542,7 @@ let%expect_test "Big matrix" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:543:21
+    HERE: test/operations/hello_world_op.ml:542:21
     ┌────────────────────────────────────────────┐
     │[5]: + shape 0:20                           │
     │┌┬─────────────────────────────────────────┐│
@@ -566,7 +566,7 @@ let%expect_test "Very big tensor" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:567:21
+    HERE: test/operations/hello_world_op.ml:566:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[0]: r6x10x11x7x8x9 shape 0:6|3:7,4:8,5:9->1:10,2:11                                                                                                                                   │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -704,7 +704,7 @@ let%expect_test "Very big tensor" =
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:704:21
+    HERE: test/operations/hello_world_op.ml:703:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[6]: -_hoo shape 0:6|1:10,2:11                                                                                                                                                         │
     │┌──────┬─────────────────────────────────────────┬─────────────────────────────────────────┬──────┬─────────────────────────────────────────┬─────────────────────────────────────────┐│
@@ -735,7 +735,7 @@ let%expect_test "Embed self id" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:734:21
+    HERE: test/operations/hello_world_op.ml:733:21
     ┌─────────────────────────┐
     │[0]: !@self_id shape 0:1 │
     │┌┬──────┐                │
@@ -744,7 +744,7 @@ let%expect_test "Embed self id" =
     │││ 0.00 │                │
     │└┴──────┘                │
     └─────────────────────────┘
-    HERE: test/operations/hello_world_op.ml:735:21
+    HERE: test/operations/hello_world_op.ml:734:21
     ┌─────────────────────────┐
     │[1]: !@self_id shape 0:1 │
     │┌┬──────┐                │
@@ -753,7 +753,7 @@ let%expect_test "Embed self id" =
     │││ 1.00 │                │
     │└┴──────┘                │
     └─────────────────────────┘
-    HERE: test/operations/hello_world_op.ml:736:21
+    HERE: test/operations/hello_world_op.ml:735:21
     ┌─────────────────────┐
     │[4]: +_bar shape 0:1 │
     │┌┬──────┐            │
@@ -766,7 +766,7 @@ let%expect_test "Embed self id" =
   Train.printf_tree ~here:[%here] bar;
   [%expect
     {|
-    HERE: test/operations/hello_world_op.ml:767:26
+    HERE: test/operations/hello_world_op.ml:766:26
                        #4 +_bar
                         3.00
           #3 + Virt/40       │#2 !@self_id Virt/40
