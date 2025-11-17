@@ -12,11 +12,11 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type axis_padding = Ir.Ops.axis_padding [@@deriving equal, sexp]
 
 module Dim_var = struct
-  type t = { id : int; label : string option [@compare.ignore] [@equal.ignore] [@hash.ignore] }
+  type t = { id : int; name : string option [@compare.ignore] [@equal.ignore] [@hash.ignore] }
   [@@deriving equal, hash, compare, sexp]
 
-  let to_string { id; label } =
-    match label with None -> "$" ^ Int.to_string id | Some l -> [%string "$%{id#Int}:%{l}"]
+  let to_string { id; name } =
+    match name with None -> "$" ^ Int.to_string id | Some n -> [%string "$%{id#Int}:%{n}"]
 
   include Comparator.Make (struct
     type nonrec t = t
@@ -78,9 +78,9 @@ let equal_dim d1 d2 =
 
 let uid = ref 0
 
-let get_var ?label () : dim_var =
+let get_var ?name () : dim_var =
   Int.incr uid;
-  { id = !uid; label }
+  { id = !uid; name }
 
 let get_dim ~d ?label ?proj_id () =
   let proj_id = Option.map ~f:(fun p -> Proj_id.Proj_id p) proj_id in
@@ -119,8 +119,8 @@ let rec dim_to_string style = function
   | Dim { d; label = Some l; proj_id = None } when equal_print_style style Axis_size ->
       [%string "%{l}=%{d#Int}"]
   | Dim solved_dim -> solved_dim_to_string style solved_dim
-  | Var { id; label = Some l } -> [%string "$%{id#Int}:%{l}"]
-  | Var { id; label = None } -> "$" ^ Int.to_string id
+  | Var { id; name = Some n } -> [%string "$%{id#Int}:%{n}"]
+  | Var { id; name = None } -> "$" ^ Int.to_string id
   | Conv_input { stride; output; dilation; kernel } ->
       let output_str = dim_to_string style output in
       let output_str = if stride = 1 then output_str else Int.to_string stride ^ "*" ^ output_str in
@@ -179,7 +179,7 @@ let get_row_for_var prov v = { dims = []; bcast = Row_var { v; beg_dims = [] }; 
 let row_shapes row = provenance_shapes row.prov
 
 let dims_label_assoc dims =
-  let f = function Var { label = Some l; _ } as d -> Some (l, d) | _ -> None in
+  let f = function Var { name = Some n; _ } as d -> Some (n, d) | _ -> None in
   List.filter_map dims.dims ~f
 
 type dim_constraint = Unconstrained_dim | At_least_dim of int
@@ -381,7 +381,7 @@ let total_elems_to_string = function
       let coeff_string =
         if Utils.is_safe_val coeff then Int.to_string (Utils.safe_force coeff) else coeff.unique_id
       in
-      let var_str = match var.label with Some l -> l | None -> "$" ^ Int.to_string var.id in
+      let var_str = match var.name with Some n -> n | None -> "$" ^ Int.to_string var.id in
       if denom = 1 then [%string "%{coeff_string}*%{var_str}"]
       else [%string "(%{coeff_string}*%{var_str})/%{denom#Int}"]
 
@@ -3077,7 +3077,7 @@ let rec row_to_labels env =
     | Dim { label = None; _ } -> ""
     | Var v -> (
         match find_dim env.dim_env v with
-        | None | Some (Bounds_dim _) -> Option.value v.label ~default:""
+        | None | Some (Bounds_dim _) -> Option.value v.name ~default:""
         | Some (Solved_dim dim) -> f dim)
     | Conv_input _ -> ""
   in

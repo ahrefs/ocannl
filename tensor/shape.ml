@@ -377,8 +377,8 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
-    | Label label ->
-        Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
+    | Label name ->
+        Row.Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
         Row.get_dim ~d:1 ~proj_id:61 ()
     | Fixed_index i ->
@@ -407,7 +407,7 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
         let output_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
-                 Row.get_var ~label:output_label ()))
+                 Row.get_var ~name:output_label ()))
         in
         let kernel_dim =
           if String.equal kernel_label "_stride_only" then
@@ -416,7 +416,7 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env 
           else
             Row.Var
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                   Row.get_var ~label:kernel_label ()))
+                   Row.get_var ~name:kernel_label ()))
         in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in
@@ -1929,14 +1929,14 @@ let shape_spec_to_dims_bio labels =
         in
         try Row.get_dim ~d:(Int.of_string dim) ~label ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
-    | Label label ->
-        Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~label ()))
+    | Label name ->
+        Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_dim ~d ()
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
         let output_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
-                 Row.get_var ~label:output_label ()))
+                 Row.get_var ~name:output_label ()))
         in
         let kernel_dim =
           if String.equal kernel_label "_stride_only" then
@@ -1945,7 +1945,7 @@ let shape_spec_to_dims_bio labels =
           else
             Row.Var
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                   Row.get_var ~label:kernel_label ()))
+                   Row.get_var ~name:kernel_label ()))
         in
         Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
   in

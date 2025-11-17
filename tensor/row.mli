@@ -13,7 +13,7 @@ type proj_cmp
 type proj_var_set = (proj_id, proj_cmp) Base.Set.t [@@deriving equal, sexp]
 type 'a proj_map = (proj_id, 'a, proj_cmp) Base.Map.t [@@deriving equal, sexp]
 
-val get_var : ?label:string -> unit -> dim_var
+val get_var : ?name:string -> unit -> dim_var
 val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
 val proj_var_set_empty : proj_var_set

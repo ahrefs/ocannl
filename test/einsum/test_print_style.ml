@@ -22,7 +22,7 @@ let test_print_styles () =
   let solved_dim_minimal = { d = 64; label = None; proj_id = None } in
 
   (* Create a variable dimension *)
-  let var_dim_labeled = get_var ~label:"channels" () in
+  let var_dim_labeled = get_var ~name:"channels" () in
   let var_dim_unlabeled = get_var () in
 
   Stdio.printf "=== Testing solved_dim_to_string ===\n";
