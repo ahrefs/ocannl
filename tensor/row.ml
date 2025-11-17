@@ -2079,8 +2079,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
           let origin = merge_origins origin origin2 in
           let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> (cur, [])
-            | Dim _, Dim _ (* when d1 <> d2 *) ->
+            | Dim { d = d1; label = l1; _ }, Dim { d = d2; label = l2; _ }
+              when d1 = d2 && Option.equal String.equal l1 l2 ->
+                (cur, [])
+            | Dim _, Dim _ (* when d1 <> d2 or l1 <> l2 *) ->
                 let lub = get_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
