@@ -371,16 +371,13 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output = to_row `Output labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
-let einsum_slot_spec_to_dims_bio ~original_spec ~generative ~sh_id ~row_var_env ~dim_var_env labels
+let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env labels
     =
-  let equal = Row.equal_kind in
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
     | Label name ->
         Row.Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
-    | Fixed_index 0 when Option.value ~default:false @@ List.Assoc.find generative ~equal kind ->
-        Row.get_dim ~d:1 ~proj_id:61 ()
     | Fixed_index i ->
         let var = Row.get_var () in
         let d = Row.Var var in
@@ -436,13 +433,6 @@ let unused_shapes = Hash_set.create (module Int)
 let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
     proj_axis_env * Row.constraint_ list =
   Hash_set.remove unused_shapes cur_sh.id;
-  let generative =
-    [
-      (`Batch, List.is_empty cur_sh.batch.dims);
-      (`Input, List.is_empty cur_sh.input.dims);
-      (`Output, List.is_empty cur_sh.output.dims);
-    ]
-  in
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
   let open Row in
@@ -925,11 +915,11 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let dim_var_env = Hashtbl.create (module String) in
 
       let extras_rhs, proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~generative:[] ~sh_id:sh.id ~row_var_env
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env
           ~dim_var_env ls_rhs
       in
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~generative ~sh_id:cur_sh.id ~row_var_env
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
@@ -1144,15 +1134,15 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
       let extras_rhs1, proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~generative:[] ~sh_id:sh1.id ~row_var_env
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh1.id ~row_var_env
           ~dim_var_env ls_rhs1
       in
       let extras_rhs2, proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~generative:[] ~sh_id:sh2.id ~row_var_env
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh2.id ~row_var_env
           ~dim_var_env ls_rhs2
       in
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~generative ~sh_id:cur_sh.id ~row_var_env
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env
           ~dim_var_env ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
