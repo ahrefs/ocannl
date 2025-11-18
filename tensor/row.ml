@@ -2840,7 +2840,7 @@ let%debug5_sexp eliminate_dim_entry stage origin v ~lub constr =
       @@ Shape_error
            ( [%string "dereferenced at dimension %{d2#Int}, higher than use site"],
              [ Dim_mismatch [ lub; Var v ] ] )
-  | Some _, At_least_dim 0 ->
+  | Some _, At_least_dim 1 ->
       (* Direct access at 0 is a strong heuristic for dimension 1 axis (e.g. result of a
          reduction). *)
       if is_stage7 stage then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:57 (); origin })
