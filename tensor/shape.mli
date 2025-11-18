@@ -113,10 +113,14 @@ type compose_type =
           multiply). *)
   | Einsum of string * delayed_var_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
-          Since OCANNL's extended einsum notation supports both axis variables and row variables, it
-          makes other compose types redundant. The [axis_labels] use pseudo-labels local to the
-          notation, to line up the axes and row variables. The symmetric difference / disjunctive
-          union of RHS1 and RHS2's pseudo-labels should be equal to LHS pseudo-labels.
+          OCANNL's extended einsum notation supports both axis variables and row variables.
+          The [axis_labels] use pseudo-labels local to the notation, to line up the axes and row
+          variables. The symmetric difference / disjunctive union of RHS1 and RHS2's pseudo-labels
+          should be equal to LHS pseudo-labels.
+
+          Unlike [Pointwise_bin] and [Compose], einsum operations use equations only (not
+          inequalities), so they do NOT permit broadcasting. This makes einsum more restrictive
+          but also more precise for operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference.
@@ -130,6 +134,10 @@ type transpose_type =
   | Pointwise_un  (** Preserves the shape. *)
   | Permute of string * delayed_var_ref list
       (** The unary "einsum" syntax: RHS1=>LHS.
+
+          Unlike [Pointwise_un], permute operations use equations only (not inequalities), so they
+          do NOT permit broadcasting. This makes permute more restrictive but also more precise
+          for operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference. *)

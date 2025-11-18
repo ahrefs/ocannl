@@ -984,10 +984,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       ( proj_env,
         extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.batch;
-                subr = b_lhs;
+                r1 = cur_sh.batch;
+                r2 = b_lhs;
                 origin =
                   [
                     {
@@ -1014,10 +1014,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                     };
                   ];
               };
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.input;
-                subr = i_lhs;
+                r1 = cur_sh.input;
+                r2 = i_lhs;
                 origin =
                   [
                     {
@@ -1044,10 +1044,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                     };
                   ];
               };
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.output;
-                subr = o_lhs;
+                r1 = cur_sh.output;
+                r2 = o_lhs;
                 origin =
                   [
                     {
@@ -1210,10 +1210,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       ( proj_env,
         extras_dim_refs @ extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.batch;
-                subr = b_lhs;
+                r1 = cur_sh.batch;
+                r2 = b_lhs;
                 origin =
                   [
                     {
@@ -1255,10 +1255,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                     };
                   ];
               };
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.input;
-                subr = i_lhs;
+                r1 = cur_sh.input;
+                r2 = i_lhs;
                 origin =
                   [
                     {
@@ -1300,10 +1300,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                     };
                   ];
               };
-            Row_ineq
+            Row_eq
               {
-                cur = cur_sh.output;
-                subr = o_lhs;
+                r1 = cur_sh.output;
+                r2 = o_lhs;
                 origin =
                   [
                     {

@@ -143,10 +143,14 @@ type compose_type =
           multiply). *)
   | Einsum of string * Ir.Indexing.variable_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
-          Since OCANNL's extended einsum notation supports both axis variables and row variables, it
-          makes other compose types redundant. The [axis_labels] use pseudo-labels local to the
-          notation, to line up the axes and row variables. The symmetric difference / disjunctive
-          union of RHS1 and RHS2's pseudo-labels should be equal to LHS pseudo-labels.
+          OCANNL's extended einsum notation supports both axis variables and row variables.
+          The [axis_labels] use pseudo-labels local to the notation, to line up the axes and row
+          variables. The symmetric difference / disjunctive union of RHS1 and RHS2's pseudo-labels
+          should be equal to LHS pseudo-labels.
+
+          Unlike [Pointwise_bin] and [Compose], einsum operations use equations only (not
+          inequalities), so they do NOT permit broadcasting. This makes einsum more restrictive
+          but also more precise for operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference.
@@ -160,6 +164,10 @@ type transpose_type =
   | Pointwise_un  (** Preserves the shape. *)
   | Permute of string * Ir.Indexing.variable_ref list
       (** The unary "einsum" syntax: RHS1=>LHS.
+
+          Unlike [Pointwise_un], permute operations use equations only (not inequalities), so they
+          do NOT permit broadcasting. This makes permute more restrictive but also more precise
+          for operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference. *)
@@ -270,7 +278,7 @@ There is an important and intentional difference between `dims` in the `arrayjit
 Other important functions in the `Shape` module.
 
 * `einsum_slot_spec_to_dims_bio` parses an einsum spec for a single shape, returns the three rows and a mapping from axis (`dim`) variables to indices where the einsum specifies fixed indexing.
-* `get_inequalities` builds row inequalities by pairing the rows of the current shape (as `cur`) with the rows of sub-shapes (as `subr`). It also derives a batch row constraint for terminals initialized with `Constant_fill values`. For `Batch_slice` (the `@|` operation) it waits till the batch row variables (if any) are solved, and derives row equations (not inequalities) between the current shape and the sub-shape, with `cur_sh.batch.dims` expanded to account for the slicing / indexing. For einsum specs, it derives inequalities, roughly: _current shape ≥ lhs spec shape_, and _rhs spec shape ≥ sub-shape_.
+* `get_inequalities` builds row inequalities by pairing the rows of the current shape (as `cur`) with the rows of sub-shapes (as `subr`). It also derives a batch row constraint for terminals initialized with `Constant_fill values`. For `Batch_slice` (the `@|` operation) it waits till the batch row variables (if any) are solved, and derives row equations (not inequalities) between the current shape and the sub-shape, with `cur_sh.batch.dims` expanded to account for the slicing / indexing. For einsum specs, it derives equations (not inequalities), equating the current shape with the lhs spec shape, and the rhs spec shapes with the sub-shapes. This means einsum operations do NOT permit broadcasting, unlike pointwise and compose operations which use inequalities.
 * `propagate_shapes` gets and then solves the inequalities, using a global state for the environment. It udpates the shapes in-place with the partial solution. It is invoked twice for each `update_step`: first during the bottom-up process of building tensors, and then in reverse order from `finish_inference`.
 * `finish_inference` is called right before some projections or array dimensions are required (typically, because of jitting). It performs a second round of `propagate_shapes`, and then once again attempts to solve any remaining constraints that `propagate_shapes` didn't solve. Then it "closes the shapes": substitutes out remaining shape variables by their LUBs if any, or dimension-1 / `Broadcastable` (no-more-axes). Then it resets the environment state, since the shapes are now guaranteed to not have variables.
 * `derive_projections` starts by freshening the `proj_id`s in the `update_step`. Then it generates and solves shape inequalities, and then generates and solves projection equations, and constructs the `projections` record.
