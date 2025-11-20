@@ -226,7 +226,7 @@ let%op conv2d ?(stride=1) ?(kernel_size=3) () x =
 > 
 > ```ocaml
 > let einmax ?(label = []) ?(capture_dims = []) spec =
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:@^ v1 * v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 * v2 in
 >   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
 >     g1 =+ where (t = t1 + t2) (g *. v2) 0;
 >     g2 =+ where (t = t1 + t2) (v1 *. g) 0

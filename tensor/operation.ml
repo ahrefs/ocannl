@@ -40,7 +40,7 @@ end
 
 let add =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 + v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g;
     g2 =+ g
@@ -49,7 +49,7 @@ let add =
 
 let sub =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 - v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 - v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g;
     g2 =- g
@@ -66,7 +66,7 @@ let mul compose_op ~op_asn =
 
 let pointmul =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 * v2 in
   mul Pointwise_bin ~op_asn ~op_label:"*."
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2. Although the
@@ -77,7 +77,7 @@ let pointmul =
 
 let matmul =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   mul Compose ~op_asn ~op_label:"*"
 
 module NDO_before_pow = struct
@@ -106,7 +106,7 @@ let rec pointpow ?grad_spec p t1 : Tensor.op_fun =
     end
   end in
   let p_t = NTDSL.number p in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
 
   let%cd grad_asn =
     if is_prohibit_grad grad_spec then fun ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Asgns.empty_comp
@@ -137,7 +137,7 @@ let rec pointdiv ?grad_spec t1 t2 : Tensor.op_fun =
       let ( /. ) t1 t2 = pointdiv ~grad_spec:Tensor.Prohibit_grad t1 t2 ()
     end
   end in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 / v2 in
   (* We cannot use g in a tensor expression since it's an array, so we keep it to the left
      (RHS1). *)
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
@@ -149,25 +149,25 @@ let rec pointdiv ?grad_spec t1 t2 : Tensor.op_fun =
 
 let relu =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: relu v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: relu v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ relu_gate (v1, g) in
   Tensor.unop ~op_label:"relu" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let sat01 =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: sat01 v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: sat01 v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ sat01_gate (v1, g) in
   Tensor.unop ~op_label:"sat01" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let exp =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: exp v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: exp v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * t in
   Tensor.unop ~op_label:"exp" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let log =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: log v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: log v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g / v1 in
   Tensor.unop ~op_label:"log" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
@@ -175,19 +175,19 @@ let log_2 = Float.log 2.0
 
 let exp2 =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: exp2 v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: exp2 v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (!.log_2 *. t) in
   Tensor.unop ~op_label:"exp2" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let log2 =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: log2 v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: log2 v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g / (t1 *. !.log_2) in
   Tensor.unop ~op_label:"log2" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let rec sin ?grad_spec =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: sin v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: sin v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
     g1 =+ g * (cos ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ()
   in
@@ -196,7 +196,7 @@ let rec sin ?grad_spec =
 
 and cos ?grad_spec : Tensor.t -> Tensor.op_fun =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: cos v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: cos v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections =
     g1 =+ g * (-1 *. (sin ?grad_spec:(Some Tensor.Prohibit_grad)) t1 ())
   in
@@ -204,43 +204,43 @@ and cos ?grad_spec : Tensor.t -> Tensor.op_fun =
 
 let sqrt =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: sqrt v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: sqrt v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g / (2 *. t) in
   Tensor.unop ~op_label:"sqrt" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let recip =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: recip v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: recip v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (-1 *. (t **. 2)) in
   Tensor.unop ~op_label:"recip" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let recip_sqrt =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: recip_sqrt v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: recip_sqrt v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (-0.5 *. (t **. 3)) in
   Tensor.unop ~op_label:"recip_sqrt" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let tanh =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: tanh v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: tanh v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ g * (1 - (t **. 2)) in
   Tensor.unop ~op_label:"tanh" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let neg =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~projections = v =: neg v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: neg v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ neg g in
   Tensor.unop ~op_label:"neg" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let not =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: not v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: not v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   Tensor.unop ~op_label:"not" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
 
 let uint4x32_to_prec_uniform ?grad_spec =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: uint4x32_to_prec_uniform v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   fun t1 ?label ?top_down_prec ->
     (* Ignore what the caller says, since we must learn the precision from the outside. *)
@@ -253,7 +253,7 @@ let uint4x32_to_prec_uniform ?grad_spec =
 
 let uint4x32_to_prec_uniform1 ?grad_spec =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =: uint4x32_to_prec_uniform1 v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: uint4x32_to_prec_uniform1 v1 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
   fun t1 ?label ?top_down_prec ->
     (* Ignore what the caller says, since we must learn the precision from the outside. *)
@@ -266,25 +266,36 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
 
 let lt =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 < v2) in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: (v1 < v2) in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~op_label:"<" ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
 let eq =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 = v2) in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: (v1 = v2) in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   Tensor.binop ~op_label:"=" ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
 let ne =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: (v1 <> v2) in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: (v1 <> v2) in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
+  Tensor.binop ~op_label:"<>" ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+
+let interleave =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~t ~t1 ~t2 ~projections:_ =
+    t =:+ id t1 ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i";
+    t =+ id t2 ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i + 1"
+   in
+  let%cd grad_asn ~t ~g:_ ~t1 ~t2 ~projections:_ =
+  t1.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i => ... | ... -> ..., i";
+  t2.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i + 1 => ... | ... -> ..., i"  in
   Tensor.binop ~op_label:"<>" ~compose_op:Pointwise_bin ~op_asn ~grad_asn
 
 let threefry4x32_crypto =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
@@ -311,7 +322,7 @@ let threefry4x32_crypto =
 
 let threefry4x32_light =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ^^ v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^ v2 in
   let%cd grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp in
   fun t1 t2 ->
     Tn.update_prec t1.Tensor.value Ir.Ops.uint4x32;
@@ -344,7 +355,7 @@ let threefry4x32 =
 
 let fma ~grad_spec t1 t2 t3 =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: fma v1 v2 v3 in
+  let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =: fma v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
     g1 =+ g * v2;
     g2 =+ g * v1;
@@ -354,7 +365,7 @@ let fma ~grad_spec t1 t2 t3 =
 
 let where ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
-  let%cd op_asn ~v ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
+  let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
     g2 =+ where v1 g 0;
     g3 =+ where v1 0 g
@@ -368,7 +379,7 @@ let where ~grad_spec t1 t2 t3 =
     input and the output axes. *)
 let einsum ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 * v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g * v2;
     g2 =+ v1 * g
@@ -378,7 +389,7 @@ let einsum ?(capture_dims = []) spec =
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
 let outer_sum ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 + v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 + v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
     g1 =+ g;
     g2 =+ g
@@ -392,7 +403,7 @@ let outer_sum ?(capture_dims = []) spec =
     input and the output axes. *)
 let einsum1 ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
-  let%cd op_asn ~v ~t1 ~projections = v =:+ v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
 
@@ -409,7 +420,7 @@ let einmax1 ?(capture_dims = []) spec =
     include Initial_NTDSL
     module O = NDO_before_einmax1
   end in
-  let%cd op_asn ~v ~t1 ~projections = v =:@^ v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =:@^ v1 in
   let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ where (t = t1) g 0 in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
@@ -419,7 +430,7 @@ let tropical ?(capture_dims = []) spec =
     include Initial_NTDSL
     module O = NDO_before_einmax1
   end in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
     g1 =+ where (t = t1 + t2) g 0;
     g2 =+ where (t = t1 + t2) g 0
@@ -463,17 +474,17 @@ let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims
 let stop_gradient =
   let module NTDSL = Initial_NTDSL in
   let grad_asn ~t:_ ~g:_ ~t1:_ ~projections:_ = Asgns.empty_comp in
-  let%cd op_asn ~v ~t1 ~projections = v =: v1 in
+  let%cd op_asn ~t ~t1 ~projections = v =: v1 in
   Tensor.unop ~op_label:"stop_grad" ~transpose_op:Pointwise_un ~op_asn ~grad_asn
     ~grad_spec:Prohibit_grad
 
 let slice (batch_idx : Idx.static_symbol) =
   let module NTDSL = Initial_NTDSL in
-  let op_asn ~v ~t1 ~projections =
+  let op_asn ~t ~t1 ~projections =
     Asgns.to_comp
     @@ Fetch
          {
-           array = v;
+           array = t.Tensor.value;
            fetch_op = Slice { batch_idx; sliced = t1.Tensor.value };
            dims = lazy (Lazy.force projections.Tensor.projections).Idx.lhs_dims;
          }

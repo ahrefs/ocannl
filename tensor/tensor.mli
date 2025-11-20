@@ -147,7 +147,7 @@ type op_fun =
 val binop :
   ?op_label:string ->
   ?compose_op:Shape.compose_type ->
-  op_asn:(v:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
+  op_asn:(t:t -> t1:t -> t2:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
@@ -160,7 +160,7 @@ val binop :
 val unop :
   ?op_label:string ->
   ?transpose_op:Shape.transpose_type ->
-  op_asn:(v:tn -> t1:t -> projections:projections -> comp) ->
+  op_asn:(t:t -> t1:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->
@@ -170,7 +170,7 @@ val unop :
 val ternop :
   ?op_label:string ->
   ?ternary_op:Shape.ternary_type ->
-  op_asn:(v:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
+  op_asn:(t:t -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
   grad_asn:(t:t -> g:tn -> t1:t -> t2:t -> t3:t -> projections:projections -> comp) ->
   ?grad_spec:grad_spec ->
   t ->

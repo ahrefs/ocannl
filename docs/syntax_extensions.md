@@ -557,7 +557,7 @@ let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
     end
   end in
   let p_t = NTDSL.number p in
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
   let%cd grad_asn =
     if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -> Asgns.Noop
     else if Float.equal p 2.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -> g1 =+ p_t *. t1 * g

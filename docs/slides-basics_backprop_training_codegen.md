@@ -511,7 +511,7 @@ Half-moons scatterplot and decision boundary:
 > let add ?(label = []) =
 >   let module NTDSL = Initial_NTDSL in
 >   (* Forward code *)
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 + v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 + v2 in
 >   (* Backprop code *)
 >   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
 >     g1 =+ g;
@@ -535,7 +535,7 @@ Half-moons scatterplot and decision boundary:
 > ```ocaml
 > let sub ?(label = []) =
 >   let module NTDSL = Initial_NTDSL in
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 - v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 - v2 in
 >   
 >   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
 >     g1 =+ g;
@@ -561,14 +561,14 @@ Half-moons scatterplot and decision boundary:
 > (* Pointwise multiplication *)
 > let pointmul ?(label = []) =
 >   let module NTDSL = Initial_NTDSL in
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 * v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 * v2 in
 >   mul Pointwise_bin ~op_asn ~label:("*." :: label)
 > 
 > (* Tensor (e.g. matrix) multiplication *)
 > let matmul ?(label = []) =
 >   let module NTDSL = Initial_NTDSL in
 >   (* =:+ so first reset v, then add up the results of v1*v2 *)
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =:+ v1 * v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 * v2 in
 >   mul Compose ~op_asn ~label:("*" :: label)
 > ```
 
@@ -588,7 +588,7 @@ Half-moons scatterplot and decision boundary:
 > let rec pointpow ?(label = []) ~grad_spec p t1 =
 >   let module NTDSL = ... in
 >   let p_t = NTDSL.number p in
->   let%cd op_asn ~v ~t1 ~t2 ~projections =
+>   let%cd op_asn ~t ~t1 ~t2 ~projections =
 >      v =: v1 ** v2 ~projections in
 >   let%cd grad_asn =
 >     if Tensor.is_prohibit_grad grad_spec
@@ -614,7 +614,7 @@ Half-moons scatterplot and decision boundary:
 > ```ocaml
 > let rec pointdiv ?(label = []) ~grad_spec t1 t2 =
 >   let module NTDSL = ... in
->   let%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 / v2 in
+>   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 / v2 in
 >   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
 >     g1 =+ g / v2;
 >     g2 =+ g * (-1. *. v1 /. (v2 **. 2.))

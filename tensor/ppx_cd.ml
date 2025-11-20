@@ -926,9 +926,11 @@ let translate ?ident_label (expr : expression) : result =
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
         { default_result with expr = ndarray_op ~ndarray_fn:[%expr NTDSL.ndarray] expr }
-    | { pexp_desc = Pexp_ident { txt = Lident ("v" | "lhs"); _ }; _ } ->
+    | { pexp_desc = Pexp_ident { txt = Lident ("lhs"); _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
-    | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
+        | { pexp_desc = Pexp_ident { txt = Lident ("v"); _ }; _ } ->
+          { default_result with typ = Array; slot = LHS; expr = [%expr t.Tensor.value] }
+      | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1 }

@@ -341,19 +341,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
           embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) ti.value;
         (Set.add used ti.id, { subtensor = ti; embedded }))
   in
-  let fwds =
-    List.filter_map ordered_ts ~f:(fun ti -> if is_fwd_root ti then Some ti.forward else None)
-  in
-  let forward = Asgns.sequence @@ fwds @ [ op_asn ~v ~projections ] in
-  let forward =
-    Asgns.
-      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
-  in
-  List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+
   let t =
     {
       params = Set.empty (module T);
-      forward;
+      forward = Asgns.empty_comp;
       diff = None;
       id;
       value = v;
@@ -362,6 +354,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       children;
     }
   in
+  let fwds =
+    List.filter_map ordered_ts ~f:(fun ti -> if is_fwd_root ti then Some ti.forward else None)
+  in
+  let forward = Asgns.sequence @@ fwds @ [ op_asn ~t ~projections ] in
+  let forward =
+    Asgns.
+      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
+  in
+  List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+  let t = { t with forward } in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
@@ -420,7 +422,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
     let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
-    let tensor = { params; forward; diff; id; value = v; top_down_prec; shape; children } in
+    let tensor = { t with params; diff } in
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
     session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
     tensor
@@ -444,7 +446,7 @@ type op_fun =
 let%track7_sexp binop ?op_label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =
-  let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~projections in
+  let op_asn ~t ~projections = op_asn ~t ~t1 ~t2 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~projections in
   op
     ~label:(Option.to_list op_label @ label)
@@ -456,7 +458,7 @@ let%track7_sexp binop ?op_label ?compose_op ~op_asn ~grad_asn ?grad_spec t1 t2 ?
 let%track7_sexp ternop ?op_label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 t3 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =
-  let op_asn ~v ~projections = op_asn ~v ~t1 ~t2 ~t3 ~projections in
+  let op_asn ~t ~projections = op_asn ~t ~t1 ~t2 ~t3 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~t2 ~t3 ~projections in
   op
     ~label:(Option.to_list op_label @ label)
@@ -468,7 +470,7 @@ let%track7_sexp ternop ?op_label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 
 let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =
-  let op_asn ~v ~projections = op_asn ~v ~t1 ~projections in
+  let op_asn ~t ~projections = op_asn ~t ~t1 ~projections in
   let grad_asn ~t ~g ~projections = grad_asn ~t ~g ~t1 ~projections in
   op
     ~label:(Option.to_list op_label @ label)
@@ -486,7 +488,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
     | None, Some fetch_op -> Some (Shape.Fetch fetch_op)
     | None, None -> None
   in
-  let op_asn ~v ~projections =
+  let op_asn ~t ~projections =
     let open Asgns in
     let dims = lazy (Lazy.force projections.projections).Idx.lhs_dims in
     match fetch_op with
@@ -494,7 +496,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
     | Some
         (( Constant _ | Constant_bits _ | Slice _ | Embed_symbol _ | Embed_dim _ | Embed_self_id
          | Range_over_offsets | Constant_fill _ ) as fetch_op) ->
-        Asgns.to_comp @@ Fetch { array = v; fetch_op; dims }
+        Asgns.to_comp @@ Fetch { array = t.value; fetch_op; dims }
   in
   let grad_asn ~t:_ ~g:_ ~projections:_ = Asgns.empty_comp in
   let make_shape =
