@@ -1270,7 +1270,7 @@ to-power-of tensor operation from <a href="../tensor/operation.ml">Operation</a>
 <span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span>
 <span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span> <span class="kw">in</span></span>
 <span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> p_t = NTDSL.number p <span class="kw">in</span></span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~v ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
 <span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd grad_asn =</span>
 <span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Tensor.is_prohibit_grad grad_spec <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop</span>
 <span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">2.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g</span>

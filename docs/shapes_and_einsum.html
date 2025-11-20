@@ -2007,7 +2007,7 @@ let%op avg_pool2d ~window () x =
 &lt;div id=&quot;custom-ops&quot; class=&quot;example&quot; title=&quot;Beyond Built-in Operators&quot;&gt;
 &lt;p&gt;&lt;span&gt;You can define operations with custom accumulation:&lt;/span&gt;&lt;/p&gt;
 &lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let einmax ?(label = []) ?(capture_dims = []) spec =
-  let%cd op_asn ~v ~t1 ~t2 ~projections = v =:@^ v1 * v2 in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 * v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
     g1 =+ where (t = t1 + t2) (g *. v2) 0;
     g2 =+ where (t = t1 + t2) (v1 *. g) 0
