@@ -113,20 +113,22 @@ type compose_type =
           multiply). *)
   | Einsum of string * delayed_var_ref list
       (** The binary "einsum" syntax: RHS1;RHS2=>LHS, where RHSi, LHS are labels specifications.
-          OCANNL's extended einsum notation supports both axis variables and row variables.
-          The [axis_labels] use pseudo-labels local to the notation, to line up the axes and row
+          OCANNL's extended einsum notation supports both axis variables and row variables. The
+          [axis_labels] use pseudo-labels local to the notation, to line up the axes and row
           variables. The symmetric difference / disjunctive union of RHS1 and RHS2's pseudo-labels
           should be equal to LHS pseudo-labels.
 
           Unlike [Pointwise_bin] and [Compose], einsum operations use equations only (not
-          inequalities), so they do NOT permit broadcasting. This makes einsum more restrictive
-          but also more precise for operations where exact shape matching is required.
+          inequalities), so they do NOT permit broadcasting. This makes einsum more restrictive but
+          also more precise for operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference.
 
           Note: The "right-hand-side" is on the left! I.e. the syntax is "rhs=>lhs",
           "rhs1;rhs2=>lhs". *)
+  | Defined_by_cd_logic
+      (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
 [@@deriving sexp_of, equal]
 
 type transpose_type =
@@ -136,8 +138,8 @@ type transpose_type =
       (** The unary "einsum" syntax: RHS1=>LHS.
 
           Unlike [Pointwise_un], permute operations use equations only (not inequalities), so they
-          do NOT permit broadcasting. This makes permute more restrictive but also more precise
-          for operations where exact shape matching is required.
+          do NOT permit broadcasting. This makes permute more restrictive but also more precise for
+          operations where exact shape matching is required.
 
           The optional {!Ir.Indexing.variable_ref}s will capture the solutions of the dimensions
           corresponding to the specification labels equal to [ref_label] of a reference. *)
@@ -146,6 +148,8 @@ type transpose_type =
       (** Converts precision in a bit-effient way, with a corresponding conversion in total number
           of elements. Currently, assumes the incoming tensor (RHS) has just a single axis to not
           force unnecessary minimum sizes on output axes. *)
+  | Defined_by_cd_logic
+      (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
 [@@deriving equal, sexp_of]
 
 (** If you miss expressivity here, leave a note on
@@ -153,6 +157,8 @@ type transpose_type =
 type ternary_type =
   | Pointwise_tern  (** As in the operation [Where]. *)
   | Compose_accumulate  (** As in the operation [FMA]. *)
+  | Defined_by_cd_logic
+      (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
 [@@deriving equal, sexp_of]
 
 (** Extracts any available shape information from the initialization or fetch. *)
@@ -203,8 +209,8 @@ type logic =
           [s1], hence the name. *)
   | Broadcast_tern of ternary_type * t * t * t  (** Matches the shapes for a ternary operation. *)
   | Terminal of { is_param : bool; logic : terminal_type }
-      (** Extracts any available shape information from the initialization. 
-          The [is_param] field indicates if this is a parameter tensor that requires gradients. *)
+      (** Extracts any available shape information from the initialization. The [is_param] field
+          indicates if this is a parameter tensor that requires gradients. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]

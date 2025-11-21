@@ -102,7 +102,11 @@ type delayed_var_ref = {
 let get_variable_ref ref_label =
   { var_ref = Ir.Indexing.{ ref_label; solved_dim = None }; var = `Not_set_yet }
 
-type compose_type = Pointwise_bin | Compose | Einsum of string * delayed_var_ref list
+type compose_type =
+  | Pointwise_bin
+  | Compose
+  | Einsum of string * delayed_var_ref list
+  | Defined_by_cd_logic
 [@@deriving sexp_of, equal]
 
 type transpose_type =
@@ -111,12 +115,14 @@ type transpose_type =
   | Permute of string * delayed_var_ref list
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
+  | Defined_by_cd_logic
 [@@deriving equal, sexp_of]
 
 type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
 [@@deriving equal, sexp_of]
 
-type ternary_type = Pointwise_tern | Compose_accumulate [@@deriving sexp, equal]
+type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
+[@@deriving sexp, equal]
 
 let identifier ~multichar =
   let open Angstrom in
@@ -277,6 +283,10 @@ let logic_to_spec = function
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
+  | Broadcast (Defined_by_cd_logic, _, _)
+  | Transpose (Defined_by_cd_logic, _)
+  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+      "<cd_logic>"
   | Terminal _ -> "<terminal>"
 
 module Update_id = struct
@@ -371,8 +381,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output = to_row `Output labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
-let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env labels
-    =
+let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env labels =
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
@@ -840,6 +849,10 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
               subr = sh3.output;
             };
         ] )
+  | Broadcast (Defined_by_cd_logic, _, _)
+  | Transpose (Defined_by_cd_logic, _)
+  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+      (Row.dim_map_empty, [])
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
       Hash_set.remove unused_shapes sh.id;
       let slice_v = get_var () in
@@ -915,12 +928,12 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let dim_var_env = Hashtbl.create (module String) in
 
       let extras_rhs, proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env
-          ~dim_var_env ls_rhs
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
+          ls_rhs
       in
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env
-          ~dim_var_env ls_lhs
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
+          ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
       let extras_dim_refs =
@@ -1134,16 +1147,16 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
       let extras_rhs1, proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh1.id ~row_var_env
-          ~dim_var_env ls_rhs1
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh1.id ~row_var_env ~dim_var_env
+          ls_rhs1
       in
       let extras_rhs2, proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh2.id ~row_var_env
-          ~dim_var_env ls_rhs2
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh2.id ~row_var_env ~dim_var_env
+          ls_rhs2
       in
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env
-          ~dim_var_env ls_lhs
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
+          ls_lhs
       in
       (* Bind delayed_var_refs to the variables after they are created *)
       (* TODO: refactor to avoid duplication with the one for unary einsum *)
@@ -1735,6 +1748,10 @@ let fresh_proj_ids update =
   in
   fresh_shape update.shape;
   (match update.logic with
+  | Broadcast (Defined_by_cd_logic, _, _)
+  | Transpose (Defined_by_cd_logic, _)
+  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+      ()
   | Terminal _ -> ()
   | Transpose (_, sh) -> fresh_shape sh
   | Broadcast (_, sh1, sh2) ->
@@ -1777,6 +1794,12 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
   let lhs = update_step.shape in
   let rhs =
     match update_step.logic with
+    | Broadcast (Defined_by_cd_logic, _, _)
+    | Transpose (Defined_by_cd_logic, _)
+    | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+        raise
+        @@ Utils.User_error
+             "Defined_by_cd_logic: use explicit ~logic annotations when defining this operation"
     | Terminal _ -> []
     | Transpose (_, sh) -> [ sh ]
     | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
@@ -1830,7 +1853,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     match kind with
     | `Batch | `Input -> get_dim ~d ()
     | `Output ->
-        if not known_no_batch && num_dim1_output = 1 && d = 1 then
+        if (not known_no_batch) && num_dim1_output = 1 && d = 1 then
           let label = debug_name ^ "_output" in
           get_dim ~d ~label ()
         else get_dim ~d ()

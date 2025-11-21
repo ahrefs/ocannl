@@ -287,11 +287,12 @@ let interleave =
   let%cd op_asn ~t ~t1 ~t2 ~projections:_ =
     t =:+ id t1 ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i";
     t =+ id t2 ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i + 1"
-   in
+  in
   let%cd grad_asn ~t ~g:_ ~t1 ~t2 ~projections:_ =
-  t1.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i => ... | ... -> ..., i";
-  t2.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i + 1 => ... | ... -> ..., i"  in
-  Tensor.binop ~op_label:"<>" ~compose_op:Pointwise_bin ~op_asn ~grad_asn
+    t1.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i => ... | ... -> ..., i";
+    t2.grad =+ id t.grad ~logic:"... | ... -> ..., 2*i + 1 => ... | ... -> ..., i"
+  in
+  Tensor.binop ~op_label:"interleave" ~compose_op:Defined_by_cd_logic ~op_asn ~grad_asn
 
 let threefry4x32_crypto =
   let module NTDSL = Initial_NTDSL in
