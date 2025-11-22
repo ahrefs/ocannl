@@ -124,147 +124,48 @@ type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.
 type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
 [@@deriving sexp, equal]
 
-let identifier ~multichar =
-  let open Angstrom in
-  if multichar then lift2 ( ^ ) (take_while1 Char.is_alpha) (take_while Char.is_alphanum)
-  else Angstrom.satisfy Char.is_alpha >>| Char.to_string
+(** Convert einsum_parser types to shape.ml types.
+    The types are structurally identical, but shape.ml has additional derivations. *)
+let convert_axis_spec : Einsum_parser.axis_spec -> axis_spec = function
+  | Label s -> Label s
+  | Fixed_index i -> Fixed_index i
+  | Conv_spec { stride; output_label; dilation; kernel_label } ->
+      Conv_spec { stride; output_label; dilation; kernel_label }
 
-let integer = Angstrom.(take_while1 Char.is_digit >>| Int.of_string)
+let convert_axis_key (key : Einsum_parser.axis_key) : AxisKey.t =
+  { in_axes = key.in_axes; pos = key.pos; from_end = key.from_end }
 
-let scaled_identifier ~multichar =
-  let open Angstrom in
-  integer <* char '*'
-  >>= (fun coeff -> identifier ~multichar >>| fun id -> (coeff, id))
-  <|> (identifier ~multichar >>| fun id -> (1, id))
-
-let conv_term ~multichar =
-  let open Angstrom in
-  let* stride, output_label = scaled_identifier ~multichar in
-  char '+' *> scaled_identifier ~multichar
-  >>| (fun (dilation, kernel_label) -> Conv_spec { stride; output_label; dilation; kernel_label })
-  <|>
-  if stride <> 1 then
-    return (Conv_spec { stride; output_label; dilation = 0; kernel_label = "_stride_only" })
-  else fail "neither convolution nor strided iteration"
-
-let opt_separators = Angstrom.take_while (fun c -> Char.is_whitespace c || Char.equal c ',')
-
-let separators_with_comma =
-  let open Angstrom in
-  let* sep = opt_separators in
-  if String.contains sep ',' then return () else fail "comma expected"
-
-(** Parse a single axis specification that can be a label, fixed index, or conv expression. *)
-let parse_single_axis_spec ~multichar =
-  let open Angstrom in
-  choice
-    [
-      conv_term ~multichar <?> "conv_term";
-      integer >>| (fun i -> Fixed_index i) <?> "fixed_index";
-      identifier ~multichar >>| (fun s -> Label s) <?> "label";
-    ]
-
-let axes_spec ~from_end ~multichar : _ Angstrom.t =
-  let open Angstrom in
-  let result =
-    let p n i = if from_end then n - i else i + 1 in
-    lift (fun l ->
-        let n = List.length l in
-        List.mapi l ~f:(fun i v -> (p n i, v)))
-    @@ sep_by1
-         (if multichar then separators_with_comma else opt_separators >>| ignore)
-         (parse_single_axis_spec ~multichar)
-  in
-  opt_separators *> result <* opt_separators <?> "axes_spec"
-
-let axis_labels_of_spec_parser ~multichar : parsed_axis_labels Angstrom.t =
-  let open Angstrom in
-  let combine ~key:_ _v1 _v2 = assert false in
-  let axes_spec ~from_end =
-    axes_spec ~from_end ~multichar <?> if from_end then "axes_spec" else "axes_spec_beg"
-  in
-  let ellipsis_spec = string "..." <|> (string ".." *> identifier ~multichar <* string "..") in
-  let ellipsis_spec = ellipsis_spec <?> "ellipsis_spec" in
-  let for_row ~kind in_axes beg_axes row_var_spec end_axes =
-    let f from_end (pos, label) = (AxisKey.{ in_axes; pos; from_end }, label) in
-    let from_beg = Map.of_alist_exn (module AxisKey) @@ List.map beg_axes ~f:(f false) in
-    let from_end = Map.of_alist_exn (module AxisKey) @@ List.map end_axes ~f:(f true) in
-    ( Option.map row_var_spec ~f:(fun rv -> if String.equal rv "..." then kind else rv),
-      List.length end_axes,
-      List.length beg_axes,
-      Map.merge_skewed ~combine from_beg from_end )
-  in
-  let parse_row ~kind in_axes =
-    let row = lift3 (for_row ~kind in_axes) in
-    opt_separators
-    *> (row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
-       <|> row (return []) (lift Option.some ellipsis_spec) (axes_spec ~from_end:true)
-       <|> row (axes_spec ~from_end:false) (lift Option.some ellipsis_spec) (return [])
-       <|> row (return []) (return None) (axes_spec ~from_end:true)
-       <|> row (return []) (lift Option.some ellipsis_spec) (return []))
-    <* opt_separators <?> "row_spec"
-  in
-  let default = Option.value ~default:(None, 0, 0, Map.empty (module AxisKey)) in
-  let shape = lift3 (fun batch input output -> (default batch, default input, output)) in
-  let p_b = lift Option.some @@ parse_row ~kind:"batch" `Batch <?> "batch_spec" in
-  let p_i = lift Option.some @@ parse_row ~kind:"input" `Input <?> "input_spec" in
-  let p_o = parse_row ~kind:"output" `Output <?> "output_spec" in
-  let+ ( (bcast_batch, given_batch, given_beg_batch, batch_labels),
-         (bcast_input, given_input, given_beg_input, input_labels),
-         (bcast_output, given_output, given_beg_output, output_labels) ) =
-    shape (return None) (p_i <* string "->") p_o
-    <|> shape (p_b <* char '|') (p_i <* string "->") p_o
-    <|> shape (p_b <* char '|') (return None) p_o
-    <|> shape (return None) (return None) p_o
-    <?> "shape_spec"
-  in
+let convert_parsed_axis_labels (parsed : Einsum_parser.parsed_axis_labels) : parsed_axis_labels =
   let labels =
-    Map.merge_skewed ~combine input_labels @@ Map.merge_skewed ~combine output_labels batch_labels
+    Map.fold parsed.labels ~init:(Map.empty (module AxisKey)) ~f:(fun ~key ~data acc ->
+        Map.set acc ~key:(convert_axis_key key) ~data:(convert_axis_spec data))
   in
   {
-    bcast_batch;
-    bcast_input;
-    bcast_output;
-    given_batch;
-    given_input;
-    given_output;
-    given_beg_batch;
-    given_beg_input;
-    given_beg_output;
+    bcast_batch = parsed.bcast_batch;
+    bcast_input = parsed.bcast_input;
+    bcast_output = parsed.bcast_output;
+    given_batch = parsed.given_batch;
+    given_input = parsed.given_input;
+    given_output = parsed.given_output;
+    given_beg_batch = parsed.given_beg_batch;
+    given_beg_input = parsed.given_beg_input;
+    given_beg_output = parsed.given_beg_output;
     labels;
   }
 
 let axis_labels_of_spec spec =
-  let multichar = String.contains spec ',' in
-  match
-    Angstrom.(
-      parse_string ~consume:Consume.All (axis_labels_of_spec_parser ~multichar <* end_of_input) spec)
-  with
-  | Ok result -> result
-  | Error msg ->
-      raise
-      @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
-
-let einsum_of_spec_parser ~multichar : _ Angstrom.t =
-  let open Angstrom in
-  let p = axis_labels_of_spec_parser ~multichar in
-  lift3
-    (fun a b c -> (a, Some b, c))
-    (p <?> "RHS1" <* char ';')
-    (p <?> "RHS2")
-    (string "=>" *> (p <?> "LHS"))
-  <|> lift2 (fun a c -> (a, None, c)) (p <?> "RHS") (string "=>" *> (p <?> "LHS"))
-  <?> "einsum_spec"
+  try convert_parsed_axis_labels (Einsum_parser.axis_labels_of_spec spec)
+  with Einsum_parser.Parse_error msg ->
+    raise @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 let einsum_of_spec spec =
-  let multichar = String.contains spec ',' in
-  match
-    Angstrom.(
-      parse_string ~consume:Consume.All (einsum_of_spec_parser ~multichar <* end_of_input) spec)
-  with
-  | Ok result -> result
-  | Error msg ->
-      raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+  try
+    let l1, l2_opt, l3 = Einsum_parser.einsum_of_spec spec in
+    ( convert_parsed_axis_labels l1,
+      Option.map l2_opt ~f:convert_parsed_axis_labels,
+      convert_parsed_axis_labels l3 )
+  with Einsum_parser.Parse_error msg ->
+    raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 type logic =
   | Broadcast of compose_type * t * t

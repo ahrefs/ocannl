@@ -86,8 +86,11 @@ let z3 =
   let open! TDSL.O in
     einsum ?label:(Some [])
       (String.concat ~sep:""
-         ["i"; Int.to_string s; "*a+"; Int.to_string d; "*bc;b=>iac"]) hey9
-      hey10
+         ["i, ";
+         Int.to_string s;
+         "*a+";
+         Int.to_string d;
+         "*bc; b => i, a, c"]) hey9 hey10
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 let mlp_layer =
   let open! TDSL.O in

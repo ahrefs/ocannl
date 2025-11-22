@@ -391,28 +391,6 @@
  (modes best))
 
 (test
- (name test_angstrom_behavior)
- (package neural_nets_lib)
- (modules test_angstrom_behavior)
- (libraries base angstrom stdio)
- (preprocess
-  (pps ppx_sexp_conv)))
-
-(test
- (name test_char_whitespace)
- (package neural_nets_lib)
- (modules test_char_whitespace)
- (libraries base stdio))
-
-(test
- (name test_minimal_parse)
- (package neural_nets_lib)
- (modules test_minimal_parse)
- (libraries base angstrom stdio)
- (preprocess
-  (pps ppx_sexp_conv)))
-
-(test
  (name test_interleave)
  (package neural_nets_lib)
  (deps
