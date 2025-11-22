@@ -6,6 +6,8 @@
 
 (using directory-targets 0.1)
 
+(using menhir 3.0)
+
 (name ocannl)
 
 (version 0.6.1)
@@ -111,6 +113,8 @@
    (>= 0.12))
   (angstrom
    (>= 0.15))
+  (menhir
+   (>= 20240715))
   (pprint
    (>= 20230830))
   stdio
