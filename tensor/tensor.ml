@@ -341,10 +341,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
           embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) ti.value;
         (Set.add used ti.id, { subtensor = ti; embedded }))
   in
+  let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
 
   let t =
     {
-      params = Set.empty (module T);
+      params;
       forward = Asgns.empty_comp;
       diff = None;
       id;
@@ -410,6 +411,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       List.filter_map ordered_ts ~f:(fun ti ->
           if is_bck_root ti && not (Set.mem t.params ti) then bprop ti else None)
     in
+    let diff = Some { grad = g; zero_grads; backprop = Asgns.empty_comp } in
+    let t = { t with diff } in
     let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~projections :: bcks) in
     let backprop =
       {
@@ -419,13 +422,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     List.iter ordered_ts ~f:(fun ti ->
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
-    (* The order is not relevant, we keep the same order as in backprop for readability. *)
     let diff = Some { grad = g; zero_grads; backprop } in
-    let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
-    let tensor = { t with params; diff } in
-    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:tensor;
-    session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:tensor;
-    tensor
+    let t = { t with diff } in
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:t;
+    t
 
 type param_op_fun =
   ?input_dims:int list ->
