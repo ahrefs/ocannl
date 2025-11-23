@@ -111,8 +111,6 @@
    (>= 0.12))
   (printbox-ext-plot
    (>= 0.12))
-  (angstrom
-   (>= 0.15))
   (menhir
    (>= 20240715))
   (pprint
