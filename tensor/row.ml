@@ -1515,6 +1515,13 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
         assert (not stored);
         (List.map2_exn exact_dims dims ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) @ extras, env)
 
+let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
+  match d with
+  | Var v' -> equal_dim_var v v'
+  | Dim _ -> false
+  | Conv_input { output; kernel; _ } ->
+      dim_var_occurs_in_dim v output || dim_var_occurs_in_dim v kernel
+
 let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
@@ -1544,17 +1551,94 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
     when !use_padding ->
       unify_dim ~stage origin (get_dim ~d:(stride * s.d) (), dim) env
   | (Conv_input { stride; output; _ }, Dim s | Dim s, Conv_input { stride; output; _ })
-    when !use_padding && s.d % stride = 0 ->
-      unify_dim ~stage origin (get_dim ~d:(s.d / stride) (), output) env
+    when !use_padding ->
+      if s.d % stride = 0 then unify_dim ~stage origin (get_dim ~d:(s.d / stride) (), output) env
+      else
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
   | Conv_input { stride; output = Dim s; dilation; kernel = Dim k }, dim
   | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k } ->
       unify_dim ~stage origin (get_dim ~d:((stride * s.d) + (dilation * k.d)) (), dim) env
   | Conv_input { stride; output; dilation; kernel = Dim k }, Dim s
-  | Dim s, Conv_input { stride; output; dilation; kernel = Dim k }
-    when (s.d - (dilation * k.d)) % stride = 0 ->
-      unify_dim ~stage origin (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
-  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+  | Dim s, Conv_input { stride; output; dilation; kernel = Dim k } ->
+      if (s.d - (dilation * k.d)) % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
+      else
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
+  | Conv_input { stride = s1; output = o1; _ }, Conv_input { stride = s2; output = o2; _ }
+    when !use_padding ->
+      if s1 = s2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+      else if s1 >= s2 && s1 % s2 = 0 then
+        ( [
+            Dim_eq
+              {
+                d1 = o2;
+                d2 =
+                  Conv_input
+                    { stride = s1 / s2; output = o1; dilation = 0; kernel = get_dim ~d:0 () };
+                origin;
+              };
+          ],
+          env )
+      else if s2 >= s1 && s2 % s1 = 0 then
+        ( [
+            Dim_eq
+              {
+                d1 = o1;
+                d2 =
+                  Conv_input
+                    { stride = s2 / s1; output = o2; dilation = 0; kernel = get_dim ~d:0 () };
+                origin;
+              };
+          ],
+          env )
+      else
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
+  | ( Conv_input { stride = s1; output = o1; dilation = d1; kernel = Dim k1 },
+      Conv_input { stride = s2; output = o2; dilation = d2; kernel = Dim k2 } )
+    when d1 * k1.d < s2 && d2 * k2.d < s1 ->
+      (* TODO: same as use_padding, reuse code once use_padding is a field of Conv_input *)
+      if s1 = s2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+      else if s1 >= s2 && s1 % s2 = 0 then
+        ( [
+            Dim_eq
+              {
+                d1 = o2;
+                d2 =
+                  Conv_input
+                    { stride = s1 / s2; output = o1; dilation = 0; kernel = get_dim ~d:0 () };
+                origin;
+              };
+          ],
+          env )
+      else if s2 >= s1 && s2 % s1 = 0 then
+        ( [
+            Dim_eq
+              {
+                d1 = o1;
+                d2 =
+                  Conv_input
+                    { stride = s2 / s1; output = o2; dilation = 0; kernel = get_dim ~d:0 () };
+                origin;
+              };
+          ],
+          env )
+      else
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
+  (* | Conv_input _, Conv_input _ -> failwith "Conv_input, Conv_input NOT IMPLEMENTED YET" *)
   | Var v, dim2 | dim2, Var v ->
+      if dim_var_occurs_in_dim v dim2 then
+        raise
+        @@ Shape_error
+             ( "occurs check failed: dimension variable occurs in its own definition",
+               [ Dim_mismatch [ Var v; dim2 ] ] );
       let ineqs = ref [] in
       let f in_ =
         let more_ineqs, result = s_dim_one_in_entry v ~value:dim2 in_ in
