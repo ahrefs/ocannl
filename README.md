@@ -56,42 +56,42 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 ## Upcoming milestones
 
-This is very tentative.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 (August 24, 2026)**.
 
-* **0.6.2: "you forgot to specify a hidden dimension".**
+* **0.6.2 (End Nov 2025): "you forgot to specify a hidden dimension".**
+  * Menhir einsum parser stabilization.
   * Detection of user errors where there is missing information about a hidden dimension: disables guessing "no axes" or "dimension 1" for shapes of parameters.
+* **0.6.3 (Mid-Dec 2025): Padding inference for convolutions.**
+  * Padding inference during shape inference.
+  * Sokoban RL policy gradient example with a CNN (stretch goal).
+* **0.6.4 (End Dec 2025): Shape concatenation.**
+  * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
+    * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
+* **0.6.5 (Mid-Jan 2026): Transformer and position embeddings.**
   * RoPE embeddings.
   * Transformer for the Names dataset.
-* **0.6.3: Padding inference for convolutions; HIP backend.**
-  * Padding inference during shape inference.
-  * A standalone bindings package for HIP (AMD hardware), and a backend using the bindings.
-  * Sokoban RL policy gradient example with a CNN.
-* **0.6.4: Real world examples.**
+* **0.7.0 (End Jan 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
+  * Cleanup of deprecated streams functionality.
+  * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
+  * Tensor saving, loading, and restoring.
+* **0.7.1 (Mid-Mar 2026): Real world examples.**
   * Add convnet examples: MNIST and CIFAR.
   * Bindings to a tokenizer (e.g. _llama.cpp_).
   * Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
-* **0.6.5: shape manipulation enhancements.**
-  * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
-    * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
-  * Draft an academic-style paper e.g. for the OCaml Workshop.
-* **0.7: CPU-style performance and memory efficiency.**
-  * Cleanup of deprecated streams functionality.
-  * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
+* **0.7.2 (Mid-Apr 2026): Compiler optimizations.**
   * Optimizations: loop invariant lifting and common subexpression elimination.
   * Universal Pool Allocator.
-  * Milestone phrasing: Enhancements for: inlining-related and simplification-related optimizations, memory management, session management.
-* **0.8: GPU-style performance -- low hanging fruit.**
+* **0.8 (Mid-Jun 2026): GPU-style performance -- low hanging fruit.**
   * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
-  * Milestone phrasing: GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now.
-* **0.9: Optimize performance: program search.**
+  * HIP backend (AMD hardware) if resources permit.
+* **0.9 (Aug 24, 2026 — ICFP): Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
   * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
-  * Milestone phrasing: Program search with execution-based per-backend or aggregate-of-backends cost functions. Starting with augmenting the tiling and layout mechanisms from v0.8 with cost functions, progressing to a broader range of code graph rewriting rules.
-* **1.0: Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
+* **1.0 (End Oct 2026): Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
   * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
   * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   * Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
