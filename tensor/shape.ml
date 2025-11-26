@@ -1685,14 +1685,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
   assert (List.is_empty unsolved);
-  (* Important: ineqs must not be substituted / solved before getting proj_equations, because
-     get_inequalities provides indexing information that is lost after substitution. *)
-  let proj_eqs : Row.proj_equation list = Row.get_proj_equations ineqs proj_axis_env local_env in
-  let proj_env : Row.proj_env =
-    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
-  in
-  let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
-  let lhs = update_step.shape in
+  let local_env = Row.populate_dim_proj_in_solved local_env in
   let rhs =
     match update_step.logic with
     | Broadcast (Defined_by_cd_logic, _, _)
@@ -1706,6 +1699,24 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
     | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
     | Broadcast_tern (_, sh1, sh2, sh3) -> [ sh1; sh2; sh3 ]
   in
+  let terminal_rows_for_inputs =
+    List.concat_map rhs ~f:(fun sh ->
+        [
+          Row.Terminal_row (false, sh.batch, []);
+          Row.Terminal_row (false, sh.input, []);
+          Row.Terminal_row (false, sh.output, []);
+        ])
+  in
+  (* Important: ineqs must not be substituted / solved before getting proj_equations, because
+     get_inequalities provides indexing information that is lost after substitution. *)
+  let proj_eqs : Row.proj_equation list =
+    Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
+  in
+  let proj_env : Row.proj_env =
+    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
+  in
+  let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
+  let lhs = update_step.shape in
   let lhs_dims = to_dims lhs in
   let rhs_dims = Array.of_list_map ~f:to_dims rhs in
   let all_dims : Row.dim list = List.concat_map ~f:dims_of @@ (lhs :: rhs) in

@@ -198,6 +198,8 @@ type proj_env [@@deriving sexp_of]
 
 val fresh_row_proj : t -> t
 
+val populate_dim_proj_in_solved : environment -> environment
+
 type proj_equation =
   | Proj_eq of proj * proj
       (** Two projections are the same, e.g. two axes share the same iterator. *)

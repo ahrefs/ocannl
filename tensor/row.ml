@@ -3186,6 +3186,16 @@ let fresh_row_proj r =
   in
   { r with dims = List.map r.dims ~f:fresh_dim }
 
+let populate_dim_proj_in_solved env =
+  let rec fresh_dim = function
+    | Dim { d; label; proj_id = None } -> Dim { d; label; proj_id = Some (Proj_id.fresh ()) }
+    | (Dim _ | Var _) as d -> d
+    | Conv_input { stride; output; dilation; kernel } ->
+        Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
+  in
+  let f = function Solved_dim dim -> Solved_dim (fresh_dim dim) | entry -> entry in
+  { env with dim_env = Utils.Tree_map.map env.dim_env ~f }
+
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
    pid1 pid2 *)
 
@@ -3276,7 +3286,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
     | d -> (
         match subst_dim env d with
         | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
-        | Dim s -> Proj (Proj_id.fresh (), s)
+        | Dim _ -> assert false
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v
         | Conv_input _ -> assert false (* handled above and by default keep_conv is false *))
