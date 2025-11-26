@@ -124,8 +124,8 @@ type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.
 type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
 [@@deriving sexp, equal]
 
-(** Convert einsum_parser types to shape.ml types.
-    The types are structurally identical, but shape.ml has additional derivations. *)
+(** Convert einsum_parser types to shape.ml types. The types are structurally identical, but
+    shape.ml has additional derivations. *)
 let convert_axis_spec : Einsum_parser.axis_spec -> axis_spec = function
   | Label s -> Label s
   | Fixed_index i -> Fixed_index i
@@ -137,7 +137,9 @@ let convert_axis_key (key : Einsum_parser.axis_key) : AxisKey.t =
 
 let convert_parsed_axis_labels (parsed : Einsum_parser.parsed_axis_labels) : parsed_axis_labels =
   let labels =
-    Map.fold parsed.labels ~init:(Map.empty (module AxisKey)) ~f:(fun ~key ~data acc ->
+    Map.fold parsed.labels
+      ~init:(Map.empty (module AxisKey))
+      ~f:(fun ~key ~data acc ->
         Map.set acc ~key:(convert_axis_key key) ~data:(convert_axis_spec data))
   in
   {
@@ -156,7 +158,8 @@ let convert_parsed_axis_labels (parsed : Einsum_parser.parsed_axis_labels) : par
 let axis_labels_of_spec spec =
   try convert_parsed_axis_labels (Einsum_parser.axis_labels_of_spec spec)
   with Einsum_parser.Parse_error msg ->
-    raise @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+    raise
+    @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 let einsum_of_spec spec =
   try
@@ -320,6 +323,9 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
           if String.equal kernel_label "_stride_only" then
             (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
             Row.get_dim ~d:0 ()
+          else if String.equal kernel_label "_offset_only" then
+            (* For offset-only iteration (dilation=offset), use fixed dimension 1 for kernel *)
+            Row.get_dim ~d:1 ()
           else
             Row.Var
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
@@ -1868,6 +1874,9 @@ let shape_spec_to_dims_bio labels =
           if String.equal kernel_label "_stride_only" then
             (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
             Row.get_dim ~d:0 ()
+          else if String.equal kernel_label "_offset_only" then
+            (* For offset-only iteration (dilation=offset), use fixed dimension 1 for kernel *)
+            Row.get_dim ~d:1 ()
           else
             Row.Var
               (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
