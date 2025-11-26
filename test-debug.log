@@ -1,0 +1,315 @@
+File "test/einsum/dune", line 27, characters 7-23:
+27 |  (name test_conv_syntax)
+            ^^^^^^^^^^^^^^^^
+Fatal error: exception Utils.User_error("Shape.axis_labels_of_spec: while parsing: o+k error: Parse error at line 1, column 3 in spec: o+k")
+Raised at Ocannl_tensor__Shape.axis_labels_of_spec in file "tensor/shape.ml", line 159, characters 4-102
+Called from Dune__exe__Test_conv_syntax.test_conv_parsing in file "test/einsum/test_conv_syntax.ml", line 16, characters 16-47
+Called from Dune__exe__Test_conv_syntax in file "test/einsum/test_conv_syntax.ml", line 136, characters 2-22
+Testing mode detection:
+  ✓ 'abc' -> single-char (expected single-char)
+  ✓ 'a,b,c' -> multichar (expected multichar)
+  ✓ '2*a+b' -> multichar (expected multichar)
+  ✓ 'a+b' -> multichar (expected multichar)
+  ✓ 'a*b' -> multichar (expected multichar)
+  ✓ 'a^b' -> multichar (expected multichar)
+  ✓ 'a&b' -> multichar (expected multichar)
+  ✓ 'a|b->c' -> single-char (expected single-char)
+  ✓ '...a..b' -> single-char (expected single-char)
+
+Testing single-char mode:
+  'abc' -> 3 output axes
+  'b|i->o' -> batch:1 input:1 output:1
+  'ij;jk=>ik' -> (0,2);(0,2)=>(0,2)
+
+Testing multichar mode:
+  'a, b, c' -> 3 output axes
+  'a, b,' -> 2 output axes
+  '2*o+k' -> 1 output axes
+  '2*o+3*k, x' -> 2 output axes
+
+All tests passed!
+File "test/einsum/dune", line 129, characters 7-22:
+129 |  (name test_interleave)
+             ^^^^^^^^^^^^^^^
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Fatal error: exception (lib/shape.ml.Shape_error "solved dimensions for axis: mismatch"
+  ((Constraint_failed
+     (Row_eq
+       (r1
+         ((dims
+            ((Conv_input (stride 2)
+               (output (Dim ((d 3) (label ()) (proj_id ())))) (dilation 1)
+               (kernel (Var ((id 8) (name (_offset_only))))))))
+           (bcast Broadcastable) (prov (((sh_id 2) (kind Output))))))
+       (r2
+         ((dims
+            ((Conv_input (stride 2) (output (Var ((id 12) (name (i)))))
+               (dilation 0) (kernel (Dim ((d 0) (label ()) (proj_id ())))))))
+           (bcast (Row_var (v (Row_var 11)) (beg_dims ())))
+           (prov (((sh_id 2) (kind Output))))))
+       (origin
+         (((lhs_name interleave) (lhs_kind Output)
+            (rhs_name "... | ... -> ..., i => ... | ... -> ..., 2*i")
+            (rhs_kind Output) (operation ("Permute RESULT")))))))
+    (Dim_mismatch
+      (Conv_input (stride 2) (output (Var ((id 12) (name (i))))) (dilation 0)
+        (kernel (Dim ((d 0) (label ()) (proj_id ())))))
+      (Conv_input (stride 2) (output (Dim ((d 3) (label ()) (proj_id ()))))
+        (dilation 1) (kernel (Var ((id 8) (name (_offset_only)))))))))
+Raised at Ocannl_tensor__Row.solve_inequalities.solve.f in file "tensor/row.ml", line 3146, characters 8-65
+Called from Base__List0.fold in file "src/list0.ml", line 43, characters 27-37
+Called from Ocannl_tensor__Row.solve_inequalities.solve in file "tensor/row.ml", line 3148, characters 22-56
+Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1535, characters 20-73
+Called from Ocannl_tensor__Tensor.raw_unop in file "tensor/tensor.ml", line 223, characters 2-43
+Called from Ocannl_tensor__Operation.interleave.(fun) in file "tensor/operation.ml", line 288, characters 4-69
+Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 361, characters 43-65
+Called from Dune__exe__Test_interleave in file "test/einsum/test_interleave.ml", line 9, characters 11-40
+ld: warning: ignoring duplicate libraries: '-lpthread'
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+HERE: test/einsum/inline_permuted_view.ml:20:21
+┌────────────────────────────────────┐
+│[3]: =>_c shape 0:4,1:3             │
+│┌──────┬───────────────────────────┐│
+││      │axis 1                     ││
+│├──────┼───────────────────────────┤│
+││axis 0│ 1.20e+2  3.20e+2  5.20e+2 ││
+││      │ 1.30e+2  3.55e+2  5.80e+2 ││
+││      │ 1.40e+2  3.90e+2  6.40e+2 ││
+││      │ 1.50e+2  4.25e+2  7.00e+2 ││
+│└──────┴───────────────────────────┘│
+└────────────────────────────────────┘
+
+HERE: test/einsum/inline_permuted_view.ml:34:26
+                                  #5 +_d
+                                   1.21e+2  3.21e+2  5.21e+2
+                                   1.31e+2  3.56e+2  5.81e+2
+                                   1.41e+2  3.91e+2  6.41e+2
+                                   1.51e+2  4.26e+2  7.01e+2
+                                 #3 =>_c1 Virt/15                                 │#4 1 Virt/40
+                                 <void>                                           │<void>
+                                 #2 * Local/1046                                  │
+                                 <void>                                           │
+#0 r3x5_a                                    │#1 r5x4_b                           │
+ 0.00     1.00     2.00     3.00     4.00    │ 0.00     1.00     2.00     3.00    │
+ 5.00     6.00     7.00     8.00     9.00    │ 4.00     5.00     6.00     7.00    │
+ 1.00e+1  1.10e+1  1.20e+1  1.30e+1  1.40e+1 │ 8.00     9.00     1.00e+1  1.10e+1 │
+                                             │ 1.20e+1  1.30e+1  1.40e+1  1.50e+1 │
+                                             │ 1.60e+1  1.70e+1  1.80e+1  1.90e+1 │
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+HERE: test/einsum/inline_permuted_view.ml:20:21
+┌────────────────────────────────────┐
+│[3]: =>_c shape 0:4,1:3             │
+│┌──────┬───────────────────────────┐│
+││      │axis 1                     ││
+│├──────┼───────────────────────────┤│
+││axis 0│ 1.20e+2  3.20e+2  5.20e+2 ││
+││      │ 1.30e+2  3.55e+2  5.80e+2 ││
+││      │ 1.40e+2  3.90e+2  6.40e+2 ││
+││      │ 1.50e+2  4.25e+2  7.00e+2 ││
+│└──────┴───────────────────────────┘│
+└────────────────────────────────────┘
+
+HERE: test/einsum/inline_permuted_view.ml:34:26
+                                  #5 +_d
+                                   1.21e+2  3.21e+2  5.21e+2
+                                   1.31e+2  3.56e+2  5.81e+2
+                                   1.41e+2  3.91e+2  6.41e+2
+                                   1.51e+2  4.26e+2  7.01e+2
+                                 #3 =>_c1 Virt/15                                 │#4 1 Virt/40
+                                 <void>                                           │<void>
+                                 #2 * Local/1046                                  │
+                                 <void>                                           │
+#0 r3x5_a                                    │#1 r5x4_b                           │
+ 0.00     1.00     2.00     3.00     4.00    │ 0.00     1.00     2.00     3.00    │
+ 5.00     6.00     7.00     8.00     9.00    │ 4.00     5.00     6.00     7.00    │
+ 1.00e+1  1.10e+1  1.20e+1  1.30e+1  1.40e+1 │ 8.00     9.00     1.00e+1  1.10e+1 │
+                                             │ 1.20e+1  1.30e+1  1.40e+1  1.50e+1 │
+                                             │ 1.60e+1  1.70e+1  1.80e+1  1.90e+1 │
+File "test/einsum/dune", line 49, characters 7-24:
+49 |  (name test_surjectivity)
+            ^^^^^^^^^^^^^^^^^
+Fatal error: exception Utils.User_error("Shape.einsum_of_spec: while parsing: ij=>i1j error: Parse error at line 1, column 7 in spec: ij=>i1j")
+Raised at Ocannl_tensor__Shape.einsum_of_spec in file "tensor/shape.ml", line 168, characters 4-97
+Called from Ocannl_tensor__Shape.get_inequalities in file "tensor/shape.ml", line 820, characters 14-33
+Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1532, characters 17-45
+Called from Base__List0.iter in file "src/list0.ml", line 66, characters 4-7
+Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 328, characters 2-57
+Called from Dune__exe__Test_surjectivity.test_multi_sparse in file "test/einsum/test_surjectivity.ml", line 45, characters 18-36
+Called from Dune__exe__Test_surjectivity in file "test/einsum/test_surjectivity.ml", line 70, characters 2-22
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+File "test/einsum/dune", line 16, characters 7-25:
+16 |  (name einsum_trivia_exec)
+            ^^^^^^^^^^^^^^^^^^
+Fatal error: exception Utils.User_error("Shape.einsum_of_spec: while parsing: i->j => i0j error: Parse error at line 1, column 11 in spec: i->j => i0j")
+Raised at Ocannl_tensor__Shape.einsum_of_spec in file "tensor/shape.ml", line 168, characters 4-97
+Called from Ocannl_tensor__Shape.get_inequalities in file "tensor/shape.ml", line 820, characters 14-33
+Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1532, characters 17-45
+Called from Base__List0.iter in file "src/list0.ml", line 66, characters 4-7
+Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 328, characters 2-57
+Called from Dune__exe__Einsum_trivia_exec in file "test/einsum/einsum_trivia_exec.ml", line 152, characters 15-36
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+File "test/einsum/surjectivity.ml", line 1, characters 0-0:
+diff --git a/_build/default/test/einsum/surjectivity.ml b/_build/.sandbox/f0b57ca916e2191e3de5c7d154c5f91d/default/test/einsum/surjectivity.ml.corrected
+index 5d36a8ae..eb196799 100644
+--- a/_build/default/test/einsum/surjectivity.ml
++++ b/_build/.sandbox/f0b57ca916e2191e3de5c7d154c5f91d/default/test/einsum/surjectivity.ml.corrected
+@@ -49,28 +49,20 @@ let%expect_test "sparse_assignment_with_fixed_indices" =
+   ignore (Train.forward_once ctx sparse);
+ 
+   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse;
+-  [%expect
+-    {|
+-    HERE: test/einsum/surjectivity.ml:51:21
+-    ┌─────────────────────────────────┐
+-    │[1]: =>_sparse shape 0:4,1:1,2:1 │
+-    │┌──────┬──────┐                  │
+-    ││      │axis 2│                  │
+-    │├──────┼──────┤                  │
+-    ││0 @ 0 │ 0.00 │                  │
+-    ││axis 1│      │                  │
+-    │├──────┼──────┤                  │
+-    ││1 @ 0 │ 1.00 │                  │
+-    ││axis 1│      │                  │
+-    │├──────┼──────┤                  │
+-    ││2 @ 0 │ 2.00 │                  │
+-    ││axis 1│      │                  │
+-    │├──────┼──────┤                  │
+-    ││3 @ 0 │ 3.00 │                  │
+-    ││axis 1│      │                  │
+-    │└──────┴──────┘                  │
+-    └─────────────────────────────────┘
+-    |}]
++  [%expect.unreachable]
++[@@expect.uncaught_exn {|
++  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
++     This is strongly discouraged as backtraces are fragile.
++     Please change this test to not include a backtrace. *)
++  ("Utils.User_error(\"Shape.einsum_of_spec: while parsing: i=>i0j error: Parse error at line 1, column 6 in spec: i=>i0j\")")
++  Raised at Ocannl_tensor__Shape.einsum_of_spec in file "tensor/shape.ml", line 168, characters 4-97
++  Called from Ocannl_tensor__Shape.get_inequalities in file "tensor/shape.ml", line 820, characters 14-33
++  Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1532, characters 17-45
++  Called from Base__List0.iter in file "src/list0.ml", line 66, characters 4-7
++  Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 328, characters 2-57
++  Called from Einsum_tutorials__Surjectivity.(fun) in file "test/einsum/surjectivity.ml", line 46, characters 18-35
++  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
++  |}]
+ 
+ let%expect_test "multiple_sparse_axes" =
+   Tensor.unsafe_reinitialize ();
+@@ -84,51 +76,17 @@ let%expect_test "multiple_sparse_axes" =
+   ignore (Train.forward_once ctx sparse_multi);
+ 
+   Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse_multi;
+-  [%expect
+-    {|
+-    HERE: test/einsum/surjectivity.ml:86:21
+-    ┌───────────────────────────────────────────┐
+-    │[1]: =>_sparse_multi shape 0:3,1:2,2:4,3:3 │
+-    │┌──────┬──────────────────┐                │
+-    ││0 @ 0 │axis 3            │                │
+-    │├──────┼──────────────────┤                │
+-    ││0 @ 1 │ 0.00  0.00  0.00 │                │
+-    ││axis 2│ 0.00  0.00  0.00 │                │
+-    ││      │ 0.00  0.00  0.00 │                │
+-    ││      │ 0.00  0.00  0.00 │                │
+-    │├──────┼──────────────────┤                │
+-    ││1 @ 1 │ 0.00  0.00  0.00 │                │
+-    ││axis 2│ 0.00  0.00  1.00 │                │
+-    ││      │ 0.00  0.00  2.00 │                │
+-    ││      │ 0.00  0.00  3.00 │                │
+-    │└──────┴──────────────────┘                │
+-    ├───────────────────────────────────────────┤
+-    │┌──────┬──────────────────┐                │
+-    ││1 @ 0 │axis 3            │                │
+-    │├──────┼──────────────────┤                │
+-    ││0 @ 1 │ 0.00  0.00  0.00 │                │
+-    ││axis 2│ 0.00  0.00  0.00 │                │
+-    ││      │ 0.00  0.00  0.00 │                │
+-    ││      │ 0.00  0.00  0.00 │                │
+-    │├──────┼──────────────────┤                │
+-    ││1 @ 1 │ 0.00  0.00  4.00 │                │
+-    ││axis 2│ 0.00  0.00  5.00 │                │
+-    ││      │ 0.00  0.00  6.00 │                │
+-    ││      │ 0.00  0.00  7.00 │                │
+-    │└──────┴──────────────────┘                │
+-    ├───────────────────────────────────────────┤
+-    │┌──────┬─────────────────────┐             │
+-    ││2 @ 0 │axis 3               │             │
+-    │├──────┼─────────────────────┤             │
+-    ││0 @ 1 │ 0.00  0.00  0.00    │             │
+-    ││axis 2│ 0.00  0.00  0.00    │             │
+-    ││      │ 0.00  0.00  0.00    │             │
+-    ││      │ 0.00  0.00  0.00    │             │
+-    │├──────┼─────────────────────┤             │
+-    ││1 @ 1 │ 0.00  0.00  8.00    │             │
+-    ││axis 2│ 0.00  0.00  9.00    │             │
+-    ││      │ 0.00  0.00  1.00e+1 │             │
+-    ││      │ 0.00  0.00  1.10e+1 │             │
+-    │└──────┴─────────────────────┘             │
+-    └───────────────────────────────────────────┘
+-    |}]
++  [%expect.unreachable]
++[@@expect.uncaught_exn {|
++  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
++     This is strongly discouraged as backtraces are fragile.
++     Please change this test to not include a backtrace. *)
++  ("Utils.User_error(\"Shape.einsum_of_spec: while parsing: ij=>i1j2 error: Parse error at line 1, column 1 in spec: ij=>i1j2\")")
++  Raised at Ocannl_tensor__Shape.einsum_of_spec in file "tensor/shape.ml", line 168, characters 4-97
++  Called from Ocannl_tensor__Shape.get_inequalities in file "tensor/shape.ml", line 820, characters 14-33
++  Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1532, characters 17-45
++  Called from Base__List0.iter in file "src/list0.ml", line 66, characters 4-7
++  Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 328, characters 2-57
++  Called from Einsum_tutorials__Surjectivity.(fun) in file "test/einsum/surjectivity.ml", line 81, characters 24-43
++  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
++  |}]
+File "test/einsum/einsum_trivia.ml", line 1, characters 0-0:
+diff --git a/_build/default/test/einsum/einsum_trivia.ml b/_build/.sandbox/f0b57ca916e2191e3de5c7d154c5f91d/default/test/einsum/einsum_trivia.ml.corrected
+index 1f8a4d09..f49e53ff 100644
+--- a/_build/default/test/einsum/einsum_trivia.ml
++++ b/_build/.sandbox/f0b57ca916e2191e3de5c7d154c5f91d/default/test/einsum/einsum_trivia.ml.corrected
+@@ -843,22 +843,20 @@ let%expect_test "einsum1 fixed dim axis" =
+   let%op ho4 = hey2 ++ "i->j => i0j" in
+   ignore (Train.forward_once ctx ho4);
+   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
+-  [%expect
+-    {|
+-    HERE: test/einsum/einsum_trivia.ml:845:21
+-    ┌──────────────────────────────┐
+-    │[5]: =>_ho4 shape 0:2,1:1,2:3 │
+-    │┌──────┬──────────────────┐   │
+-    ││      │axis 2            │   │
+-    │├──────┼──────────────────┤   │
+-    ││0 @ 0 │ 0.00  2.00  4.00 │   │
+-    ││axis 1│                  │   │
+-    │├──────┼──────────────────┤   │
+-    ││1 @ 0 │ 1.00  3.00  5.00 │   │
+-    ││axis 1│                  │   │
+-    │└──────┴──────────────────┘   │
+-    └──────────────────────────────┘
+-    |}]
++  [%expect.unreachable]
++[@@expect.uncaught_exn {|
++  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
++     This is strongly discouraged as backtraces are fragile.
++     Please change this test to not include a backtrace. *)
++  ("Utils.User_error(\"Shape.einsum_of_spec: while parsing: i->j => i0j error: Parse error at line 1, column 11 in spec: i->j => i0j\")")
++  Raised at Ocannl_tensor__Shape.einsum_of_spec in file "tensor/shape.ml", line 168, characters 4-97
++  Called from Ocannl_tensor__Shape.get_inequalities in file "tensor/shape.ml", line 820, characters 14-33
++  Called from Ocannl_tensor__Shape.propagate_shapes in file "tensor/shape.ml", line 1532, characters 17-45
++  Called from Base__List0.iter in file "src/list0.ml", line 66, characters 4-7
++  Called from Ocannl_tensor__Tensor.op in file "tensor/tensor.ml", line 328, characters 2-57
++  Called from Einsum_tutorials__Einsum_trivia.(fun) in file "test/einsum/einsum_trivia.ml", line 843, characters 15-36
++  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
++  |}]
+ 
+ let%expect_test "einsum with fixed dim axes" =
+   Tensor.unsafe_reinitialize ();

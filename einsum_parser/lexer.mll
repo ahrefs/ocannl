@@ -44,7 +44,7 @@ rule multichar_token = parse
   | eof              { EOF }
   | _ as c           { raise (Syntax_error ("Unexpected character in multichar mode: " ^ String.make 1 c)) }
 
-(* Single-character mode lexer - always emits COMMA after each identifier *)
+(* Single-character mode lexer - always emits COMMA after each identifier or fixed index *)
 and single_char_token = parse
   | white+           { single_char_token lexbuf }
   | '|'              { PIPE }
@@ -53,7 +53,11 @@ and single_char_token = parse
   | ';'              { SEMICOLON }
   | "..."            { ELLIPSIS }
   | ".."             { DOT_DOT }
-  | digit+ as n      { INT (int_of_string n) }
+  | digit+ as n      {
+      (* Always buffer COMMA after fixed index - parser handles trailing commas *)
+      buffered_token := Some COMMA;
+      INT (int_of_string n)
+    }
   | '_'              {
       (* Always buffer COMMA after identifier - parser handles trailing commas *)
       buffered_token := Some COMMA;

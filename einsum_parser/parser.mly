@@ -113,6 +113,8 @@ conv_expr:
     { Conv_spec { stride = 1; output_label = output; dilation; kernel_label = "_offset_only" } }
   | output = IDENT; PLUS; offset = INT
     { Conv_spec { stride = 1; output_label = output; dilation = offset; kernel_label = "_offset_only" } }
+  | output = IDENT; PLUS; kernel = IDENT
+    { Conv_spec { stride = 1; output_label = output; dilation = 1; kernel_label = kernel } }
   | stride = INT; STAR; output = IDENT; PLUS; kernel = IDENT
     { Conv_spec { stride; output_label = output; dilation = 1; kernel_label = kernel } }
   | stride = INT; STAR; output = IDENT; PLUS; UNDERSCORE
