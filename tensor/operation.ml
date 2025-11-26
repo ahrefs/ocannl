@@ -681,6 +681,7 @@ struct
   let uniform_at = uniform_at ~grad_spec
   let uniform1 = uniform1 ~grad_spec
   let uniform_at1 = uniform_at1 ~grad_spec
+  let interleave = interleave ~grad_spec
 
   module O = struct
     let ( * ) ?label t1 t2 = matmul ?label t1 t2 ()
@@ -728,6 +729,7 @@ struct
     let uniform_at ?label counter = uniform_at ?label counter ()
     let uniform1 ?label () = uniform1 () ?label ()
     let uniform_at1 ?label counter = uniform_at1 ?label counter ()
+    let interleave ?label t1 t2 = interleave ?label t1 t2 ()
   end
 end
 
