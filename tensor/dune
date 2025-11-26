@@ -1,3 +1,18 @@
+(ocamllex lexer)
+
+(menhir
+ (modules parser)
+ (flags --table))
+
+(library
+ (name einsum_parser)
+ (public_name neural_nets_lib.einsum_parser)
+ (libraries base menhirLib)
+ (preprocess
+  (pps ppx_compare ppx_sexp_conv))
+ (modules einsum_types lexer parser einsum_parser)
+ (flags :standard -w -69-3))
+
 (library
  (name ocannl_tensor)
  (public_name neural_nets_lib.tensor)
