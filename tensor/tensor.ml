@@ -409,7 +409,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
-          if is_bck_root ti && not (Set.mem t.params ti) then bprop ti else None)
+          if is_bck_root ti then
+            if Set.mem t.params ti then (
+              (* Parameter's backprop is terminal, but we still need its gradient embedded *)
+              Option.iter ti.diff ~f:(fun diff ->
+                  embedded_nodes := Set.add !embedded_nodes diff.grad);
+              None)
+            else bprop ti
+          else None)
     in
     let diff = Some { grad = g; zero_grads; backprop = Asgns.empty_comp } in
     let t = { t with diff } in
