@@ -363,9 +363,11 @@ let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
       | res when keep_conv -> res
       | Conv_input { stride = 1; _ } when !use_padding -> output
       | Conv_input { stride; output = Dim s; kernel = Dim k; dilation } when not !use_padding ->
+          let offset = dilation * k.d in
+          let offset_adjusted = offset - (offset % stride) in
           Dim
             {
-              d = (s.d * stride) + (dilation * k.d);
+              d = (s.d * stride) + offset_adjusted;
               label = Option.first_some s.label k.label;
               proj_id = None;
             }
@@ -1559,11 +1561,14 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
   | Conv_input { stride; output = Dim s; dilation; kernel = Dim k }, dim
   | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k } ->
-      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + (dilation * k.d)) (), dim) env
+      let offset = dilation * k.d in
+      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + offset - (offset % stride)) (), dim) env
   | Conv_input { stride; output; dilation; kernel = Dim k }, Dim s
   | Dim s, Conv_input { stride; output; dilation; kernel = Dim k } ->
-      if (s.d - (dilation * k.d)) % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((s.d - (dilation * k.d)) / stride) (), output) env
+      let offset = dilation * k.d in
+      let offset_adjusted = offset - (offset % stride) in
+      if (s.d - offset_adjusted) % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:((s.d - offset_adjusted) / stride) (), output) env
       else
         raise
         @@ Shape_error
@@ -1600,35 +1605,25 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
   | ( Conv_input { stride = s1; output = o1; dilation = d1; kernel = Dim k1 },
-      Conv_input { stride = s2; output = o2; dilation = d2; kernel = Dim k2 } )
-    when d1 * k1.d < s2 && d2 * k2.d < s1 ->
-      (* TODO: same as use_padding, reuse code once use_padding is a field of Conv_input *)
-      if s1 = s2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+      Conv_input { stride = s2; output = o2; dilation = d2; kernel = Dim k2 } ) ->
+      let offset1 = d1 * k1.d and offset2 = d2 * k2.d in
+      let offset1_adjusted = offset1 - (offset1 % s1)
+      and offset2_adjusted = offset2 - (offset2 % s2) in
+      let kernel = get_dim ~d:1 () in
+      if s1 = s2 && offset1_adjusted = offset2_adjusted then
+        ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
       else if s1 >= s2 && s1 % s2 = 0 then
-        ( [
-            Dim_eq
-              {
-                d1 = o2;
-                d2 =
-                  Conv_input
-                    { stride = s1 / s2; output = o1; dilation = 0; kernel = get_dim ~d:0 () };
-                origin;
-              };
-          ],
+        let stride = s1 / s2 in
+        let dilation = (offset1_adjusted - offset2_adjusted) / s2 in
+        ( [ Dim_eq { d1 = o2; d2 = Conv_input { stride; output = o1; dilation; kernel }; origin } ],
           env )
       else if s2 >= s1 && s2 % s1 = 0 then
-        ( [
-            Dim_eq
-              {
-                d1 = o1;
-                d2 =
-                  Conv_input
-                    { stride = s2 / s1; output = o2; dilation = 0; kernel = get_dim ~d:0 () };
-                origin;
-              };
-          ],
+        let stride = s2 / s1 in
+        let dilation = (offset2_adjusted - offset1_adjusted) / s1 in
+        ( [ Dim_eq { d1 = o1; d2 = Conv_input { stride; output = o2; dilation; kernel }; origin } ],
           env )
       else
+        (* FIXME: should keep the constraint as-is but currently unification must make progress. *)
         raise
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
@@ -3233,7 +3228,7 @@ type proj_env = {
 type proj_equation = Proj_eq of proj * proj | Iterated of proj | Non_iterated of proj
 [@@deriving compare, equal, sexp]
 
-let%debug4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
+let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
     proj_equation list =
   (* The difference between to_proj and dim_to_proj is that here we do not have a projection
      environment. *)
@@ -3372,7 +3367,7 @@ let unknown_projection proj_id d =
   @@ Shape_error
        ([%string "projection_of_solved_dims: unknown projection: %{proj_id#Proj_id} %{d#Int}"], [])
 
-let get_proj_index proj_env =
+let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_index =
   let rec loop (proj : proj) : Idx.axis_index =
     match proj with
     | Proj (proj_id, { d; _ }) -> (
@@ -3381,7 +3376,7 @@ let get_proj_index proj_env =
         in
         match (d, Map.find proj_env.proj_to_index repr) with
         | _, Some i -> i
-        | (0 | 1), None -> Fixed_idx 0
+        | (0 | 1), None -> Idx.Fixed_idx 0
         | _ -> unknown_projection proj_id d)
     | Solved idx -> idx
     | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _ } -> (
@@ -3514,7 +3509,7 @@ let get_proj_index proj_env =
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Projection_mismatch [ proj ] ] )
   in
-  loop
+  loop proj
 
 let rec dim_to_proj proj_env : dim -> proj = function
   | Var v -> Var v
