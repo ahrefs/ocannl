@@ -1,3 +1,52 @@
+## [0.6.2] -- 2025-11-27
+
+### Added
+
+- Normal distribution random number generation
+- `%%extend_dsls` syntax extension for extending DSL modules
+- `interleave` operation in DSL modules
+- `Defined_by_cd_logic` shape inference specification for explicit shape logic in forward code
+- Menhir-based einsum parser replacing Angstrom for better maintainability
+- Name clash detection for inline definitions and variable captures in syntax extensions
+- `is_param` flag in shape inference for improved parameter-related error messages
+- Teacher forcing support in transformer implementation
+- Heuristics for "missing hidden dimensions" error messages with row variables
+- `Tree_map` persistent map utility with exposed tree structure in sexp serialization
+
+### Changed
+
+- Migrated shape environment to use `Utils.Tree_map` for ppx_minidebug v3 full-scale debugging
+- Replaced explicit non-iteration tracking with improved projection constraints derivation
+- Support for offset-only affine expressions in shape inference
+- Renamed optional dimension variable parameter from `label` to `name`
+- Row IDs replaced with provenance tracking (`Row.id` → `Row.prov`) supporting deduplication
+- Tensor labels interface improved: per-operation `op_label` string with `label` list as trailing parameter
+- Adapted to ppx_minidebug renaming (`entry_id` → `scope_id`)
+- Prefixed block names in `lib/nn_blocks.ml` for better namespace management
+- Tests reorganized: more einsum-related tests moved to `test/einsum/`
+
+### Fixed
+
+- Normal distribution test determinism across different machines
+- Convolution/affine indexing shape inference offset adjustment by strides
+- Parameter gradients not embedded after params moved earlier in processing
+- Einsum parser handling of missing convolution and single-character cases
+- Shape inference for `Conv_input` additional cases
+- Incremental construction of tensors in `Tensor.op`
+- Attention masks now have empty output dimensions for proper broadcasting to multihead attentions
+- LUB (Least Upper Bound) computation in `dim_ineq`
+- Axis labels distinguished from dimension units (labels) in `shape_spec_to_dims_bio`
+- Shape inference for dim-1 with labels treated same as dim>1 (only dim-1 without label is different)
+- Shape specification requiring LUB incorporation for non-terminal shapes
+- Missing CUDA backend cases and NVRTC compatibility
+- Premature guessing of dim variables as dim-1 when participating in `Total_elems` constraints
+- Generic constraints ignored for unused tensors
+- Missing propagation when `set_dim` happened before parsing the spec
+- Guard `axis_keys_to_idcs` from un-inferred shapes
+- More informative error messages for parameter shape errors
+- Crash on repeated variable capture in syntax extensions
+- Additional syntax support for binary einsum operators
+
 ## [0.6.1] -- 2025-09-12
 
 ### Added
