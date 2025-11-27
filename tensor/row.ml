@@ -3133,10 +3133,10 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) e
         let more_ineqs, env = process_constraint env ineq in
         (more_ineqs @ ineqs, env)
       with Shape_error (s, trace) ->
-        let f_out = Out_channel.open_text "shape_error.txt" in
-        Stdlib.Printf.fprintf f_out "Shape_error: %s\nenv=\n%s\n%!" s
-          (Sexp.to_string_hum @@ [%sexp_of: environment] env);
-        Out_channel.close f_out;
+        (* let f_out = Out_channel.open_text "shape_error.txt" in
+           Stdlib.Printf.fprintf f_out "Shape_error: %s\nenv=\n%s\n%!" s
+             (Sexp.to_string_hum @@ [%sexp_of: environment] env);
+           Out_channel.close f_out; *)
         (* Add the failing constraint to the error trace *)
         raise @@ Shape_error (s, Constraint_failed ineq :: trace)
     in
@@ -3252,8 +3252,7 @@ type proj_env = {
 }
 [@@deriving sexp_of]
 
-type proj_equation = Proj_eq of proj * proj | Iterated of proj
-[@@deriving compare, equal, sexp]
+type proj_equation = Proj_eq of proj * proj | Iterated of proj [@@deriving compare, equal, sexp]
 
 let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
     proj_equation list =

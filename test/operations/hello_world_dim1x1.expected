@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+HERE: test/operations/hello_world_dim1x1.ml:12:21
+┌────────────────────────────┐
+│[0]: hey shape 1:q=1->0:p=1 │
+│┌────────┬────────┐         │
+││        │axis q=1│         │
+│├────────┼────────┤         │
+││axis p=0│ 7.00   │         │
+│└────────┴────────┘         │
+└────────────────────────────┘

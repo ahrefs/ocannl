@@ -1,27 +1,27 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-┌───────────────────────────────────────┐
-│[5]: w_o shape 0:4                     │
-│┌┬────────────────────────────────────┐│
-│││axis 0                              ││
-│├┼────────────────────────────────────┤│
-│││ 8.38e-1  1.38e-1  2.61e-1  7.74e-1 ││
-│└┴────────────────────────────────────┘│
-└───────────────────────────────────────┘
+Testing default parameter 1D -- corner case
+┌───────────────────┐
+│[5]: w_o shape 0:1 │
+│┌┬─────────┐       │
+│││axis 0   │       │
+│├┼─────────┤       │
+│││ 8.38e-1 │       │
+│└┴─────────┘       │
+└───────────────────┘
 grad_w_o <not-hosted>
-
-Got expected error: ...
-┌──────────────────────────────────────────────────┐
-│[5]: w_o shape 1:128->0:256                       │
-│┌──────┬─────────────────────────────────────────┐│
-││      │axis 1                                   ││
-│├──────┼─────────────────────────────────────────┤│
-││axis 0│ 8.38e-1  1.38e-1  ...  9.51e-1  6.55e-1 ││
-││      │ 8.38e-1  3.27e-1  ...  8.89e-1  6.55e-1 ││
-││      │ ...      ...      ...  ...      ...     ││
-││      │ 8.38e-1  1.05e-1  ...  7.43e-2  6.33e-1 ││
-││      │ 8.38e-1  6.41e-1  ...  1.27e-2  6.33e-1 ││
-│└──────┴─────────────────────────────────────────┘│
-└──────────────────────────────────────────────────┘
-grad_w_o <not-hosted>
-Parameter created successfully
+Testing default linear operation
+Got expected error: You forgot to specify the hidden dimension(s) 1
+Testing default affine operation with propagated dimensions
+┌────────────────────────────────────┐
+│[5]: w shape 1:3->0:2               │
+│┌──────┬───────────────────────────┐│
+││      │axis 1                     ││
+│├──────┼───────────────────────────┤│
+││axis 0│ 8.38e-1  2.13e-1  8.85e-2 ││
+││      │ 4.63e-1  3.38e-1  7.13e-1 ││
+│└──────┴───────────────────────────┘│
+└────────────────────────────────────┘
+grad_w <not-hosted>
+Testing default affine operation with unknown input dimensions
+Got expected error: You forgot to specify the hidden dimension(s) 1
