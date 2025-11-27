@@ -128,12 +128,7 @@ type row_entry =
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
   | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
-  | Dim_ineq of {
-      cur : dim;
-      subr : dim;
-      from_ : Sexp.t;
-      origin : constraint_origin list;
-    }
+  | Dim_ineq of { cur : dim; subr : dim; from_ : Sexp.t; origin : constraint_origin list }
   | Row_ineq of { cur : t; subr : t; origin : constraint_origin list }
   | Dim_constr of { d : dim; constr : dim_constraint; origin : constraint_origin list }
   | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
@@ -197,7 +192,6 @@ type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp_of]
 
 val fresh_row_proj : t -> t
-
 val populate_dim_proj_in_solved : environment -> environment
 
 type proj_equation =

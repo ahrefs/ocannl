@@ -421,8 +421,8 @@ let handle_cases ~bad_pun_hints ~proj_in_scope transl cases =
   let fields, transformed_cases =
     List.unzip
     @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-           let res = transl ~bad_pun_hints ~proj_in_scope pc_rhs in
-           ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
+        let res = transl ~bad_pun_hints ~proj_in_scope pc_rhs in
+        ((res.vbs, res.typ, res.slot), { c with pc_rhs = res.expr }))
   in
   let vbss, typs, slots = List.unzip3 fields in
   (* TODO: make the inference of typ and slot more strict by detecting mismatches. *)
@@ -450,55 +450,55 @@ let translate ?ident_label (expr : expression) : result =
     let assignment_op accu_op =
       loc
       |> Option.value_or_thunk (Hashtbl.find assignment_ops accu_op) ~default:(fun () _loc ->
-             ( false,
-               Ast_builder.Default.pexp_extension ~loc
-               @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
-                    "=+ (Add), =- (Sub), =* (Mul),=/ (Div), =** (ToPowOf), =?/ (Relu_gate), =?^ \
-                     (Satur01_gate), =|| (Or),  =&& (And), =@^ (Max), =@- (Min), =^^^^ \
-                     (threefry4x32), =: (Arg2), =:+, =:-,"
-                    " =:*, =:/, =:**, =:?/, =:?^, =:||, =:&&, =:@^, =:@-, =:^^^^ (same with \
-                     initializing the tensor to the neutral value before the start of the \
-                     calculation)" ))
+          ( false,
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected an assignment operator, one of: %s %s"
+                 "=+ (Add), =- (Sub), =* (Mul),=/ (Div), =** (ToPowOf), =?/ (Relu_gate), =?^ \
+                  (Satur01_gate), =|| (Or),  =&& (And), =@^ (Max), =@- (Min), =^^^^ \
+                  (threefry4x32), =: (Arg2), =:+, =:-,"
+                 " =:*, =:/, =:**, =:?/, =:?^, =:||, =:&&, =:@^, =:@-, =:^^^^ (same with \
+                  initializing the tensor to the neutral value before the start of the \
+                  calculation)" ))
     in
     let unary_op un_op =
       loc
       |> Option.value_or_thunk (Hashtbl.find unary_ops un_op) ~default:(fun () loc ->
-             ( [%expr Shape.Pointwise_un],
-               Ast_builder.Default.pexp_extension ~loc
-               @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected a unary operator, one of: %s"
-                    "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, \
-                     neg, tanh, uint4x32_to_prec_uniform1" ))
+          ( [%expr Shape.Pointwise_un],
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected a unary operator, one of: %s"
+                 "id, relu, sat01, exp, log, exp2, log2, sin, cos, sqrt, recip, recip_sqrt, neg, \
+                  tanh, uint4x32_to_prec_uniform1" ))
     in
     let vec_unary_op vec_un_op =
       loc
       |> Option.value_or_thunk (Hashtbl.find vec_unary_ops vec_un_op) ~default:(fun () loc ->
-             ( [%expr Shape.Uint4x32_to_prec_uniform],
-               Ast_builder.Default.pexp_extension ~loc
-               @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected a vector unary operator, one of: \
-                     uint4x32_to_prec_uniform; found: %s"
-                    vec_un_op ))
+          ( [%expr Shape.Uint4x32_to_prec_uniform],
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected a vector unary operator, one of: \
+                  uint4x32_to_prec_uniform; found: %s"
+                 vec_un_op ))
     in
     let binary_op bin_op =
       loc
       |> Option.value_or_thunk (Hashtbl.find binary_ops bin_op) ~default:(fun () _loc ->
-             ( [%expr Shape.Pointwise_bin],
-               Ast_builder.Default.pexp_extension ~loc
-               @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected a binary operator, one of: %s"
-                    "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -?^ \
-                     (Satur01_gate), -/> (Arg2), <  (Cmplt), = (Cmpeq), <> (Cmpne), || (Or), && \
-                     (And), % (Mod), @^(Max), @- (Min), ^^^^ (threefry4x32)" ))
+          ( [%expr Shape.Pointwise_bin],
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected a binary operator, one of: %s"
+                 "+ (Add), - (Sub), * (Mul), / (Div), **(ToPowOf), -?/ (Relu_gate), -?^ \
+                  (Satur01_gate), -/> (Arg2), <  (Cmplt), = (Cmpeq), <> (Cmpne), || (Or), && \
+                  (And), % (Mod), @^(Max), @- (Min), ^^^^ (threefry4x32)" ))
     in
     let ternary_op tern_op =
       loc
       |> Option.value_or_thunk (Hashtbl.find ternary_ops tern_op) ~default:(fun () _loc ->
-             ( [%expr Shape.Pointwise_tern],
-               Ast_builder.Default.pexp_extension ~loc
-               @@ Location.error_extensionf ~loc
-                    "ppx_ocannl %%cd: expected a ternary operator, one of: where, fma" ))
+          ( [%expr Shape.Pointwise_tern],
+            Ast_builder.Default.pexp_extension ~loc
+            @@ Location.error_extensionf ~loc
+                 "ppx_ocannl %%cd: expected a ternary operator, one of: where, fma" ))
     in
     (* TODO: collapse these (code reuse) *)
     let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
@@ -926,11 +926,11 @@ let translate ?ident_label (expr : expression) : result =
     | { pexp_desc = Pexp_array _; _ }
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
         { default_result with expr = ndarray_op ~ndarray_fn:[%expr NTDSL.ndarray] expr }
-    | { pexp_desc = Pexp_ident { txt = Lident ("lhs"); _ }; _ } ->
+    | { pexp_desc = Pexp_ident { txt = Lident "lhs"; _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
-        | { pexp_desc = Pexp_ident { txt = Lident ("v"); _ }; _ } ->
-          { default_result with typ = Array; slot = LHS; expr = [%expr t.Tensor.value] }
-      | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
+    | { pexp_desc = Pexp_ident { txt = Lident "v"; _ }; _ } ->
+        { default_result with typ = Array; slot = LHS; expr = [%expr t.Tensor.value] }
+    | { pexp_desc = Pexp_ident { txt = Lident "g"; _ }; _ } ->
         { default_result with typ = Array; slot = LHS }
     | { pexp_desc = Pexp_ident { txt = Lident "rhs1"; _ }; _ } ->
         { default_result with typ = Array; slot = RHS1 }
@@ -1308,10 +1308,10 @@ let translate ?ident_label (expr : expression) : result =
         let elements =
           expr :: List.map ~f:snd exprs
           |> List.map ~f:(function
-               | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
-               | [%expr [%e? t].value] -> [%expr Ir.Tnode.debug_name [%e t].value]
-               | [%expr [%e? t].grad] -> [%expr Ir.Tnode.debug_name [%e t].value ^ ".grad"]
-               | t -> [%expr Ir.Tnode.debug_name [%e t].value])
+            | { pexp_desc = Pexp_constant (Pconst_string _); _ } as s -> s
+            | [%expr [%e? t].value] -> [%expr Ir.Tnode.debug_name [%e t].value]
+            | [%expr [%e? t].grad] -> [%expr Ir.Tnode.debug_name [%e t].value ^ ".grad"]
+            | t -> [%expr Ir.Tnode.debug_name [%e t].value])
         in
         let res2 = loop ~proj_in_scope expr2 in
         let block =
@@ -1593,18 +1593,18 @@ let translate ?ident_label (expr : expression) : result =
         let proj_in_scope =
           proj_in_scope
           || List.exists args ~f:(function
-               | { pparam_desc = Pparam_val ((Labelled s | Optional s), _, _); _ }
-                 when String.equal s "projections" ->
-                   true
-               | _ -> false)
+            | { pparam_desc = Pparam_val ((Labelled s | Optional s), _, _); _ }
+              when String.equal s "projections" ->
+                true
+            | _ -> false)
         in
         let bad_pun_hints =
           Set.union_list (module String)
           @@ bad_pun_hints
              :: List.map args ~f:(fun arg ->
-                    match arg.pparam_desc with
-                    | Pparam_val (_, _, pat) -> collect_pat_idents pat
-                    | _ -> Set.empty (module String))
+                 match arg.pparam_desc with
+                 | Pparam_val (_, _, pat) -> collect_pat_idents pat
+                 | _ -> Set.empty (module String))
         in
         let result =
           match body with

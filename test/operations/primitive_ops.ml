@@ -31,9 +31,9 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
-           step_ref := i;
-           Train.run ctx fx_routine;
-           (fx.@[0], x.@%[0]))
+        step_ref := i;
+        Train.run ctx fx_routine;
+        (fx.@[0], x.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"

@@ -119,25 +119,25 @@ let config_file_args =
       let result =
         config_lines
         |> List.filter ~f:(fun l ->
-               not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
+            not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
         |> List.map ~f:(String.split ~on:'=')
         |> List.filter_map ~f:(function
-             | [] -> None
-             | [ s ] when String.is_empty s -> None
-             | key :: [ v ] ->
-                 let key =
-                   String.(
-                     lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
-                 in
-                 let key =
-                   if String.is_prefix key ~prefix:"ocannl" then
-                     String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
-                   else key
-                 in
-                 str_nonempty ~f:(pair key) v
-             | l ->
-                 failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
-                 ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
+          | [] -> None
+          | [ s ] when String.is_empty s -> None
+          | key :: [ v ] ->
+              let key =
+                String.(
+                  lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
+              in
+              let key =
+                if String.is_prefix key ~prefix:"ocannl" then
+                  String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
+                else key
+              in
+              str_nonempty ~f:(pair key) v
+          | l ->
+              failwith @@ "OCANNL: invalid syntax in the config file " ^ fname
+              ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
         |> Hashtbl.of_alist (module String)
         |> function
         | `Ok h -> h
@@ -379,11 +379,11 @@ let get_local_debug_runtime =
     else
       String.split pairs_str ~on:';'
       |> List.filter_map ~f:(fun pair_str ->
-             match String.split pair_str ~on:',' with
-             | [ id1; id2 ] ->
-                 Option.try_with (fun () ->
-                     (Int.of_string (String.strip id1), Int.of_string (String.strip id2)))
-             | _ -> None)
+          match String.split pair_str ~on:',' with
+          | [ id1; id2 ] ->
+              Option.try_with (fun () ->
+                  (Int.of_string (String.strip id1), Int.of_string (String.strip id2)))
+          | _ -> None)
   in
   let truncate_children =
     let arg = get_global_arg ~default:"" ~arg_name:"debug_log_truncate_children" in

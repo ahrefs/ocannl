@@ -1014,10 +1014,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       Array.mapi code_batch.params_and_names ~f:(fun i pns ->
           Option.value ~default:None
           @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
-                 let task =
-                   link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
-                 in
-                 Some task))
+              let task =
+                link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
+              in
+              Some task))
     in
     (lowered_bindings, procs)
 

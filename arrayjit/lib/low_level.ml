@@ -372,7 +372,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         if
           (not virtualize_settings.inline_complex_computations)
           || Option.value_map access_pos ~default:true ~f:(fun pos ->
-                 not ([%equal: int array] pos at_pos))
+              not ([%equal: int array] pos at_pos))
         then
           Hashtbl.update traced.accesses at_pos
             ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
@@ -712,11 +712,11 @@ let%track7_sexp inline_computation ~id
     let computations =
       Hashtbl.find computations_table traced.tn
       |> Option.value_or_thunk ~default:(fun () ->
-             raise
-             @@ Utils.User_error
-                  [%string
-                    "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
-                     %{Tn.debug_name traced.tn}"])
+          raise
+          @@ Utils.User_error
+               [%string
+                 "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
+                  %{Tn.debug_name traced.tn}"])
     in
     let body = List.rev_filter_map ~f:loop_proc computations in
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)

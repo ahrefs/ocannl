@@ -24,7 +24,7 @@ type backend_wrapper =
       -> backend_wrapper
 
 type t = {
-  backend_wrapper : (backend_wrapper [@sexp.opaque]);
+  backend_wrapper : (backend_wrapper[@sexp.opaque]);
   device_id : int;
   backend_name : string;
   initialized_nodes : Set.M(Tn).t; (* Track which nodes have been initialized *)

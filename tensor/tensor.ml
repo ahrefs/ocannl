@@ -119,9 +119,9 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
   let params : t list =
     Set.to_list t.params
     |> (match skip with
-       | None -> Fn.id
-       | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value)))
-       (* Compare to ordered_ts in op -- we need to sort to avoid computed-after-use bugs! *)
+      | None -> Fn.id
+      | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value)))
+      (* Compare to ordered_ts in op -- we need to sort to avoid computed-after-use bugs! *)
     |> List.sort ~compare:(fun p1 p2 -> Int.ascending p1.id p2.id)
   in
   let asgns =

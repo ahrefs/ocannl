@@ -50,19 +50,19 @@ let str_expander ~loc:pstr_loc ~path:_ str_items =
     let item_bindings, op_item_bindings =
       List.unzip
       @@ List.concat_map str_items ~f:(function
-           | { pstr_desc = Pstr_value (Nonrecursive, bindings); pstr_loc = loc; _ } ->
-               List.map bindings ~f:(fun binding ->
-                   let params, binding = transform_dsl_binding ~loc ~dsl_name binding in
-                   let op_binding = transform_op_binding params binding in
-                   (binding, op_binding))
-           | { pstr_loc = loc; _ } ->
-               let pat = Ast_helper.Pat.var ~loc { txt = "syntax_error"; loc } in
-               let v =
-                 Ast_builder.Default.pexp_extension ~loc
-                 @@ Location.error_extensionf ~loc
-                      "ppx_extend_dsls: currently only non-recursive value bindings are supported"
-               in
-               [ (Ast_helper.Vb.mk ~loc pat v, Ast_helper.Vb.mk ~loc pat v) ])
+        | { pstr_desc = Pstr_value (Nonrecursive, bindings); pstr_loc = loc; _ } ->
+            List.map bindings ~f:(fun binding ->
+                let params, binding = transform_dsl_binding ~loc ~dsl_name binding in
+                let op_binding = transform_op_binding params binding in
+                (binding, op_binding))
+        | { pstr_loc = loc; _ } ->
+            let pat = Ast_helper.Pat.var ~loc { txt = "syntax_error"; loc } in
+            let v =
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_extend_dsls: currently only non-recursive value bindings are supported"
+            in
+            [ (Ast_helper.Vb.mk ~loc pat v, Ast_helper.Vb.mk ~loc pat v) ])
     in
     let item = { pstr_desc = Pstr_value (Nonrecursive, item_bindings); pstr_loc } in
     let op_item = { pstr_desc = Pstr_value (Nonrecursive, op_item_bindings); pstr_loc } in

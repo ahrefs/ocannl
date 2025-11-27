@@ -291,15 +291,15 @@ let identity_projections ?debug_info ?derived_for ~lhs_dims () =
 let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
   Array.zip_exn dims projection
   |> Array.fold_right ~init:(1, [], 0) ~f:(fun (dim, idx) (stride, symbols, offset) ->
-         match idx with
-         | Fixed_idx fixed_offset -> (stride * dim, symbols, offset + (fixed_offset * stride))
-         | Iterator sym -> (stride * dim, (stride, sym) :: symbols, offset)
-         | Affine { symbols = affine_symbols; offset = affine_offset } ->
-             let new_symbols =
-               List.map affine_symbols ~f:(fun (coeff, sym) -> (coeff * stride, sym))
-             in
-             (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride))
-         | Sub_axis -> (stride * dim, symbols, offset))
+      match idx with
+      | Fixed_idx fixed_offset -> (stride * dim, symbols, offset + (fixed_offset * stride))
+      | Iterator sym -> (stride * dim, (stride, sym) :: symbols, offset)
+      | Affine { symbols = affine_symbols; offset = affine_offset } ->
+          let new_symbols =
+            List.map affine_symbols ~f:(fun (coeff, sym) -> (coeff * stride, sym))
+          in
+          (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride))
+      | Sub_axis -> (stride * dim, symbols, offset))
   |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
 type variable_ref = { ref_label : string; mutable solved_dim : int option }

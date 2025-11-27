@@ -367,14 +367,14 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
       let vbs_args, processed_args =
         List.unzip
         @@ List.mapi args ~f:(fun i (arg_label, arg_expr) ->
-               match unit_position with
-               | Some unit_pos when i < unit_pos ->
-                   (* Before unit: preserve as OCaml expression *)
-                   (no_vbs, (arg_label, arg_expr))
-               | _ ->
-                   (* After unit or no unit: transform *)
-                   let vbs, e = loop arg_expr in
-                   (vbs, (arg_label, e)))
+            match unit_position with
+            | Some unit_pos when i < unit_pos ->
+                (* Before unit: preserve as OCaml expression *)
+                (no_vbs, (arg_label, arg_expr))
+            | _ ->
+                (* After unit or no unit: transform *)
+                let vbs, e = loop arg_expr in
+                (vbs, (arg_label, e)))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
       (all_vbs, Ast_builder.Default.pexp_apply ~loc e_fn processed_args)
@@ -422,10 +422,10 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
           let labels =
             Option.to_list label
             @ List.filter_map args ~f:(function
-                | { pparam_desc = Pparam_val (_, _, pat); _ } ->
-                    let loc = pat.ppat_loc in
-                    Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
-                | _ -> None)
+              | { pparam_desc = Pparam_val (_, _, pat); _ } ->
+                  let loc = pat.ppat_loc in
+                  Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
+              | _ -> None)
           in
           let label_locs = List.map labels ~f:(fun label -> label.pexp_loc) in
           let label_starts = List.map label_locs ~f:(fun l -> l.loc_start) in
@@ -453,8 +453,8 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
                 let vbs, cases =
                   List.unzip
                   @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                         let vbs, pc_rhs = loop ~label pc_rhs in
-                         (vbs, { c with pc_rhs }))
+                      let vbs, pc_rhs = loop ~label pc_rhs in
+                      (vbs, { c with pc_rhs }))
                 in
                 ( List.fold vbs
                     ~init:(Map.empty (module String))
@@ -472,8 +472,8 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             let vbs, cases =
               List.unzip
               @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-                     let vbs, pc_rhs = loop ?label pc_rhs in
-                     (vbs, { c with pc_rhs }))
+                  let vbs, pc_rhs = loop ?label pc_rhs in
+                  (vbs, { c with pc_rhs }))
             in
             ( List.fold vbs
                 ~init:(Map.empty (module String))
@@ -531,18 +531,18 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
       let vbss, cases =
         List.unzip
         @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-               let vbs, pc_rhs = loop ?label pc_rhs in
-               (vbs, { c with pc_rhs }))
+            let vbs, pc_rhs = loop ?label pc_rhs in
+            (vbs, { c with pc_rhs }))
       in
       (reduce_vbss vbss, { expr with pexp_desc = Pexp_match (expr1, cases) })
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
       let vbss1, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun binding ->
-               let vbs, pvb_expr =
-                 loop ~label:[%expr [ [%e pat2string binding.pvb_pat] ]] binding.pvb_expr
-               in
-               (vbs, { binding with pvb_expr }))
+            let vbs, pvb_expr =
+              loop ~label:[%expr [ [%e pat2string binding.pvb_pat] ]] binding.pvb_expr
+            in
+            (vbs, { binding with pvb_expr }))
       in
       let vbs2, body = loop ?label body in
       (reduce_vbss (vbss1 @ [ vbs2 ]), { expr with pexp_desc = Pexp_let (recflag, bindings, body) })

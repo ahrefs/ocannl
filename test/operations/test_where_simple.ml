@@ -7,7 +7,7 @@ let () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   (* Simple test: where(true, x, y) should have gradient flow to x only *)
-  let x = Tensor.number  ~grad_spec:Require_grad 2.0 in
+  let x = Tensor.number ~grad_spec:Require_grad 2.0 in
   let y = Tensor.number ~grad_spec:Require_grad 3.0 in
   let cond = Tensor.number 1.0 in
   (* true *)

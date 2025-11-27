@@ -175,9 +175,9 @@ let%expect_test "Graph drawing fetch" =
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
-           step_ref := i;
-           Train.run ctx fx_routine;
-           (fx.@[0], x.@%[0]))
+        step_ref := i;
+        Train.run ctx fx_routine;
+        (fx.@[0], x.@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let plot_box =

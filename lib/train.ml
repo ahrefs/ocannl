@@ -183,7 +183,8 @@ let every_non_literal_on_host =
 
 module Lazy = Utils.Lazy
 
-let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted = true) bindings comp =
+let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted = true) bindings
+    comp =
   if output_cd_file then (
     let name = Asgns.get_name_exn comp.Asgns.asgns in
     if not Utils.settings.output_debug_files_in_build_directory then

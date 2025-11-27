@@ -691,22 +691,21 @@ let render_array ?(brief = false) ?(prefix = "") ?(entries_per_axis = 4) ?(label
     let outer_grid v =
       (if brief then Fn.id else B.frame ~stretch:false)
       @@ B.init_grid ~bars:true ~line:nlines ~col:ncols (fun ~line ~col ->
-             if (not brief) && line = 0 && col = 0 then
-               B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [ tag ~pos:v label0 ind0 ]
-             else if (not brief) && line = 0 then
-               B.lines
-               @@ List.filter ~f:(Fn.non String.is_empty)
-               @@ [ tag ~pos:(col - 1) label2 ind2; tag label4 ind4 ]
-             else if (not brief) && col = 0 then
-               B.lines
-               @@ List.filter ~f:(Fn.non String.is_empty)
-               @@ [ tag ~pos:(line - 1) label1 ind1; tag label3 ind3 ]
-             else
-               let nline = if brief then line else line - 1 in
-               let ncol = if brief then col else col - 1 in
-               if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1 then
-                 B.hpad 1 @@ B.line "..."
-               else inner_grid v nline ncol)
+          if (not brief) && line = 0 && col = 0 then
+            B.lines @@ List.filter ~f:(Fn.non String.is_empty) @@ [ tag ~pos:v label0 ind0 ]
+          else if (not brief) && line = 0 then
+            B.lines
+            @@ List.filter ~f:(Fn.non String.is_empty)
+            @@ [ tag ~pos:(col - 1) label2 ind2; tag label4 ind4 ]
+          else if (not brief) && col = 0 then
+            B.lines
+            @@ List.filter ~f:(Fn.non String.is_empty)
+            @@ [ tag ~pos:(line - 1) label1 ind1; tag label3 ind3 ]
+          else
+            let nline = if brief then line else line - 1 in
+            let ncol = if brief then col else col - 1 in
+            if elide_for ncol ~ind:ind2 || elide_for nline ~ind:ind1 then B.hpad 1 @@ B.line "..."
+            else inner_grid v nline ncol)
     in
     let screens =
       B.init_grid ~bars:true ~line:size0 ~col:1 (fun ~line ~col:_ ->

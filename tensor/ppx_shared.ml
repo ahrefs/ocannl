@@ -298,8 +298,8 @@ let expr_expander_with_punning translate ~loc ~path:_ payload =
       let vbss, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun vb ->
-               let vbs, v = translate ?ident_label:(Some vb.pvb_pat) vb.pvb_expr in
-               (vbs, { vb with pvb_expr = v }))
+            let vbs, v = translate ?ident_label:(Some vb.pvb_pat) vb.pvb_expr in
+            (vbs, { vb with pvb_expr = v }))
       in
       let expr = { payload with pexp_desc = Pexp_let (recflag, bindings, body) } in
       let_opt ~loc (reduce_vbss vbss) expr

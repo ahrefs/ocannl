@@ -39,8 +39,8 @@ let tl_exn = function
   | Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn")
   | Cons { tl; _ } -> tl
 
-(** A dynamic array of weak references. *)
 type 'a weak_dynarray = 'a Stdlib.Weak.t ref
+(** A dynamic array of weak references. *)
 
 let weak_create () : 'a weak_dynarray = ref @@ Stdlib.Weak.create 0
 
@@ -67,12 +67,12 @@ let weak_iter (arr : 'a weak_dynarray) ~f =
     Option.iter (W.get !arr i) ~f
   done
 
-(** A lazy value that can be safely forced and compared by unique ID. *)
 type 'a safe_lazy = {
   mutable value : [ `Callback of unit -> 'a | `Value of 'a ];
   unique_id : string;
 }
 [@@deriving sexp_of]
+(** A lazy value that can be safely forced and compared by unique ID. *)
 
 let safe_lazy unique_id f = { value = `Callback f; unique_id }
 
@@ -123,37 +123,42 @@ let sexp_of_safe_lazy sexp_of_elem gated =
       Sexp.List [ Sexp.Atom "value"; status ];
     ]
 
-(** A persistent map implemented as a balanced binary tree.
-    The sexp_of function preserves and displays the tree structure. *)
+(** A persistent map implemented as a balanced binary tree. The sexp_of function preserves and
+    displays the tree structure. *)
 module Tree_map = struct
   type ('k, 'v) t =
     | Empty
-    | Node of {
-        key : 'k;
-        value : 'v;
-        left : ('k, 'v) t;
-        right : ('k, 'v) t;
-        height : int;
-      }
+    | Node of { key : 'k; value : 'v; left : ('k, 'v) t; right : ('k, 'v) t; height : int }
 
   let empty = Empty
-
   let height = function Empty -> 0 | Node { height; _ } -> height
 
   let create key value left right =
     Node { key; value; left; right; height = 1 + max (height left) (height right) }
 
-  let balance_factor = function
-    | Empty -> 0
-    | Node { left; right; _ } -> height left - height right
+  let balance_factor = function Empty -> 0 | Node { left; right; _ } -> height left - height right
 
   let rotate_right = function
-    | Node { key; value; left = Node { key = lkey; value = lvalue; left = ll; right = lr; _ }; right; _ } ->
+    | Node
+        {
+          key;
+          value;
+          left = Node { key = lkey; value = lvalue; left = ll; right = lr; _ };
+          right;
+          _;
+        } ->
         create lkey lvalue ll (create key value lr right)
     | t -> t
 
   let rotate_left = function
-    | Node { key; value; left; right = Node { key = rkey; value = rvalue; left = rl; right = rr; _ }; _ } ->
+    | Node
+        {
+          key;
+          value;
+          left;
+          right = Node { key = rkey; value = rvalue; left = rl; right = rr; _ };
+          _;
+        } ->
         create rkey rvalue (create key value left rl) rr
     | t -> t
 
@@ -162,18 +167,22 @@ module Tree_map = struct
     | bf when bf > 1 -> (
         match t with
         | Node { left; _ } when balance_factor left < 0 ->
-            rotate_right (create (match t with Node n -> n.key | _ -> assert false)
-                           (match t with Node n -> n.value | _ -> assert false)
-                           (rotate_left left)
-                           (match t with Node n -> n.right | _ -> assert false))
+            rotate_right
+              (create
+                 (match t with Node n -> n.key | _ -> assert false)
+                 (match t with Node n -> n.value | _ -> assert false)
+                 (rotate_left left)
+                 (match t with Node n -> n.right | _ -> assert false))
         | _ -> rotate_right t)
     | bf when bf < -1 -> (
         match t with
         | Node { right; _ } when balance_factor right > 0 ->
-            rotate_left (create (match t with Node n -> n.key | _ -> assert false)
-                          (match t with Node n -> n.value | _ -> assert false)
-                          (match t with Node n -> n.left | _ -> assert false)
-                          (rotate_right right))
+            rotate_left
+              (create
+                 (match t with Node n -> n.key | _ -> assert false)
+                 (match t with Node n -> n.value | _ -> assert false)
+                 (match t with Node n -> n.left | _ -> assert false)
+                 (rotate_right right))
         | _ -> rotate_left t)
     | _ -> t
 
@@ -200,7 +209,9 @@ module Tree_map = struct
     | Empty -> false
     | Node n ->
         let c = compare key n.key in
-        if c = 0 then true else if c < 0 then mem ~compare ~key n.left else mem ~compare ~key n.right
+        if c = 0 then true
+        else if c < 0 then mem ~compare ~key n.left
+        else mem ~compare ~key n.right
 
   let rec fold t ~init ~f =
     match t with
@@ -221,14 +232,12 @@ module Tree_map = struct
   let rec map t ~f =
     match t with
     | Empty -> Empty
-    | Node n ->
-        create n.key (f n.value) (map n.left ~f) (map n.right ~f)
+    | Node n -> create n.key (f n.value) (map n.left ~f) (map n.right ~f)
 
   let rec mapi t ~f =
     match t with
     | Empty -> Empty
-    | Node n ->
-        create n.key (f ~key:n.key ~data:n.value) (mapi n.left ~f) (mapi n.right ~f)
+    | Node n -> create n.key (f ~key:n.key ~data:n.value) (mapi n.left ~f) (mapi n.right ~f)
 
   let to_alist t = List.rev (fold t ~init:[] ~f:(fun ~key ~data acc -> (key, data) :: acc))
 

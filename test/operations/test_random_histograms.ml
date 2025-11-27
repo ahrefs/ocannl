@@ -18,16 +18,15 @@ let print_histogram bins ~title ~max_width =
   let max_count = Array.max_elt bins ~compare:Int.compare |> Option.value ~default:0 in
   let total = Array.fold bins ~init:0 ~f:( + ) in
   Array.iteri bins ~f:(fun i count ->
-      let bar_width = (count * max_width) / max_count in
+      let bar_width = count * max_width / max_count in
       let bar = String.make bar_width '#' in
-      let percentage = (Float.of_int count /. Float.of_int total) *. 100.0 in
+      let percentage = Float.of_int count /. Float.of_int total *. 100.0 in
       printf "Bin %2d: %s %4d (%.1f%%)\n" i bar count percentage)
 
 let test_uniform_at_histogram () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-
   (* Generate a large batch of random numbers using uniform_at *)
   (* Note: uniform_at produces 4 values per counter input (from uint4x32) *)
   let num_counters = 2500 in
@@ -42,8 +41,8 @@ let test_uniform_at_histogram () =
   ignore (Ocannl.Train.forward_once ctx uniform_values);
   let result = Ir.Tnode.get_values uniform_values.value in
 
-  printf "Generated %d values from %d counters (%.1fx expansion)\n"
-    (Array.length result) num_counters
+  printf "Generated %d values from %d counters (%.1fx expansion)\n" (Array.length result)
+    num_counters
     (Float.of_int (Array.length result) /. Float.of_int num_counters);
 
   (* Create and print histogram *)
@@ -52,10 +51,9 @@ let test_uniform_at_histogram () =
   print_histogram bins ~title:"Uniform Distribution [0, 1) Histogram" ~max_width:40;
 
   (* Statistical tests *)
-  let mean = Array.fold result ~init:0.0 ~f:(+.) /. Float.of_int (Array.length result) in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int (Array.length result) in
   let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x ->
-        acc +. ((x -. mean) *. (x -. mean)))
+    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
     /. Float.of_int (Array.length result)
   in
   let std_dev = Float.sqrt variance in
@@ -73,8 +71,8 @@ let test_uniform_at_histogram () =
         let diff = Float.of_int observed -. expected_per_bin in
         acc +. (diff *. diff /. expected_per_bin))
   in
-  printf "  Chi-square statistic: %.2f (df=%d, critical value at 0.05: ~%.2f)\n"
-    chi_square (num_bins - 1) 30.14;
+  printf "  Chi-square statistic: %.2f (df=%d, critical value at 0.05: ~%.2f)\n" chi_square
+    (num_bins - 1) 30.14;
 
   (* Check if all values are in range *)
   let all_in_range = Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)) in
@@ -84,7 +82,6 @@ let test_normal_at_histogram () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-
   (* Generate a large batch of random numbers using normal_at *)
   (* Note: normal_at also produces 4 values per counter input *)
   let num_counters = 2500 in
@@ -100,10 +97,9 @@ let test_normal_at_histogram () =
   let result = Ir.Tnode.get_values normal_values.value in
 
   (* Calculate statistics *)
-  let mean = Array.fold result ~init:0.0 ~f:(+.) /. Float.of_int (Array.length result) in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int (Array.length result) in
   let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x ->
-        acc +. ((x -. mean) *. (x -. mean)))
+    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
     /. Float.of_int (Array.length result)
   in
   let std_dev = Float.sqrt variance in
@@ -124,15 +120,9 @@ let test_normal_at_histogram () =
   printf "  Max: %.4f\n" max_val;
 
   (* Check what percentage falls within standard deviations *)
-  let within_1_std =
-    Array.count result ~f:(fun x -> Float.(abs x <= 1.0))
-  in
-  let within_2_std =
-    Array.count result ~f:(fun x -> Float.(abs x <= 2.0))
-  in
-  let within_3_std =
-    Array.count result ~f:(fun x -> Float.(abs x <= 3.0))
-  in
+  let within_1_std = Array.count result ~f:(fun x -> Float.(abs x <= 1.0)) in
+  let within_2_std = Array.count result ~f:(fun x -> Float.(abs x <= 2.0)) in
+  let within_3_std = Array.count result ~f:(fun x -> Float.(abs x <= 3.0)) in
 
   printf "  Within 1 std dev: %.1f%% (expected: ~68.3%%)\n"
     (Float.of_int within_1_std /. Float.of_int (Array.length result) *. 100.0);
@@ -143,20 +133,23 @@ let test_normal_at_histogram () =
 
   (* Normality test using skewness and kurtosis *)
   let skewness =
-    let sum_cubed = Array.fold result ~init:0.0 ~f:(fun acc x ->
-        let diff = x -. mean in
-        acc +. (diff *. diff *. diff))
+    let sum_cubed =
+      Array.fold result ~init:0.0 ~f:(fun acc x ->
+          let diff = x -. mean in
+          acc +. (diff *. diff *. diff))
     in
     sum_cubed /. (Float.of_int (Array.length result) *. std_dev *. std_dev *. std_dev)
   in
 
   let kurtosis =
-    let sum_fourth = Array.fold result ~init:0.0 ~f:(fun acc x ->
-        let diff = x -. mean in
-        let diff2 = diff *. diff in
-        acc +. (diff2 *. diff2))
+    let sum_fourth =
+      Array.fold result ~init:0.0 ~f:(fun acc x ->
+          let diff = x -. mean in
+          let diff2 = diff *. diff in
+          acc +. (diff2 *. diff2))
     in
-    (sum_fourth /. (Float.of_int (Array.length result) *. std_dev *. std_dev *. std_dev *. std_dev)) -. 3.0
+    (sum_fourth /. (Float.of_int (Array.length result) *. std_dev *. std_dev *. std_dev *. std_dev))
+    -. 3.0
   in
 
   printf "  Skewness: %.4f (expected: ~0.0)\n" skewness;
@@ -166,7 +159,6 @@ let test_batched_generation_consistency () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-
   (* Test that batched generation gives consistent results *)
   let batch_size = 100 in
   let num_batches = 10 in
@@ -205,9 +197,8 @@ let test_batched_generation_consistency () =
     Array.sort sorted ~compare:Float.compare;
     let unique = ref 1 in
     for i = 1 to Array.length sorted - 1 do
-      let diff = Float.abs (sorted.(i) -. sorted.(i-1)) in
-      if Float.(diff > 1e-7) then
-        unique := !unique + 1
+      let diff = Float.abs (sorted.(i) -. sorted.(i - 1)) in
+      if Float.(diff > 1e-7) then unique := !unique + 1
     done;
     !unique
   in
@@ -217,11 +208,9 @@ let test_batched_generation_consistency () =
   let unique_normal = count_unique !all_normal_values in
 
   printf "Generated %d values in %d batches of %d\n" total_values num_batches batch_size;
-  printf "Uniform values: %d unique out of %d (%.1f%%)\n"
-    unique_uniform total_values
+  printf "Uniform values: %d unique out of %d (%.1f%%)\n" unique_uniform total_values
     (Float.of_int unique_uniform /. Float.of_int total_values *. 100.0);
-  printf "Normal values: %d unique out of %d (%.1f%%)\n"
-    unique_normal total_values
+  printf "Normal values: %d unique out of %d (%.1f%%)\n" unique_normal total_values
     (Float.of_int unique_normal /. Float.of_int total_values *. 100.0);
 
   (* Verify batch consistency of statistical properties *)
@@ -234,36 +223,40 @@ let test_batched_generation_consistency () =
     let normal_batch = Array.sub !all_normal_values ~pos:start_idx ~len:batch_size in
 
     batch_means_uniform.(batch) <-
-      Array.fold uniform_batch ~init:0.0 ~f:(+.) /. Float.of_int batch_size;
+      Array.fold uniform_batch ~init:0.0 ~f:( +. ) /. Float.of_int batch_size;
     batch_means_normal.(batch) <-
-      Array.fold normal_batch ~init:0.0 ~f:(+.) /. Float.of_int batch_size
+      Array.fold normal_batch ~init:0.0 ~f:( +. ) /. Float.of_int batch_size
   done;
 
   let mean_of_means_uniform =
-    Array.fold batch_means_uniform ~init:0.0 ~f:(+.) /. Float.of_int num_batches
+    Array.fold batch_means_uniform ~init:0.0 ~f:( +. ) /. Float.of_int num_batches
   in
   let mean_of_means_normal =
-    Array.fold batch_means_normal ~init:0.0 ~f:(+.) /. Float.of_int num_batches
+    Array.fold batch_means_normal ~init:0.0 ~f:( +. ) /. Float.of_int num_batches
   in
 
   let std_of_means_uniform =
-    let diff_sum = Array.fold batch_means_uniform ~init:0.0 ~f:(fun acc x ->
-        let diff = x -. mean_of_means_uniform in
-        acc +. (diff *. diff)) in
+    let diff_sum =
+      Array.fold batch_means_uniform ~init:0.0 ~f:(fun acc x ->
+          let diff = x -. mean_of_means_uniform in
+          acc +. (diff *. diff))
+    in
     Float.sqrt (diff_sum /. Float.of_int num_batches)
   in
   let std_of_means_normal =
-    let diff_sum = Array.fold batch_means_normal ~init:0.0 ~f:(fun acc x ->
-        let diff = x -. mean_of_means_normal in
-        acc +. (diff *. diff)) in
+    let diff_sum =
+      Array.fold batch_means_normal ~init:0.0 ~f:(fun acc x ->
+          let diff = x -. mean_of_means_normal in
+          acc +. (diff *. diff))
+    in
     Float.sqrt (diff_sum /. Float.of_int num_batches)
   in
 
   printf "\nBatch means consistency:\n";
-  printf "  Uniform: mean of batch means = %.4f, std = %.4f\n"
-    mean_of_means_uniform std_of_means_uniform;
-  printf "  Normal: mean of batch means = %.4f, std = %.4f\n"
-    mean_of_means_normal std_of_means_normal
+  printf "  Uniform: mean of batch means = %.4f, std = %.4f\n" mean_of_means_uniform
+    std_of_means_uniform;
+  printf "  Normal: mean of batch means = %.4f, std = %.4f\n" mean_of_means_normal
+    std_of_means_normal
 
 let () =
   test_uniform_at_histogram ();

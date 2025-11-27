@@ -11,17 +11,14 @@ type axis_spec =
 
 type axis_key_kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp]
 
-type axis_key = {
-  in_axes : axis_key_kind;
-  pos : int;
-  from_end : bool;
-}
+type axis_key = { in_axes : axis_key_kind; pos : int; from_end : bool }
 [@@deriving equal, compare, sexp]
 
 module AxisKey = struct
   module T = struct
     type t = axis_key [@@deriving equal, compare, sexp]
   end
+
   include T
   include Comparator.Make (T)
 end

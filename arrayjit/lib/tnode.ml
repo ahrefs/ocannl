@@ -165,22 +165,22 @@ let debug_memory_mode = function
   | None -> "unknown"
   | Some (mem, prov) ->
       (match mem with
-      | Effectively_constant -> "Const"
-      | Virtual -> "Virt"
-      | Never_virtual -> "Non-virt"
-      | Local -> "Local"
-      | Device_only -> "Dev"
-      | Materialized -> "Material"
-      | On_device Unset -> "On-dev"
-      | On_device Shared_cross_streams -> "Dev-shared"
-      | On_device Per_stream -> "Dev-stream"
-      | Hosted Constant -> "Host-const"
-      | Hosted Nonconstant -> "Host-non-const"
-      | Hosted Unset_hosted -> "Host-unset"
-      | Hosted Volatile -> "Hosted"
-      | Hosted (Changed_on_devices Unset) -> "Host&dev"
-      | Hosted (Changed_on_devices Per_stream) -> "Host&stream"
-      | Hosted (Changed_on_devices Shared_cross_streams) -> "Host&shared")
+        | Effectively_constant -> "Const"
+        | Virtual -> "Virt"
+        | Never_virtual -> "Non-virt"
+        | Local -> "Local"
+        | Device_only -> "Dev"
+        | Materialized -> "Material"
+        | On_device Unset -> "On-dev"
+        | On_device Shared_cross_streams -> "Dev-shared"
+        | On_device Per_stream -> "Dev-stream"
+        | Hosted Constant -> "Host-const"
+        | Hosted Nonconstant -> "Host-non-const"
+        | Hosted Unset_hosted -> "Host-unset"
+        | Hosted Volatile -> "Hosted"
+        | Hosted (Changed_on_devices Unset) -> "Host&dev"
+        | Hosted (Changed_on_devices Per_stream) -> "Host&stream"
+        | Hosted (Changed_on_devices Shared_cross_streams) -> "Host&shared")
       ^ "/" ^ Int.to_string prov
 
 let log_debug_info ~from_log_level tn =

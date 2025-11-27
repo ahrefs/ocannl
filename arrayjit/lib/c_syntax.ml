@@ -759,19 +759,19 @@ module C_syntax (B : C_syntax_config) = struct
     let params : (string * param_source) list =
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
-             let backend_info, is_param =
-               if Tn.is_virtual_force tn 334 then ("Virt", false)
-               else if in_ctx tn then ("Ctx", true)
-               else if Tn.is_materialized_force tn 335 then ("Global", true)
-               else if Tn.known_not_materialized tn then ("Local", false)
-               else assert false
-             in
-             let backend_info = Sexp.Atom backend_info in
-             if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-               tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-             if is_param then
-               (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
-             else params)
+          let backend_info, is_param =
+            if Tn.is_virtual_force tn 334 then ("Virt", false)
+            else if in_ctx tn then ("Ctx", true)
+            else if Tn.is_materialized_force tn 335 then ("Global", true)
+            else if Tn.known_not_materialized tn then ("Local", false)
+            else assert false
+          in
+          let backend_info = Sexp.Atom backend_info in
+          if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+            tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+          if is_param then
+            (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
+          else params)
     in
     let idx_params =
       List.map idx_params ~f:(fun s ->
@@ -788,7 +788,7 @@ module C_syntax (B : C_syntax_config) = struct
       Option.(
         to_list
         @@ map merge_node ~f:(fun tn ->
-               ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
+            ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
     in
     let all_params = log_file_param @ merge_param @ idx_params @ params in
     let sorted_params =

@@ -5,7 +5,6 @@ open Utils
 (* Demo of Tree_map with tree-preserving sexp output *)
 let () =
   let open Tree_map in
-
   (* Create a tree by inserting values *)
   let tree =
     empty
@@ -23,8 +22,10 @@ let () =
   printf "%s\n\n" (Sexp.to_string_hum (sexp_of_t Int.sexp_of_t String.sexp_of_t tree));
 
   (* Test lookups *)
-  printf "Finding key 4: %s\n" (Option.value ~default:"not found" (find ~compare:Int.compare ~key:4 tree));
-  printf "Finding key 10: %s\n" (Option.value ~default:"not found" (find ~compare:Int.compare ~key:10 tree));
+  printf "Finding key 4: %s\n"
+    (Option.value ~default:"not found" (find ~compare:Int.compare ~key:4 tree));
+  printf "Finding key 10: %s\n"
+    (Option.value ~default:"not found" (find ~compare:Int.compare ~key:10 tree));
 
   (* Print as association list *)
   printf "\nAs alist (in-order): ";

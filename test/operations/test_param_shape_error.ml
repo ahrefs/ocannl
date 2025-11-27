@@ -29,7 +29,7 @@ let default_linear_op () =
   Tensor.unsafe_reinitialize ();
   (* This should raise an error because we have a parameter with unspecified dimensions *)
   try
-    let%op w_o = { w = uniform1 () } * [3; 4; 5] in
+    let%op w_o = { w = uniform1 () } * [ 3; 4; 5 ] in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
     Train.printf w;
     ()
@@ -40,23 +40,23 @@ let default_affine_op_propagated () =
   Tensor.unsafe_reinitialize ();
   (* This should raise an error because we have a parameter with unspecified dimensions *)
   try
-    let%op w_o = [1; 2] + { w = uniform1 () } * [3; 4; 5] in
+    let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * [ 3; 4; 5 ]) in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
     Train.printf w;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got unacceptable error: %s\n" msg
 
-  let default_affine_op_unknown_input () =
-    Stdio.printf "Testing default affine operation with unknown input dimensions\n";
-    Tensor.unsafe_reinitialize ();
-    (* This should raise an error because we have a parameter with unspecified dimensions *)
-    try
-      let%op w_o = [1; 2] + { w = uniform1 () } * { x = uniform1 () } in
-      let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-      Train.printf w;
-      ()
-    with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
-  
+let default_affine_op_unknown_input () =
+  Stdio.printf "Testing default affine operation with unknown input dimensions\n";
+  Tensor.unsafe_reinitialize ();
+  (* This should raise an error because we have a parameter with unspecified dimensions *)
+  try
+    let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * { x = uniform1 () }) in
+    let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
+    Train.printf w;
+    ()
+  with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
+
 let () =
   ignore default_lone_param;
   default_param_1d ();

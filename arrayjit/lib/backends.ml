@@ -32,7 +32,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (Fn.compose (List.filter ~f:(fun (_, e) -> not (Backend.is_done e)))
         @@ Option.value ~default:[])
     |> List.iter ~f:(fun (work_stream, e) ->
-           if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
+        if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
 
   let wait_for_ready ~dst ~src tn =
     let s = src.stream in
@@ -40,7 +40,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     (* TODO: maybe it's worthwhile to clean up s.updating_for every now and then. *)
     Hashtbl.find s.updating_for tn
     |> Option.iter ~f:(fun upd_e ->
-           if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
+        if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
   let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
@@ -269,13 +269,13 @@ let lower_batch_assignments optim_ctx ?names ?occupancy bindings asgns_l =
   let occupancy = Option.value occupancy ~default:(fun ~name:_ ~src_n:_ -> true) in
   Array.unzip
   @@ Array.mapi names ~f:(fun src_n name ->
-         let asgns = asgns_l.(src_n) in
-         if occupancy ~name ~src_n then
-           ( Some name,
-             Some
-               (Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name bound
-                  asgns) )
-         else (None, None))
+      let asgns = asgns_l.(src_n) in
+      if occupancy ~name ~src_n then
+        ( Some name,
+          Some
+            (Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name bound asgns)
+        )
+      else (None, None))
 
 let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
   Set.iter from_prior_context ~f:(fun tn ->
@@ -659,8 +659,7 @@ let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () 
       : Backend)
   | "sync_cc" ->
       (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) (Config) : Backend)
-  | "cuda" ->
-      (module Raise_backend ((Cuda_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
+  | "cuda" -> (module Raise_backend (Cuda_backend_impl.Fresh (Config) : Lowered_backend) : Backend)
   | "metal" ->
-      (module Raise_backend ((Metal_backend_impl.Fresh (Config) : Lowered_backend)) : Backend)
+      (module Raise_backend (Metal_backend_impl.Fresh (Config) : Lowered_backend) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

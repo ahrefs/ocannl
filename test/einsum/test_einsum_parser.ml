@@ -12,17 +12,15 @@ let test_single_char () =
   (* Test 2: With batch and input *)
   let spec2 = "b|i->o" in
   let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
-  printf "  'b|i->o' -> batch:%d input:%d output:%d\n"
-    labels2.given_batch labels2.given_input labels2.given_output;
+  printf "  'b|i->o' -> batch:%d input:%d output:%d\n" labels2.given_batch labels2.given_input
+    labels2.given_output;
 
   (* Test 3: Einsum spec *)
   let spec3 = "ij;jk=>ik" in
-  let (l1, l2_opt, l3) = Einsum_parser.einsum_of_spec spec3 in
+  let l1, l2_opt, l3 = Einsum_parser.einsum_of_spec spec3 in
   let l2 = Option.value_exn l2_opt in
-  printf "  'ij;jk=>ik' -> (%d,%d);(%d,%d)=>(%d,%d)\n"
-    l1.given_input l1.given_output
-    l2.given_input l2.given_output
-    l3.given_input l3.given_output;
+  printf "  'ij;jk=>ik' -> (%d,%d);(%d,%d)=>(%d,%d)\n" l1.given_input l1.given_output l2.given_input
+    l2.given_output l3.given_input l3.given_output;
 
   printf "\n"
 

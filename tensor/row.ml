@@ -815,10 +815,10 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
 
 exception Given_up
 
-(** Mark variables in Total_elems constraints to prevent premature guessing.
-    When a Total_elems has Strided_var { var; _ } in numerator and divided_by list,
-    we mark var with has_uniq_constr_unless = Some divided_by. This prevents var from
-    being guessed to 1 unless at least one divided_by variable is also prevented. *)
+(* Mark variables in Total_elems constraints to prevent premature guessing. When a Total_elems has
+   Strided_var { var; _ } in numerator and divided_by list, we mark var with has_uniq_constr_unless
+   = Some divided_by. This prevents var from being guessed to 1 unless at least one divided_by
+   variable is also prevented. *)
 let mark_total_elems_vars (constr : row_constraint) env : environment =
   match constr with
   | Total_elems { numerator = Strided_var { var; _ }; divided_by } -> (
