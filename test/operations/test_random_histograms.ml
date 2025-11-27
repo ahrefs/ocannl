@@ -97,39 +97,24 @@ let test_normal_at_histogram () =
   let result = Ir.Tnode.get_values normal_values.value in
 
   (* Calculate statistics *)
-  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int (Array.length result) in
+  let n = Array.length result in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
   let variance =
     Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
-    /. Float.of_int (Array.length result)
+    /. Float.of_int n
   in
   let std_dev = Float.sqrt variance in
   let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
   let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
-
-  (* Create histogram with dynamic range *)
-  let histogram_min = Float.max (-4.0) (min_val -. 0.5) in
-  let histogram_max = Float.min 4.0 (max_val +. 0.5) in
-  let num_bins = 30 in
-  let bins = create_histogram result ~num_bins ~min_val:histogram_min ~max_val:histogram_max in
-  print_histogram bins ~title:"Normal Distribution N(0,1) Histogram" ~max_width:40;
-
-  printf "\nStatistics:\n";
-  printf "  Mean: %.4f (expected: ~0.0)\n" mean;
-  printf "  Std Dev: %.4f (expected: ~1.0)\n" std_dev;
-  printf "  Min: %.4f\n" min_val;
-  printf "  Max: %.4f\n" max_val;
 
   (* Check what percentage falls within standard deviations *)
   let within_1_std = Array.count result ~f:(fun x -> Float.(abs x <= 1.0)) in
   let within_2_std = Array.count result ~f:(fun x -> Float.(abs x <= 2.0)) in
   let within_3_std = Array.count result ~f:(fun x -> Float.(abs x <= 3.0)) in
 
-  printf "  Within 1 std dev: %.1f%% (expected: ~68.3%%)\n"
-    (Float.of_int within_1_std /. Float.of_int (Array.length result) *. 100.0);
-  printf "  Within 2 std dev: %.1f%% (expected: ~95.4%%)\n"
-    (Float.of_int within_2_std /. Float.of_int (Array.length result) *. 100.0);
-  printf "  Within 3 std dev: %.1f%% (expected: ~99.7%%)\n"
-    (Float.of_int within_3_std /. Float.of_int (Array.length result) *. 100.0);
+  let pct_1_std = Float.of_int within_1_std /. Float.of_int n *. 100.0 in
+  let pct_2_std = Float.of_int within_2_std /. Float.of_int n *. 100.0 in
+  let pct_3_std = Float.of_int within_3_std /. Float.of_int n *. 100.0 in
 
   (* Normality test using skewness and kurtosis *)
   let skewness =
@@ -138,7 +123,7 @@ let test_normal_at_histogram () =
           let diff = x -. mean in
           acc +. (diff *. diff *. diff))
     in
-    sum_cubed /. (Float.of_int (Array.length result) *. std_dev *. std_dev *. std_dev)
+    sum_cubed /. (Float.of_int n *. std_dev *. std_dev *. std_dev)
   in
 
   let kurtosis =
@@ -148,12 +133,45 @@ let test_normal_at_histogram () =
           let diff2 = diff *. diff in
           acc +. (diff2 *. diff2))
     in
-    (sum_fourth /. (Float.of_int (Array.length result) *. std_dev *. std_dev *. std_dev *. std_dev))
-    -. 3.0
+    (sum_fourth /. (Float.of_int n *. std_dev *. std_dev *. std_dev *. std_dev)) -. 3.0
   in
 
-  printf "  Skewness: %.4f (expected: ~0.0)\n" skewness;
-  printf "  Excess Kurtosis: %.4f (expected: ~0.0)\n" kurtosis
+  (* Note: Box-Muller transformation uses transcendental functions (log, cos) which may
+     produce slightly different results across different CPU architectures and math libraries.
+     We only verify statistical properties are within acceptable bounds, not exact values. *)
+  printf "\nNormal Distribution N(0,1) Statistical Test\n";
+  printf "============================================\n";
+  printf "Generated %d values\n" n;
+
+  (* Verify statistical properties - only print PASS/FAIL to avoid machine-specific output *)
+  let check name value expected tolerance =
+    let passed = Float.(abs (value -. expected) <= tolerance) in
+    printf "  %s (expected: ~%.1f, tolerance: %.2f): %s\n" name expected tolerance
+      (if passed then "PASS" else Printf.sprintf "FAIL (got %.4f)" value);
+    passed
+  in
+
+  let check_bound name value bound is_lower =
+    let passed = if is_lower then Float.(value < bound) else Float.(value > bound) in
+    let op = if is_lower then "<" else ">" in
+    printf "  %s (should be %s %.1f): %s\n" name op bound
+      (if passed then "PASS" else Printf.sprintf "FAIL (got %.4f)" value);
+    passed
+  in
+
+  let all_passed =
+    check "Mean" mean 0.0 0.1
+    && check "Std Dev" std_dev 1.0 0.1
+    && check "Within 1 std dev %%" pct_1_std 68.3 3.0
+    && check "Within 2 std dev %%" pct_2_std 95.4 2.0
+    && check "Within 3 std dev %%" pct_3_std 99.7 1.0
+    && check "Skewness" skewness 0.0 0.15
+    && check "Excess Kurtosis" kurtosis 0.0 0.15
+    && check_bound "Min" min_val (-3.0) true
+    && check_bound "Max" max_val 3.0 false
+  in
+
+  printf "\nOverall: %s\n" (if all_passed then "ALL TESTS PASSED" else "SOME TESTS FAILED")
 
 let test_batched_generation_consistency () =
   Tensor.unsafe_reinitialize ();

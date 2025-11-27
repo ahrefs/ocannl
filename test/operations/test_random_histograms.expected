@@ -34,49 +34,20 @@ Statistics:
   All values in [0, 1) range: true
 
 
-Normal Distribution N(0,1) Histogram
-====================================
-Bin  0:     0 (0.0%)
-Bin  1:     1 (0.0%)
-Bin  2:     3 (0.0%)
-Bin  3:    10 (0.1%)
-Bin  4:    22 (0.2%)
-Bin  5: #   43 (0.4%)
-Bin  6: ##   83 (0.8%)
-Bin  7: ####  143 (1.4%)
-Bin  8: #######  236 (2.4%)
-Bin  9: ############  381 (3.8%)
-Bin 10: ##################  548 (5.5%)
-Bin 11: #######################  716 (7.2%)
-Bin 12: ##########################  799 (8.0%)
-Bin 13: ############################  881 (8.8%)
-Bin 14: ######################################## 1216 (12.2%)
-Bin 15: ###################################### 1168 (11.7%)
-Bin 16: ##########################  815 (8.2%)
-Bin 17: ##########################  812 (8.1%)
-Bin 18: ######################  698 (7.0%)
-Bin 19: ################  514 (5.1%)
-Bin 20: ###########  349 (3.5%)
-Bin 21: #######  226 (2.3%)
-Bin 22: #####  158 (1.6%)
-Bin 23: ###   96 (1.0%)
-Bin 24: #   48 (0.5%)
-Bin 25:    18 (0.2%)
-Bin 26:     8 (0.1%)
-Bin 27:     3 (0.0%)
-Bin 28:     3 (0.0%)
-Bin 29:     2 (0.0%)
+Normal Distribution N(0,1) Statistical Test
+============================================
+Generated 10000 values
+  Mean (expected: ~0.0, tolerance: 0.10): PASS
+  Std Dev (expected: ~1.0, tolerance: 0.10): PASS
+  Within 1 std dev %% (expected: ~68.3, tolerance: 3.00): PASS
+  Within 2 std dev %% (expected: ~95.4, tolerance: 2.00): PASS
+  Within 3 std dev %% (expected: ~99.7, tolerance: 1.00): PASS
+  Skewness (expected: ~0.0, tolerance: 0.15): PASS
+  Excess Kurtosis (expected: ~0.0, tolerance: 0.15): PASS
+  Min (should be < -3.0): PASS
+  Max (should be > 3.0): PASS
 
-Statistics:
-  Mean: -0.0073 (expected: ~0.0)
-  Std Dev: 1.0022 (expected: ~1.0)
-  Min: -3.5704
-  Max: 4.0677
-  Within 1 std dev: 67.6% (expected: ~68.3%)
-  Within 2 std dev: 95.4% (expected: ~95.4%)
-  Within 3 std dev: 99.8% (expected: ~99.7%)
-  Skewness: 0.0449 (expected: ~0.0)
-  Excess Kurtosis: -0.0068 (expected: ~0.0)
+Overall: ALL TESTS PASSED
 
 
 Batched Generation Consistency Test
