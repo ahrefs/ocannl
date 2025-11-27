@@ -3184,7 +3184,12 @@ let fresh_row_proj r =
     | Conv_input { stride; output; dilation; kernel } ->
         Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
   in
-  { r with dims = List.map r.dims ~f:fresh_dim }
+  let bcast =
+    match r.bcast with
+    | Row_var { v; beg_dims } -> Row_var { v; beg_dims = List.map beg_dims ~f:fresh_dim }
+    | Broadcastable -> Broadcastable
+  in
+  { r with dims = List.map r.dims ~f:fresh_dim; bcast }
 
 let populate_dim_proj_in_solved env =
   let rec fresh_dim = function
@@ -3193,8 +3198,21 @@ let populate_dim_proj_in_solved env =
     | Conv_input { stride; output; dilation; kernel } ->
         Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
   in
-  let f = function Solved_dim dim -> Solved_dim (fresh_dim dim) | entry -> entry in
-  { env with dim_env = Utils.Tree_map.map env.dim_env ~f }
+  let fresh_row ({ dims; bcast; prov } : row) : row =
+    let dims = List.map dims ~f:fresh_dim in
+    let bcast =
+      match bcast with
+      | Row_var { v; beg_dims } -> Row_var { v; beg_dims = List.map beg_dims ~f:fresh_dim }
+      | Broadcastable -> Broadcastable
+    in
+    { dims; bcast; prov }
+  in
+  let f_dim = function Solved_dim dim -> Solved_dim (fresh_dim dim) | entry -> entry in
+  let f_row = function Solved_row row -> Solved_row (fresh_row row) | entry -> entry in
+  {
+    dim_env = Utils.Tree_map.map env.dim_env ~f:f_dim;
+    row_env = Utils.Tree_map.map env.row_env ~f:f_row;
+  }
 
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
    pid1 pid2 *)
@@ -3231,11 +3249,10 @@ type proj_env = {
   inferred_padding : axis_padding Hashtbl.M(Proj_id).t;
   proj_classes : proj_classes;
   product_dim : int Map.M(Proj_id).t;
-  non_product : Set.M(Proj_id).t;
 }
 [@@deriving sexp_of]
 
-type proj_equation = Proj_eq of proj * proj | Iterated of proj | Non_iterated of proj
+type proj_equation = Proj_eq of proj * proj | Iterated of proj
 [@@deriving compare, equal, sexp]
 
 let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
@@ -3246,6 +3263,16 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
     | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
     | Dim { d = 0; _ } -> Solved (Fixed_idx 0)
     | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
+    | Dim { d = 1; label = _; proj_id = None } ->
+        (* d=1 dims created during constraint solving don't need iteration *)
+        Solved (Fixed_idx 0)
+    | Dim { d; label; proj_id = None } ->
+        raise
+        @@ Shape_error
+             ( "to_proj: Dim without proj_id (d=" ^ Int.to_string d ^ ", label="
+               ^ Option.value label ~default:"None"
+               ^ ")",
+               [] )
     | Conv_input { stride; output; dilation = 0; kernel = _ } ->
         (* Strided iteration: ignore kernel since dilation=0 *)
         Conv_input
@@ -3260,7 +3287,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
           }
     | Conv_input { stride; output; dilation; kernel } ->
         let kernel_size =
-          match subst_dim env kernel with
+          match subst_dim ~keep_conv:true env kernel with
           | Var v as dim ->
               raise
               @@ Shape_error
@@ -3269,7 +3296,6 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                      [ Dim_mismatch [ dim ] ] )
           | Dim { d; _ } -> d
           | Conv_input _ as dim ->
-              (* by default keep_conv is false in subst_dim *)
               raise
               @@ Shape_error
                    ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ dim ] ])
@@ -3284,12 +3310,22 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
             input_id = None;
           }
     | d -> (
-        match subst_dim env d with
+        match subst_dim ~keep_conv:true env d with
+        | Dim { d = 0; _ } -> Solved (Fixed_idx 0)
         | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
-        | Dim _ -> assert false
+        | Dim { d = 1; label = _; proj_id = None } ->
+            (* d=1 dims created during constraint solving don't need iteration *)
+            Solved (Fixed_idx 0)
+        | Dim { d; label; proj_id = None } ->
+            raise
+            @@ Shape_error
+                 ( "to_proj (subst): Dim without proj_id (d=" ^ Int.to_string d ^ ", label="
+                   ^ Option.value label ~default:"None"
+                   ^ ")",
+                   [] )
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v
-        | Conv_input _ -> assert false (* handled above and by default keep_conv is false *))
+        | Conv_input _ as conv -> to_proj conv)
   in
   let rec expand_dims = function
     | { dims; bcast = Row_var { v; beg_dims }; _ }
@@ -3337,7 +3373,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
           constr = Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by };
           origin = _;
         } -> (
-        let divided_by = List.map divided_by ~f:(fun v -> subst_dim env (Var v)) in
+        let divided_by = List.map divided_by ~f:(fun v -> subst_dim ~keep_conv:true env (Var v)) in
         match collect_factors divided_by with
         | Some (known_product, residual_vars) ->
             assert (List.is_empty residual_vars);
@@ -3352,14 +3388,13 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                   match List.rev dims with
                   | [] ->
                       [
-                        (let output = subst_dim env (Var var) in
+                        (let output = subst_dim ~keep_conv:true env (Var var) in
                          Iterated (to_proj output));
                       ]
                   | inner :: other_dims ->
-                      let output = subst_dim env (Var var) in
+                      let output = subst_dim ~keep_conv:true env (Var var) in
                       let input = to_proj inner in
                       Iterated (to_proj output)
-                      :: Non_iterated input
                       :: Proj_eq
                            ( to_proj
                                (Conv_input
@@ -3584,7 +3619,6 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
-  let non_product = ref @@ Set.empty (module Proj_id) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
@@ -3631,11 +3665,6 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         match Hashtbl.find v_env v with
         | None -> Hashtbl.add_exn v_env ~key:v ~data:p
         | Some p2 -> loop (Proj_eq (p, p2)))
-    | Non_iterated p -> (
-        match p with
-        | Proj (proj_id, _) | Conv_input { input_id = Some proj_id; _ } ->
-            non_product := Set.add !non_product proj_id
-        | _ -> ())
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
     | Iterated (Conv_input { output; dilation = 0; kernel = _; _ }) ->
@@ -3655,7 +3684,6 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let projs = ref @@ Map.empty (module Proj_id) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      non_product := Set.add !non_product repr;
       Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
           if not @@ Idx.equal_axis_index idx idx2 then
             raise
@@ -3698,7 +3726,6 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
       inferred_padding;
       resolved_padding;
       product_dim = !product_dim;
-      non_product = !non_product;
     }
   in
   (* Process postponed Conv_input equations *)
@@ -3740,7 +3767,6 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
     inferred_padding;
     resolved_padding;
     product_dim = !product_dim;
-    non_product = !non_product;
   }
 
 let proj_repr proj_env p =
@@ -3749,11 +3775,11 @@ let proj_repr proj_env p =
 let get_product_proj proj_env dim =
   match dim with
   | Dim { d; _ } when not @@ Idx.iterated d -> None
-  | Dim { proj_id = Some proj_id; d; _ } ->
+  | Dim { proj_id = Some proj_id; d; _ } -> (
       let repr = proj_repr proj_env proj_id in
-      if Map.mem proj_env.proj_to_index repr && (not @@ Set.mem proj_env.non_product repr) then
-        Some (repr, d)
-      else None
+      match Map.find proj_env.proj_to_index repr with
+      | Some (Iterator _) -> Some (repr, d)
+      | _ -> None)
   | Dim { proj_id = None; _ } -> None
   | Var v ->
       raise

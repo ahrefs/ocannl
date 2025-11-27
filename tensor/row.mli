@@ -206,8 +206,6 @@ type proj_equation =
   | Iterated of proj
       (** The projection needs to be an iterator even if an axis is not matched with another axis,
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
-  | Non_iterated of proj
-      (** The projection is not part of a product space, e.g. for convolution input. *)
 [@@deriving compare, equal, sexp]
 
 val get_proj_equations :

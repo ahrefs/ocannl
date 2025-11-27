@@ -346,8 +346,9 @@ let add_var_used_in_pointwise row =
 
 let unused_shapes = Hash_set.create (module Int)
 
-let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : update_step) :
-    proj_axis_env * Row.constraint_ list =
+let%debug4_sexp get_inequalities ?(for_projections = false)
+    ({ shape = cur_sh; logic; id = _ } as _upd : update_step) : proj_axis_env * Row.constraint_ list
+    =
   Hash_set.remove unused_shapes cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
@@ -401,44 +402,54 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
-        Rows_constr
-          {
-            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-            constr =
-              Exact (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
-            origin =
-              [
-                {
-                  lhs_name = cur_sh.debug_name;
-                  lhs_kind = `Batch;
-                  rhs_name = "Keep_shape_no_padding";
-                  rhs_kind = `Output;
-                  operation = Some "Exact";
-                };
-              ];
-          }
-        :: mark_terminal ~is_param )
+        (if for_projections then []
+         else
+           [
+             Rows_constr
+               {
+                 r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+                 constr =
+                   Exact
+                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+                 origin =
+                   [
+                     {
+                       lhs_name = cur_sh.debug_name;
+                       lhs_kind = `Batch;
+                       rhs_name = "Keep_shape_no_padding";
+                       rhs_kind = `Output;
+                       operation = Some "Exact";
+                     };
+                   ];
+               };
+           ])
+        @ mark_terminal ~is_param )
   | Terminal { is_param; logic = Data (Padded { data; padding; padded_value }) } ->
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
       ( dim_map_empty,
-        Rows_constr
-          {
-            r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-            constr =
-              Exact (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
-            origin =
-              [
-                {
-                  lhs_name = cur_sh.debug_name;
-                  lhs_kind = `Batch;
-                  rhs_name = "Padded";
-                  rhs_kind = `Output;
-                  operation = Some "Exact";
-                };
-              ];
-          }
-        :: mark_terminal ~is_param )
+        (if for_projections then []
+         else
+           [
+             Rows_constr
+               {
+                 r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+                 constr =
+                   Exact
+                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+                 origin =
+                   [
+                     {
+                       lhs_name = cur_sh.debug_name;
+                       lhs_kind = `Batch;
+                       rhs_name = "Padded";
+                       rhs_kind = `Output;
+                       operation = Some "Exact";
+                     };
+                   ];
+               };
+           ])
+        @ mark_terminal ~is_param )
   | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
@@ -461,25 +472,29 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
   | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
-          Rows_constr
-            {
-              r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-              constr =
-                Exact
-                  (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
-                  |> List.map ~f:(fun d -> get_dim ~d ()));
-              origin =
-                [
-                  {
-                    lhs_name = cur_sh.debug_name;
-                    lhs_kind = `Batch;
-                    rhs_name = Tn.debug_name tn;
-                    rhs_kind = `Output;
-                    operation = Some "Slice";
-                  };
-                ];
-            }
-          :: mark_terminal ~is_param )
+          (if for_projections then []
+           else
+             [
+               Rows_constr
+                 {
+                   r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+                   constr =
+                     Exact
+                       (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
+                       |> List.map ~f:(fun d -> get_dim ~d ()));
+                   origin =
+                     [
+                       {
+                         lhs_name = cur_sh.debug_name;
+                         lhs_kind = `Batch;
+                         rhs_name = Tn.debug_name tn;
+                         rhs_kind = `Output;
+                         operation = Some "Slice";
+                       };
+                     ];
+                 };
+             ])
+          @ mark_terminal ~is_param )
       else (Row.dim_map_empty, mark_terminal ~is_param)
   | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
       (Row.dim_map_empty, mark_terminal ~is_param)
@@ -796,7 +811,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
         ]
       in
       ( proj_axis_env,
-        (Option.to_list static_range
+        (Option.to_list (if for_projections then None else static_range)
         |> List.map ~f:(fun range ->
             Dim_eq
               {
@@ -867,7 +882,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                             };
                           ];
                       })
-                  delayed_ref.var_ref.solved_dim
+                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
             | None -> (
                 match Hashtbl.find row_var_env label with
                 | Some var ->
@@ -1091,7 +1106,7 @@ let%debug4_sexp get_inequalities ({ shape = cur_sh; logic; id = _ } as _upd : up
                             };
                           ];
                       })
-                  delayed_ref.var_ref.solved_dim
+                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
             | None -> (
                 match Hashtbl.find row_var_env label with
                 | Some var ->
@@ -1677,7 +1692,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
   let resolved_padding, inferred_padding = fresh_proj_ids update_step in
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
-    get_inequalities update_step
+    get_inequalities ~for_projections:true update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be
