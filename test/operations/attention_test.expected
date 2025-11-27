@@ -4,12 +4,12 @@ Testing basic multi-head attention
 Output shape:
 ((batch
   ((dims
-    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 204)))))
-     (Dim ((d 8) (label ()) (proj_id ((Proj_id 205)))))))
+    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 195)))))
+     (Dim ((d 8) (label ()) (proj_id ((Proj_id 196)))))))
    (bcast Broadcastable) (prov (((sh_id 64) (kind Batch))))))
  (input ((dims ()) (bcast Broadcastable) (prov (((sh_id 64) (kind Input))))))
  (output
-  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 206)))))))
+  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 197)))))))
    (bcast Broadcastable) (prov (((sh_id 64) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (id 64)
  (debug_name output))

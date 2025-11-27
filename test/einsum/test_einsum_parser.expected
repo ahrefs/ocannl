@@ -1,0 +1,23 @@
+Testing mode detection:
+  ✓ 'abc' -> single-char (expected single-char)
+  ✓ 'a,b,c' -> multichar (expected multichar)
+  ✓ '2*a+b' -> multichar (expected multichar)
+  ✓ 'a+b' -> multichar (expected multichar)
+  ✓ 'a*b' -> multichar (expected multichar)
+  ✓ 'a^b' -> multichar (expected multichar)
+  ✓ 'a&b' -> multichar (expected multichar)
+  ✓ 'a|b->c' -> single-char (expected single-char)
+  ✓ '...a..b' -> single-char (expected single-char)
+
+Testing single-char mode:
+  'abc' -> 3 output axes
+  'b|i->o' -> batch:1 input:1 output:1
+  'ij;jk=>ik' -> (0,2);(0,2)=>(0,2)
+
+Testing multichar mode:
+  'a, b, c' -> 3 output axes
+  'a, b,' -> 2 output axes
+  '2*o+k' -> 1 output axes
+  '2*o+3*k, x' -> 2 output axes
+
+All tests passed!
