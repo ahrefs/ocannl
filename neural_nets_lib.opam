@@ -62,3 +62,6 @@ build: [
 ]
 dev-repo: "git+https://github.com/lukstafi/ocannl.git"
 x-maintenance-intent: ["(latest)"]
+pin-depends: [
+  ["ppx_minidebug.dev" "git+https://github.com/lukstafi/ppx_minidebug.git"]
+]
