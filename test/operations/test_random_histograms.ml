@@ -136,9 +136,9 @@ let test_normal_at_histogram () =
     (sum_fourth /. (Float.of_int n *. std_dev *. std_dev *. std_dev *. std_dev)) -. 3.0
   in
 
-  (* Note: Box-Muller transformation uses transcendental functions (log, cos) which may
-     produce slightly different results across different CPU architectures and math libraries.
-     We only verify statistical properties are within acceptable bounds, not exact values. *)
+  (* Note: Box-Muller transformation uses transcendental functions (log, cos) which may produce
+     slightly different results across different CPU architectures and math libraries. We only
+     verify statistical properties are within acceptable bounds, not exact values. *)
   printf "\nNormal Distribution N(0,1) Statistical Test\n";
   printf "============================================\n";
   printf "Generated %d values\n" n;
@@ -160,8 +160,7 @@ let test_normal_at_histogram () =
   in
 
   let all_passed =
-    check "Mean" mean 0.0 0.1
-    && check "Std Dev" std_dev 1.0 0.1
+    check "Mean" mean 0.0 0.1 && check "Std Dev" std_dev 1.0 0.1
     && check "Within 1 std dev %%" pct_1_std 68.3 3.0
     && check "Within 2 std dev %%" pct_2_std 95.4 2.0
     && check "Within 3 std dev %%" pct_3_std 99.7 1.0

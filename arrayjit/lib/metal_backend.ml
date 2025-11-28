@@ -221,8 +221,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     { shared = shared_event; value = next_value }
 
   let await stream =
-    (* Signal an event after all current work and wait for it.
-       This ensures all previously submitted command buffers complete. *)
+    (* Signal an event after all current work and wait for it. This ensures all previously submitted
+       command buffers complete. *)
     let event = all_work stream in
     sync event;
     (* Process captured logs if any *)
