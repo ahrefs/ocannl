@@ -1,3 +1,4 @@
 pin-depends: [
   ["ppx_minidebug.dev" "git+https://github.com/lukstafi/ppx_minidebug.git"]
+  ["notty-community.dev" "git+https://github.com/lukstafi/notty-community.git"]
 ]

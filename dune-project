@@ -70,6 +70,8 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
+  (notty-community
+   (>= 2.4.0))
   (ppx_minidebug
    (>= 3.0.0))
   (metal
@@ -132,6 +134,8 @@
   ppx_string
   ppx_variants_conv
   ppx_expect
+  (notty-community
+   (>= 2.4.0))
   (ppx_minidebug
    (>= 3.0.0))
   (odoc :with-doc)
