@@ -1,6 +1,18 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Testing default parameter 1D -- corner case
+Testing default lone parameter -- corner case
+┌───────────────────────────────────────┐
+│[5]: w_o shape 0:4                     │
+│┌┬────────────────────────────────────┐│
+│││axis 0                              ││
+│├┼────────────────────────────────────┤│
+│││ 8.38e-1  1.38e-1  2.61e-1  7.74e-1 ││
+│└┴────────────────────────────────────┘│
+└───────────────────────────────────────┘
+grad_w_o <not-hosted>
+
+ERROR: Should have raised an exception
+Testing lone parameter 1D -- corner case
 ┌───────────────────┐
 │[5]: w_o shape 0:1 │
 │┌┬─────────┐       │
@@ -24,4 +36,8 @@ Testing default affine operation with propagated dimensions
 └────────────────────────────────────┘
 grad_w <not-hosted>
 Testing default affine operation with unknown input dimensions
+Got expected error: You forgot to specify the hidden dimension(s) 1
+Testing default bias parameter
+Got expected error: You forgot to specify the hidden dimension(s) 4
+Testing bias parameter 1D
 Got expected error: You forgot to specify the hidden dimension(s) 1
