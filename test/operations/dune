@@ -378,6 +378,17 @@
   (pps ppx_here ppx_ocannl ppx_expect)))
 
 (test
+ (name small_literal_tensor)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules small_literal_tensor)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_expect)))
+
+(test
  (name zero2hero_1of7_exec)
  (package neural_nets_lib)
  (deps
