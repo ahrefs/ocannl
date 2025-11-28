@@ -40,7 +40,7 @@ module Device_config = struct
   type runner = {
     queue : Me.CommandQueue.t;
     event : Me.SharedEvent.t; (* Use SharedEvent for signalling *)
-    counter : ullong; (* Next value to signal *)
+    mutable counter : ullong; (* Next value to signal *)
   }
   [@@deriving sexp_of]
 
@@ -212,6 +212,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let shared_event = stream.runner.event in
     let counter = stream.runner.counter in
     let next_value = Unsigned.ULLong.add counter Unsigned.ULLong.one in
+    stream.runner.counter <- next_value;
     let command_buffer = Me.CommandBuffer.on_queue queue in
     Me.CommandBuffer.encode_signal_event command_buffer
       (Me.SharedEvent.super shared_event)
@@ -220,10 +221,10 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     { shared = shared_event; value = next_value }
 
   let await stream =
-    let queue = stream.runner.queue in
-    let command_buffer = Me.CommandBuffer.on_queue queue in
-    Me.CommandBuffer.commit command_buffer;
-    Me.CommandBuffer.wait_until_completed command_buffer;
+    (* Signal an event after all current work and wait for it.
+       This ensures all previously submitted command buffers complete. *)
+    let event = all_work stream in
+    sync event;
     (* Process captured logs if any *)
     if Utils.debug_log_from_routines () then
       match Hashtbl.find stream_logs stream.stream_id with
