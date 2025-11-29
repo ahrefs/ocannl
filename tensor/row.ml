@@ -1618,41 +1618,48 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         @@ Shape_error
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
   | ( Affine
-        {
-          stride;
-          over = Dim s;
-          conv = Some { dilation; kernel = Dim k; use_padding = false };
-          stride_offset;
-        },
+        { stride; over = Dim s; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ },
       dim )
   | ( dim,
       Affine
-        {
-          stride;
-          over = Dim s;
-          conv = Some { dilation; kernel = Dim k; use_padding = false };
-          stride_offset;
-        } ) ->
-      (* For kernel dim k, we shave off k-1 dilated positions from the input *)
-      let offset = (dilation * (k.d - 1)) + stride_offset in
-      let offset_adjusted = offset - (offset % stride) in
-      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + offset_adjusted) (), dim) env
-  | ( Affine
-        { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; stride_offset },
+        { stride; over = Dim s; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
+    ) ->
+      (* stride_offset doesn't affect dimension - it just shifts which elements are accessed.
+         Max index at stride_offset=stride-1: (s-1)*stride + (stride-1) + (k-1)*dilation
+         So input dim = s * stride + (k-1) * dilation *)
+      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + (dilation * (k.d - 1))) (), dim) env
+  | ( Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ },
       Dim s )
   | ( Dim s,
-      Affine
-        { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; stride_offset }
-    ) ->
-      (* For kernel dim k, we shave off k-1 dilated positions from the input *)
-      let offset = (dilation * (k.d - 1)) + stride_offset in
-      let offset_adjusted = offset - (offset % stride) in
-      if (s.d - offset_adjusted) % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((s.d - offset_adjusted) / stride) (), over) env
+      Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ } ) ->
+      (* Reverse: solve for over given input dim s.
+         s = stride * over + dilation * (k - 1)
+         over = (s - dilation * (k - 1)) / stride *)
+      let kernel_extent = dilation * (k.d - 1) in
+      let over_times_stride = s.d - kernel_extent in
+      if over_times_stride >= 0 && over_times_stride % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:(over_times_stride / stride) (), over) env
       else
         raise
         @@ Shape_error
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
+  | ( Affine { stride; over = Dim s; conv = Some { dilation; kernel = Var v; use_padding = false }; _ },
+      Dim i )
+  | ( Dim i,
+      Affine { stride; over = Dim s; conv = Some { dilation; kernel = Var v; use_padding = false }; _ }
+    ) ->
+      (* Infer kernel dimension from the amount of contraction.
+         i = s * stride + dilation * (k - 1)
+         k = 1 + (i - s * stride) / dilation *)
+      let kernel_extent = i.d - (stride * s.d) in
+      if kernel_extent >= 0 && kernel_extent % dilation = 0 then
+        let k = 1 + (kernel_extent / dilation) in
+        unify_dim ~stage origin (Var v, get_dim ~d:k ()) env
+      else
+        raise
+        @@ Shape_error
+             ( "solved dimensions for axis: cannot infer kernel dimension",
+               [ Dim_mismatch [ dim1; dim2 ] ] )
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine { stride = s2; over = o2; conv = None | Some { use_padding = true; _ }; _ } ) ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
@@ -1670,33 +1677,22 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
   | ( Affine
-        {
-          stride = s1;
-          over = o1;
-          conv = Some { dilation = d1; kernel = Dim k1; use_padding = false };
-          stride_offset = off1;
-        },
+        { stride = s1; over = o1; conv = Some { dilation = d1; kernel = Dim k1; use_padding = false }; _ },
       Affine
-        {
-          stride = s2;
-          over = o2;
-          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
-          stride_offset = off2;
-        } ) ->
-      (* For kernel dim k, we shave off k-1 dilated positions from the input *)
-      let offset1 = (d1 * (k1.d - 1)) + off1 and offset2 = (d2 * (k2.d - 1)) + off2 in
-      let offset1_adjusted = offset1 - (offset1 % s1)
-      and offset2_adjusted = offset2 - (offset2 % s2) in
-      if s1 = s2 && offset1_adjusted = offset2_adjusted then unify_dim ~stage origin (o1, o2) env
+        { stride = s2; over = o2; conv = Some { dilation = d2; kernel = Dim k2; use_padding = false }; _ }
+    ) ->
+      (* stride_offset doesn't affect dimension - kernel extent is dilation * (k - 1) *)
+      let extent1 = d1 * (k1.d - 1) and extent2 = d2 * (k2.d - 1) in
+      if s1 = s2 && extent1 = extent2 then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
-        let new_offset = (offset1_adjusted - offset2_adjusted) / s2 in
-        (* Encode new_offset via a helper conv: dilation=1, kernel dim = new_offset + 1 *)
+        let new_extent = (extent1 - extent2) / s2 in
+        (* Encode new_extent via a helper conv: dilation=1, kernel dim = new_extent + 1 *)
         let helper_conv =
           Some
             {
               dilation = 1;
-              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              kernel = Dim { d = new_extent + 1; label = None; proj_id = None };
               use_padding = false;
             }
         in
@@ -1705,13 +1701,13 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           env
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
-        let new_offset = (offset2_adjusted - offset1_adjusted) / s1 in
-        (* Encode new_offset via a helper conv: dilation=1, kernel dim = new_offset + 1 *)
+        let new_extent = (extent2 - extent1) / s1 in
+        (* Encode new_extent via a helper conv: dilation=1, kernel dim = new_extent + 1 *)
         let helper_conv =
           Some
             {
               dilation = 1;
-              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              kernel = Dim { d = new_extent + 1; label = None; proj_id = None };
               use_padding = false;
             }
         in
@@ -1725,33 +1721,22 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine
-        {
-          stride = s2;
-          over = o2;
-          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
-          stride_offset = off2;
-        } )
+        { stride = s2; over = o2; conv = Some { dilation = d2; kernel = Dim k2; use_padding = false }; _ }
+    )
   | ( Affine
-        {
-          stride = s2;
-          over = o2;
-          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
-          stride_offset = off2;
-        },
+        { stride = s2; over = o2; conv = Some { dilation = d2; kernel = Dim k2; use_padding = false }; _ },
       Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ } ) ->
-      (* Treat conv = None and use_padding = true as having effective offset 0 *)
-      let offset1 = 0 and offset2 = (d2 * (k2.d - 1)) + off2 in
-      let offset1_adjusted = offset1 - (offset1 % s1)
-      and offset2_adjusted = offset2 - (offset2 % s2) in
-      if s1 = s2 && offset1_adjusted = offset2_adjusted then unify_dim ~stage origin (o1, o2) env
+      (* conv = None and use_padding = true have extent 0; use_padding = false has extent dilation * (k-1) *)
+      let extent1 = 0 and extent2 = d2 * (k2.d - 1) in
+      if s1 = s2 && extent1 = extent2 then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
-        let new_offset = (offset1_adjusted - offset2_adjusted) / s2 in
+        let new_extent = (extent1 - extent2) / s2 in
         let helper_conv =
           Some
             {
               dilation = 1;
-              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              kernel = Dim { d = new_extent + 1; label = None; proj_id = None };
               use_padding = false;
             }
         in
@@ -1760,12 +1745,12 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           env
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
-        let new_offset = (offset2_adjusted - offset1_adjusted) / s1 in
+        let new_extent = (extent2 - extent1) / s1 in
         let helper_conv =
           Some
             {
               dilation = 1;
-              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              kernel = Dim { d = new_extent + 1; label = None; proj_id = None };
               use_padding = false;
             }
         in
@@ -1776,7 +1761,10 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         raise
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
-  (* | Affine _, Affine _ -> failwith "Affine, Affine NOT IMPLEMENTED YET" *)
+  | Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ }, _
+  | _, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
+      (* Can't compute offset until kernel dimension is resolved; defer *)
+      ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
   | Var v, dim2 | dim2, Var v ->
       if dim_var_occurs_in_dim v dim2 then
         raise
