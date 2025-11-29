@@ -1656,27 +1656,15 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine { stride = s2; over = o2; conv = None | Some { use_padding = true; _ }; _ } ) ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      if s1 = s2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+      if s1 = s2 then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
-        ( [
-            Dim_eq
-              {
-                d1 = o2;
-                d2 = Affine { stride = s1 / s2; over = o1; conv = None; stride_offset = 0 };
-                origin;
-              };
-          ],
-          env )
+        unify_dim ~stage origin
+          (o2, Affine { stride = s1 / s2; over = o1; conv = None; stride_offset = 0 })
+          env
       else if s2 >= s1 && s2 % s1 = 0 then
-        ( [
-            Dim_eq
-              {
-                d1 = o1;
-                d2 = Affine { stride = s2 / s1; over = o2; conv = None; stride_offset = 0 };
-                origin;
-              };
-          ],
-          env )
+        unify_dim ~stage origin
+          (o1, Affine { stride = s2 / s1; over = o2; conv = None; stride_offset = 0 })
+          env
       else
         raise
         @@ Shape_error
@@ -1699,8 +1687,7 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       let offset1 = (d1 * (k1.d - 1)) + off1 and offset2 = (d2 * (k2.d - 1)) + off2 in
       let offset1_adjusted = offset1 - (offset1 % s1)
       and offset2_adjusted = offset2 - (offset2 % s2) in
-      if s1 = s2 && offset1_adjusted = offset2_adjusted then
-        ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+      if s1 = s2 && offset1_adjusted = offset2_adjusted then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
         let new_offset = (offset1_adjusted - offset2_adjusted) / s2 in
@@ -1713,11 +1700,9 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               use_padding = false;
             }
         in
-        ( [
-            Dim_eq
-              { d1 = o2; d2 = Affine { stride; over = o1; conv = helper_conv; stride_offset = 0 }; origin };
-          ],
-          env )
+        unify_dim ~stage origin
+          (o2, Affine { stride; over = o1; conv = helper_conv; stride_offset = 0 })
+          env
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
         let new_offset = (offset2_adjusted - offset1_adjusted) / s1 in
@@ -1730,13 +1715,64 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               use_padding = false;
             }
         in
-        ( [
-            Dim_eq
-              { d1 = o1; d2 = Affine { stride; over = o2; conv = helper_conv; stride_offset = 0 }; origin };
-          ],
-          env )
+        unify_dim ~stage origin
+          (o1, Affine { stride; over = o2; conv = helper_conv; stride_offset = 0 })
+          env
       else
         (* FIXME: should keep the constraint as-is but currently unification must make progress. *)
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
+  | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
+      Affine
+        {
+          stride = s2;
+          over = o2;
+          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
+          stride_offset = off2;
+        } )
+  | ( Affine
+        {
+          stride = s2;
+          over = o2;
+          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
+          stride_offset = off2;
+        },
+      Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ } ) ->
+      (* Treat conv = None and use_padding = true as having effective offset 0 *)
+      let offset1 = 0 and offset2 = (d2 * (k2.d - 1)) + off2 in
+      let offset1_adjusted = offset1 - (offset1 % s1)
+      and offset2_adjusted = offset2 - (offset2 % s2) in
+      if s1 = s2 && offset1_adjusted = offset2_adjusted then unify_dim ~stage origin (o1, o2) env
+      else if s1 >= s2 && s1 % s2 = 0 then
+        let stride = s1 / s2 in
+        let new_offset = (offset1_adjusted - offset2_adjusted) / s2 in
+        let helper_conv =
+          Some
+            {
+              dilation = 1;
+              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              use_padding = false;
+            }
+        in
+        unify_dim ~stage origin
+          (o2, Affine { stride; over = o1; conv = helper_conv; stride_offset = 0 })
+          env
+      else if s2 >= s1 && s2 % s1 = 0 then
+        let stride = s2 / s1 in
+        let new_offset = (offset2_adjusted - offset1_adjusted) / s1 in
+        let helper_conv =
+          Some
+            {
+              dilation = 1;
+              kernel = Dim { d = new_offset + 1; label = None; proj_id = None };
+              use_padding = false;
+            }
+        in
+        unify_dim ~stage origin
+          (o1, Affine { stride; over = o2; conv = helper_conv; stride_offset = 0 })
+          env
+      else
         raise
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
