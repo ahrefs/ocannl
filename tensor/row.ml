@@ -64,11 +64,14 @@ let use_padding = ref false
 type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 
-type dim =
+type convolution = { dilation : int; kernel : dim; use_padding : bool }
+[@@deriving equal, hash, compare, sexp]
+
+and dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
-[@@deriving equal, hash, compare, sexp, variants]
+  | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
+[@@deriving equal, hash, compare, sexp]
 
 let equal_dim d1 d2 =
   match (d1, d2) with
@@ -121,16 +124,20 @@ let rec dim_to_string style = function
   | Dim solved_dim -> solved_dim_to_string style solved_dim
   | Var { id; name = Some n } -> [%string "$%{id#Int}:%{n}"]
   | Var { id; name = None } -> "$" ^ Int.to_string id
-  | Conv_input { stride; output; dilation; kernel } ->
-      let output_str = dim_to_string style output in
-      let output_str = if stride = 1 then output_str else Int.to_string stride ^ "*" ^ output_str in
-      if dilation = 0 then output_str
-      else
-        let kernel_str = dim_to_string style kernel in
-        let kernel_str =
-          if dilation = 1 then kernel_str else Int.to_string dilation ^ "*" ^ kernel_str
-        in
-        [%string "conv(%{output_str}+%{kernel_str})"]
+  | Affine { stride; over; conv; stride_offset } ->
+      let over_str = dim_to_string style over in
+      let stride_str = if stride = 1 then over_str else Int.to_string stride ^ "*" ^ over_str in
+      let offset_str =
+        if stride_offset = 0 then stride_str else [%string "%{stride_str}+%{stride_offset#Int}"]
+      in
+      (match conv with
+      | None -> offset_str
+      | Some { dilation; kernel; use_padding = _ } ->
+          let kernel_str = dim_to_string style kernel in
+          let kernel_str =
+            if dilation = 1 then kernel_str else Int.to_string dilation ^ "*" ^ kernel_str
+          in
+          [%string "conv(%{offset_str}+%{kernel_str})"])
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -351,19 +358,31 @@ let merge_origins o1 o2 =
 let dim_to_int_exn = function
   | Dim { d; _ } -> d
   | Var _ -> invalid_arg "dim_to_int: dim still unknown"
-  | Conv_input _ -> invalid_arg "dim_to_int: conv_input dimension cannot be converted to single int"
+  | Affine _ -> invalid_arg "dim_to_int: affine dimension cannot be converted to single int"
 
-let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
+let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
   match in_ with
   | Var v2 when equal_dim_var v v2 -> value
-  | Conv_input { stride; output; dilation; kernel } -> (
-      let output = s_dim_one ~keep_conv v ~value ~in_:output in
-      let kernel = s_dim_one ~keep_conv v ~value ~in_:kernel in
-      match Conv_input { stride; output; dilation; kernel } with
-      | res when keep_conv -> res
-      | Conv_input { stride = 1; _ } when !use_padding -> output
-      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation } when not !use_padding ->
-          let offset = dilation * k.d in
+  | Affine { stride; over; conv; stride_offset } -> (
+      let over = s_dim_one ~keep_affine v ~value ~in_:over in
+      let conv =
+        Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
+            { dilation; kernel = s_dim_one ~keep_affine v ~value ~in_:kernel; use_padding })
+      in
+      let result = Affine { stride; over; conv; stride_offset } in
+      match result with
+      | res when keep_affine -> res
+      | Affine { stride = 1; over; conv = Some { use_padding = true; _ }; stride_offset = 0 } ->
+          over
+      | Affine { stride = 1; over; conv = None; stride_offset = 0 } -> over
+      | Affine
+          {
+            stride;
+            over = Dim s;
+            conv = Some { dilation; kernel = Dim k; use_padding = false };
+            stride_offset;
+          } ->
+          let offset = (dilation * k.d) + stride_offset in
           let offset_adjusted = offset - (offset % stride) in
           Dim
             {
@@ -371,8 +390,21 @@ let rec s_dim_one ?(keep_conv = false) v ~value ~in_ =
               label = Option.first_some s.label k.label;
               proj_id = None;
             }
-      | Conv_input { stride; output = Dim s; kernel = Dim k; dilation = _ } when !use_padding ->
-          Dim { d = s.d * stride; label = Option.first_some s.label k.label; proj_id = None }
+      | Affine
+          {
+            stride;
+            over = Dim s;
+            conv = Some { kernel = Dim k; use_padding = true; _ };
+            stride_offset;
+          } ->
+          Dim
+            {
+              d = (s.d * stride) + stride_offset;
+              label = Option.first_some s.label k.label;
+              proj_id = None;
+            }
+      | Affine { stride; over = Dim s; conv = None; stride_offset } ->
+          Dim { d = (s.d * stride) + stride_offset; label = s.label; proj_id = None }
       | res -> res)
   | Dim _ | Var _ -> in_
 
@@ -423,13 +455,13 @@ let dim_conjunction constr1 constr2 =
 let rec collect_dim_factors (known, vars) = function
   | Dim { d; _ } -> Some (d * known, vars)
   | Var v -> Some (known, v :: vars)
-  | Conv_input { stride; output; _ } when !use_padding ->
+  | Affine { stride; over; conv = Some { use_padding = true; _ }; stride_offset = 0 } ->
       Option.map
-        (collect_dim_factors (known, vars) output)
+        (collect_dim_factors (known, vars) over)
         ~f:(fun (known, vars) -> (known * stride, vars))
-  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
+  | Affine { stride; over; conv = None; stride_offset = 0 } ->
       Option.map
-        (collect_dim_factors (known, vars) output)
+        (collect_dim_factors (known, vars) over)
         ~f:(fun (known, vars) -> (known * stride, vars))
   | _ -> None
 
@@ -502,9 +534,7 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                     Dim_eq
                       {
                         d1 = Var v1;
-                        d2 =
-                          Conv_input
-                            { stride = k; output = Var v2; dilation = 0; kernel = get_dim ~d:0 () };
+                        d2 = Affine { stride = k; over = Var v2; conv = None; stride_offset = 0 };
                         origin;
                       };
                   ],
@@ -518,9 +548,7 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                     Dim_eq
                       {
                         d1 = Var v2;
-                        d2 =
-                          Conv_input
-                            { stride = k; output = Var v1; dilation = 0; kernel = get_dim ~d:0 () };
+                        d2 = Affine { stride = k; over = Var v1; conv = None; stride_offset = 0 };
                         origin;
                       };
                   ],
@@ -753,19 +781,19 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                     (* Simple equality *)
                     Some ([ Dim_eq { d1 = Var var; d2 = Var single_var; origin } ], Exact dims)
                   else if coefficient > 1 then
-                    (* Use Conv_input with stride and dilation=0 *)
+                    (* Use Affine with stride and no convolution *)
                     Some
                       ( [
                           Dim_eq
                             {
                               d1 = Var var;
                               d2 =
-                                Conv_input
+                                Affine
                                   {
                                     stride = coefficient;
-                                    output = Var single_var;
-                                    dilation = 0;
-                                    kernel = get_dim ~d:0 ();
+                                    over = Var single_var;
+                                    conv = None;
+                                    stride_offset = 0;
                                   };
                               origin;
                             };
@@ -790,16 +818,19 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Conv_input { stride; output; dilation; kernel }, At_least_dim d_min -> (
-        let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
-        match kernel with
-        | Dim { d = d_k; _ } when not !use_padding ->
-            let d_min = d_min - (dilation * d_k) in
-            if d_min <= 0 then ([], Unconstrained_dim)
-            else
-              let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
-              apply_dim_constraint ~source ~stage output (At_least_dim quotient) env
-        | _ -> apply_dim_constraint ~source ~stage output (At_least_dim quotient) env)
+    | Affine { stride; over; conv; stride_offset }, At_least_dim d_min -> (
+        let d_min = d_min - stride_offset in
+        if d_min <= 0 then ([], Unconstrained_dim)
+        else
+          let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
+          match conv with
+          | Some { dilation; kernel = Dim { d = d_k; _ }; use_padding = false } ->
+              let d_min = d_min - (dilation * d_k) in
+              if d_min <= 0 then ([], Unconstrained_dim)
+              else
+                let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
+                apply_dim_constraint ~source ~stage over (At_least_dim quotient) env
+          | _ -> apply_dim_constraint ~source ~stage over (At_least_dim quotient) env)
     | Var v, _ -> (
         match find_dim env.dim_env v with
         | None -> ([], constr)
@@ -895,7 +926,7 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
         List.partition_map (beg_dims @ dims) ~f:(function
           | Dim { d; _ } -> Either.First d
           | Var v -> Either.Second v
-          | Conv_input _ -> failwith "NOT IMPLEMENTED YET")
+          | Affine _ -> failwith "NOT IMPLEMENTED YET")
       in
       (* Check if all vars are in divided_by - for multiset, need to count occurrences *)
       let remove_all vars from_list =
@@ -1094,7 +1125,7 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
           (* Stage 1: Don't force coeff yet, keep the constraint as-is *)
           Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
       | Var v' -> Total_elems { numerator = Strided_var { coeff; var = v'; denom }; divided_by }
-      | Conv_input _ ->
+      | Affine _ ->
           (* FIXME: NOT IMPLEMENTED YET *)
           failwith "NOT IMPLEMENTED YET")
   | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
@@ -1108,7 +1139,7 @@ let s_dim_one_in_row_constr stage v ~value constr =
     if equal_dim_var v v' then match value with Dim { d; _ } -> Some d | _ -> None else None
   in
   subst_row_constraint_impl
-    ~subst_in_dim:(fun in_ -> s_dim_one ~keep_conv:true v ~value ~in_)
+    ~subst_in_dim:(fun in_ -> s_dim_one ~keep_affine:true v ~value ~in_)
     ~get_dim_val stage constr
 
 let ineqs_from_reapply_rows_constr = ref []
@@ -1133,14 +1164,15 @@ let s_dim_one_in_row_entry stage v ~value ~key ~data =
 let rec vars_of_dim = function
   | Dim _ -> Set.empty (module Dim_var)
   | Var v -> Set.singleton (module Dim_var) v
-  | Conv_input { output; dilation; _ } when dilation = 0 -> vars_of_dim output
-  | Conv_input { output; kernel; _ } -> Set.union (vars_of_dim output) (vars_of_dim kernel)
+  | Affine { over; conv = None; _ } -> vars_of_dim over
+  | Affine { over; conv = Some { kernel; _ }; _ } ->
+      Set.union (vars_of_dim over) (vars_of_dim kernel)
 
-let subst_dim ?(keep_conv = false) env dim =
+let subst_dim ?(keep_affine = false) env dim =
   let vars = vars_of_dim dim in
   List.fold (Set.elements vars) ~init:dim ~f:(fun acc v ->
       match find_dim env.dim_env v with
-      | Some (Solved_dim d) -> s_dim_one ~keep_conv v ~value:d ~in_:acc
+      | Some (Solved_dim d) -> s_dim_one ~keep_affine v ~value:d ~in_:acc
       | _ -> acc)
 
 let s_row_one v ~value:{ dims = more_dims; bcast; prov = _ } ~in_ =
@@ -1521,8 +1553,9 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
   match d with
   | Var v' -> equal_dim_var v v'
   | Dim _ -> false
-  | Conv_input { output; kernel; _ } ->
-      dim_var_occurs_in_dim v output || dim_var_occurs_in_dim v kernel
+  | Affine { over; conv = None; _ } -> dim_var_occurs_in_dim v over
+  | Affine { over; conv = Some { kernel; _ }; _ } ->
+      dim_var_occurs_in_dim v over || dim_var_occurs_in_dim v kernel
 
 let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
@@ -1533,57 +1566,114 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | (Conv_input { stride = 1; output; _ }, dim | dim, Conv_input { stride = 1; output; _ })
-    when !use_padding ->
-      unify_dim ~stage origin (output, dim) env
-  | ( Conv_input { stride = stride1; output = output1; dilation = dilation1; kernel = kernel1 },
-      Conv_input { stride = stride2; output = output2; dilation = dilation2; kernel = kernel2 } )
-    when !use_padding && (stride1 % stride2 = 0 || stride2 % stride1 = 0) ->
+  | ( Affine { stride = 1; over; conv = Some { use_padding = true; _ }; stride_offset = 0 },
+      dim )
+  | ( dim,
+      Affine { stride = 1; over; conv = Some { use_padding = true; _ }; stride_offset = 0 } ) ->
+      unify_dim ~stage origin (over, dim) env
+  | Affine { stride = 1; over; conv = None; stride_offset = 0 }, dim
+  | dim, Affine { stride = 1; over; conv = None; stride_offset = 0 } ->
+      unify_dim ~stage origin (over, dim) env
+  | ( Affine
+        {
+          stride = stride1;
+          over = over1;
+          conv = Some ({ use_padding = true; _ } as c1);
+          stride_offset = offset1;
+        },
+      Affine
+        {
+          stride = stride2;
+          over = over2;
+          conv = Some { use_padding = true; _ };
+          stride_offset = offset2;
+        } )
+    when stride1 % stride2 = 0 || stride2 % stride1 = 0 ->
+      (* Both have use_padding=true, we can simplify by dividing strides *)
       unify_dim ~stage origin
-        ( Conv_input
+        ( Affine
             {
               stride = (if stride1 > stride2 then stride1 / stride2 else stride2 / stride1);
-              output = (if stride1 > stride2 then output1 else output2);
-              kernel = (if stride1 > stride2 then kernel1 else kernel2);
-              dilation = (if stride1 > stride2 then dilation1 else dilation2);
+              over = (if stride1 > stride2 then over1 else over2);
+              conv = Some (if stride1 > stride2 then c1 else c1);
+              stride_offset = (if stride1 > stride2 then offset1 else offset2);
             },
-          if stride1 > stride2 then output2 else output1 )
+          if stride1 > stride2 then over2 else over1 )
         env
-  | (Conv_input { stride; output = Dim s; _ }, dim | dim, Conv_input { stride; output = Dim s; _ })
-    when !use_padding ->
-      unify_dim ~stage origin (get_dim ~d:(stride * s.d) (), dim) env
-  | (Conv_input { stride; output; _ }, Dim s | Dim s, Conv_input { stride; output; _ })
-    when !use_padding ->
-      if s.d % stride = 0 then unify_dim ~stage origin (get_dim ~d:(s.d / stride) (), output) env
+  | ( Affine { stride; over = Dim s; conv = Some { use_padding = true; _ }; stride_offset },
+      dim )
+  | ( dim,
+      Affine { stride; over = Dim s; conv = Some { use_padding = true; _ }; stride_offset } ) ->
+      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + stride_offset) (), dim) env
+  | Affine { stride; over = Dim s; conv = None; stride_offset }, dim
+  | dim, Affine { stride; over = Dim s; conv = None; stride_offset } ->
+      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + stride_offset) (), dim) env
+  | ( Affine { stride; over; conv = Some { use_padding = true; _ }; stride_offset },
+      Dim s )
+  | ( Dim s,
+      Affine { stride; over; conv = Some { use_padding = true; _ }; stride_offset } ) ->
+      let d = s.d - stride_offset in
+      if d >= 0 && d % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:(d / stride) (), over) env
       else
         raise
         @@ Shape_error
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Conv_input { stride; output = Dim s; dilation; kernel = Dim k }, dim
-  | dim, Conv_input { stride; output = Dim s; dilation; kernel = Dim k } ->
-      let offset = dilation * k.d in
-      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + offset - (offset % stride)) (), dim) env
-  | Conv_input { stride; output; dilation; kernel = Dim k }, Dim s
-  | Dim s, Conv_input { stride; output; dilation; kernel = Dim k } ->
-      let offset = dilation * k.d in
+  | Affine { stride; over; conv = None; stride_offset }, Dim s
+  | Dim s, Affine { stride; over; conv = None; stride_offset } ->
+      let d = s.d - stride_offset in
+      if d >= 0 && d % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:(d / stride) (), over) env
+      else
+        raise
+        @@ Shape_error
+             ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
+  | ( Affine
+        {
+          stride;
+          over = Dim s;
+          conv = Some { dilation; kernel = Dim k; use_padding = false };
+          stride_offset;
+        },
+      dim )
+  | ( dim,
+      Affine
+        {
+          stride;
+          over = Dim s;
+          conv = Some { dilation; kernel = Dim k; use_padding = false };
+          stride_offset;
+        } ) ->
+      let offset = (dilation * k.d) + stride_offset in
+      let offset_adjusted = offset - (offset % stride) in
+      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + offset_adjusted) (), dim) env
+  | ( Affine
+        { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; stride_offset },
+      Dim s )
+  | ( Dim s,
+      Affine
+        { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; stride_offset }
+    ) ->
+      let offset = (dilation * k.d) + stride_offset in
       let offset_adjusted = offset - (offset % stride) in
       if (s.d - offset_adjusted) % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((s.d - offset_adjusted) / stride) (), output) env
+        unify_dim ~stage origin (get_dim ~d:((s.d - offset_adjusted) / stride) (), over) env
       else
         raise
         @@ Shape_error
              ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Conv_input { stride = s1; output = o1; _ }, Conv_input { stride = s2; output = o2; _ }
-    when !use_padding ->
-      if s1 = s2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
+  | ( Affine { stride = s1; over = o1; conv = Some { use_padding = true; _ }; stride_offset = off1 },
+      Affine { stride = s2; over = o2; conv = Some { use_padding = true; _ }; stride_offset = off2 }
+    ) ->
+      if s1 = s2 && off1 = off2 then ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
       else if s1 >= s2 && s1 % s2 = 0 then
         ( [
             Dim_eq
               {
                 d1 = o2;
                 d2 =
-                  Conv_input
-                    { stride = s1 / s2; output = o1; dilation = 0; kernel = get_dim ~d:0 () };
+                  Affine
+                    { stride = s1 / s2; over = o1; conv = None; stride_offset = (off1 - off2) / s2 };
                 origin;
               };
           ],
@@ -1594,8 +1684,8 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               {
                 d1 = o1;
                 d2 =
-                  Conv_input
-                    { stride = s2 / s1; output = o2; dilation = 0; kernel = get_dim ~d:0 () };
+                  Affine
+                    { stride = s2 / s1; over = o2; conv = None; stride_offset = (off2 - off1) / s1 };
                 origin;
               };
           ],
@@ -1604,30 +1694,47 @@ let%debug5_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         raise
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
-  | ( Conv_input { stride = s1; output = o1; dilation = d1; kernel = Dim k1 },
-      Conv_input { stride = s2; output = o2; dilation = d2; kernel = Dim k2 } ) ->
-      let offset1 = d1 * k1.d and offset2 = d2 * k2.d in
+  | ( Affine
+        {
+          stride = s1;
+          over = o1;
+          conv = Some { dilation = d1; kernel = Dim k1; use_padding = false };
+          stride_offset = off1;
+        },
+      Affine
+        {
+          stride = s2;
+          over = o2;
+          conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
+          stride_offset = off2;
+        } ) ->
+      let offset1 = (d1 * k1.d) + off1 and offset2 = (d2 * k2.d) + off2 in
       let offset1_adjusted = offset1 - (offset1 % s1)
       and offset2_adjusted = offset2 - (offset2 % s2) in
-      let kernel = get_dim ~d:1 () in
       if s1 = s2 && offset1_adjusted = offset2_adjusted then
         ([ Dim_eq { d1 = o1; d2 = o2; origin } ], env)
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
-        let dilation = (offset1_adjusted - offset2_adjusted) / s2 in
-        ( [ Dim_eq { d1 = o2; d2 = Conv_input { stride; output = o1; dilation; kernel }; origin } ],
+        let new_offset = (offset1_adjusted - offset2_adjusted) / s2 in
+        ( [
+            Dim_eq
+              { d1 = o2; d2 = Affine { stride; over = o1; conv = None; stride_offset = new_offset }; origin };
+          ],
           env )
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
-        let dilation = (offset2_adjusted - offset1_adjusted) / s1 in
-        ( [ Dim_eq { d1 = o1; d2 = Conv_input { stride; output = o2; dilation; kernel }; origin } ],
+        let new_offset = (offset2_adjusted - offset1_adjusted) / s1 in
+        ( [
+            Dim_eq
+              { d1 = o1; d2 = Affine { stride; over = o2; conv = None; stride_offset = new_offset }; origin };
+          ],
           env )
       else
         (* FIXME: should keep the constraint as-is but currently unification must make progress. *)
         raise
         @@ Shape_error
              ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
-  (* | Conv_input _, Conv_input _ -> failwith "Conv_input, Conv_input NOT IMPLEMENTED YET" *)
+  (* | Affine _, Affine _ -> failwith "Affine, Affine NOT IMPLEMENTED YET" *)
   | Var v, dim2 | dim2, Var v ->
       if dim_var_occurs_in_dim v dim2 then
         raise
@@ -1885,7 +1992,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
         match find_dim env.dim_env cur_v with
         | None | Some (Solved_dim (Dim _)) -> false
         | Some (Solved_dim (Var v)) -> equal_dim_var subr_v v
-        | Some (Solved_dim (Conv_input _)) -> false (* Affine dimensions can't be cyclic *)
+        | Some (Solved_dim (Affine _)) -> false (* Affine dimensions can't be cyclic *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
   match (cur, subr) with
@@ -1897,7 +2004,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
   | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
   | _, Dim { d = 1; label = None; _ } -> ([], env)
   | (Dim { d = 1; label = None; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
-  | Conv_input _, _ | _, Conv_input _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
+  | Affine _, _ | _, Affine _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Var cur_v, Var subr_v -> (
       match (find_dim env.dim_env cur_v, find_dim env.dim_env subr_v) with
       | Some (Bounds_dim { cur = cur1; _ }), _ when List.mem ~equal:equal_dim_var cur1 subr_v ->
@@ -2167,7 +2274,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                 (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
-            | Conv_input _, _ | _, Conv_input _ -> assert false
+            | Affine _, _ | _, Affine _ -> assert false
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
@@ -2579,24 +2686,69 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 | Dim { label = Some l1; _ }, Dim { label = Some l2; _ }
                   when not (String.equal l1 l2) ->
                     get_dim ~d:1 ~proj_id:63 ()
-                | Conv_input { stride; output = Dim s; _ }, Dim s'
-                | Dim s', Conv_input { stride; output = Dim s; _ }
-                  when !use_padding && stride * s.d <> s'.d ->
+                | ( Affine
+                      { stride; over = Dim s; conv = Some { use_padding = true; _ }; stride_offset },
+                    Dim s' )
+                | ( Dim s',
+                    Affine
+                      { stride; over = Dim s; conv = Some { use_padding = true; _ }; stride_offset }
+                  )
+                  when (stride * s.d) + stride_offset <> s'.d ->
                     get_dim ~d:1 ~proj_id:49 ()
-                | Conv_input { stride; output = Dim s; kernel = Dim k; dilation }, Dim s'
-                | Dim s', Conv_input { stride; output = Dim s; kernel = Dim k; dilation }
-                  when (stride * s.d) + (dilation * k.d) <> s'.d ->
+                | Affine { stride; over = Dim s; conv = None; stride_offset }, Dim s'
+                | Dim s', Affine { stride; over = Dim s; conv = None; stride_offset }
+                  when (stride * s.d) + stride_offset <> s'.d ->
+                    get_dim ~d:1 ~proj_id:49 ()
+                | ( Affine
+                      {
+                        stride;
+                        over = Dim s;
+                        conv = Some { kernel = Dim k; dilation; use_padding = false };
+                        stride_offset;
+                      },
+                    Dim s' )
+                | ( Dim s',
+                    Affine
+                      {
+                        stride;
+                        over = Dim s;
+                        conv = Some { kernel = Dim k; dilation; use_padding = false };
+                        stride_offset;
+                      } )
+                  when (stride * s.d) + (dilation * k.d) + stride_offset <> s'.d ->
                     get_dim ~d:1 ~proj_id:50 ()
-                | ( Conv_input { stride = stride1; output = Dim s1; _ },
-                    Conv_input { stride = stride2; output = Dim s2; _ } )
-                  when !use_padding && stride1 * s1.d <> stride2 * s2.d ->
+                | ( Affine
+                      {
+                        stride = stride1;
+                        over = Dim s1;
+                        conv = Some { use_padding = true; _ };
+                        stride_offset = off1;
+                      },
+                    Affine
+                      {
+                        stride = stride2;
+                        over = Dim s2;
+                        conv = Some { use_padding = true; _ };
+                        stride_offset = off2;
+                      } )
+                  when (stride1 * s1.d) + off1 <> (stride2 * s2.d) + off2 ->
                     get_dim ~d:1 ~proj_id:51 ()
-                | ( Conv_input
-                      { stride = stride1; output = Dim s1; kernel = Dim k1; dilation = dilation1 },
-                    Conv_input
-                      { stride = stride2; output = Dim s2; kernel = Dim k2; dilation = dilation2 } )
-                  when (stride1 * s1.d) + (dilation1 * k1.d) <> (stride2 * s2.d) + (dilation2 * k2.d)
-                  ->
+                | ( Affine
+                      {
+                        stride = stride1;
+                        over = Dim s1;
+                        conv = Some { kernel = Dim k1; dilation = dilation1; use_padding = false };
+                        stride_offset = off1;
+                      },
+                    Affine
+                      {
+                        stride = stride2;
+                        over = Dim s2;
+                        conv = Some { kernel = Dim k2; dilation = dilation2; use_padding = false };
+                        stride_offset = off2;
+                      } )
+                  when (stride1 * s1.d) + (dilation1 * k1.d) + off1
+                       <> (stride2 * s2.d) + (dilation2 * k2.d) + off2 ->
                     get_dim ~d:1 ~proj_id:52 ()
                 | Var _, _ -> d1
                 | _, Var _ -> d2
@@ -2668,8 +2820,8 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : 
           [ Dim_eq { d1 = dim; d2 = lub; origin } ]
       | _ when not (is_stage5_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
-  | Conv_input _ ->
-      (* The input dimension itself cannot be dim-1, and the output dimension doesn't become
+  | Affine _ ->
+      (* The input dimension itself cannot be dim-1, and the over dimension doesn't become
          transitively terminal. *)
       []
 
@@ -2937,8 +3089,9 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
   let final = is_stage7 stage in
   let rec finalize_upper_lower_bound = function
     | Dim _ -> []
-    | Conv_input { output; kernel; _ } ->
-        finalize_upper_lower_bound output @ finalize_upper_lower_bound kernel
+    | Affine { over; conv = None; _ } -> finalize_upper_lower_bound over
+    | Affine { over; conv = Some { kernel; _ }; _ } ->
+        finalize_upper_lower_bound over @ finalize_upper_lower_bound kernel
     | Var v -> (
         match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
@@ -2957,7 +3110,8 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
   in
   let rec has_dim_var = function
     | Dim _ -> false
-    | Conv_input { output; kernel; _ } -> has_dim_var output || has_dim_var kernel
+    | Affine { over; conv = None; _ } -> has_dim_var over
+    | Affine { over; conv = Some { kernel; _ }; _ } -> has_dim_var over || has_dim_var kernel
     | Var _ -> true
   in
   let process_dims dims = List.concat_map dims ~f:finalize_upper_lower_bound in
@@ -3083,7 +3237,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) e
           let extras, constr = apply_dim_constraint ~source:Direct ~stage d constr env in
           let env =
             match (constr, d) with
-            | Unconstrained_dim, _ | _, Dim _ | _, Conv_input _ -> env
+            | Unconstrained_dim, _ | _, Dim _ | _, Affine _ -> env
             | _, Var v ->
                 let data =
                   match find_dim env.dim_env v with
@@ -3158,7 +3312,7 @@ let rec row_to_labels env =
         match find_dim env.dim_env v with
         | None | Some (Bounds_dim _) -> Option.value v.name ~default:""
         | Some (Solved_dim dim) -> f dim)
-    | Conv_input _ -> ""
+    | Affine _ -> ""
   in
   function
   | { dims; bcast = Row_var { v; beg_dims }; prov } -> (
@@ -3181,8 +3335,12 @@ let fresh_row_proj r =
   let rec fresh_dim = function
     | Dim { d; label; proj_id = _ } -> Dim { d; label; proj_id = Some (Proj_id.fresh ()) }
     | Var _ as d -> d
-    | Conv_input { stride; output; dilation; kernel } ->
-        Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
+    | Affine { stride; over; conv; stride_offset } ->
+        let conv =
+          Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
+              { dilation; kernel = fresh_dim kernel; use_padding })
+        in
+        Affine { stride; over = fresh_dim over; conv; stride_offset }
   in
   let bcast =
     match r.bcast with
@@ -3195,8 +3353,12 @@ let populate_dim_proj_in_solved env =
   let rec fresh_dim = function
     | Dim { d; label; proj_id = None } -> Dim { d; label; proj_id = Some (Proj_id.fresh ()) }
     | (Dim _ | Var _) as d -> d
-    | Conv_input { stride; output; dilation; kernel } ->
-        Conv_input { stride; output = fresh_dim output; dilation; kernel = fresh_dim kernel }
+    | Affine { stride; over; conv; stride_offset } ->
+        let conv =
+          Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
+              { dilation; kernel = fresh_dim kernel; use_padding })
+        in
+        Affine { stride; over = fresh_dim over; conv; stride_offset }
   in
   let fresh_row ({ dims; bcast; prov } : row) : row =
     let dims = List.map dims ~f:fresh_dim in
@@ -3217,18 +3379,20 @@ let populate_dim_proj_in_solved env =
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
    pid1 pid2 *)
 
-type proj =
+type convolution_proj = { dilation : int; kernel : proj; kernel_size : int }
+[@@deriving compare, equal, sexp]
+
+and proj =
   (* TODO: remove this variant Var to see if it breaks anything *)
   | Var of dim_var
   | Proj of proj_id * solved_dim
   | Solved of Idx.axis_index
   | Conv_input of {
       stride : int;
-      output : proj;
-      dilation : int;
-      kernel : proj;
-      kernel_size : int;
-      mutable input_id : proj_id option;
+      over : proj;
+      conv : convolution_proj option;
+      stride_offset : int;
+      mutable target_id : proj_id option;
     }
 [@@deriving compare, equal, sexp]
 
@@ -3272,21 +3436,13 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                ^ Option.value label ~default:"None"
                ^ ")",
                [] )
-    | Conv_input { stride; output; dilation = 0; kernel = _ } ->
-        (* Strided iteration: ignore kernel since dilation=0 *)
+    | Affine { stride; over; conv = None; stride_offset } ->
+        (* Strided iteration: no convolution *)
         Conv_input
-          {
-            stride;
-            output = to_proj output;
-            dilation = 0;
-            kernel = Solved (Fixed_idx 0);
-            (* dummy kernel *)
-            kernel_size = 0;
-            input_id = None;
-          }
-    | Conv_input { stride; output; dilation; kernel } ->
+          { stride; over = to_proj over; conv = None; stride_offset; target_id = None }
+    | Affine { stride; over; conv = Some { dilation; kernel; use_padding = _ }; stride_offset } ->
         let kernel_size =
-          match subst_dim ~keep_conv:true env kernel with
+          match subst_dim ~keep_affine:true env kernel with
           | Var v as dim ->
               raise
               @@ Shape_error
@@ -3294,7 +3450,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                      ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                      [ Dim_mismatch [ dim ] ] )
           | Dim { d; _ } -> d
-          | Conv_input _ as dim ->
+          | Affine _ as dim ->
               raise
               @@ Shape_error
                    ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ dim ] ])
@@ -3302,14 +3458,13 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         Conv_input
           {
             stride;
-            output = to_proj output;
-            dilation;
-            kernel = to_proj kernel;
-            kernel_size;
-            input_id = None;
+            over = to_proj over;
+            conv = Some { dilation; kernel = to_proj kernel; kernel_size };
+            stride_offset;
+            target_id = None;
           }
     | d -> (
-        match subst_dim ~keep_conv:true env d with
+        match subst_dim ~keep_affine:true env d with
         | Dim { d = 0; _ } -> Solved (Fixed_idx 0)
         | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
         | Dim { d = 1; label = _; proj_id = None } ->
@@ -3324,7 +3479,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                    [] )
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v
-        | Conv_input _ as conv -> to_proj conv)
+        | Affine _ as affine -> to_proj affine)
   in
   let rec expand_dims = function
     | { dims; bcast = Row_var { v; beg_dims }; _ }
@@ -3372,7 +3527,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
           constr = Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by };
           origin = _;
         } -> (
-        let divided_by = List.map divided_by ~f:(fun v -> subst_dim ~keep_conv:true env (Var v)) in
+        let divided_by = List.map divided_by ~f:(fun v -> subst_dim ~keep_affine:true env (Var v)) in
         match collect_factors divided_by with
         | Some (known_product, residual_vars) ->
             assert (List.is_empty residual_vars);
@@ -3387,17 +3542,16 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                   match List.rev dims with
                   | [] ->
                       [
-                        (let output = subst_dim ~keep_conv:true env (Var var) in
+                        (let output = subst_dim ~keep_affine:true env (Var var) in
                          Iterated (to_proj output));
                       ]
                   | inner :: other_dims ->
-                      let output = subst_dim ~keep_conv:true env (Var var) in
+                      let output = subst_dim ~keep_affine:true env (Var var) in
                       let input = to_proj inner in
                       Iterated (to_proj output)
                       :: Proj_eq
                            ( to_proj
-                               (Conv_input
-                                  { stride; output; dilation = 0; kernel = get_dim ~d:0 () }),
+                               (Affine { stride; over = output; conv = None; stride_offset = 0 }),
                              input )
                       :: List.map other_dims ~f:(fun d -> Proj_eq (to_proj d, Solved Sub_axis)))
             else assert false
@@ -3423,20 +3577,20 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | (0 | 1), None -> Idx.Fixed_idx 0
         | _ -> unknown_projection proj_id d)
     | Solved idx -> idx
-    | Conv_input { stride; output; dilation = 0; kernel = _; kernel_size = _; input_id = _ } -> (
-        (* Strided iteration: skip kernel computation since dilation=0 *)
-        let output_idx = loop output in
+    | Conv_input { stride; over; conv = None; stride_offset; target_id = _ } -> (
+        (* Strided iteration: skip kernel computation since no convolution *)
+        let over_idx = loop over in
         let symbols = ref [] in
-        let offset = ref 0 in
+        let offset = ref stride_offset in
 
-        (* Expand output index - multiply by stride *)
-        (match output_idx with
+        (* Expand over index - multiply by stride *)
+        (match over_idx with
         | Idx.Fixed_idx i -> offset := !offset + (stride * i)
         | Idx.Sub_axis -> ()
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
-        | Idx.Affine { symbols = output_syms; offset = output_offset } ->
-            symbols := List.map output_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
-            offset := !offset + (stride * output_offset));
+        | Idx.Affine { symbols = over_syms; offset = over_offset } ->
+            symbols := List.map over_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
+            offset := !offset + (stride * over_offset));
 
         (* Combine and simplify symbols *)
         let symbols =
@@ -3455,20 +3609,22 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | [] -> Idx.Fixed_idx !offset
         | [ (1, s) ] when !offset = 0 -> Idx.Iterator s
         | _ -> Idx.Affine { symbols; offset = !offset })
-    | Conv_input { stride; output; dilation; kernel; kernel_size; input_id } -> (
-        let output_idx = loop output in
+    | Conv_input
+        { stride; over; conv = Some { dilation; kernel; kernel_size }; stride_offset; target_id }
+      -> (
+        let over_idx = loop over in
         let kernel_idx = loop kernel in
         let symbols = ref [] in
-        let offset = ref 0 in
+        let offset = ref stride_offset in
 
-        (* Expand output index - multiply by stride *)
-        (match output_idx with
+        (* Expand over index - multiply by stride *)
+        (match over_idx with
         | Idx.Fixed_idx i -> offset := !offset + (stride * i)
         | Idx.Sub_axis -> ()
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
-        | Idx.Affine { symbols = output_syms; offset = output_offset } ->
-            symbols := List.map output_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
-            offset := !offset + (stride * output_offset));
+        | Idx.Affine { symbols = over_syms; offset = over_offset } ->
+            symbols := List.map over_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
+            offset := !offset + (stride * over_offset));
 
         (match kernel_idx with
         | Idx.Fixed_idx i -> offset := !offset + (dilation * i)
@@ -3486,7 +3642,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
             let left_padding = kernel_size - right_padding in
             let operation_padding = Ir.Ops.{ left = left_padding; right = right_padding } in
 
-            (* Check and update padding based on projection ID from output *)
+            (* Check and update padding based on projection ID from over *)
             (let check_and_update_padding proj_id =
                let repr, _ =
                  Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
@@ -3520,9 +3676,9 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
                    | None -> Hashtbl.set proj_env.inferred_padding ~key:repr ~data:operation_padding
                    | Some _ -> (* Existing inferred padding is sufficient *) ())
              in
-             match input_id with
+             match target_id with
              | Some proj_id -> check_and_update_padding proj_id
-             | None -> () (* No input projection ID available to check *));
+             | None -> () (* No target projection ID available to check *));
 
             !offset - left_padding)
           else !offset
@@ -3555,33 +3711,23 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
   in
   loop proj
 
-let rec dim_to_proj proj_env : dim -> proj = function
+let rec dim_to_proj _proj_env : dim -> proj = function
   | Var v -> Var v
   | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> Proj (proj_id, solved_dim)
   | Dim s -> Proj (Proj_id.fresh (), s)
-  | Conv_input { stride; output; dilation = 0; kernel = _ } ->
-      (* Strided iteration: ignore kernel since dilation=0 *)
+  | Affine { stride; over; conv = None; stride_offset } ->
       Conv_input
-        {
-          stride;
-          output = dim_to_proj proj_env output;
-          dilation = 0;
-          kernel = dim_to_proj proj_env (get_dim ~d:0 ());
-          (* dummy kernel *)
-          kernel_size = 0;
-          input_id = None;
-        }
-  | Conv_input { stride; output; dilation; kernel } ->
+        { stride; over = dim_to_proj _proj_env over; conv = None; stride_offset; target_id = None }
+  | Affine { stride; over; conv = Some { dilation; kernel; use_padding = _ }; stride_offset } ->
       (* FIXME: is this sufficient? *)
       let kernel_size = match kernel with Dim { d; _ } -> d | _ -> assert false in
       Conv_input
         {
           stride;
-          output = dim_to_proj proj_env output;
-          dilation;
-          kernel = dim_to_proj proj_env kernel;
-          kernel_size;
-          input_id = None;
+          over = dim_to_proj _proj_env over;
+          conv = Some { dilation; kernel = dim_to_proj _proj_env kernel; kernel_size };
+          stride_offset;
+          target_id = None;
         }
 
 let get_dim_index proj_env =
@@ -3604,7 +3750,7 @@ let get_dim_index proj_env =
         | _, Some i -> i
         | (0 | 1), None -> Fixed_idx 0
         | _ -> unknown_projection proj_id d)
-    | Conv_input _ as dim -> get_proj_index proj_env (dim_to_proj proj_env dim)
+    | Affine _ as dim -> get_proj_index proj_env (dim_to_proj proj_env dim)
   in
   loop
 
@@ -3635,20 +3781,20 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         p_solved := (p, idx) :: !p_solved
     | Proj_eq (Proj (p, _), (Conv_input c as conv_input))
     | Proj_eq ((Conv_input c as conv_input), Proj (p, _)) ->
-        (match c.input_id with
+        (match c.target_id with
         | Some pid when Proj_id.equal p pid -> ()
         | Some pid -> proj_classes := Utils.union_add ~equal:Proj_id.equal !proj_classes pid p
-        | None -> c.input_id <- Some p);
+        | None -> c.target_id <- Some p);
         (* We will substitute variables in conv_input later *)
         p_conv_input := (p, conv_input) :: !p_conv_input
     | Proj_eq (Solved idx, (Conv_input _ as conv_input))
     | Proj_eq ((Conv_input _ as conv_input), Solved idx) ->
         verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
     | Proj_eq
-        ( (Conv_input { stride = stride1; output = output1; _ } as conv_input1),
-          (Conv_input { stride = stride2; output = output2; _ } as conv_input2) )
+        ( (Conv_input { stride = stride1; over = over1; _ } as conv_input1),
+          (Conv_input { stride = stride2; over = over2; _ } as conv_input2) )
       when stride1 = stride2 ->
-        loop (Proj_eq (output1, output2));
+        loop (Proj_eq (over1, over2));
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
     | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ as conv_input2)) ->
@@ -3666,11 +3812,11 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | Some p2 -> loop (Proj_eq (p, p2)))
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
-    | Iterated (Conv_input { output; dilation = 0; kernel = _; _ }) ->
-        (* Strided iteration: only process output since dilation=0 *)
-        loop (Iterated output)
-    | Iterated (Conv_input { output; kernel; _ }) ->
-        loop (Iterated output);
+    | Iterated (Conv_input { over; conv = None; _ }) ->
+        (* Strided iteration: only process over since no convolution *)
+        loop (Iterated over)
+    | Iterated (Conv_input { over; conv = Some { kernel; _ }; _ }) ->
+        loop (Iterated over);
         loop (Iterated kernel)
     | Iterated (Var v) -> (
         match Hashtbl.find v_env v with
@@ -3786,7 +3932,7 @@ let get_product_proj proj_env dim =
            ( "projection_of_solved_dims: still not fully inferred for variable "
              ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
              [ Dim_mismatch [ dim ] ] )
-  | Conv_input _ -> None
+  | Affine _ -> None
 
 let proj_to_iterator_exn proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with

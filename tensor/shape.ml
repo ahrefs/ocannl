@@ -314,24 +314,27 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
           :: !extras;
         d
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
-        let output_dim =
+        let over_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
                  Row.get_var ~name:output_label ()))
         in
-        let kernel_dim =
+        let conv =
           if String.equal kernel_label "_stride_only" then
-            (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
-            Row.get_dim ~d:0 ()
+            (* For strided iteration (dilation=0), no convolution *)
+            None
           else if String.equal kernel_label "_offset_only" then
-            (* For offset-only iteration (dilation=offset), use fixed dimension 1 for kernel *)
-            Row.get_dim ~d:1 ()
+            (* For offset-only iteration (dilation=offset), no convolution *)
+            None
           else
-            Row.Var
-              (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                   Row.get_var ~name:kernel_label ()))
+            let kernel =
+              Row.Var
+                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                     Row.get_var ~name:kernel_label ()))
+            in
+            Some { Row.dilation; kernel; use_padding = !Row.use_padding }
         in
-        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
+        Row.Affine { stride; over = over_dim; conv; stride_offset = 0 }
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -1512,7 +1515,7 @@ let rec compute_row_product env (row : Row.t) : int =
             match Row.get_dim_val env v with
             | Some d -> d
             | None -> 1 (* Variable not yet resolved *))
-        | Row.Conv_input _ -> 1 (* TODO: handle convolution input dimensions *)
+        | Row.Affine _ -> 1 (* TODO: handle affine/convolution input dimensions *)
       in
       dim_val * compute_row_product env { row with dims = rest }
 
@@ -1600,7 +1603,7 @@ let%debug4_sexp row_to_dims (row : Row.t) : int array =
              ( "Not enough shape information: unresolved variable "
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Row_mismatch [ row ] ] )
-    | Conv_input _ ->
+    | Affine _ ->
         (* FIXME: reconsider this, we could return the input dimension of the convolution. *)
         raise
         @@ Row.Shape_error
@@ -1880,24 +1883,27 @@ let shape_spec_to_dims_bio labels =
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_dim ~d ()
     | Conv_spec { stride; output_label; dilation; kernel_label } ->
-        let output_dim =
+        let over_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
                  Row.get_var ~name:output_label ()))
         in
-        let kernel_dim =
+        let conv =
           if String.equal kernel_label "_stride_only" then
-            (* For strided iteration (dilation=0), use fixed dimension 0 for kernel *)
-            Row.get_dim ~d:0 ()
+            (* For strided iteration (dilation=0), no convolution *)
+            None
           else if String.equal kernel_label "_offset_only" then
-            (* For offset-only iteration (dilation=offset), use fixed dimension 1 for kernel *)
-            Row.get_dim ~d:1 ()
+            (* For offset-only iteration (dilation=offset), no convolution *)
+            None
           else
-            Row.Var
-              (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                   Row.get_var ~name:kernel_label ()))
+            let kernel =
+              Row.Var
+                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                     Row.get_var ~name:kernel_label ()))
+            in
+            Some { Row.dilation; kernel; use_padding = !Row.use_padding }
         in
-        Row.Conv_input { stride; output = output_dim; dilation; kernel = kernel_dim }
+        Row.Affine { stride; over = over_dim; conv; stride_offset = 0 }
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels

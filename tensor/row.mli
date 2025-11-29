@@ -25,13 +25,20 @@ type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 (** A single axis in a shape. [proj_id] is used for projection inference, and abused for provenance
     tracking during shape inference. *)
 
-type dim =
+type convolution = { dilation : int; kernel : dim; use_padding : bool }
+[@@deriving equal, hash, compare, sexp]
+(** Convolution parameters. The offset is implicit, automatically derived. If [use_padding] is
+    [true], the offset is the left part of the dimensionality-preserving symmetric padding,
+    otherwise it is 0. *)
+
+and dim =
   | Var of dim_var
   | Dim of solved_dim
-  | Conv_input of { stride : int; output : dim; dilation : int; kernel : dim }
-      (** The offset is implicit, automatically derived. If [!use_padding] is [true], the offset is
-          the left part of the dimensionality-preserving symmetric padding, otherwise it is 0. *)
-[@@deriving equal, hash, compare, sexp, variants]
+  | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
+      (** An affine transformation of a dimension. When [conv] is [None], this is a simple strided
+          dimension. When [conv] is [Some], this includes convolution parameters.
+          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+[@@deriving equal, hash, compare, sexp]
 
 val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
 val dim_to_int_exn : dim -> int
