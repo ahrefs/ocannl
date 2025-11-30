@@ -17,7 +17,7 @@ open Einsum_types
 (* Helper functions *)
 
 let make_axes_map ~in_axes ~from_end specs =
-  let f pos spec = ({ in_axes; pos; from_end }, spec) in
+  let f pos spec = (({ in_axes; pos; from_end } : AxisKey.t), spec) in
   let n = List.length specs in
   let indexed =
     if from_end then

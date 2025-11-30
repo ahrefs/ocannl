@@ -14,65 +14,8 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 (** {2 Shape types and inference.} *)
 
-(** An index pointing to any of a shape's axes, including the kind of the axis
-    ([Batch, Input, Output]) and the position (which is counted from the end to facilitate
-    broadcasting).
-
-    Note the following inconsistency due to differing conventions in function notation and matrix
-    notation: for label specifications and einsum notation, we write "batch|inputs->outputs", but
-    when we convert a shape to an [Ndarray] index we do it in the order [[batch; outputs; inputs].
-*)
-module AxisKey = struct
-  module T = struct
-    type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash]
-
-    type t = {
-      in_axes : kind;
-      pos : int;
-          (** Indices start at [1] (note this is axis index, dimension indices are always 0-based),
-              counted from the end if [from_end] is true. *)
-      from_end : bool;
-          (** Axes are indexed from the front (rarely) or from the end (typically), to avoid
-              reindexing when broadcasting. *)
-    }
-    [@@deriving equal, compare, sexp]
-  end
-
-  include T
-  include Comparator.Make (T)
-end
-
-type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
-
-(** Specification for individual axes in the einsum notation. *)
-type axis_spec =
-  | Label of string  (** A variable axis label. *)
-  | Fixed_index of int  (** A fixed index, used for projection. *)
-  | Conv_spec of { stride : int; output_label : string; dilation : int; kernel_label : string }
-      (** Convolution-style axis specification: stride*output + dilation*kernel. *)
-[@@deriving compare, sexp]
-
-type parsed_axis_labels = {
-  bcast_batch : string option;
-  bcast_input : string option;
-  bcast_output : string option;
-  given_batch : int;
-  given_input : int;
-  given_output : int;
-  given_beg_batch : int;
-  given_beg_input : int;
-  given_beg_output : int;
-  labels : axis_spec axis_map;
-}
-[@@deriving compare, sexp, fields]
-(** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
-    whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
-    broadcasting). The string can be used to identify a row variable, and defaults to ["batch"],
-    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields count the number of
-    specified axes of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
-    [from_end=false]. *)
-
-let axis_labels parsed = parsed.labels
+(* Re-export types from Einsum_parser (which includes Einsum_types) *)
+include Einsum_parser
 
 type padding = Row.axis_padding array option [@@deriving sexp, equal]
 
@@ -124,49 +67,14 @@ type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.
 type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
 [@@deriving sexp, equal]
 
-(** Convert einsum_parser types to shape.ml types. The types are structurally identical, but
-    shape.ml has additional derivations. *)
-let convert_axis_spec : Einsum_parser.axis_spec -> axis_spec = function
-  | Label s -> Label s
-  | Fixed_index i -> Fixed_index i
-  | Conv_spec { stride; output_label; dilation; kernel_label } ->
-      Conv_spec { stride; output_label; dilation; kernel_label }
-
-let convert_axis_key (key : Einsum_parser.axis_key) : AxisKey.t =
-  { in_axes = key.in_axes; pos = key.pos; from_end = key.from_end }
-
-let convert_parsed_axis_labels (parsed : Einsum_parser.parsed_axis_labels) : parsed_axis_labels =
-  let labels =
-    Map.fold parsed.labels
-      ~init:(Map.empty (module AxisKey))
-      ~f:(fun ~key ~data acc ->
-        Map.set acc ~key:(convert_axis_key key) ~data:(convert_axis_spec data))
-  in
-  {
-    bcast_batch = parsed.bcast_batch;
-    bcast_input = parsed.bcast_input;
-    bcast_output = parsed.bcast_output;
-    given_batch = parsed.given_batch;
-    given_input = parsed.given_input;
-    given_output = parsed.given_output;
-    given_beg_batch = parsed.given_beg_batch;
-    given_beg_input = parsed.given_beg_input;
-    given_beg_output = parsed.given_beg_output;
-    labels;
-  }
-
 let axis_labels_of_spec spec =
-  try convert_parsed_axis_labels (Einsum_parser.axis_labels_of_spec spec)
+  try Einsum_parser.axis_labels_of_spec spec
   with Einsum_parser.Parse_error msg ->
     raise
     @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
 let einsum_of_spec spec =
-  try
-    let l1, l2_opt, l3 = Einsum_parser.einsum_of_spec spec in
-    ( convert_parsed_axis_labels l1,
-      Option.map l2_opt ~f:convert_parsed_axis_labels,
-      convert_parsed_axis_labels l3 )
+  try Einsum_parser.einsum_of_spec spec
   with Einsum_parser.Parse_error msg ->
     raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
 
