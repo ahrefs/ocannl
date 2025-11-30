@@ -192,7 +192,10 @@ let%track4_sexp to_low_level code =
       =
     let projections : Indexing.projections = Lazy.force projections in
     let basecase rev_iters =
-      (* Create a substitution from product iterators to loop iterators *)
+      (* Create a substitution from product iterators to loop iterators.
+         Fresh loop symbols are needed because product_iterators may be shared across
+         different operations/tensors, but each lowered operation needs private loop symbols
+         to avoid conflicts in low_level.ml's symbol-to-tensor tracking. *)
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
         Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
@@ -200,13 +203,19 @@ let%track4_sexp to_low_level code =
         |> Array.to_list
         |> Map.of_alist_exn (module Indexing.Symbol)
       in
-      (* Substitute in projections *)
+      (* Substitute in projections - including inside Affine indices *)
       let subst_index = function
         | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
         | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
         | Indexing.Affine { symbols; offset } ->
-            (* For affine indices, we don't substitute - they should already use the right
-               symbols *)
+            let symbols =
+              List.map symbols ~f:(fun (coeff, s) ->
+                  match Map.find subst_map s with
+                  | Some (Indexing.Iterator s') -> (coeff, s')
+                  | Some (Indexing.Affine _) ->
+                      failwith "Affine substitution in Affine index not supported"
+                  | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
+            in
             Indexing.Affine { symbols; offset }
       in
       let lhs_idcs : Indexing.axis_index array = Array.map projections.project_lhs ~f:subst_index in
