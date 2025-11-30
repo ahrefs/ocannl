@@ -25,9 +25,11 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 - **Padding inference for convolutions** (#354, #386)
   - Integrate padding inference into shape inference pipeline
   - Refactor `use_padding` from global setting to `Conv_input` constructor field
+  - Synthetic toy CNN example: counting
 
-- **Example: Sokoban RL** (stretch goal)
-  - Policy gradient example with CNN architecture
+- **HIP backend** (#411) — parallel / background task
+  - Standalone bindings package for HIP (AMD hardware)
+  - Backend implementation
 
 ---
 
@@ -55,6 +57,9 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 - **Transformer toy example** (#57)
   - Fully working decoder-only autoregressive transformer
   - Names dataset language model
+
+- **Example: Sokoban RL** (stretch goal)
+  - Policy gradient example with CNN architecture
 
 ### v0.7.0 — End of January 2026
 **Theme: Frontend finalization (before ICFP deadline)**
@@ -131,10 +136,6 @@ This is a substantial milestone requiring ~2 months.
 
 - **Metal optimizations** (#320)
   - Use private mode appropriately
-
-- **HIP backend** (#411) — if resources permit
-  - Standalone bindings package for HIP (AMD hardware)
-  - Backend implementation
 
 ---
 

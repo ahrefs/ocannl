@@ -58,18 +58,17 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 (August 24, 2026)**.
 
-* **0.6.2 (End Nov 2025): "you forgot to specify a hidden dimension".**
-  * Menhir einsum parser stabilization.
-  * Detection of user errors where there is missing information about a hidden dimension: disables guessing "no axes" or "dimension 1" for shapes of parameters.
 * **0.6.3 (Mid-Dec 2025): Padding inference for convolutions.**
   * Padding inference during shape inference.
-  * Sokoban RL policy gradient example with a CNN (stretch goal).
+  * Toy CNN example: counting.
+  * HIP backend (AMD hardware) -- tentative.
 * **0.6.4 (End Dec 2025): Shape concatenation.**
   * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
     * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
 * **0.6.5 (Mid-Jan 2026): Transformer and position embeddings.**
   * RoPE embeddings.
   * Transformer for the Names dataset.
+  * Sokoban RL policy gradient example with a CNN (stretch goal).
 * **0.7.0 (End Jan 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
   * Cleanup of deprecated streams functionality.
   * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
@@ -103,6 +102,9 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.6.2: "you forgot to specify a hidden dimension".**
+  * Menhir einsum parser.
+  * Detection of user errors where there is missing information about a hidden dimension: disables guessing "no axes" or "dimension 1" for shapes of parameters.
 * **0.6.1: Syntax extension improvements, transformer building blocks.**
   * Heterogeneous precision operations.
   * Counter-based randomness via threefry, second pass (pointwise and weak-but-efficient variants); normal distribution operation.
