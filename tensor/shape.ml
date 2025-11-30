@@ -67,12 +67,6 @@ type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.
 type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
 [@@deriving sexp, equal]
 
-let axis_labels_of_spec spec =
-  try Einsum_parser.axis_labels_of_spec spec
-  with Einsum_parser.Parse_error msg ->
-    raise
-    @@ Utils.User_error ("Shape.axis_labels_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
-
 let einsum_of_spec spec =
   try Einsum_parser.einsum_of_spec spec
   with Einsum_parser.Parse_error msg ->
@@ -221,28 +215,22 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
             }
           :: !extras;
         d
-    | Conv_spec { stride; output_label; dilation; kernel_label } ->
+    | Affine_spec { stride; over_label; conv; stride_offset } ->
         let over_dim =
           Row.Var
-            (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
-                 Row.get_var ~name:output_label ()))
+            (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
+                 Row.get_var ~name:over_label ()))
         in
         let conv =
-          if String.equal kernel_label "_stride_only" then
-            (* For strided iteration (dilation=0), no convolution *)
-            None
-          else if String.equal kernel_label "_offset_only" then
-            (* For offset-only iteration (dilation=offset), no convolution *)
-            None
-          else
-            let kernel =
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                     Row.get_var ~name:kernel_label ()))
-            in
-            Some { Row.dilation; kernel; use_padding = !Row.use_padding }
+          Option.map conv ~f:(fun { dilation; kernel_label } ->
+              let kernel =
+                Row.Var
+                  (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                       Row.get_var ~name:kernel_label ()))
+              in
+              { Row.dilation; kernel; use_padding = !Row.use_padding })
         in
-        Row.Affine { stride; over = over_dim; conv; stride_offset = 0 }
+        Row.Affine { stride; over = over_dim; conv; stride_offset }
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -1790,28 +1778,22 @@ let shape_spec_to_dims_bio labels =
     | Label name ->
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_dim ~d ()
-    | Conv_spec { stride; output_label; dilation; kernel_label } ->
+    | Affine_spec { stride; over_label; conv; stride_offset } ->
         let over_dim =
           Row.Var
-            (Hashtbl.find_or_add dim_var_env output_label ~default:(fun () ->
-                 Row.get_var ~name:output_label ()))
+            (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
+                 Row.get_var ~name:over_label ()))
         in
         let conv =
-          if String.equal kernel_label "_stride_only" then
-            (* For strided iteration (dilation=0), no convolution *)
-            None
-          else if String.equal kernel_label "_offset_only" then
-            (* For offset-only iteration (dilation=offset), no convolution *)
-            None
-          else
-            let kernel =
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                     Row.get_var ~name:kernel_label ()))
-            in
-            Some { Row.dilation; kernel; use_padding = !Row.use_padding }
+          Option.map conv ~f:(fun { dilation; kernel_label } ->
+              let kernel =
+                Row.Var
+                  (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                       Row.get_var ~name:kernel_label ()))
+              in
+              { Row.dilation; kernel; use_padding = !Row.use_padding })
         in
-        Row.Affine { stride; over = over_dim; conv; stride_offset = 0 }
+        Row.Affine { stride; over = over_dim; conv; stride_offset }
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels
@@ -1940,3 +1922,12 @@ let%debug5_sexp default_display_indices (sh : t) : int array =
   in
   let axes = loop 1 axes in
   axis_map_to_dims_index axes
+
+let parse_n5_layout priorities =
+  let f : Einsum_parser.axis_spec -> int = function
+    | Fixed_index i -> i
+    | Label _ -> invalid_arg "parse_n5_layout requires integer-only labels"
+    | Affine_spec _ -> invalid_arg "parse_n5_layout does not support affine expressions"
+  in
+  let p_labels = Einsum_parser.(axis_labels @@ axis_labels_of_spec priorities) in
+  axis_map_to_dims_index p_labels |> Array.map ~f

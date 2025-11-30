@@ -30,9 +30,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_conv_syntax)
- (libraries ocannl)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
+ (libraries base einsum_parser stdio))
 
 (test
  (name test_print_style)

@@ -1,5 +1,3 @@
-Retrieving commandline, environment, or config file variable ocannl_log_level
-Found 0, in the config file
 Testing conv syntax parsing...
 Test 1: Parsed '2*o+3*k' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -7,7 +5,8 @@ Test 1: Parsed '2*o+3*k' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 2) (output_label o) (dilation 3) (kernel_label k))))))
+    (Affine_spec (stride 2) (over_label o)
+     (conv (((dilation 3) (kernel_label k)))) (stride_offset 0))))))
 
 Test 2: Parsed 'o+k' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -15,7 +14,8 @@ Test 2: Parsed 'o+k' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 1) (output_label o) (dilation 1) (kernel_label k))))))
+    (Affine_spec (stride 1) (over_label o)
+     (conv (((dilation 1) (kernel_label k)))) (stride_offset 0))))))
 
 Test 3: Parsed 'a, 2*b+c' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -23,7 +23,8 @@ Test 3: Parsed 'a, 2*b+c' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 2) (output_label b) (dilation 1) (kernel_label c)))
+    (Affine_spec (stride 2) (over_label b)
+     (conv (((dilation 1) (kernel_label c)))) (stride_offset 0)))
    (((in_axes Output) (pos 2) (from_end true)) (Label a)))))
 
 Test 4: Parsed 'i, o+k, j' successfully (multichar mode)
@@ -33,7 +34,8 @@ Test 4: Parsed 'i, o+k, j' successfully (multichar mode)
  (labels
   ((((in_axes Output) (pos 1) (from_end true)) (Label j))
    (((in_axes Output) (pos 2) (from_end true))
-    (Conv_spec (stride 1) (output_label o) (dilation 1) (kernel_label k)))
+    (Affine_spec (stride 1) (over_label o)
+     (conv (((dilation 1) (kernel_label k)))) (stride_offset 0)))
    (((in_axes Output) (pos 3) (from_end true)) (Label i)))))
 
 Test 5: Parsed 'a+bc' successfully (multichar mode)
@@ -42,7 +44,8 @@ Test 5: Parsed 'a+bc' successfully (multichar mode)
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 1) (output_label a) (dilation 1) (kernel_label bc))))))
+    (Affine_spec (stride 1) (over_label a)
+     (conv (((dilation 1) (kernel_label bc)))) (stride_offset 0))))))
 
 Test 6: Parsed 'i, j -> 2*i+j' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -50,7 +53,8 @@ Test 6: Parsed 'i, j -> 2*i+j' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 2) (output_label i) (dilation 1) (kernel_label j)))
+    (Affine_spec (stride 2) (over_label i)
+     (conv (((dilation 1) (kernel_label j)))) (stride_offset 0)))
    (((in_axes Input) (pos 1) (from_end true)) (Label j))
    (((in_axes Input) (pos 2) (from_end true)) (Label i)))))
 
@@ -61,8 +65,8 @@ Test 7: Parsed 'batch|input->3*output+1*kernel,' successfully
  (labels
   ((((in_axes Batch) (pos 1) (from_end true)) (Label batch))
    (((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 3) (output_label output) (dilation 1)
-     (kernel_label kernel)))
+    (Affine_spec (stride 3) (over_label output)
+     (conv (((dilation 1) (kernel_label kernel)))) (stride_offset 0)))
    (((in_axes Input) (pos 1) (from_end true)) (Label input)))))
 
 All conv syntax parsing tests passed!
@@ -74,8 +78,7 @@ Test 1: Parsed strided iteration '2*output' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 2) (output_label output) (dilation 0)
-     (kernel_label _stride_only))))))
+    (Affine_spec (stride 2) (over_label output) (conv ()) (stride_offset 0))))))
 
 Test 2: Parsed strided iteration '3*i' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -83,8 +86,7 @@ Test 2: Parsed strided iteration '3*i' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 3) (output_label i) (dilation 0)
-     (kernel_label _stride_only))))))
+    (Affine_spec (stride 3) (over_label i) (conv ()) (stride_offset 0))))))
 
 Test 3: Parsed einsum with strided iteration 'input -> 2*output' successfully
   Structure: ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_batch 0)
@@ -92,8 +94,7 @@ Test 3: Parsed einsum with strided iteration 'input -> 2*output' successfully
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 2) (output_label output) (dilation 0)
-     (kernel_label _stride_only)))
+    (Affine_spec (stride 2) (over_label output) (conv ()) (stride_offset 0)))
    (((in_axes Input) (pos 1) (from_end true)) (Label input)))))
 
 Test 4: Parsed mixed labels with strided iteration 'regular, 3*strided' successfully
@@ -102,8 +103,7 @@ Test 4: Parsed mixed labels with strided iteration 'regular, 3*strided' successf
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 3) (output_label strided) (dilation 0)
-     (kernel_label _stride_only)))
+    (Affine_spec (stride 3) (over_label strided) (conv ()) (stride_offset 0)))
    (((in_axes Output) (pos 2) (from_end true)) (Label regular)))))
 
 
@@ -128,7 +128,8 @@ Conv spec 'a+b': ((bcast_batch ()) (bcast_input ()) (bcast_output ()) (given_bat
  (given_beg_output 0)
  (labels
   ((((in_axes Output) (pos 1) (from_end true))
-    (Conv_spec (stride 1) (output_label a) (dilation 1) (kernel_label b))))))
+    (Affine_spec (stride 1) (over_label a)
+     (conv (((dilation 1) (kernel_label b)))) (stride_offset 0))))))
 Note: Conv expressions with + or * now always use multichar mode
 
 All conv syntax tests completed!

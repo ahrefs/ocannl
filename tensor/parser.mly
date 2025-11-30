@@ -96,31 +96,53 @@ axis_spec:
     { Label id }
   | UNDERSCORE
     { Label "_" }
-  | conv_expr
+  | affine_expr
     { $1 }
 
-/* Convolution expression: [stride*]output[+[dilation*]kernel] */
-conv_expr:
-  | stride = INT; STAR; output = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
-    { Conv_spec { stride; output_label = output; dilation; kernel_label = kernel } }
-  | stride = INT; STAR; output = IDENT; PLUS; dilation = INT; STAR; UNDERSCORE
-    { Conv_spec { stride; output_label = output; dilation; kernel_label = "_offset_only" } }
-  | stride = INT; STAR; output = IDENT; PLUS; offset = INT
-    { Conv_spec { stride; output_label = output; dilation = offset; kernel_label = "_offset_only" } }
-  | output = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
-    { Conv_spec { stride = 1; output_label = output; dilation; kernel_label = kernel } }
-  | output = IDENT; PLUS; dilation = INT; STAR; UNDERSCORE
-    { Conv_spec { stride = 1; output_label = output; dilation; kernel_label = "_offset_only" } }
-  | output = IDENT; PLUS; offset = INT
-    { Conv_spec { stride = 1; output_label = output; dilation = offset; kernel_label = "_offset_only" } }
-  | output = IDENT; PLUS; kernel = IDENT
-    { Conv_spec { stride = 1; output_label = output; dilation = 1; kernel_label = kernel } }
-  | stride = INT; STAR; output = IDENT; PLUS; kernel = IDENT
-    { Conv_spec { stride; output_label = output; dilation = 1; kernel_label = kernel } }
-  | stride = INT; STAR; output = IDENT; PLUS; UNDERSCORE
-    { Conv_spec { stride; output_label = output; dilation = 1; kernel_label = "_offset_only" } }
-  | stride = INT; STAR; output = IDENT
-    { Conv_spec { stride; output_label = output; dilation = 0; kernel_label = "_stride_only" } }
+/* Affine expression: [stride*]over[+offset][+[dilation*]kernel]
+   Supports various combinations of stride, offset, and convolution components.
+   The underscore (_) can be used as a placeholder in convolution syntax. */
+affine_expr:
+  /* Full form: stride*over+offset+dilation*kernel */
+  | stride = INT; STAR; over = IDENT; PLUS; offset = INT; PLUS; dilation = INT; STAR; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = offset;
+                    conv = Some { dilation; kernel_label = kernel } } }
+  /* stride*over+offset+kernel (dilation=1) */
+  | stride = INT; STAR; over = IDENT; PLUS; offset = INT; PLUS; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = offset;
+                    conv = Some { dilation = 1; kernel_label = kernel } } }
+  /* over+offset+dilation*kernel (stride=1) */
+  | over = IDENT; PLUS; offset = INT; PLUS; dilation = INT; STAR; kernel = IDENT
+    { Affine_spec { stride = 1; over_label = over; stride_offset = offset;
+                    conv = Some { dilation; kernel_label = kernel } } }
+  /* over+offset+kernel (stride=1, dilation=1) */
+  | over = IDENT; PLUS; offset = INT; PLUS; kernel = IDENT
+    { Affine_spec { stride = 1; over_label = over; stride_offset = offset;
+                    conv = Some { dilation = 1; kernel_label = kernel } } }
+  /* stride*over+dilation*kernel (no offset) */
+  | stride = INT; STAR; over = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = 0;
+                    conv = Some { dilation; kernel_label = kernel } } }
+  /* stride*over+kernel (no offset, dilation=1) */
+  | stride = INT; STAR; over = IDENT; PLUS; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = 0;
+                    conv = Some { dilation = 1; kernel_label = kernel } } }
+  /* over+dilation*kernel (stride=1, no offset) */
+  | over = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
+    { Affine_spec { stride = 1; over_label = over; stride_offset = 0;
+                    conv = Some { dilation; kernel_label = kernel } } }
+  /* over+kernel (stride=1, dilation=1, no offset) */
+  | over = IDENT; PLUS; kernel = IDENT
+    { Affine_spec { stride = 1; over_label = over; stride_offset = 0;
+                    conv = Some { dilation = 1; kernel_label = kernel } } }
+  /* stride*over+offset (no conv) */
+  | stride = INT; STAR; over = IDENT; PLUS; offset = INT
+    { Affine_spec { stride; over_label = over; stride_offset = offset; conv = None } }
+  /* over+offset (stride=1, no conv) - note: ambiguous with over+kernel, resolved by INT vs IDENT */
+  /* This case is handled by the over+kernel rule when offset is an IDENT */
+  /* stride*over (no offset, no conv) */
+  | stride = INT; STAR; over = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = 0; conv = None } }
 
 /* List of axis specifications - can be empty, allows trailing comma */
 axes_spec:

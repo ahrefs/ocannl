@@ -58,14 +58,6 @@ open Base
 
 type padding = Row.axis_padding array option [@@deriving sexp, equal]
 
-(** Specification for individual axes in the einsum notation. *)
-type axis_spec =
-  | Label of string  (** A variable axis label. *)
-  | Fixed_index of int  (** A fixed index, used for projection. *)
-  | Conv_spec of { stride : int; output_label : string; dilation : int; kernel_label : string }
-      (** Convolution-style axis specification: stride*output + dilation*kernel. *)
-[@@deriving compare, sexp]
-
 type t = {
   mutable batch : Row.t;
   mutable input : Row.t;
@@ -246,9 +238,6 @@ val default_display_indices : t -> int array
 val to_labels : t -> string array
 (** Uses the matrix convention of putting the input axes last. *)
 
-type 'a axis_map
-type parsed_axis_labels [@@deriving sexp]
-
-val axis_labels : parsed_axis_labels -> axis_spec axis_map
-val axis_labels_of_spec : string -> parsed_axis_labels
-val axis_map_to_dims_index : ?default:'a -> 'a axis_map -> 'a array
+val parse_n5_layout : string -> int array
+(** Parse a N5_layout priority string (e.g., "0,1,2") into display indices.
+    Only supports integer labels (Fixed_index). *)

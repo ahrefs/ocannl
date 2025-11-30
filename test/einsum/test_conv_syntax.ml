@@ -1,5 +1,4 @@
 open Base
-open Ocannl
 open Stdio
 
 let test_conv_parsing () =
@@ -7,45 +6,45 @@ let test_conv_parsing () =
 
   (* Test 1: Basic conv expression with coefficients (multichar - requires commas) *)
   let spec1 = "2*o+3*k" in
-  let labels1 = Shape.axis_labels_of_spec spec1 in
+  let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
   printf "Test 1: Parsed '%s' successfully\n%!" spec1;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels1));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
 
   (* Test 2: Simple conv expression without coefficients (multichar - requires commas) *)
   let spec2 = "o+k" in
-  let labels2 = Shape.axis_labels_of_spec spec2 in
+  let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
   printf "Test 2: Parsed '%s' successfully\n%!" spec2;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels2));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
 
   (* Test 3: Mixed spec with comma (multichar mode) *)
   let spec3 = "a, 2*b+c" in
-  let labels3 = Shape.axis_labels_of_spec spec3 in
+  let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
   printf "Test 3: Parsed '%s' successfully\n%!" spec3;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels3));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
 
   (* Test 4: Conv expression with multiple identifiers (multichar - requires commas) *)
   let spec4 = "i, o+k, j" in
-  let labels4 = Shape.axis_labels_of_spec spec4 in
+  let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
   printf "Test 4: Parsed '%s' successfully (multichar mode)\n%!" spec4;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels4));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
 
   (* Test 5: Conv expression with multi-char identifiers (multichar) *)
   let spec5 = "a+bc" in
-  let labels5 = Shape.axis_labels_of_spec spec5 in
+  let labels5 = Einsum_parser.axis_labels_of_spec spec5 in
   printf "Test 5: Parsed '%s' successfully (multichar mode)\n%!" spec5;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels5));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
 
   (* Test 6: Test in einsum notation with multichar conv *)
   let spec6 = "i, j -> 2*i+j" in
-  let labels6 = Shape.axis_labels_of_spec spec6 in
+  let labels6 = Einsum_parser.axis_labels_of_spec spec6 in
   printf "Test 6: Parsed '%s' successfully\n%!" spec6;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels6));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
 
   (* Test 7: Complex batch-input-output spec with conv *)
   let spec7 = "batch|input->3*output+1*kernel," in
-  let labels7 = Shape.axis_labels_of_spec spec7 in
+  let labels7 = Einsum_parser.axis_labels_of_spec spec7 in
   printf "Test 7: Parsed '%s' successfully\n%!" spec7;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels7));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels7));
 
   printf "All conv syntax parsing tests passed!\n%!"
 
@@ -54,27 +53,27 @@ let test_strided_iteration_parsing () =
 
   (* Test 1: Basic strided iteration (multichar mode due to multiplication) *)
   let spec1 = "2*output" in
-  let labels1 = Shape.axis_labels_of_spec spec1 in
+  let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
   printf "Test 1: Parsed strided iteration '%s' successfully\n%!" spec1;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels1));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
 
   (* Test 2: Strided iteration with single-char identifier (multichar mode) *)
   let spec2 = "3*i" in
-  let labels2 = Shape.axis_labels_of_spec spec2 in
+  let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
   printf "Test 2: Parsed strided iteration '%s' successfully\n%!" spec2;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels2));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
 
   (* Test 3: Strided iteration in einsum context (multichar due to multiplication) *)
   let spec3 = "input -> 2*output" in
-  let labels3 = Shape.axis_labels_of_spec spec3 in
+  let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
   printf "Test 3: Parsed einsum with strided iteration '%s' successfully\n%!" spec3;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels3));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
 
   (* Test 4: Mixed regular labels and strided iteration (multichar due to comma) *)
   let spec4 = "regular, 3*strided" in
-  let labels4 = Shape.axis_labels_of_spec spec4 in
+  let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
   printf "Test 4: Parsed mixed labels with strided iteration '%s' successfully\n%!" spec4;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels4));
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
 
   printf "\nAll strided iteration parsing tests completed!\n%!"
 
@@ -88,7 +87,7 @@ let test_conv_multichar_detection () =
 
   List.iter multichar_specs ~f:(fun spec ->
       try
-        let _labels = Shape.axis_labels_of_spec spec in
+        let _labels = Einsum_parser.axis_labels_of_spec spec in
         printf "✓ Multichar spec '%s' parsed correctly\n%!" spec
       with exn -> printf "✗ Failed to parse multichar spec '%s': %s\n%!" spec (Exn.to_string exn));
 
@@ -114,7 +113,7 @@ let test_conv_multichar_detection () =
 
   List.iter singlechar_specs ~f:(fun spec ->
       try
-        let _labels = Shape.axis_labels_of_spec spec in
+        let _labels = Einsum_parser.axis_labels_of_spec spec in
         printf "✓ Single-char spec '%s' parsed correctly\n%!" spec
       with exn ->
         printf "✗ Failed to parse single-char spec '%s': %s\n%!" spec (Exn.to_string exn))
@@ -125,10 +124,10 @@ let test_single_char_conv_equivalence () =
   (* Conv expressions now always trigger multichar mode due to plus or multiplication *)
   let conv_spec = "a+b" in
 
-  let labels = Shape.axis_labels_of_spec conv_spec in
+  let labels = Einsum_parser.axis_labels_of_spec conv_spec in
 
   printf "Conv spec '%s': %s\n%!" conv_spec
-    (Sexp.to_string_hum (Shape.sexp_of_parsed_axis_labels labels));
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels));
 
   printf "Note: Conv expressions with + or * now always use multichar mode\n%!"
 

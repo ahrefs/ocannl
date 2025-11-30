@@ -4,12 +4,21 @@
 
 open Base
 
+(** Convolution component for affine axis specifications. *)
+type conv_spec = { dilation : int; kernel_label : string } [@@deriving compare, sexp]
+
 (** Specification for individual axes in the einsum notation. *)
 type axis_spec =
   | Label of string  (** A variable axis label. *)
   | Fixed_index of int  (** A fixed index, used for projection. *)
-  | Conv_spec of { stride : int; output_label : string; dilation : int; kernel_label : string }
-      (** Convolution-style axis specification: stride*output + dilation*kernel. *)
+  | Affine_spec of {
+      stride : int;  (** Coefficient for the over dimension. *)
+      over_label : string;  (** The output/iteration dimension label. *)
+      conv : conv_spec option;  (** Optional convolution: dilation*kernel. *)
+      stride_offset : int;  (** Constant offset added after stride*over. *)
+    }
+      (** Affine axis specification: stride*over + stride_offset [+ dilation*kernel].
+          Corresponds to [Row.Affine] in shape inference. *)
 [@@deriving compare, sexp]
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input,
