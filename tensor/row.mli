@@ -36,8 +36,8 @@ and dim =
   | Dim of solved_dim
   | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
       (** An affine transformation of a dimension. When [conv] is [None], this is a simple strided
-          dimension. When [conv] is [Some], this includes convolution parameters.
-          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+          dimension. When [conv] is [Some], this includes convolution parameters. Invariants:
+          [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
 [@@deriving equal, hash, compare, sexp]
 
 val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
@@ -224,4 +224,5 @@ val get_product_proj : proj_env -> dim -> (proj_id * int) option
 
 val proj_to_iterator_exn : proj_env -> proj_id -> Ir.Indexing.symbol
 (** [proj_to_iterator_exn proj_env p] returns the iterator for [p] in [proj_env]. Raises
-    [Invalid_argument] if [p] is not an iterator. *)
+    [Invalid_argument] if [p] is not an iterator. Note that symbols go through substitution when
+    lowering, so these iterators are not the same as the ones in the generated code. *)

@@ -139,7 +139,8 @@ type projections = {
       *)
   product_iterators : symbol array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes) for
-          iterating over the [product_space] axes, where same axes are at same array indices. *)
+          iterating over the [product_space] axes, where same axes are at same array indices.
+          These may be shared; lowering creates fresh symbols for loop indices. *)
   project_lhs : axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the
           result of an operation. *)
