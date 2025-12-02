@@ -140,11 +140,3 @@
   backends
   context)
  (modes best))
-
-(library
- (name ppx_arrayjit)
- (public_name arrayjit.ppx_arrayjit)
- (modules ppx_helper)
- (libraries base ppxlib str)
- (preprocess
-  (pps ppxlib.metaquot)))

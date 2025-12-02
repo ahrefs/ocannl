@@ -1,6 +1,5 @@
 open Base
 open Ppxlib
-open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 
 let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name =

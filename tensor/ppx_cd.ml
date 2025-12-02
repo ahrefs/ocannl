@@ -1,6 +1,5 @@
 open Base
 open Ppxlib
-open Ppx_arrayjit.Ppx_helper
 open Ppx_shared
 module A = Ppxlib_ast.Ast_helper
 
