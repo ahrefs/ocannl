@@ -139,3 +139,14 @@
  (package neural_nets_lib)
  (modules test_einsum_parser)
  (libraries base ocannl stdio einsum_parser))
+
+(test
+ (name test_conv_padding)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_conv_padding)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
