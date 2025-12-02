@@ -18,7 +18,6 @@ val dim_var_set_empty : dim_var_set
 val dim_map_empty : 'a dim_map
 val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
-val use_padding : bool ref
 
 type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]

@@ -56,6 +56,7 @@ let _test_stride_gap () =
   let ctx = Context.auto () in
   (* Create tensor with multiple dims and test sparse assignment *)
   let input = TDSL.range_of_shape ~output_dims:[ 2; 5 ] () in
+  let use_padding = false in
   let%op result = input ++ "ij=>i+3*j" in
 
   Train.set_hosted result.value;

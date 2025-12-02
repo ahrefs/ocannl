@@ -4,15 +4,23 @@
 
 open Base
 
-(** Convolution component for affine axis specifications. *)
-type conv_spec = { dilation : int; kernel_label : string } [@@deriving compare, sexp]
+(** Use_padding specification for convolutions. *)
+type use_padding_spec = [ `True | `False | `Unspecified ] [@@deriving compare, sexp]
 
-(** Specification for individual axes in the einsum notation. *)
+(** Convolution component for affine axis specifications.
+    Note: [dilation] is a string because it can be an identifier at parse time,
+    and is resolved to an int at runtime. *)
+type conv_spec = { dilation : string; kernel_label : string; use_padding : use_padding_spec }
+[@@deriving compare, sexp]
+
+(** Specification for individual axes in the einsum notation.
+    Note: [stride] is a string because it can be an identifier at parse time,
+    and is resolved to an int at runtime. *)
 type axis_spec =
   | Label of string  (** A variable axis label. *)
   | Fixed_index of int  (** A fixed index, used for projection. *)
   | Affine_spec of {
-      stride : int;  (** Coefficient for the over dimension. *)
+      stride : string;  (** Coefficient for the over dimension (string to allow identifiers). *)
       over_label : string;  (** The output/iteration dimension label. *)
       conv : conv_spec option;  (** Optional convolution: dilation*kernel. *)
       stride_offset : int;  (** Constant offset added after stride*over. *)
@@ -55,20 +63,20 @@ type parsed_axis_labels = {
   bcast_batch : string option;
   bcast_input : string option;
   bcast_output : string option;
-  given_batch : int;
-  given_input : int;
-  given_output : int;
-  given_beg_batch : int;
-  given_beg_input : int;
-  given_beg_output : int;
+  given_batch : axis_spec list;
+  given_input : axis_spec list;
+  given_output : axis_spec list;
+  given_beg_batch : axis_spec list;
+  given_beg_input : axis_spec list;
+  given_beg_output : axis_spec list;
   labels : axis_spec axis_map;
 }
 [@@deriving compare, sexp, fields]
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
     whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
     broadcasting). The string can be used to identify a row variable, and defaults to ["batch"],
-    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields count the number of
-    specified axes of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
+    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields are lists of
+    axis specs of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
     [from_end=false]. *)
 
 let axis_labels parsed = parsed.labels

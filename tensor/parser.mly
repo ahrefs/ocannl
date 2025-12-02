@@ -35,11 +35,11 @@ let make_row_spec ~kind in_axes (beg_axes, row_var_spec, end_axes) =
   let from_beg = make_axes_map ~in_axes ~from_end:false beg_axes in
   let from_end = make_axes_map ~in_axes ~from_end:true end_axes in
   ( Option.map row_var_spec ~f:(fun rv -> if String.equal rv "..." then kind else rv),
-    List.length end_axes,
-    List.length beg_axes,
+    end_axes,
+    beg_axes,
     merge_maps from_beg from_end )
 
-let default_row = (None, 0, 0, Map.empty (module AxisKey))
+let default_row = (None, [], [], Map.empty (module AxisKey))
 
 let make_parsed_labels batch_opt input_opt output =
   let (bcast_batch, given_batch, given_beg_batch, batch_labels) =
@@ -80,6 +80,8 @@ let make_parsed_labels batch_opt input_opt output =
 %token UNDERSCORE   /* _ */
 %token ELLIPSIS     /* ... */
 %token DOT_DOT      /* .. */
+%token EQUALS       /* = - use_padding=true */
+%token LESS_THAN    /* < - use_padding=false */
 %token EOF
 
 /* Start symbols */
@@ -99,49 +101,96 @@ axis_spec:
   | affine_expr
     { $1 }
 
-/* Affine expression: [stride*]over[+offset][+[dilation*]kernel]
+/* Helper for converting int to string *)
+%inline int_as_string:
+  | n = INT { Int.to_string n }
+
+/* Helper for stride value (int or identifier) */
+%inline stride_value:
+  | n = INT { Int.to_string n }
+  | id = IDENT { id }
+
+/* Helper for use_padding specification */
+%inline use_padding_marker:
+  | EQUALS { `True }
+  | LESS_THAN { `False }
+
+/* Affine expression: [stride*]over[=|<][+offset][+[dilation*]kernel]
    Supports various combinations of stride, offset, and convolution components.
-   The underscore (_) can be used as a placeholder in convolution syntax. */
+   = after over means use_padding=true, < means use_padding=false.
+   The underscore (_) can be used as a placeholder in convolution syntax.
+   stride and dilation can be int literals or identifiers. */
 affine_expr:
-  /* Full form: stride*over+offset+dilation*kernel */
-  | stride = INT; STAR; over = IDENT; PLUS; offset = INT; PLUS; dilation = INT; STAR; kernel = IDENT
+  /* Full form with use_padding: stride*over[=|<]+offset+dilation*kernel */
+  | stride = stride_value; STAR; over = IDENT; padding = use_padding_marker; PLUS; offset = INT; PLUS; dilation = stride_value; STAR; kernel = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = offset;
-                    conv = Some { dilation; kernel_label = kernel } } }
-  /* stride*over+offset+kernel (dilation=1) */
-  | stride = INT; STAR; over = IDENT; PLUS; offset = INT; PLUS; kernel = IDENT
+                    conv = Some { dilation; kernel_label = kernel; use_padding = padding } } }
+  /* stride*over[=|<]+offset+kernel (dilation=1) */
+  | stride = stride_value; STAR; over = IDENT; padding = use_padding_marker; PLUS; offset = INT; PLUS; kernel = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = offset;
-                    conv = Some { dilation = 1; kernel_label = kernel } } }
-  /* over+offset+dilation*kernel (stride=1) */
-  | over = IDENT; PLUS; offset = INT; PLUS; dilation = INT; STAR; kernel = IDENT
-    { Affine_spec { stride = 1; over_label = over; stride_offset = offset;
-                    conv = Some { dilation; kernel_label = kernel } } }
-  /* over+offset+kernel (stride=1, dilation=1) */
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = padding } } }
+  /* over[=|<]+offset+dilation*kernel (stride=1) */
+  | over = IDENT; padding = use_padding_marker; PLUS; offset = INT; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = offset;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = padding } } }
+  /* over[=|<]+offset+kernel (stride=1, dilation=1) */
+  | over = IDENT; padding = use_padding_marker; PLUS; offset = INT; PLUS; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = offset;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = padding } } }
+  /* stride*over[=|<]+dilation*kernel (no offset) */
+  | stride = stride_value; STAR; over = IDENT; padding = use_padding_marker; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = 0;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = padding } } }
+  /* stride*over[=|<]+kernel (no offset, dilation=1) */
+  | stride = stride_value; STAR; over = IDENT; padding = use_padding_marker; PLUS; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = 0;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = padding } } }
+  /* over[=|<]+dilation*kernel (stride=1, no offset) */
+  | over = IDENT; padding = use_padding_marker; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = 0;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = padding } } }
+  /* over[=|<]+kernel (stride=1, dilation=1, no offset) */
+  | over = IDENT; padding = use_padding_marker; PLUS; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = 0;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = padding } } }
+  /* Unspecified use_padding (legacy syntax without = or <, implies no convolution or use_padding=`Unspecified) */
+  /* Full form: stride*over+offset+dilation*kernel (unspecified use_padding) */
+  | stride = stride_value; STAR; over = IDENT; PLUS; offset = INT; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = offset;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* stride*over+offset+kernel (dilation=1, unspecified use_padding) */
+  | stride = stride_value; STAR; over = IDENT; PLUS; offset = INT; PLUS; kernel = IDENT
+    { Affine_spec { stride; over_label = over; stride_offset = offset;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* over+offset+dilation*kernel (stride=1, unspecified use_padding) */
+  | over = IDENT; PLUS; offset = INT; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = offset;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* over+offset+kernel (stride=1, dilation=1, unspecified use_padding) */
   | over = IDENT; PLUS; offset = INT; PLUS; kernel = IDENT
-    { Affine_spec { stride = 1; over_label = over; stride_offset = offset;
-                    conv = Some { dilation = 1; kernel_label = kernel } } }
-  /* stride*over+dilation*kernel (no offset) */
-  | stride = INT; STAR; over = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = offset;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* stride*over+dilation*kernel (no offset, unspecified use_padding) */
+  | stride = stride_value; STAR; over = IDENT; PLUS; dilation = stride_value; STAR; kernel = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = 0;
-                    conv = Some { dilation; kernel_label = kernel } } }
-  /* stride*over+kernel (no offset, dilation=1) */
-  | stride = INT; STAR; over = IDENT; PLUS; kernel = IDENT
+                    conv = Some { dilation; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* stride*over+kernel (no offset, dilation=1, unspecified use_padding) */
+  | stride = stride_value; STAR; over = IDENT; PLUS; kernel = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = 0;
-                    conv = Some { dilation = 1; kernel_label = kernel } } }
-  /* over+dilation*kernel (stride=1, no offset) */
-  | over = IDENT; PLUS; dilation = INT; STAR; kernel = IDENT
-    { Affine_spec { stride = 1; over_label = over; stride_offset = 0;
-                    conv = Some { dilation; kernel_label = kernel } } }
-  /* over+kernel (stride=1, dilation=1, no offset) */
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* over+dilation*kernel (stride=1, no offset, unspecified use_padding) */
+  | over = IDENT; PLUS; dilation = stride_value; STAR; kernel = IDENT
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = 0;
+                    conv = Some { dilation; kernel_label = kernel; use_padding = `Unspecified } } }
+  /* over+kernel (stride=1, dilation=1, no offset, unspecified use_padding) */
   | over = IDENT; PLUS; kernel = IDENT
-    { Affine_spec { stride = 1; over_label = over; stride_offset = 0;
-                    conv = Some { dilation = 1; kernel_label = kernel } } }
+    { Affine_spec { stride = "1"; over_label = over; stride_offset = 0;
+                    conv = Some { dilation = "1"; kernel_label = kernel; use_padding = `Unspecified } } }
   /* stride*over+offset (no conv) */
-  | stride = INT; STAR; over = IDENT; PLUS; offset = INT
+  | stride = stride_value; STAR; over = IDENT; PLUS; offset = INT
     { Affine_spec { stride; over_label = over; stride_offset = offset; conv = None } }
-  /* over+offset (stride=1, no conv) - note: ambiguous with over+kernel, resolved by INT vs IDENT */
-  /* This case is handled by the over+kernel rule when offset is an IDENT */
   /* stride*over (no offset, no conv) */
-  | stride = INT; STAR; over = IDENT
+  | stride = stride_value; STAR; over = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = 0; conv = None } }
 
 /* List of axis specifications - can be empty, allows trailing comma */

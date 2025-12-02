@@ -38,6 +38,8 @@ rule multichar_token = parse
   | '_'              { UNDERSCORE }
   | "..."            { ELLIPSIS }
   | ".."             { DOT_DOT }
+  | '='              { EQUALS }
+  | '<'              { LESS_THAN }
   | digit+ as n      { INT (int_of_string n) }
   | alpha alphanum* as id
                      { IDENT id }
@@ -53,6 +55,8 @@ and single_char_token = parse
   | ';'              { SEMICOLON }
   | "..."            { ELLIPSIS }
   | ".."             { DOT_DOT }
+  | '='              { EQUALS }
+  | '<'              { LESS_THAN }
   | digit+ as n      {
       (* Always buffer COMMA after fixed index - parser handles trailing commas *)
       buffered_token := Some COMMA;
@@ -75,11 +79,19 @@ and single_char_token = parse
 (* Determine if input uses multichar mode *)
 let is_multichar spec =
   let has_multichar_trigger = ref false in
-  String.iter (fun c ->
-    match c with
-    | ',' | '*' | '+' | '^' | '&' -> has_multichar_trigger := true
-    | _ -> ()
-  ) spec;
+  let len = String.length spec in
+  let i = ref 0 in
+  while !i < len do
+    let c = spec.[!i] in
+    (match c with
+    | ',' | '*' | '+' | '^' | '&' | '<' -> has_multichar_trigger := true
+    | '=' ->
+        (* Only trigger multichar if '=' is NOT followed by '>' (i.e., not part of '=>') *)
+        if !i + 1 >= len || spec.[!i + 1] <> '>' then
+          has_multichar_trigger := true
+    | _ -> ());
+    incr i
+  done;
   !has_multichar_trigger
 
 (* Main entry point that switches between modes and handles buffered tokens *)

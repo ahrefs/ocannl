@@ -206,8 +206,6 @@ let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt
 let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
-  (* FIXME(#386): this is super hacky, but how will we pass use_padding? *)
-  [%oc Ocannl_tensor.Row.use_padding := use_padding];
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
   x
@@ -218,7 +216,7 @@ let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
 
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
     conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing) *)
-let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) () x =
+let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
   (* Depthwise: each input channel is convolved with its own filter *)
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
@@ -243,7 +241,7 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
      ~fetch_op:(Constant 1.) ()" but that's less concise. See:
      https://github.com/ahrefs/ocannl/discussions/381 *)
   x
-  @^+ "... | stride*oh+wh, stride*ow+ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
+  @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
         (0.5 + 0.5)
 
 (** Average pooling for 2D spatial data - reduces spatial dimensions by averaging values. *)
@@ -252,7 +250,7 @@ let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
   Shape.set_dim ww window_size;
   let sum =
     x
-    +++ "... | stride*oh+wh, stride*ow+ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
+    +++ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
           (0.5 + 0.5)
   in
   sum /. (dim wh *. dim ww)

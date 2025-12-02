@@ -735,6 +735,7 @@ end
 
 module DSL_modules = struct
   module Ir = Ir
+  module Row = Row
   module Shape = Shape
   module Tensor = Tensor
 

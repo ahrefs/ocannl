@@ -216,21 +216,38 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
           :: !extras;
         d
     | Affine_spec { stride; over_label; conv; stride_offset } ->
+        let stride_int =
+          try Int.of_string stride
+          with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
+        in
         let over_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
                  Row.get_var ~name:over_label ()))
         in
         let conv =
-          Option.map conv ~f:(fun { dilation; kernel_label } ->
+          Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
+              let dilation_int =
+                try Int.of_string dilation
+                with _ -> failwith ("Invalid dilation value (expected integer): " ^ dilation)
+              in
+              let use_padding_bool =
+                match use_padding with
+                | `True -> true
+                | `False -> false
+                | `Unspecified ->
+                    failwith
+                      "use_padding must be specified in convolution spec (use = for true, < for \
+                       false)"
+              in
               let kernel =
                 Row.Var
                   (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
                        Row.get_var ~name:kernel_label ()))
               in
-              { Row.dilation; kernel; use_padding = !Row.use_padding })
+              { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
         in
-        Row.Affine { stride; over = over_dim; conv; stride_offset }
+        Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -1779,21 +1796,38 @@ let shape_spec_to_dims_bio labels =
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_dim ~d ()
     | Affine_spec { stride; over_label; conv; stride_offset } ->
+        let stride_int =
+          try Int.of_string stride
+          with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
+        in
         let over_dim =
           Row.Var
             (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
                  Row.get_var ~name:over_label ()))
         in
         let conv =
-          Option.map conv ~f:(fun { dilation; kernel_label } ->
+          Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
+              let dilation_int =
+                try Int.of_string dilation
+                with _ -> failwith ("Invalid dilation value (expected integer): " ^ dilation)
+              in
+              let use_padding_bool =
+                match use_padding with
+                | `True -> true
+                | `False -> false
+                | `Unspecified ->
+                    failwith
+                      "use_padding must be specified in convolution spec (use = for true, < for \
+                       false)"
+              in
               let kernel =
                 Row.Var
                   (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
                        Row.get_var ~name:kernel_label ()))
               in
-              { Row.dilation; kernel; use_padding = !Row.use_padding })
+              { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
         in
-        Row.Affine { stride; over = over_dim; conv; stride_offset }
+        Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels

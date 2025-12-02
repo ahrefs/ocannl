@@ -62,6 +62,7 @@ let z =
       (( * ) ?label:None hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
 let stride = 2
 and dilation = 3
+and use_padding = true
 let z2 =
   let hey7 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
@@ -72,8 +73,18 @@ let z2 =
   let open! TDSL.O in
     einsum ?label:(Some ["z2"])
       (String.concat ~sep:""
-         [Int.to_string stride; "*a+"; Int.to_string dilation; "*b,;b=>a,"])
-      hey7 hey8
+         [Int.to_string stride;
+         "*";
+         "a";
+         if use_padding then "=" else "<";
+         "+";
+         Int.to_string dilation;
+         "*";
+         "b";
+         "; ";
+         "b";
+         " => ";
+         "a"]) hey7 hey8
 let z3 =
   let s = 2
   and d = 3 in
@@ -86,11 +97,24 @@ let z3 =
   let open! TDSL.O in
     einsum ?label:(Some [])
       (String.concat ~sep:""
-         ["i, ";
+         ["i";
+         ", ";
          Int.to_string s;
-         "*a+";
+         "*";
+         "a";
+         if use_padding then "=" else "<";
+         "+";
          Int.to_string d;
-         "*bc; b => i, a, c"]) hey9 hey10
+         "*";
+         "bc";
+         "; ";
+         "b";
+         " => ";
+         "i";
+         ", ";
+         "a";
+         ", ";
+         "c"]) hey9 hey10
 let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
 let mlp_layer =
   let open! TDSL.O in

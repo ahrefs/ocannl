@@ -59,7 +59,6 @@ let proj_var_set_empty = Set.empty (module Proj_id)
 let proj_map_empty = Map.empty (module Proj_id)
 let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
-let use_padding = ref false
 
 type solved_dim = { d : int; label : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
@@ -3417,7 +3416,7 @@ let populate_dim_proj_in_solved env =
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
    pid1 pid2 *)
 
-type convolution_proj = { dilation : int; kernel : proj; kernel_size : int }
+type convolution_proj = { dilation : int; kernel : proj; kernel_size : int; use_padding : bool }
 [@@deriving compare, equal, sexp]
 
 and proj =
@@ -3477,7 +3476,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
     | Affine { stride; over; conv = None; stride_offset } ->
         (* Strided iteration: no convolution *)
         Conv_input { stride; over = to_proj over; conv = None; stride_offset; target_id = None }
-    | Affine { stride; over; conv = Some { dilation; kernel; use_padding = _ }; stride_offset } ->
+    | Affine { stride; over; conv = Some { dilation; kernel; use_padding }; stride_offset } ->
         let kernel_size =
           match subst_dim ~keep_affine:true env kernel with
           | Var v as dim ->
@@ -3496,7 +3495,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
           {
             stride;
             over = to_proj over;
-            conv = Some { dilation; kernel = to_proj kernel; kernel_size };
+            conv = Some { dilation; kernel = to_proj kernel; kernel_size; use_padding };
             stride_offset;
             target_id = None;
           }
@@ -3649,7 +3648,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | [ (1, s) ] when !offset = 0 -> Idx.Iterator s
         | _ -> Idx.Affine { symbols; offset = !offset })
     | Conv_input
-        { stride; over; conv = Some { dilation; kernel; kernel_size }; stride_offset; target_id }
+        { stride; over; conv = Some { dilation; kernel; kernel_size; use_padding }; stride_offset; target_id }
       -> (
         let over_idx = loop over in
         let kernel_idx = loop kernel in
@@ -3675,7 +3674,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
 
         (* Subtract padding if use_padding is true *)
         let offset =
-          if !use_padding then (
+          if use_padding then (
             (* Left padding smaller than right when split needed *)
             let right_padding = (kernel_size + 1) / 2 in
             let left_padding = kernel_size - right_padding in
@@ -3757,14 +3756,14 @@ let rec dim_to_proj _proj_env : dim -> proj = function
   | Affine { stride; over; conv = None; stride_offset } ->
       Conv_input
         { stride; over = dim_to_proj _proj_env over; conv = None; stride_offset; target_id = None }
-  | Affine { stride; over; conv = Some { dilation; kernel; use_padding = _ }; stride_offset } ->
+  | Affine { stride; over; conv = Some { dilation; kernel; use_padding }; stride_offset } ->
       (* FIXME: is this sufficient? *)
       let kernel_size = match kernel with Dim { d; _ } -> d | _ -> assert false in
       Conv_input
         {
           stride;
           over = dim_to_proj _proj_env over;
-          conv = Some { dilation; kernel = dim_to_proj _proj_env kernel; kernel_size };
+          conv = Some { dilation; kernel = dim_to_proj _proj_env kernel; kernel_size; use_padding };
           stride_offset;
           target_id = None;
         }

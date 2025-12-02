@@ -113,84 +113,168 @@ let ndarray_constant expr =
   in
   (values, List.rev batch_dims, List.rev output_dims, List.rev input_dims)
 
-(** Convert a string containing patterns like "identifier*" to an OCaml expression that substitutes
-    the identifiers with their runtime values. Identifiers match the pattern [a-z_][a-z0-9_]* and
-    must directly precede '*'.
+(** Convert an einsum spec string to an OCaml expression that constructs the runtime string.
 
-    Example usage: [substitute_identifiers_in_string ~loc "a *x + b * y"] generates an expression
-    equivalent to: [String.concat "" [Int.to_string a; " *x + "; Int.to_string b; " * y"]]
+    This function parses the einsum spec using the Einsum_parser, then reconstructs a runtime
+    string expression, handling:
+    - stride and dilation values: if they look like integer literals, emit them directly;
+      otherwise emit [Int.to_string identifier] to convert at runtime
+    - use_padding: if unspecified (legacy syntax), emit [if use_padding then "=" else "<"]
+      to read the value from [Row.use_padding] at runtime
 
-    So if [a = 2] and [b = 3], the result would be ["2 *x + 3 * y"]. Whitespace between identifiers
-    and '*' is preserved. *)
+    Example: ["stride*x=+k; y => z"] where [stride] is a variable, generates an expression that
+    evaluates to e.g. ["2*x=+k; y => z"] if [stride = 2]. *)
 let substitute_identifiers_in_einsum_spec ~loc str_input =
-  let multichar = String.contains str_input ',' in
   let open Ast_builder.Default in
-  (* Helper to check if character is valid for identifier start *)
-  let is_identifier_start c = Char.is_alpha c || Char.equal c '_' in
-
-  (* Helper to check if character is valid for identifier continuation *)
-  let is_identifier_char c = Char.is_alphanum c || Char.equal c '_' in
-
-  (* Find all identifier* patterns and their positions using forward scanning *)
-  let len = String.length str_input in
-  let substitutions = ref [] in
-
-  let i = ref 0 in
-  while !i < len do
-    let c = str_input.[!i] in
-    if is_identifier_start c then (
-      (* Found start of potential identifier *)
-      let start_pos = !i in
-      (* Scan forward to find end of identifier *)
-      while !i < len && is_identifier_char str_input.[!i] && (multichar || !i = start_pos) do
-        i := !i + 1
-      done;
-      let end_pos = !i - 1 in
-
-      (* Skip any whitespace after identifier *)
-      while !i < len && List.mem ~equal:Char.equal [ ' '; '\t'; '\n'; '\r' ] str_input.[!i] do
-        i := !i + 1
-      done;
-
-      (* Check if followed by '*' *)
-      if !i < len && Char.equal str_input.[!i] '*' then
-        let identifier = String.sub str_input ~pos:start_pos ~len:(end_pos - start_pos + 1) in
-        substitutions := (start_pos, end_pos, identifier) :: !substitutions)
-    else i := !i + 1
-  done;
-
-  let substitutions = List.rev !substitutions in
-
-  (* Build segments by splitting the string at substitution boundaries *)
-  let segments = ref [] in
-  let pos = ref 0 in
-
-  List.iter substitutions ~f:(fun (start_pos, end_pos, identifier) ->
-      (* Add literal segment before substitution *)
-      (if start_pos > !pos then
-         let literal = String.sub str_input ~pos:!pos ~len:(start_pos - !pos) in
-         segments := estring ~loc literal :: !segments);
-
-      (* Add substitution marker *)
-      segments :=
-        [%expr Int.to_string [%e pexp_ident ~loc (Located.mk ~loc (Lident identifier))]]
-        :: !segments;
-
-      (* Move position past the '*' *)
-      pos := end_pos + 1);
-
-  (* Add final literal segment *)
-  (if !pos < len then
-     let literal = String.sub str_input ~pos:!pos ~len:(len - !pos) in
-     segments := estring ~loc literal :: !segments);
-
-  let segments = List.rev !segments in
-
-  (* Generate expression to concatenate all segments *)
-  match segments with
-  | [] -> estring ~loc ""
-  | [ single ] -> single
-  | multiple -> [%expr String.concat ~sep:"" [%e elist ~loc multiple]]
+  let open Einsum_parser in
+  (* Helper to check if a string is an integer literal *)
+  let is_int_literal s =
+    try
+      ignore (Int.of_string s);
+      true
+    with _ -> false
+  in
+  (* Convert a string that might be an identifier to a runtime int expression *)
+  let int_value_expr s =
+    if is_int_literal s then estring ~loc s
+    else [%expr Int.to_string [%e pexp_ident ~loc (Located.mk ~loc (Lident s))]]
+  in
+  (* Convert use_padding_spec to a string expression *)
+  let use_padding_expr = function
+    | `True -> estring ~loc "="
+    | `False -> estring ~loc "<"
+    | `Unspecified -> [%expr if use_padding then "=" else "<"]
+  in
+  (* Convert a conv_spec to string segments *)
+  let conv_to_segments conv =
+    let dilation_expr = int_value_expr conv.dilation in
+    let padding_expr = use_padding_expr conv.use_padding in
+    if String.equal conv.dilation "1" then
+      [ padding_expr; estring ~loc "+"; estring ~loc conv.kernel_label ]
+    else
+      [
+        padding_expr;
+        estring ~loc "+";
+        dilation_expr;
+        estring ~loc "*";
+        estring ~loc conv.kernel_label;
+      ]
+  in
+  (* Convert axis_spec to string segments *)
+  let axis_spec_to_segments spec =
+    match spec with
+    | Label s -> [ estring ~loc s ]
+    | Fixed_index i -> [ estring ~loc (Int.to_string i) ]
+    | Affine_spec { stride; over_label; conv; stride_offset } ->
+        let stride_expr = int_value_expr stride in
+        let base_segments =
+          if String.equal stride "1" then [ estring ~loc over_label ]
+          else [ stride_expr; estring ~loc "*"; estring ~loc over_label ]
+        in
+        let offset_segments =
+          if stride_offset = 0 then []
+          else [ estring ~loc "+"; estring ~loc (Int.to_string stride_offset) ]
+        in
+        let conv_segments = match conv with None -> [] | Some c -> conv_to_segments c in
+        base_segments @ conv_segments @ offset_segments
+  in
+  (* Convert a list of axis_spec to segments with comma separators *)
+  let axes_to_segments axes =
+    List.concat_mapi axes ~f:(fun i spec ->
+        let prefix = if i > 0 then [ estring ~loc ", " ] else [] in
+        prefix @ axis_spec_to_segments spec)
+  in
+  (* Convert a row (bcast, given, given_beg) to segments *)
+  let row_to_segments ~kind bcast given_beg given =
+    let bcast_segment =
+      match bcast with
+      | None -> []
+      | Some s ->
+          if String.equal s kind then [ estring ~loc "..." ]
+          else [ estring ~loc ".."; estring ~loc s; estring ~loc ".." ]
+    in
+    let beg_segments = axes_to_segments given_beg in
+    let end_segments = axes_to_segments given in
+    let comma_before_bcast =
+      if List.is_empty beg_segments || List.is_empty bcast_segment then []
+      else [ estring ~loc ", " ]
+    in
+    let comma_after_bcast =
+      if List.is_empty bcast_segment || List.is_empty end_segments then []
+      else [ estring ~loc ", " ]
+    in
+    beg_segments @ comma_before_bcast @ bcast_segment @ comma_after_bcast @ end_segments
+  in
+  (* Convert parsed_axis_labels to segments *)
+  let parsed_to_segments parsed =
+    let batch_segments =
+      row_to_segments ~kind:"batch" parsed.bcast_batch parsed.given_beg_batch parsed.given_batch
+    in
+    let input_segments =
+      row_to_segments ~kind:"input" parsed.bcast_input parsed.given_beg_input parsed.given_input
+    in
+    let output_segments =
+      row_to_segments ~kind:"output" parsed.bcast_output parsed.given_beg_output parsed.given_output
+    in
+    let has_batch = not (List.is_empty batch_segments) || Option.is_some parsed.bcast_batch in
+    let has_input = not (List.is_empty input_segments) || Option.is_some parsed.bcast_input in
+    let segments =
+      if has_batch then
+        batch_segments @ [ estring ~loc "|" ]
+        @ (if has_input then input_segments @ [ estring ~loc "->" ] else [])
+        @ output_segments
+      else if has_input then input_segments @ [ estring ~loc "->" ] @ output_segments
+      else output_segments
+    in
+    segments
+  in
+  (* Try to parse as einsum spec *)
+  try
+    let labels1, labels2_opt, labels_r = einsum_of_spec str_input in
+    let segments1 = parsed_to_segments labels1 in
+    let segments2 =
+      match labels2_opt with
+      | None -> []
+      | Some labels2 -> [ estring ~loc "; " ] @ parsed_to_segments labels2
+    in
+    let segments_r = [ estring ~loc " => " ] @ parsed_to_segments labels_r in
+    let all_segments = segments1 @ segments2 @ segments_r in
+    (* Optimize: if all segments are string literals, concatenate at compile time *)
+    let all_literals =
+      List.for_all all_segments ~f:(fun e ->
+          match e.pexp_desc with Pexp_constant (Pconst_string _) -> true | _ -> false)
+    in
+    if all_literals then
+      let combined =
+        String.concat
+          (List.filter_map all_segments ~f:(fun e ->
+               match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None))
+      in
+      estring ~loc combined
+    else [%expr String.concat ~sep:"" [%e elist ~loc all_segments]]
+  with Parse_error _ ->
+    (* If parsing fails, try as axis_labels_spec *)
+    (try
+       let parsed = axis_labels_of_spec str_input in
+       let segments = parsed_to_segments parsed in
+       let all_literals =
+         List.for_all segments ~f:(fun e ->
+             match e.pexp_desc with Pexp_constant (Pconst_string _) -> true | _ -> false)
+       in
+       if all_literals then
+         let combined =
+           String.concat
+             (List.filter_map segments ~f:(fun e ->
+                  match e.pexp_desc with
+                  | Pexp_constant (Pconst_string (s, _, _)) -> Some s
+                  | _ -> None))
+         in
+         estring ~loc combined
+       else [%expr String.concat ~sep:"" [%e elist ~loc segments]]
+     with Parse_error msg ->
+       (* Fall back to returning the original string with an error note *)
+       pexp_extension ~loc
+       @@ Location.error_extensionf ~loc "Failed to parse einsum spec: %s" msg)
 
 let string_expr ~loc s = Ast_helper.Exp.constant @@ Pconst_string (s, loc, None)
 

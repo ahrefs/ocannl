@@ -12,6 +12,7 @@ let%op z = ('q' 2.0 * { hey5 }) + ({ hey6 } * 'p' 1.0)
 
 let stride = 2
 and dilation = 3
+and use_padding = true
 
 let%op z2 = { hey7 } +* "stride*a+dilation*b,;b=>a," { hey8 }
 

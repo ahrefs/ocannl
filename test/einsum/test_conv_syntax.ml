@@ -131,9 +131,51 @@ let test_single_char_conv_equivalence () =
 
   printf "Note: Conv expressions with + or * now always use multichar mode\n%!"
 
+let test_use_padding_syntax () =
+  printf "\nTesting use_padding syntax (= for true, < for false)...\n%!";
+
+  (* Test 1: use_padding=true with = syntax *)
+  let spec1 = "o=+k" in
+  let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
+  printf "Test 1: Parsed '%s' (use_padding=true)\n%!" spec1;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
+
+  (* Test 2: use_padding=false with < syntax *)
+  let spec2 = "o<+k" in
+  let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
+  printf "Test 2: Parsed '%s' (use_padding=false)\n%!" spec2;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
+
+  (* Test 3: use_padding with stride *)
+  let spec3 = "2*o=+k" in
+  let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
+  printf "Test 3: Parsed '%s' (stride with use_padding=true)\n%!" spec3;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
+
+  (* Test 4: use_padding with dilation *)
+  let spec4 = "o<+3*k" in
+  let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
+  printf "Test 4: Parsed '%s' (dilation with use_padding=false)\n%!" spec4;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
+
+  (* Test 5: use_padding with stride and dilation *)
+  let spec5 = "2*o=+3*k" in
+  let labels5 = Einsum_parser.axis_labels_of_spec spec5 in
+  printf "Test 5: Parsed '%s' (stride, dilation, use_padding=true)\n%!" spec5;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
+
+  (* Test 6: unspecified use_padding (legacy syntax) *)
+  let spec6 = "o+k" in
+  let labels6 = Einsum_parser.axis_labels_of_spec spec6 in
+  printf "Test 6: Parsed '%s' (unspecified use_padding)\n%!" spec6;
+  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
+
+  printf "All use_padding syntax tests completed!\n%!"
+
 let () =
   test_conv_parsing ();
   test_strided_iteration_parsing ();
   test_conv_multichar_detection ();
   test_single_char_conv_equivalence ();
+  test_use_padding_syntax ();
   printf "\nAll conv syntax tests completed!\n%!"

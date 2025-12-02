@@ -28,7 +28,7 @@ let test_variable_capture =
         ~capture_dims:[[%ocaml.error
                          "ppx_ocannl %op: repeated variable capture 'a'"];
                       b;
-                      a] "ab=>ba" x
+                      a] "a, b => b, a" x
 let test_mixed =
   let a = Shape.get_variable_ref "a"
   and b =
@@ -41,4 +41,4 @@ let test_mixed =
         ?label:(Some
                   (List.concat
                      [["test_mixed"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[b; a] "ab;bc=>ac" x b
+        ~capture_dims:[b; a] "a, b; b, c => a, c" x b
