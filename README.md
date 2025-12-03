@@ -61,14 +61,13 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
 * **0.6.3 (Mid-Dec 2025): Padding inference for convolutions.**
   * Padding inference during shape inference.
   * Toy CNN example: counting.
-  * HIP backend (AMD hardware) -- tentative.
-* **0.6.4 (End Dec 2025): Shape concatenation.**
+  * Sokoban RL policy gradient example with a CNN.
+  * HIP backend (AMD hardware) -- tentative, can slip to 0.6.4.
+* **0.6.4 (End Dec 2025): Shape concatenation and position embeddings.**
   * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
     * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
-* **0.6.5 (Mid-Jan 2026): Transformer and position embeddings.**
   * RoPE embeddings.
   * Transformer for the Names dataset.
-  * Sokoban RL policy gradient example with a CNN (stretch goal).
 * **0.7.0 (End Jan 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
   * Cleanup of deprecated streams functionality.
   * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
@@ -85,7 +84,6 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   * Finally from [llm.c](https://github.com/karpathy/llm.c).
   * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
-  * HIP backend (AMD hardware) if resources permit.
 * **0.9 (Aug 24, 2026 — ICFP): Optimize performance: program search.**
   * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.

@@ -27,7 +27,10 @@ This roadmap outlines the development plan for OCANNL from the current state to 
   - Refactor `use_padding` from global setting to `Conv_input` constructor field
   - Synthetic toy CNN example: counting
 
-- **HIP backend** (#411) — parallel / background task
+- **Example: Sokoban RL** (stretch goal)
+  - Policy gradient example with CNN architecture
+
+- **HIP backend** (#411) — parallel / background task, can slip to v0.6.4
   - Standalone bindings package for HIP (AMD hardware)
   - Backend implementation
 
@@ -36,7 +39,7 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 ## Q1 2026: Frontend Maturity and ICFP Paper
 
 ### v0.6.4 — End of December 2025
-**Theme: Shape concatenation**
+**Theme: Shape concatenation and position embeddings**
 
 - **Axis concatenation in einsum** (#49)
   - Implement `^` syntax for tensor stacking/concatenation
@@ -47,9 +50,6 @@ This roadmap outlines the development plan for OCANNL from the current state to 
   - Clarify design decisions
   - Document rationale
 
-### v0.6.5 — Mid-January 2026
-**Theme: Transformer and position embeddings**
-
 - **RoPE and position embeddings** (#398)
   - Rotary Position Embeddings implementation
   - Other non-learned position embedding variants
@@ -57,9 +57,6 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 - **Transformer toy example** (#57)
   - Fully working decoder-only autoregressive transformer
   - Names dataset language model
-
-- **Example: Sokoban RL** (stretch goal)
-  - Policy gradient example with CNN architecture
 
 ### v0.7.0 — End of January 2026
 **Theme: Frontend finalization (before ICFP deadline)**
