@@ -3864,17 +3864,23 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
             iterated_vars := v :: !iterated_vars
         | Some proj -> loop @@ Iterated proj)
   in
+  let no_proj_assigned v =
+    raise
+    @@ Shape_error
+         ( "Iterated variable has no projection assigned: "
+           ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+           [] )
+  in
   List.iter eqs ~f:loop;
   (* Process deferred iterated variables: they should now have projections assigned *)
-  List.iter !iterated_vars ~f:(fun v ->
+  let pending_vars = !iterated_vars in
+  iterated_vars := [];
+  List.iter pending_vars ~f:(fun v ->
       match Hashtbl.find v_env v with
-      | None ->
-          raise
-          @@ Shape_error
-               ( "Iterated variable has no projection assigned: "
-                 ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
-                 [] )
+      | None -> no_proj_assigned v
       | Some proj -> loop @@ Iterated proj);
+  (* Any variables added during the above iteration have no valid projection chain *)
+  List.iter !iterated_vars ~f:no_proj_assigned;
   let projs = ref @@ Map.empty (module Proj_id) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
