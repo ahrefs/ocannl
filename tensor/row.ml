@@ -3801,6 +3801,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let verify_when_solved1 = ref [] in
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
+  let iterated_vars = ref [] in
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
@@ -3859,11 +3860,21 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
     | Iterated (Var v) -> (
         match Hashtbl.find v_env v with
         | None ->
-            let idx = Idx.(Iterator (get_symbol ())) in
-            Hashtbl.add_exn v_env ~key:v ~data:(Solved idx)
+            (* Defer: record that v needs iteration, will resolve after all equations processed *)
+            iterated_vars := v :: !iterated_vars
         | Some proj -> loop @@ Iterated proj)
   in
   List.iter eqs ~f:loop;
+  (* Process deferred iterated variables: they should now have projections assigned *)
+  List.iter !iterated_vars ~f:(fun v ->
+      match Hashtbl.find v_env v with
+      | None ->
+          raise
+          @@ Shape_error
+               ( "Iterated variable has no projection assigned: "
+                 ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+                 [] )
+      | Some proj -> loop @@ Iterated proj);
   let projs = ref @@ Map.empty (module Proj_id) in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
@@ -3873,6 +3884,14 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
             @@ Shape_error
                  ("Multiple constraints on the same projection", [ Index_mismatch [ idx; idx2 ] ])));
   let product_dim = ref @@ Map.empty (module Proj_id) in
+  (* Collect projection IDs that will get their index from Conv_input (target_id projections).
+     These should NOT get fresh iterators from product_dim processing. *)
+  let conv_input_targets =
+    Set.of_list (module Proj_id)
+    @@ List.filter_map !p_conv_input ~f:(fun (p, _) ->
+           let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
+           Some repr)
+  in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       if Idx.iterated d && (not @@ Map.mem !projs repr) then
@@ -3885,9 +3904,12 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
                        "Conflicting dimensions for the same projection: %{p#Proj_id} %{d#Int} \
                         %{d2#Int}"],
                      [] )));
+  (* Create fresh iterators for product dimensions, EXCEPT for those that will get
+     their index from Conv_input (they will be processed later). *)
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
+      if not (Set.mem conv_input_targets repr) then
+        Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
 
   (* Process p_conv_input to populate projs and compute padding *)
   let resolved_padding =
@@ -3942,6 +3964,12 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
           @@ Shape_error
                ("Cannot unify two Conv_input projections", [ Index_mismatch [ idx1; idx2 ] ])
       with _ -> () (* Ignore errors for now *));
+
+  (* Now create fresh iterators for product dimensions that still don't have an index.
+     This is done after p_conv_input processing so Conv_input projections don't conflict. *)
+  Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
+      let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
+      Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
 
   {
     v_env;
