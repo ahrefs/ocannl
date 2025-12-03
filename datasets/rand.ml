@@ -24,7 +24,9 @@ module Random_for_tests : Random = struct
     (raw /. 10000. *. (high -. low)) +. low
 
   let char () = Char.chr @@ Int32.(to_int @@ rem (rand_int32 ()) 256l)
-  let int high = Int32.(to_int @@ rem (rand_int32 ()) @@ of_int high)
+  let int high =
+    (* Use abs to handle negative random values from xor-shift RNG *)
+    Int32.(to_int @@ rem (abs (rand_int32 ())) @@ of_int high)
 end
 
 module Random_for_dummy_tests : Random = struct

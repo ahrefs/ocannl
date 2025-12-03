@@ -36,6 +36,27 @@ let normal_at1 counter = [%oc box_muller grad_spec (fun () -> uniform_at1 counte
 
 open DSL_modules
 
+(** Convert a list of integers to a one-hot encoded tensor.
+    @param num_classes The number of classes (size of the one-hot dimension)
+    @param lst List of integer class indices (0-based)
+    @return A tensor of shape [len; num_classes] with one-hot encoding *)
+let one_hot_of_int_list ~num_classes lst =
+  let open Bigarray in
+  let len = List.length lst in
+  let arr = lst |> Array.of_list in
+  let genarray = Genarray.create Float32 c_layout [| len; num_classes |] in
+  (* Initialize to zero *)
+  for i = 0 to len - 1 do
+    for j = 0 to num_classes - 1 do
+      Genarray.set genarray [| i; j |] 0.
+    done
+  done;
+  (* Set one-hot positions *)
+  for i = 0 to len - 1 do
+    Genarray.set genarray [| i; arr.(i) |] 1.
+  done;
+  TDSL.rebatch ~l:"one_hot" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
+
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [ hid_dim ] })
 
 (** Masks and scales by 1/keep_prob to maintain expected value. When [train_step = None], the

@@ -1,7 +1,6 @@
 open Base
 open Ocannl
 open Stdio
-open Bigarray
 module Tn = Ir.Tnode
 module IDX = Train.IDX
 open Nn_blocks.DSL_modules
@@ -9,19 +8,6 @@ module CDSL = Train.CDSL
 module Asgns = Ir.Assignments
 
 module type Backend = Ir.Backend_intf.Backend
-
-let tensor_of_int_list lst =
-  let len = List.length lst in
-  let arr = lst |> Array.of_list in
-  (* Metal backend doesn't support double precision. *)
-  let genarray =
-    Genarray.create Bigarray.Float32 Bigarray.c_layout [| len; Datasets.Names.dict_size |]
-  in
-  (* convert to one-hot vectors *)
-  for i = 0 to len - 1 do
-    Genarray.set genarray [| i; arr.(i) |] 1.
-  done;
-  TDSL.rebatch ~l:"tensor" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
 
 let () =
   Utils.settings.fixed_state_for_init <- Some 13;
@@ -37,8 +23,8 @@ let () =
   let input_size = List.length int_input in
   Stdio.printf "input_size: %d\n%!" input_size;
 
-  let inputs = tensor_of_int_list int_input in
-  let outputs = tensor_of_int_list int_output in
+  let inputs = Nn_blocks.one_hot_of_int_list ~num_classes:Datasets.Names.dict_size int_input in
+  let outputs = Nn_blocks.one_hot_of_int_list ~num_classes:Datasets.Names.dict_size int_output in
 
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in

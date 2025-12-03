@@ -51,8 +51,9 @@ let generate_with_kind kind ?(config = Config.default) ~len () =
   let images = Genarray.create kind c_layout [| len; image_size; image_size; 1 |] in
   let labels = Genarray.create kind c_layout [| len; 1 |] in
 
-  (* Initialize images to zero *)
+  (* Initialize images and labels to zero *)
   for i = 0 to len - 1 do
+    Genarray.set labels [| i; 0 |] 0.0;
     for y = 0 to image_size - 1 do
       for x = 0 to image_size - 1 do
         Genarray.set images [| i; y; x; 0 |] 0.0
