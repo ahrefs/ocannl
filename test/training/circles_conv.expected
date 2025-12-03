@@ -1,0 +1,18 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Generating 160 circle counting images...
+Dataset generated: images shape [160; 16; 16; 1], labels shape [160; 1]
+
+Starting training for 10 epochs (200 steps)...
+Epoch 1: avg loss = 1.7506
+Epoch 2: avg loss = 1.3418
+Epoch 3: avg loss = 1.2798
+Epoch 4: avg loss = 1.2426
+Epoch 5: avg loss = 1.2119
+Epoch 6: avg loss = 1.1852
+Epoch 7: avg loss = 1.1617
+Epoch 8: avg loss = 1.1407
+Epoch 9: avg loss = 1.1219
+Epoch 10: avg loss = 1.1050
+
+Training complete!

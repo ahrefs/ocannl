@@ -46,3 +46,14 @@
  (libraries ocannl datasets)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name circles_conv)
+ (package neural_nets_lib)
+ (modules circles_conv)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl datasets)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
