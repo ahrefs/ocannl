@@ -257,13 +257,13 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
   (* NOTE: projections inference runs per-assignment in a distinct phase from shape inference, so
-     for it to know about the window size, we use a constant kernel = 1 to propagate the shape. We
+     for it to know about the window size, we use a constant kernel = 0.0 to propagate the shape. We
      use a trick to create a shape-inferred constant tensor, equivalently we could write "NTDSL.term
-     ~fetch_op:(Constant 1.) ()" but that's less concise. See:
+     ~fetch_op:(Constant 0.0) ()" but that's less concise. See:
      https://github.com/ahrefs/ocannl/discussions/381 *)
   x
   @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
-        (0.5 + 0.5)
+        (0.0 + 0.0)
 
 (** Average pooling for 2D spatial data - reduces spatial dimensions by averaging values. *)
 let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
@@ -272,7 +272,7 @@ let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
   let sum =
     x
     +++ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
-          (0.5 + 0.5)
+          (0.0 + 0.0)
   in
   sum /. (dim wh *. dim ww)
 
