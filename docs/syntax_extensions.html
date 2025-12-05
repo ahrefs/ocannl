@@ -1020,50 +1020,6 @@ padding is used:
 <code>%op</code> and <code>%cd</code> syntax extensions)</li>
 </ul></li>
 </ul>
-<h4 id="affine-indexing-for-convolutions-and-pooling">Affine indexing
-for convolutions and pooling</h4>
-<p>The affine axis syntax enables convolution and pooling operations
-directly in einsum notation. The semantics:</p>
-<ul>
-<li><p><strong>Input index formula</strong>:
-<code>input_index = stride * output_position + dilation * kernel_position</code></p></li>
-<li><p><strong>Padded convolution</strong> (<code>=+</code>): Input and
-output dimensions are equal (padding compensates for kernel
-extent)</p></li>
-<li><p><strong>Valid convolution</strong> (<code>&lt;+</code>): No
-padding. The dimension relationship is:</p>
-<pre><code>input_size = stride * (output_size - 1) + effective_kernel_span</code></pre>
-<p>where
-<code>effective_kernel_span = 1 + (kernel_size - 1) * dilation</code>.</p></li>
-</ul>
-<p><strong>Important constraint for valid convolution</strong>: The
-formula must hold exactly. For example, with <code>stride=2</code>,
-<code>kernel_size=2</code>, <code>dilation=1</code>: -
-<code>effective_kernel_span = 1 + (2-1) * 1 = 2</code> - A 4x4 input
-gives output_size: <code>4 = 2 * (output - 1) + 2</code> →
-<code>output = 2</code> - A 5x5 input would fail:
-<code>5 = 2 * (output - 1) + 2</code> → <code>output = 2.5</code> (not
-integer)</p>
-<p><strong>Examples</strong>:</p>
-<ul>
-<li>Max pooling 2x2 with stride 2:
-<code>input @^+ &quot;...|2*oh&lt;+wh, 2*ow&lt;+ww, ..c..; wh, ww =&gt; ...|oh, ow, ..c..&quot; window</code>
-<ul>
-<li>Uses <code>@^+</code> (max-reduce) to take maximum over the kernel
-window</li>
-<li><code>2*oh&lt;+wh</code> means: for each output position
-<code>oh</code>, access input at <code>2*oh + kernel_offset</code></li>
-<li>Valid convolution (<code>&lt;+</code>) so no padding; output is half
-the input size</li>
-</ul></li>
-<li>2D convolution with stride 1:
-<code>input +* &quot;...|oh&lt;+wh, ow&lt;+ww, ..ic..; wh, ww, ic =&gt; ...|oh, ow, ..oc..&quot; kernel</code>
-<ul>
-<li>Sum-reduces over kernel height, kernel width, and input
-channels</li>
-<li>Output channels come from the kernel’s output structure</li>
-</ul></li>
-</ul>
 <p>Examples:</p>
 <ul>
 <li><code>...|...-&gt;... =&gt; 0</code>: reduce all axes of the
@@ -1105,6 +1061,51 @@ result. Fails if the argument has input axes.</li>
 of the leftmost batch axis, reduce all its output axes, preserve its
 other batch axes as output axes. Fails if the argument has input
 axes.</li>
+</ul>
+<h4 id="affine-indexing-for-convolutions-and-pooling">Affine indexing
+for convolutions and pooling</h4>
+<p>The affine axis syntax enables convolution and pooling operations
+directly in einsum notation. The semantics:</p>
+<ul>
+<li><p><strong>Input index formula</strong>:
+<code>input_index = stride * output_position + dilation * kernel_position</code></p></li>
+<li><p><strong>Padded convolution</strong> (<code>=+</code>): Input and
+output dimensions are equal (padding compensates for kernel
+extent)</p></li>
+<li><p><strong>Valid convolution</strong> (<code>&lt;+</code>): No
+padding. The dimension relationship is:</p>
+<pre><code>input_size = stride * (output_size - 1) + effective_kernel_span</code></pre>
+<p>where
+<code>effective_kernel_span = 1 + (kernel_size - 1) * dilation</code>.</p></li>
+</ul>
+<p><strong>Important constraint for valid convolution</strong>: The
+formula must hold exactly. For example, with <code>stride=2</code>,
+<code>kernel_size=2</code>, <code>dilation=1</code>: -
+<code>effective_kernel_span = 1 + (2-1) * 1 = 2</code> - A 4x4 input
+gives output_size: <code>4 = 2 * (output - 1) + 2</code> →
+<code>output = 2</code> - A 5x5 input would fail:
+<code>5 = 2 * (output - 1) + 2</code> → <code>output = 2.5</code> (not
+integer)</p>
+<p><strong>Examples</strong>:</p>
+<ul>
+<li>Max pooling 2x2 with stride 2:
+<code>input @^+ &quot;...|2*oh&lt;+wh, 2*ow&lt;+ww, ..c..; wh, ww =&gt; ...|oh, ow, ..c..&quot; window</code>
+<ul>
+<li>Uses <code>@^+</code> (max-reduce) to take maximum over the kernel
+window</li>
+<li><code>2*oh&lt;+wh</code> means: for each output position
+<code>oh</code>, access input at <code>2*oh + kernel_offset</code></li>
+<li>Valid convolution (<code>&lt;+</code>) so no padding; output is half
+the input size</li>
+</ul></li>
+<li>2D convolution with stride 1:
+<code>input +* &quot;...|oh&lt;+wh, ow&lt;+ww, ..ic..; wh, ww, ic =&gt; ...|oh, ow, ..oc..&quot; kernel</code>
+<ul>
+<li>Sum-reduces over kernel height, kernel width, and input
+channels</li>
+<li>Output channels come from the output shape (typically inferred for
+the kernel)</li>
+</ul></li>
 </ul>
 <h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
