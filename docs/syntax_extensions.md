@@ -402,6 +402,38 @@ The syntax of an axis spec:
   - In both the output part and the kernel part you can prefix the axis variable by a constant coefficient with the `*` sign.
   - The coefficient can directly only be an integer, e.g. `"2*i+3*k"`, but under the `%op` and `%cd` syntax extensions, it can also be an identifier of an integer value, e.g. `let stride = 2 and dilation = 3 in [%op "input" +* "stride * a + dilation * b; b=>a," "kernel"]`.
   - Note the comma above. The syntax extension's expansion of stride and dilation respects the "multichar" mode. Without the comma we are limited to single-character identifiers, e.g. `let s = 2 and d = 3 in [%op "input" +* "is*a+d*bc;b=>iac" "kernel"]`.
+- The use_padding modifier before `+` specifies whether padding is used:
+  - `=+` for padded convolution (use_padding=true): `stride*output=+dilation*kernel`
+  - `<+` for valid convolution (use_padding=false): `stride*output<+dilation*kernel`
+  - Plain `+` (unspecified): reads the `use_padding` variable from scope (only under `%op` and `%cd` syntax extensions)
+
+#### Affine indexing for convolutions and pooling
+
+The affine axis syntax enables convolution and pooling operations directly in einsum notation. The semantics:
+
+- **Input index formula**: `input_index = stride * output_position + dilation * kernel_position`
+- **Padded convolution** (`=+`): Input and output dimensions are equal (padding compensates for kernel extent)
+- **Valid convolution** (`<+`): No padding. The dimension relationship is:
+  ```
+  input_size = stride * (output_size - 1) + effective_kernel_span
+  ```
+  where `effective_kernel_span = 1 + (kernel_size - 1) * dilation`.
+
+**Important constraint for valid convolution**: The formula must hold exactly. For example, with `stride=2`, `kernel_size=2`, `dilation=1`:
+- `effective_kernel_span = 1 + (2-1) * 1 = 2`
+- A 4x4 input gives output_size: `4 = 2 * (output - 1) + 2` → `output = 2`
+- A 5x5 input would fail: `5 = 2 * (output - 1) + 2` → `output = 2.5` (not integer)
+
+**Examples**:
+
+- Max pooling 2x2 with stride 2: `input @^+ "...|2*oh<+wh, 2*ow<+ww, ..c..; wh, ww => ...|oh, ow, ..c.." window`
+  - Uses `@^+` (max-reduce) to take maximum over the kernel window
+  - `2*oh<+wh` means: for each output position `oh`, access input at `2*oh + kernel_offset`
+  - Valid convolution (`<+`) so no padding; output is half the input size
+
+- 2D convolution with stride 1: `input +* "...|oh<+wh, ow<+ww, ..ic..; wh, ww, ic => ...|oh, ow, ..oc.." kernel`
+  - Sum-reduces over kernel height, kernel width, and input channels
+  - Output channels come from the kernel's output structure
 
 Examples:
 
