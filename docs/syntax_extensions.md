@@ -407,6 +407,21 @@ The syntax of an axis spec:
   - `<+` for valid convolution (use_padding=false): `stride*output<+dilation*kernel`
   - Plain `+` (unspecified): reads the `use_padding` variable from scope (only under `%op` and `%cd` syntax extensions)
 
+Examples:
+
+- `...|...->... => 0`: reduce all axes of the argument into a single number. Useful e.g. for reducing losses to a single number.
+- `...|... => 0`, `...->... => 0`, `... => 0` do the same but will fail if the argument has axes of the kind for which the ellipsis is missing.
+- `...|...->... => ...|...->...`: fully pointwise unary operation.
+- `...->... => ...->...`, `...|... => ...|...`, `... => ...`: fully pointwise but will fail if the argument has axes of the kind for which the ellipsis is missing.
+- `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
+- `...|...->... => ...->...`: reduce the batch axes into the result.
+- `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
+- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignment (reduction) operator, here with ones.
+- `ijk => kji`: reverse the three output axes, fails if the argument has any other axes.
+- `ijk => ki`: as above but also reduce the second-leftmost output axis.
+- `..v..|...ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result. Fails if the argument has input axes.
+- `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its output axes, preserve its other batch axes as output axes. Fails if the argument has input axes.
+
 #### Affine indexing for convolutions and pooling
 
 The affine axis syntax enables convolution and pooling operations directly in einsum notation. The semantics:
@@ -433,22 +448,7 @@ The affine axis syntax enables convolution and pooling operations directly in ei
 
 - 2D convolution with stride 1: `input +* "...|oh<+wh, ow<+ww, ..ic..; wh, ww, ic => ...|oh, ow, ..oc.." kernel`
   - Sum-reduces over kernel height, kernel width, and input channels
-  - Output channels come from the kernel's output structure
-
-Examples:
-
-- `...|...->... => 0`: reduce all axes of the argument into a single number. Useful e.g. for reducing losses to a single number.
-- `...|... => 0`, `...->... => 0`, `... => 0` do the same but will fail if the argument has axes of the kind for which the ellipsis is missing.
-- `...|...->... => ...|...->...`: fully pointwise unary operation.
-- `...->... => ...->...`, `...|... => ...|...`, `... => ...`: fully pointwise but will fail if the argument has axes of the kind for which the ellipsis is missing.
-- `...|...->... ; ...|...->... => ...|...->...`: fully pointwise binary operation.
-- `...|...->... => ...->...`: reduce the batch axes into the result.
-- `2...|...->... => ...|...->...`: slice the tensor at dimension 2 of the leftmost batch axis. Note that the tensor operation `@|` implements slicing at the leftmost batch axis for arbitrary dimension.
-- `...|... => ...|...2`: expand the tensor by putting the argument at leftmost output dimension 2 of the result (and reduce input axes if any). `rhs ++ "...|... => ...|...2"` will fill the other cells of the new tensor with zeroes; `[%cd lhs =:* rhs ~logic:"...|... => ...|...2"]` will fill the other cells of `lhs` with ones since it's the neutral element of the assignment (reduction) operator, here with ones.
-- `ijk => kji`: reverse the three output axes, fails if the argument has any other axes.
-- `ijk => ki`: as above but also reduce the second-leftmost output axis.
-- `..v..|...ijk => ..v..kji`: reverse the three rightmost output axes, reduce any other output axes, pointwise for batch axes, pairing the batch axes with the leftmost output axes of the result. Fails if the argument has input axes.
-- `2..v..|... => ..v..`: slice the tensor at dimension 2 of the leftmost batch axis, reduce all its output axes, preserve its other batch axes as output axes. Fails if the argument has input axes.
+  - Output channels come from the output shape (typically inferred for the kernel)
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 
