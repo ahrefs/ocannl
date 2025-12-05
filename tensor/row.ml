@@ -4030,6 +4030,20 @@ let get_product_proj proj_env dim =
              [ Dim_mismatch [ dim ] ] )
   | Affine _ -> None
 
+let rec get_dim_padding proj_env dim =
+  match dim with
+  | Dim { proj_id = Some proj_id; _ } -> (
+      let repr = proj_repr proj_env proj_id in
+      (* Check inferred_padding first (mutable), then resolved_padding *)
+      match Hashtbl.find proj_env.inferred_padding repr with
+      | Some pad -> Some pad
+      | None -> Map.find proj_env.resolved_padding repr)
+  | Dim { proj_id = None; _ } -> None
+  | Var _ -> None
+  | Affine { over; _ } ->
+      (* For affine dimensions, the padding is on the 'over' dimension *)
+      get_dim_padding proj_env over
+
 let proj_to_iterator_exn proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with
   | Iterator s -> s

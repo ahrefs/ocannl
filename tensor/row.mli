@@ -220,6 +220,7 @@ val solve_proj_equations :
 val get_proj_index : proj_env -> proj -> Ir.Indexing.axis_index
 val get_dim_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (proj_id * int) option
+val get_dim_padding : proj_env -> dim -> axis_padding option
 
 val proj_to_iterator_exn : proj_env -> proj_id -> Ir.Indexing.symbol
 (** [proj_to_iterator_exn proj_env p] returns the iterator for [p] in [proj_env]. Raises

@@ -1,9 +1,9 @@
 
 n3_fwd (): /* n3 fwd */
-  for i2 = 0 to 4 { random_seed<uint4x32>[i2] := 0x2A; }
-  for i4 = 0 to 4 { n1<uint4x32>[i4] := i4; }
-  for i6 = 0 to 4 {
-    threefry4x32_light<uint4x32>[i6] := (random_seed<uint4x32>[i6] ^^ n1<uint4x32>[i6]);
+  for i5 = 0 to 4 { random_seed<uint4x32>[i5] := 0x2A; }
+  for i6 = 0 to 4 { n1<uint4x32>[i6] := i6; }
+  for i7 = 0 to 4 {
+    threefry4x32_light<uint4x32>[i7] := (random_seed<uint4x32>[i7] ^^ n1<uint4x32>[i7]);
   }
   for i8 = 0 to 4 {
     n3<half>[8*i8]<8> := uint4x32_to_prec_uniform(threefry4x32_light<uint4x32>[i8], <8>);

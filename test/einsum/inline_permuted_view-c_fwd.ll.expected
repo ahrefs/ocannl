@@ -1,7 +1,11 @@
 
 c_fwd (): /* c fwd */
-  for i3 = 0 to 2 { for i4 = 0 to 4 { r3x5_a[i3, i4] := 5*i3+i4; } }
-  for i7 = 0 to 4 { for i8 = 0 to 3 { r5x4_b[i7, i8] := 4*i7+i8; } }
+  for i10 = 0 to 2 {
+    for i11 = 0 to 4 { r3x5_a[i10, i11] := 5*i10+i11; }
+  }
+  for i12 = 0 to 4 {
+    for i13 = 0 to 3 { r5x4_b[i12, i13] := 4*i12+i13; }
+  }
   for i17 = 0 to 3 {
     for i18 = 0 to 2 {
       c[i17, i18] := v1_n2 {

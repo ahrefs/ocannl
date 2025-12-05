@@ -112,7 +112,13 @@ let get_update_id () =
   Int.incr update_uid;
   Update_id.Update_id !update_uid
 
-type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp_of]
+type update_step = {
+  shape : t;
+  logic : logic;
+  id : update_id;
+  mutable unsafe_projections : Idx.projections option;
+}
+[@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
@@ -263,8 +269,7 @@ let add_var_used_in_pointwise row =
 let unused_shapes = Hash_set.create (module Int)
 
 let%debug4_sexp get_inequalities ?(for_projections = false)
-    ({ shape = cur_sh; logic; id = _ } as _upd : update_step) : proj_axis_env * Row.constraint_ list
-    =
+    ({ shape = cur_sh; logic; _ } as _upd : update_step) : proj_axis_env * Row.constraint_ list =
   Hash_set.remove unused_shapes cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
@@ -1412,6 +1417,203 @@ let all_rows_w_origin update_step =
   | Broadcast (_, sh1, sh2) -> rows_sh sh1 @ rows_sh sh2
   | Broadcast_tern (_, sh1, sh2, sh3) -> rows_sh sh1 @ rows_sh sh2 @ rows_sh sh3
 
+(** {3 Projection inference} *)
+
+let fresh_proj_ids update =
+  let resolved_padding = ref [] in
+  let inferred_padding = ref [] in
+  let fetch_padding ~id row row_padding =
+    let tn_opt = Ir.Tnode.find ~id in
+    let is_resolved = match tn_opt with Some tn -> Lazy.is_val tn.padding | None -> false in
+    Option.iter row_padding ~f:(fun padding ->
+        Array.iter2_exn (Array.of_list row.Row.dims) padding ~f:(fun d p ->
+            match d with
+            | Row.Dim { proj_id = Some proj_id; _ } ->
+                if is_resolved then resolved_padding := (proj_id, p) :: !resolved_padding
+                else inferred_padding := (proj_id, p) :: !inferred_padding
+            | _ -> ()))
+  in
+  let fresh_shape (sh : t) =
+    sh.batch <- Row.fresh_row_proj sh.batch;
+    sh.input <- Row.fresh_row_proj sh.input;
+    sh.output <- Row.fresh_row_proj sh.output;
+    fetch_padding ~id:sh.id sh.batch sh.batch_padding;
+    fetch_padding ~id:sh.id sh.input sh.input_padding;
+    fetch_padding ~id:sh.id sh.output sh.output_padding
+  in
+  fresh_shape update.shape;
+  (match update.logic with
+  | Broadcast (Defined_by_cd_logic, _, _)
+  | Transpose (Defined_by_cd_logic, _)
+  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+      ()
+  | Terminal _ -> ()
+  | Transpose (_, sh) -> fresh_shape sh
+  | Broadcast (_, sh1, sh2) ->
+      fresh_shape sh1;
+      fresh_shape sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) ->
+      fresh_shape sh1;
+      fresh_shape sh2;
+      fresh_shape sh3);
+  (!resolved_padding, !inferred_padding)
+
+let%debug4_sexp row_to_dims (row : Row.t) : int array =
+  let open Row in
+  let f = function
+    | Dim { d; _ } -> d
+    | Var v ->
+        raise
+        @@ Row.Shape_error
+             ( "Not enough shape information: unresolved variable "
+               ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+               [ Row_mismatch [ row ] ] )
+    | Affine _ ->
+        (* FIXME: reconsider this, we could return the input dimension of the convolution. *)
+        raise
+        @@ Row.Shape_error
+             ( "Not enough shape information: affine dimension cannot be converted to single int",
+               [ Row_mismatch [ row ] ] )
+  in
+  match row with
+  | { bcast = Row_var { v; _ }; _ } ->
+      raise
+      @@ Row.Shape_error
+           ( "Not enough shape information: unresolved row variable "
+             ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
+             [ Row_mismatch [ row ] ] )
+  | { dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map dims ~f
+
+let to_dims_impl (sh : t) : int array =
+  try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
+  with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
+
+(** Computes the indexing into subtensors given the shape information of a tensor.
+    [derive_projections] should only be invoked when the shapes are fully inferred already! Sets
+    [unsafe_projections] as a side effect. Raises if projections were already computed. *)
+let%debug4_sexp derive_projections (update_step : update_step) : unit =
+  if Option.is_some update_step.unsafe_projections then
+    raise
+    @@ Utils.User_error "derive_projections: projections already computed for this update_step";
+  let resolved_padding, inferred_padding = fresh_proj_ids update_step in
+  let _debug_update_step : update_step = update_step in
+  let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
+    get_inequalities ~for_projections:true update_step
+  in
+  (* We need to solve the equations/inequalities one last time because of fresh row variables
+     potentially generated by [get_inequalities]. Since the variables in the shapes must be
+     substituted-out at this point, the global state is already an empty env, but in principle we
+     want to only find a local solution to not contaminate projections across operations. *)
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
+  let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
+  assert (List.is_empty unsolved);
+  let local_env = Row.populate_dim_proj_in_solved local_env in
+  let rhs =
+    match update_step.logic with
+    | Broadcast (Defined_by_cd_logic, _, _)
+    | Transpose (Defined_by_cd_logic, _)
+    | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+        raise
+        @@ Utils.User_error
+             "Defined_by_cd_logic: use explicit ~logic annotations when defining this operation"
+    | Terminal _ -> []
+    | Transpose (_, sh) -> [ sh ]
+    | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
+    | Broadcast_tern (_, sh1, sh2, sh3) -> [ sh1; sh2; sh3 ]
+  in
+  let terminal_rows_for_inputs =
+    List.concat_map rhs ~f:(fun sh ->
+        [
+          Row.Terminal_row (false, sh.batch, []);
+          Row.Terminal_row (false, sh.input, []);
+          Row.Terminal_row (false, sh.output, []);
+        ])
+  in
+  (* Important: ineqs must not be substituted / solved before getting proj_equations, because
+     get_inequalities provides indexing information that is lost after substitution. *)
+  let proj_eqs : Row.proj_equation list =
+    Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
+  in
+  let proj_env : Row.proj_env =
+    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
+  in
+  let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
+  let lhs = update_step.shape in
+  let lhs_dims = to_dims_impl lhs in
+  let rhs_dims = Array.of_list_map ~f:to_dims_impl rhs in
+  let all_dims : Row.dim list = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
+  (* Note: the ordering will affect performance of naive backends. *)
+  let all_product_projs : (Row.proj_id * int) list =
+    Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> Row.equal_proj_id p q)
+    @@ List.filter_map all_dims ~f:(Row.get_product_proj proj_env)
+  in
+  (* Deduplicate by iterator symbol. When Conv_input with d=1 over dimension is used, multiple
+     proj_ids can share the same iterator (e.g., input height and kernel height). We keep the first
+     occurrence for each unique iterator symbol. *)
+  let all_product_projs_with_iters =
+    List.map all_product_projs ~f:(fun (p, d) -> (p, d, Row.proj_to_iterator_exn proj_env p))
+  in
+  let unique_by_iterator =
+    Utils.unique_keep_first
+      ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
+      all_product_projs_with_iters
+  in
+  let product_space : int array = Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> d) in
+  let product_iterators : Idx.symbol array =
+    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> s)
+  in
+  let indices_of_sh (sh : t) =
+    Array.of_list_map ~f:(Row.get_dim_index proj_env)
+    @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
+  in
+  (* Extract padding from proj_env and set the padding fields on shapes *)
+  let padding_of_row (row : Row.t) : padding =
+    let no_padding = Ir.Ops.{ left = 0; right = 0 } in
+    let paddings =
+      List.map row.dims ~f:(fun d ->
+          Option.value (Row.get_dim_padding proj_env d) ~default:no_padding)
+    in
+    (* Only return Some if at least one dimension has non-zero padding *)
+    if List.for_all paddings ~f:(fun p -> p.left = 0 && p.right = 0) then None
+    else Some (Array.of_list paddings)
+  in
+  let set_padding (sh : t) =
+    sh.batch_padding <- padding_of_row sh.batch;
+    sh.output_padding <- padding_of_row sh.output;
+    sh.input_padding <- padding_of_row sh.input
+  in
+  (* Set padding on all shapes involved *)
+  set_padding lhs;
+  List.iter rhs ~f:set_padding;
+  let projections =
+    try
+      Idx.
+        {
+          product_space;
+          lhs_dims;
+          rhs_dims;
+          product_iterators;
+          project_lhs = indices_of_sh lhs;
+          project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
+          debug_info =
+            {
+              spec = logic_to_spec update_step.logic;
+              derived_for = sexp_of_update_step update_step;
+              trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
+            };
+        }
+    with Row.Shape_error (s, trace) ->
+      raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
+  in
+  update_step.unsafe_projections <- Some projections
+
+(** {3 Shape inference} *)
+
 let apply_env_t env sh =
   sh.batch <- Row.subst_row env sh.batch;
   sh.input <- Row.subst_row env sh.input;
@@ -1501,49 +1703,41 @@ let%debug4_sexp finish_inference (() : unit) : unit =
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step env) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
+  (* Derive projections for all active update_steps, setting their unsafe_projections field. This
+     must happen before clearing active_update_steps. *)
+  List.iter !active_update_steps ~f:(fun update_step ->
+      if Option.is_none update_step.unsafe_projections then derive_projections update_step);
   active_constraints := [];
   active_update_steps := [];
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env
 
-let%debug4_sexp row_to_dims (row : Row.t) : int array =
-  let open Row in
-  let f = function
-    | Dim { d; _ } -> d
-    | Var v ->
-        raise
-        @@ Row.Shape_error
-             ( "Not enough shape information: unresolved variable "
-               ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
-               [ Row_mismatch [ row ] ] )
-    | Affine _ ->
-        (* FIXME: reconsider this, we could return the input dimension of the convolution. *)
-        raise
-        @@ Row.Shape_error
-             ( "Not enough shape information: affine dimension cannot be converted to single int",
-               [ Row_mismatch [ row ] ] )
-  in
-  match row with
-  | { bcast = Row_var { v; _ }; _ } ->
-      raise
-      @@ Row.Shape_error
-           ( "Not enough shape information: unresolved row variable "
-             ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
-             [ Row_mismatch [ row ] ] )
-  | { dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map dims ~f
-
-let to_dims (sh : t) : int array =
+let to_dims sh =
   finish_inference ();
-  try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
-  with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
+  to_dims_impl sh
 
 let to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
   finish_inference ();
-  (* FIXME: NOT IMPLEMENTED YET -- e.g. this should not be None if any of the padding isn't None.
-     Also, the padded value should be inferred. *)
   try
-    Option.map3 sh.batch_padding sh.output_padding sh.input_padding ~f:(fun batch output input ->
-        (Array.concat [ batch; output; input ], 0.))
+    (* If any row has padding, we need to return padding for all dimensions. Use zero padding for
+       rows without explicit padding. *)
+    let no_padding = Ir.Ops.{ left = 0; right = 0 } in
+    let get_padding_array row_opt row =
+      match row_opt with
+      | Some padding -> padding
+      | None -> Array.create ~len:(List.length row.Row.dims) no_padding
+    in
+    let has_any_padding =
+      Option.is_some sh.batch_padding || Option.is_some sh.output_padding
+      || Option.is_some sh.input_padding
+    in
+    if not has_any_padding then None
+    else
+      let batch = get_padding_array sh.batch_padding sh.batch in
+      let output = get_padding_array sh.output_padding sh.output in
+      let input = get_padding_array sh.input_padding sh.input in
+      (* TODO: The padded value should be inferred from the operation. *)
+      Some (Array.concat [ batch; output; input ], 0.)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
 let to_labels (sh : t) : string array =
@@ -1560,147 +1754,17 @@ let () =
         Sexplib0.Sexp.List [ Sexplib0.Sexp.Atom "lib/shape.ml.Shape_error"; res0; res1 ]
     | _ -> assert false)
 
-(** *** Projection inference *** *)
-
-let fresh_proj_ids update =
-  let resolved_padding = ref [] in
-  let inferred_padding = ref [] in
-  let fetch_padding ~id row row_padding =
-    let tn_opt = Ir.Tnode.find ~id in
-    let is_resolved = match tn_opt with Some tn -> Lazy.is_val tn.padding | None -> false in
-    Option.iter row_padding ~f:(fun padding ->
-        Array.iter2_exn (Array.of_list row.Row.dims) padding ~f:(fun d p ->
-            match d with
-            | Row.Dim { proj_id = Some proj_id; _ } ->
-                if is_resolved then resolved_padding := (proj_id, p) :: !resolved_padding
-                else inferred_padding := (proj_id, p) :: !inferred_padding
-            | _ -> ()))
-  in
-  let fresh_shape (sh : t) =
-    sh.batch <- Row.fresh_row_proj sh.batch;
-    sh.input <- Row.fresh_row_proj sh.input;
-    sh.output <- Row.fresh_row_proj sh.output;
-    fetch_padding ~id:sh.id sh.batch sh.batch_padding;
-    fetch_padding ~id:sh.id sh.input sh.input_padding;
-    fetch_padding ~id:sh.id sh.output sh.output_padding
-  in
-  fresh_shape update.shape;
-  (match update.logic with
-  | Broadcast (Defined_by_cd_logic, _, _)
-  | Transpose (Defined_by_cd_logic, _)
-  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
-      ()
-  | Terminal _ -> ()
-  | Transpose (_, sh) -> fresh_shape sh
-  | Broadcast (_, sh1, sh2) ->
-      fresh_shape sh1;
-      fresh_shape sh2
-  | Broadcast_tern (_, sh1, sh2, sh3) ->
-      fresh_shape sh1;
-      fresh_shape sh2;
-      fresh_shape sh3);
-  (!resolved_padding, !inferred_padding)
-
-(** Computes the indexing into subtensors given the shape information of a tensor.
-    [derive_projections] should only be invoked when the shapes are fully inferred already! *)
-let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections =
-  finish_inference ();
-  let resolved_padding, inferred_padding = fresh_proj_ids update_step in
-  let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
-    get_inequalities ~for_projections:true update_step
-  in
-  (* We need to solve the equations/inequalities one last time because of fresh row variables
-     potentially generated by [get_inequalities]. Since the variables in the shapes must be
-     substituted-out at this point, the global state is already an empty env, but in principle we
-     want to only find a local solution to not contaminate projections across operations. *)
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
-  assert (List.is_empty unsolved);
-  let local_env = Row.populate_dim_proj_in_solved local_env in
-  let rhs =
-    match update_step.logic with
-    | Broadcast (Defined_by_cd_logic, _, _)
-    | Transpose (Defined_by_cd_logic, _)
-    | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
-        raise
-        @@ Utils.User_error
-             "Defined_by_cd_logic: use explicit ~logic annotations when defining this operation"
-    | Terminal _ -> []
-    | Transpose (_, sh) -> [ sh ]
-    | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
-    | Broadcast_tern (_, sh1, sh2, sh3) -> [ sh1; sh2; sh3 ]
-  in
-  let terminal_rows_for_inputs =
-    List.concat_map rhs ~f:(fun sh ->
-        [
-          Row.Terminal_row (false, sh.batch, []);
-          Row.Terminal_row (false, sh.input, []);
-          Row.Terminal_row (false, sh.output, []);
-        ])
-  in
-  (* Important: ineqs must not be substituted / solved before getting proj_equations, because
-     get_inequalities provides indexing information that is lost after substitution. *)
-  let proj_eqs : Row.proj_equation list =
-    Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
-  in
-  let proj_env : Row.proj_env =
-    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
-  in
-  let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
-  let lhs = update_step.shape in
-  let lhs_dims = to_dims lhs in
-  let rhs_dims = Array.of_list_map ~f:to_dims rhs in
-  let all_dims : Row.dim list = List.concat_map ~f:dims_of @@ (lhs :: rhs) in
-  (* Note: the ordering will affect performance of naive backends. *)
-  let all_product_projs : (Row.proj_id * int) list =
-    Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> Row.equal_proj_id p q)
-    @@ List.filter_map all_dims ~f:(Row.get_product_proj proj_env)
-  in
-  (* Deduplicate by iterator symbol. When Conv_input with d=1 over dimension is used,
-     multiple proj_ids can share the same iterator (e.g., input height and kernel height).
-     We keep the first occurrence for each unique iterator symbol. *)
-  let all_product_projs_with_iters =
-    List.map all_product_projs ~f:(fun (p, d) -> (p, d, Row.proj_to_iterator_exn proj_env p))
-  in
-  let unique_by_iterator =
-    Utils.unique_keep_first
-      ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
-      all_product_projs_with_iters
-  in
-  let product_space : int array = Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> d) in
-  let product_iterators : Idx.symbol array =
-    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> s)
-  in
-  let indices_of_sh (sh : t) =
-    Array.of_list_map ~f:(Row.get_dim_index proj_env)
-    @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
-  in
-  try
-    Idx.
-      {
-        product_space;
-        lhs_dims;
-        rhs_dims;
-        product_iterators;
-        project_lhs = indices_of_sh lhs;
-        project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
-        debug_info =
-          {
-            spec = logic_to_spec update_step.logic;
-            derived_for = sexp_of_update_step update_step;
-            trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
-          };
-      }
-  with Row.Shape_error (s, trace) ->
-    raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
-
 (** {2 Shape builders.} *)
+
+let get_projections (update_step : update_step) : Idx.projections =
+  finish_inference ();
+  match update_step.unsafe_projections with
+  | Some projections -> projections
+  | None ->
+      (* This shouldn't happen if finish_inference is working correctly, but derive projections just
+         in case *)
+      derive_projections update_step;
+      Option.value_exn update_step.unsafe_projections
 
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =

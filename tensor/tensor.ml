@@ -166,11 +166,13 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
     Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
+  let local_shape_update =
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+  in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
   let projections =
-    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+    { projections_debug; projections = lazy (Shape.get_projections local_shape_update) }
   in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
@@ -192,11 +194,13 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
     ~rhs3_is_grad ~rhs3_is_merge ~logic : Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast_tern (logic, t1.shape, t2.shape, t3.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
+  let local_shape_update =
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+  in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
   let projections =
-    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+    { projections_debug; projections = lazy (Shape.get_projections local_shape_update) }
   in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs1 = if rhs1_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
@@ -219,11 +223,13 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
     ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
-  let local_shape_update = Shape.{ shape; logic = shape_logic; id = get_update_id () } in
+  let local_shape_update =
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+  in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
   let projections =
-    { projections_debug; projections = lazy (Shape.derive_projections local_shape_update) }
+    { projections_debug; projections = lazy (Shape.get_projections local_shape_update) }
   in
   let lhs = if lhs_is_grad then (Option.value_exn ~here:[%here] t.diff).grad else t.value in
   let rhs = if rhs_is_grad then (Option.value_exn ~here:[%here] t1.diff).grad else t1.value in
@@ -323,13 +329,15 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         assert false
   in
   let local_shape_updates =
-    List.map ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id () }) @@ shape_logics orig_ts
+    List.map
+      ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id (); unsafe_projections = None })
+    @@ shape_logics orig_ts
   in
   List.iter ~f:Shape.propagate_shapes local_shape_updates;
   let shape_update = List.hd_exn local_shape_updates in
   let projections_debug = Shape.logic_to_spec shape_update.logic in
   let projections =
-    { projections_debug; projections = lazy (Shape.derive_projections shape_update) }
+    { projections_debug; projections = lazy (Shape.get_projections shape_update) }
   in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =

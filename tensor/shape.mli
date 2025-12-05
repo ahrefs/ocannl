@@ -212,7 +212,13 @@ val get_update_id : unit -> update_id
 val logic_to_spec : logic -> string
 (** Converts a shape logic to its string specification for debugging/display purposes. *)
 
-type update_step = { shape : t; logic : logic; id : update_id } [@@deriving sexp_of]
+type update_step = {
+  shape : t;
+  logic : logic;
+  id : update_id;
+  mutable unsafe_projections : Ir.Indexing.projections option;
+}
+[@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
@@ -228,9 +234,10 @@ val to_padding : t -> (Ir.Ops.axis_padding array * float) option
 
 val propagate_shapes : update_step -> unit
 
-val derive_projections : update_step -> Ir.Indexing.projections
-(** Computes the indexing into subtensors given the shape information of a tensor.
-    [derive_projections] should only be invoked when the shapes are fully inferred already! *)
+val get_projections : update_step -> Ir.Indexing.projections
+(** Returns the projections for this update step, computing them if not already done.
+    This triggers [finish_inference] and then retrieves the projections from
+    [unsafe_projections]. Use this instead of [derive_projections] directly. *)
 
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
