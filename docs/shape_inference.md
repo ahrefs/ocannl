@@ -56,26 +56,34 @@ The `Affine` constructor represents affine transformations of dimensions, suppor
 
 - `conv = None` (strided iteration): `input_dim = stride * output_dim`
 - `conv = Some { use_padding = true; _ }`: `input_dim = stride * output_dim` (padding compensates for kernel)
-- `conv = Some { use_padding = false; dilation; kernel }`: `input_dim = stride * output_dim + dilation * (kernel_dim - 1)`
+- `conv = Some { use_padding = false; dilation; kernel }`: `input_dim = stride * (output_dim - 1) + effective_kernel_span`
 
-The formula for `use_padding = false` comes from computing the maximum input index. For output position `o` (0 to output_dim-1) and kernel position `j` (0 to kernel_dim-1), the input index is:
+where `effective_kernel_span = 1 + (kernel_dim - 1) * dilation`.
 
-```
-input_index = o * stride + stride_offset + j * dilation
-```
-
-The maximum input index occurs at `o = output_dim - 1`, `j = kernel_dim - 1`, and `stride_offset = stride - 1` (worst case for any valid stride_offset):
+The formula for `use_padding = false` comes from the standard valid convolution relationship. For output position `o` (0 to output_dim-1) and kernel position `k` (0 to kernel_dim-1), the input index is:
 
 ```
-max_index = (output_dim - 1) * stride + (stride - 1) + (kernel_dim - 1) * dilation
-          = output_dim * stride - 1 + (kernel_dim - 1) * dilation
+input_index = o * stride + k * dilation
 ```
 
-Thus `input_dim = max_index + 1 = output_dim * stride + (kernel_dim - 1) * dilation`.
+The maximum input index occurs at `o = output_dim - 1` and `k = kernel_dim - 1`:
+
+```
+max_index = (output_dim - 1) * stride + (kernel_dim - 1) * dilation
+```
+
+Since valid indices are 0 to input_dim-1, we have `input_dim = max_index + 1`:
+
+```
+input_dim = (output_dim - 1) * stride + (kernel_dim - 1) * dilation + 1
+          = stride * (output_dim - 1) + effective_kernel_span
+```
+
+Equivalently, solving for output_dim: `output_dim = (input_dim - effective_kernel_span) / stride + 1`. This requires `(input_dim - effective_kernel_span)` to be non-negative and divisible by `stride`.
 
 **Projection inference** handles `Affine` terms differently depending on `use_padding`:
 
-- If `use_padding = false`: the kernel extent `dilation * (kernel_dim - 1)` is incorporated during shape inference; projection inference just applies the index formula with the actual `stride_offset`.
+- If `use_padding = false`: the effective kernel span is incorporated during shape inference; projection inference just applies the index formula with the actual `stride_offset`.
 - If `use_padding = true`: kernel extent doesn't affect shape inference; padding is computed during projection inference, keyed by `proj_id`. The padding is the maximal dilated kernel extent encountered in constraints involving that projection id.
 
 Shape inference does not maintain padding for axes of individual tensor nodes—these padding values are computed and updated during projections inference.
