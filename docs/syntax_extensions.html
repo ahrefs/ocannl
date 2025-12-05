@@ -1008,6 +1008,61 @@ dilation respects the “multichar” mode. Without the comma we are limited
 to single-character identifiers,
 e.g. <code>let s = 2 and d = 3 in [%op &quot;input&quot; +* &quot;is*a+d*bc;b=&gt;iac&quot; &quot;kernel&quot;]</code>.</li>
 </ul></li>
+<li>The use_padding modifier before <code>+</code> specifies whether
+padding is used:
+<ul>
+<li><code>=+</code> for padded convolution (use_padding=true):
+<code>stride*output=+dilation*kernel</code></li>
+<li><code>&lt;+</code> for valid convolution (use_padding=false):
+<code>stride*output&lt;+dilation*kernel</code></li>
+<li>Plain <code>+</code> (unspecified): reads the
+<code>use_padding</code> variable from scope (only under
+<code>%op</code> and <code>%cd</code> syntax extensions)</li>
+</ul></li>
+</ul>
+<h4 id="affine-indexing-for-convolutions-and-pooling">Affine indexing
+for convolutions and pooling</h4>
+<p>The affine axis syntax enables convolution and pooling operations
+directly in einsum notation. The semantics:</p>
+<ul>
+<li><p><strong>Input index formula</strong>:
+<code>input_index = stride * output_position + dilation * kernel_position</code></p></li>
+<li><p><strong>Padded convolution</strong> (<code>=+</code>): Input and
+output dimensions are equal (padding compensates for kernel
+extent)</p></li>
+<li><p><strong>Valid convolution</strong> (<code>&lt;+</code>): No
+padding. The dimension relationship is:</p>
+<pre><code>input_size = stride * (output_size - 1) + effective_kernel_span</code></pre>
+<p>where
+<code>effective_kernel_span = 1 + (kernel_size - 1) * dilation</code>.</p></li>
+</ul>
+<p><strong>Important constraint for valid convolution</strong>: The
+formula must hold exactly. For example, with <code>stride=2</code>,
+<code>kernel_size=2</code>, <code>dilation=1</code>: -
+<code>effective_kernel_span = 1 + (2-1) * 1 = 2</code> - A 4x4 input
+gives output_size: <code>4 = 2 * (output - 1) + 2</code> →
+<code>output = 2</code> - A 5x5 input would fail:
+<code>5 = 2 * (output - 1) + 2</code> → <code>output = 2.5</code> (not
+integer)</p>
+<p><strong>Examples</strong>:</p>
+<ul>
+<li>Max pooling 2x2 with stride 2:
+<code>input @^+ &quot;...|2*oh&lt;+wh, 2*ow&lt;+ww, ..c..; wh, ww =&gt; ...|oh, ow, ..c..&quot; window</code>
+<ul>
+<li>Uses <code>@^+</code> (max-reduce) to take maximum over the kernel
+window</li>
+<li><code>2*oh&lt;+wh</code> means: for each output position
+<code>oh</code>, access input at <code>2*oh + kernel_offset</code></li>
+<li>Valid convolution (<code>&lt;+</code>) so no padding; output is half
+the input size</li>
+</ul></li>
+<li>2D convolution with stride 1:
+<code>input +* &quot;...|oh&lt;+wh, ow&lt;+ww, ..ic..; wh, ww, ic =&gt; ...|oh, ow, ..oc..&quot; kernel</code>
+<ul>
+<li>Sum-reduces over kernel height, kernel width, and input
+channels</li>
+<li>Output channels come from the kernel’s output structure</li>
+</ul></li>
 </ul>
 <p>Examples:</p>
 <ul>
@@ -1103,10 +1158,10 @@ device-to-device transfer.</p>
 <p>The <code>%cd</code> syntax uses the prefix operator
 <code>(~~)</code> in a semicolon sequence to introduce block
 comments:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Assignments.t =</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  ...</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  | Block_comment <span class="kw">of</span> <span class="dt">string</span> * t</span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Assignments.t =</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  ...</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  | Block_comment <span class="kw">of</span> <span class="dt">string</span> * t</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
 <p>Schematic example:
 <code>~~(&quot;space&quot; &quot;separated&quot; &quot;comment&quot; &quot;tensor p debug_name:&quot; p; &lt;scope of the comment&gt;)</code>.
 The content of the comment uses application syntax, must be composed of
@@ -1184,8 +1239,8 @@ dimensions (rarely used in <code>%op</code>)</li>
 </ul>
 <p>A very simple example from <a href="test/micrograd_demo.ml">micrograd_demo: Micrograd README basic
 example</a>:</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op c = { a = [ <span class="dv">-4</span> ] } + { b = [ <span class="dv">2</span> ] } <span class="kw">in</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op c = { a = [ <span class="dv">-4</span> ] } + { b = [ <span class="dv">2</span> ] } <span class="kw">in</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
 <p>How does it relate to
 <code>let%op c = { a = -4 } + { b = 2 } in ...</code>? Without brackets,
 the number is used to initialize all cells of the tensor value, and
@@ -1200,36 +1255,36 @@ functions to be defined at the point of a unit <code>()</code>
 parameter. Our example
 <code>let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</code>
 translates as:</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp_layer ~label ~hid_dim () =</span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> w = TDSL.param ~more_label:label <span class="st">&quot;w&quot;</span> () </span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> b = TDSL.param ~more_label:label ~output_dims:[ hid_dim ] <span class="st">&quot;b&quot;</span> () <span class="kw">in</span></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; TDSL.O.(relu (w * x + b))</span></code></pre></div>
+<div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp_layer ~label ~hid_dim () =</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> w = TDSL.param ~more_label:label <span class="st">&quot;w&quot;</span> () </span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> b = TDSL.param ~more_label:label ~output_dims:[ hid_dim ] <span class="st">&quot;b&quot;</span> () <span class="kw">in</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; TDSL.O.(relu (w * x + b))</span></code></pre></div>
 <p>For this to work properly, when employing such network blocks, their
 params also need to be introduced at the right moment. At one point, we
 tried to do this automatically by the <code>%op</code> syntax, but that
 was confusing to use. So you need to ensure scoping manually.
 Consider:</p>
-<div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* </span><span class="al">FIXME</span><span class="co">: this is wrong! Doesn&#39;t bind the parameters at the right place. *)</span></span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =</span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    (mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>       (mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () x))</span></code></pre></div>
+<div class="sourceCode" id="cb19"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* </span><span class="al">FIXME</span><span class="co">: this is wrong! Doesn&#39;t bind the parameters at the right place. *)</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () x =</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    (mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>       (mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () x))</span></code></pre></div>
 <p>This example would work if we used direct inline definitions, but it
 does not work when the definitions are indirectly in the functions
 called. We need to write instead:</p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layer3 = mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer2 = mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer1 = mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () <span class="kw">in</span></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; layer3 (layer2 (layer1 x))</span></code></pre></div>
+<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layer3 = mlp_layer ~label:[ <span class="st">&quot;L3&quot;</span> ] ~hid_dim:dim3 ()</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer2 = mlp_layer ~label:[ <span class="st">&quot;L2&quot;</span> ] ~hid_dim:dim2 ()</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">and</span> layer1 = mlp_layer ~label:[ <span class="st">&quot;L1&quot;</span> ] ~hid_dim:dim1 () <span class="kw">in</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; layer3 (layer2 (layer1 x))</span></code></pre></div>
 <p>The manual approach naturally extends to programmatic network
 architectures:</p>
-<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp ~label ~hid_dims () =</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layers =</span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">List</span>.mapi hid_dims ~f:(<span class="kw">fun</span> i hid_dim -&gt;</span>
-<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        mlp_layer ~label:[ <span class="st">&quot;L&quot;</span> ^ <span class="dt">Int</span>.to_string i ] ~hid_dim ())</span>
-<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
-<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; <span class="dt">List</span>.fold layers ~init:x ~f:(<span class="kw">fun</span> x layer -&gt; layer x)</span></code></pre></div>
+<div class="sourceCode" id="cb21"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> mlp ~label ~hid_dims () =</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> layers =</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">List</span>.mapi hid_dims ~f:(<span class="kw">fun</span> i hid_dim -&gt;</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>        mlp_layer ~label:[ <span class="st">&quot;L&quot;</span> ^ <span class="dt">Int</span>.to_string i ] ~hid_dim ())</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; <span class="dt">List</span>.fold layers ~init:x ~f:(<span class="kw">fun</span> x layer -&gt; layer x)</span></code></pre></div>
 <h2 id="the-syntax-extension-extend_dsls">The syntax extension
 %%extend_dsls</h2>
 <p>This syntax extension creates a module <code>DSL_modules</code> with
@@ -1259,25 +1314,25 @@ to-the-power-of operator</h3>
 <code>Ops.ToPowOf</code>. As part of assignments, the corresponding
 operator is <code>**</code>. Here is the full definition of the
 to-power-of tensor operation from <a href="../tensor/operation.ml">Operation</a>:</p>
-<div class="sourceCode" id="cb21"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">rec</span> pointpow ?(label : <span class="dt">string</span> <span class="dt">list</span> = []) ~grad_spec p t1 : Tensor.t =</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">module</span> NTDSL = <span class="kw">struct</span></span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">include</span> Initial_NTDSL</span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">module</span> O = <span class="kw">struct</span></span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">include</span> NDO_without_pow</span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> ( **. ) ?label base <span class="dt">exp</span> = pointpow ?label ~grad_spec:Tensor.Prohibit_grad <span class="dt">exp</span> base</span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span> <span class="kw">in</span></span>
-<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> p_t = NTDSL.number p <span class="kw">in</span></span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
-<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd grad_asn =</span>
-<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Tensor.is_prohibit_grad grad_spec <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop</span>
-<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">2.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g</span>
-<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">1.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ g</span>
-<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. (t1 **. (p -. <span class="dv">1</span>.)) * g</span>
-<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
-<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  Tensor.binop ~label:(<span class="st">&quot;**.&quot;</span> :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t</span></code></pre></div>
+<div class="sourceCode" id="cb22"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">rec</span> pointpow ?(label : <span class="dt">string</span> <span class="dt">list</span> = []) ~grad_spec p t1 : Tensor.t =</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">module</span> NTDSL = <span class="kw">struct</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">include</span> Initial_NTDSL</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">module</span> O = <span class="kw">struct</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">include</span> NDO_without_pow</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> ( **. ) ?label base <span class="dt">exp</span> = pointpow ?label ~grad_spec:Tensor.Prohibit_grad <span class="dt">exp</span> base</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span> <span class="kw">in</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> p_t = NTDSL.number p <span class="kw">in</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd grad_asn =</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Tensor.is_prohibit_grad grad_spec <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop</span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">2.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g</span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">1.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ g</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. (t1 **. (p -. <span class="dv">1</span>.)) * g</span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>  Tensor.binop ~label:(<span class="st">&quot;**.&quot;</span> :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t</span></code></pre></div>
 <p>On the <code>Tensor</code> level, this is implemented as a binary
 tensor operation, but it is exposed as a unary tensor operation! To
 avoid the complexities of propagating gradient into the exponent,
@@ -1336,10 +1391,10 @@ the assignments.</li>
 <h3 id="embedded-nodes">Embedded nodes</h3>
 <p>In fact, the syntax <code>%cd</code> produces
 <code>Assignments.comp</code> values:</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> comp = {</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  asgns : t;</span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  embedded_nodes : <span class="dt">Set</span>.M(Tnode).t;</span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb23"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> comp = {</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  asgns : t;</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  embedded_nodes : <span class="dt">Set</span>.M(Tnode).t;</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>The tensor nodes that are in <code>asgns</code> but not in
 <code>embedded_nodes</code>, and are on-device, must already be present
 in contexts with which the computation is linked. Such non-embedded
