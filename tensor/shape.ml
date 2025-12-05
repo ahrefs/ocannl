@@ -1662,9 +1662,20 @@ let%debug4_sexp derive_projections (update_step : update_step) : Idx.projections
     Utils.unique_keep_first ~equal:(fun (p, _) (q, _) -> Row.equal_proj_id p q)
     @@ List.filter_map all_dims ~f:(Row.get_product_proj proj_env)
   in
-  let product_space : int array = Array.of_list_map all_product_projs ~f:snd in
+  (* Deduplicate by iterator symbol. When Conv_input with d=1 over dimension is used,
+     multiple proj_ids can share the same iterator (e.g., input height and kernel height).
+     We keep the first occurrence for each unique iterator symbol. *)
+  let all_product_projs_with_iters =
+    List.map all_product_projs ~f:(fun (p, d) -> (p, d, Row.proj_to_iterator_exn proj_env p))
+  in
+  let unique_by_iterator =
+    Utils.unique_keep_first
+      ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
+      all_product_projs_with_iters
+  in
+  let product_space : int array = Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> d) in
   let product_iterators : Idx.symbol array =
-    Array.of_list_map all_product_projs ~f:(fun (p, _) -> Row.proj_to_iterator_exn proj_env p)
+    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> s)
   in
   let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(Row.get_dim_index proj_env)
