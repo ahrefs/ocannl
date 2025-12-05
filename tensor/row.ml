@@ -88,28 +88,19 @@ let get_dim ~d ?label ?proj_id () =
   let proj_id = Option.map ~f:(fun p -> Proj_id.Proj_id p) proj_id in
   Dim { d; label; proj_id }
 
-let kernel_extent ~dilation ~kernel_size =
-  (* For odd kernel sizes, the center element "remains inside" the output, so we subtract 1.
-     For even kernel sizes, there's no center element, so the full kernel contributes. *)
-  dilation * (kernel_size - (kernel_size % 2))
+let effective_kernel_span ~dilation ~kernel_size =
+  (* The effective kernel span with dilation is: 1 + (kernel_size - 1) * dilation
+     This is the actual range of input indices covered by the kernel. *)
+  1 + (kernel_size - 1) * dilation
 
-let kernel_size_of_extent ~dilation ~extent =
-  (* Inverse of kernel_extent. Given extent, find kernel_size such that
-     kernel_extent ~dilation ~kernel_size = extent.
-     For odd k: extent = dilation * (k - 1), so k = extent/dilation + 1
-     For even k: extent = dilation * k, so k = extent/dilation
-     We return the smallest valid kernel_size, which is the even case when divisible. *)
-  if extent % dilation <> 0 then None
-  else
-    let k_even = extent / dilation in
-    (* Verify: for even k, kernel_extent = dilation * k = extent. Check k_even is even. *)
-    if k_even % 2 = 0 && k_even > 0 then Some k_even
-    else
-      (* Try odd: k = extent/dilation + 1 *)
-      let k_odd = k_even + 1 in
-      (* Verify: for odd k, kernel_extent = dilation * (k - 1) = extent *)
-      if k_odd % 2 = 1 then Some k_odd
-      else None (* k_even was odd but we needed even, k_odd is even but we needed odd *)
+let kernel_size_of_span ~dilation ~span =
+  (* Inverse of effective_kernel_span. Given span, find kernel_size such that
+     effective_kernel_span ~dilation ~kernel_size = span.
+     Since effective_kernel_span = 1 + (kernel_size - 1) * dilation,
+     we have: span - 1 = (kernel_size - 1) * dilation
+              kernel_size = (span - 1) / dilation + 1 *)
+  if (span - 1) % dilation <> 0 then None
+  else Some ((span - 1) / dilation + 1)
 
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
@@ -404,10 +395,11 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
             conv = Some { dilation; kernel = Dim k; use_padding = false };
             stride_offset = _;
           } ->
-          let extent = kernel_extent ~dilation ~kernel_size:k.d in
+          (* input_size = stride * (output_size - 1) + effective_kernel_span *)
+          let span = effective_kernel_span ~dilation ~kernel_size:k.d in
           Dim
             {
-              d = (s.d * stride) + extent;
+              d = (stride * (s.d - 1)) + span;
               label = Option.first_some s.label k.label;
               proj_id = None;
             }
@@ -1631,19 +1623,19 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       Affine
         { stride; over = Dim s; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ } )
     ->
-      (* stride_offset doesn't affect dimension - it just shifts which elements are accessed. Max
-         index at stride_offset=stride-1: (s-1)*stride + (stride-1) + kernel_extent So input dim =
-         s * stride + kernel_extent *)
-      unify_dim ~stage origin (get_dim ~d:((stride * s.d) + kernel_extent ~dilation ~kernel_size:k.d) (), dim) env
+      (* input_size = stride * (output_size - 1) + effective_kernel_span *)
+      let span = effective_kernel_span ~dilation ~kernel_size:k.d in
+      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) (), dim) env
   | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
     ->
-      (* Reverse: solve for over given input dim s. s = stride * over + kernel_extent over = (s
-         - kernel_extent) / stride *)
-      let kext : int = kernel_extent ~dilation ~kernel_size:k.d in
-      let over_times_stride : int = s.d - kext in
-      if over_times_stride >= 0 && over_times_stride % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:(over_times_stride / stride) (), over) env
+      (* Reverse: solve for output_size given input_size s.
+         input_size = stride * (output_size - 1) + effective_kernel_span
+         output_size = (input_size - effective_kernel_span) / stride + 1 *)
+      let span : int = effective_kernel_span ~dilation ~kernel_size:k.d in
+      let numerator : int = s.d - span in
+      if numerator >= 0 && numerator % stride = 0 then
+        unify_dim ~stage origin (get_dim ~d:(numerator / stride + 1) (), over) env
       else
         raise
         @@ Shape_error
@@ -1655,10 +1647,11 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       Affine
         { stride; over = Dim s; conv = Some { dilation; kernel = Var v; use_padding = false }; _ } )
     ->
-      (* Infer kernel dimension from the amount of contraction. i = s * stride + kernel_extent
-         Use kernel_size_of_extent to find k from the observed extent. *)
-      let extent = i.d - (stride * s.d) in
-      (match kernel_size_of_extent ~dilation ~extent with
+      (* Infer kernel dimension from the relationship:
+         input_size = stride * (output_size - 1) + effective_kernel_span
+         effective_kernel_span = input_size - stride * (output_size - 1) *)
+      let span = i.d - (stride * (s.d - 1)) in
+      (match kernel_size_of_span ~dilation ~span with
       | Some k -> unify_dim ~stage origin (Var v, get_dim ~d:k ()) env
       | None ->
           raise
@@ -1695,15 +1688,15 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
           _;
         } ) ->
-      (* stride_offset doesn't affect dimension - kernel extent depends on kernel size parity *)
-      let extent1 = kernel_extent ~dilation:d1 ~kernel_size:k1.d
-      and extent2 = kernel_extent ~dilation:d2 ~kernel_size:k2.d in
-      if s1 = s2 && extent1 = extent2 then unify_dim ~stage origin (o1, o2) env
+      (* Both sides use: input = stride * (output - 1) + span *)
+      let span1 = effective_kernel_span ~dilation:d1 ~kernel_size:k1.d
+      and span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
+      if s1 = s2 && span1 = span2 then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
-        let new_extent = (extent1 - extent2) / s2 in
-        (* Encode new_extent via a helper conv with dilation=1 *)
-        let helper_kernel_size = Option.value ~default:(new_extent + 1) (kernel_size_of_extent ~dilation:1 ~extent:new_extent) in
+        let new_span = (span1 - span2) / s2 + 1 in
+        (* Encode new_span via a helper conv with dilation=1 *)
+        let helper_kernel_size = Option.value ~default:new_span (kernel_size_of_span ~dilation:1 ~span:new_span) in
         let helper_conv =
           Some
             {
@@ -1717,9 +1710,9 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           env
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
-        let new_extent = (extent2 - extent1) / s1 in
-        (* Encode new_extent via a helper conv with dilation=1 *)
-        let helper_kernel_size = Option.value ~default:(new_extent + 1) (kernel_size_of_extent ~dilation:1 ~extent:new_extent) in
+        let new_span = (span2 - span1) / s1 + 1 in
+        (* Encode new_span via a helper conv with dilation=1 *)
+        let helper_kernel_size = Option.value ~default:new_span (kernel_size_of_span ~dilation:1 ~span:new_span) in
         let helper_conv =
           Some
             {
@@ -1752,14 +1745,14 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           _;
         },
       Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ } ) ->
-      (* conv = None and use_padding = true have extent 0; use_padding = false has extent depending
-         on kernel size parity *)
-      let extent1 = 0 and extent2 = kernel_extent ~dilation:d2 ~kernel_size:k2.d in
-      if s1 = s2 && extent1 = extent2 then unify_dim ~stage origin (o1, o2) env
+      (* conv = None and use_padding = true effectively have span 1 (identity on dimension);
+         use_padding = false has effective_kernel_span *)
+      let span1 = 1 and span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
+      if s1 = s2 && span1 = span2 then unify_dim ~stage origin (o1, o2) env
       else if s1 >= s2 && s1 % s2 = 0 then
         let stride = s1 / s2 in
-        let new_extent = (extent1 - extent2) / s2 in
-        let helper_kernel_size = Option.value ~default:(new_extent + 1) (kernel_size_of_extent ~dilation:1 ~extent:new_extent) in
+        let new_span = (span1 - span2) / s2 + 1 in
+        let helper_kernel_size = Option.value ~default:new_span (kernel_size_of_span ~dilation:1 ~span:new_span) in
         let helper_conv =
           Some
             {
@@ -1773,8 +1766,8 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           env
       else if s2 >= s1 && s2 % s1 = 0 then
         let stride = s2 / s1 in
-        let new_extent = (extent2 - extent1) / s1 in
-        let helper_kernel_size = Option.value ~default:(new_extent + 1) (kernel_size_of_extent ~dilation:1 ~extent:new_extent) in
+        let new_span = (span2 - span1) / s1 + 1 in
+        let helper_kernel_size = Option.value ~default:new_span (kernel_size_of_span ~dilation:1 ~span:new_span) in
         let helper_conv =
           Some
             {
@@ -2771,6 +2764,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                         stride_offset = _;
                       },
                     Dim s' )
+                  when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d <> s'.d ->
+                    get_dim ~d:1 ~proj_id:50 ()
                 | ( Dim s',
                     Affine
                       {
@@ -2779,7 +2774,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                         conv = Some { kernel = Dim k; dilation; use_padding = false };
                         stride_offset = _;
                       } )
-                  when (stride * s.d) + kernel_extent ~dilation ~kernel_size:k.d <> s'.d ->
+                  when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d <> s'.d ->
                     get_dim ~d:1 ~proj_id:50 ()
                 | ( Affine
                       {
@@ -2811,8 +2806,10 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                         conv = Some { kernel = Dim k2; dilation = dilation2; use_padding = false };
                         stride_offset = _;
                       } )
-                  when (stride1 * s1.d) + kernel_extent ~dilation:dilation1 ~kernel_size:k1.d
-                       <> (stride2 * s2.d) + kernel_extent ~dilation:dilation2 ~kernel_size:k2.d ->
+                  when stride1 * (s1.d - 1)
+                     + effective_kernel_span ~dilation:dilation1 ~kernel_size:k1.d
+                     <> stride2 * (s2.d - 1)
+                        + effective_kernel_span ~dilation:dilation2 ~kernel_size:k2.d ->
                     get_dim ~d:1 ~proj_id:52 ()
                 | Var _, _ -> d1
                 | _, Var _ -> d2
