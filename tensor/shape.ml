@@ -1584,10 +1584,10 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     if List.for_all paddings ~f:(fun p -> p.left = 0 && p.right = 0) then None
     else Some (Array.of_list paddings)
   in
-  let set_padding (sh : t) =
-    sh.batch_padding <- padding_of_row sh.batch;
-    sh.output_padding <- padding_of_row sh.output;
-    sh.input_padding <- padding_of_row sh.input
+  let set_padding (sh : t) : unit =
+    Option.iter (padding_of_row sh.batch) ~f:(fun p -> sh.batch_padding <- Some p);
+    Option.iter (padding_of_row sh.output) ~f:(fun p -> sh.output_padding <- Some p);
+    Option.iter (padding_of_row sh.input) ~f:(fun p -> sh.input_padding <- Some p)
   in
   (* Set padding on all shapes involved *)
   set_padding lhs;
