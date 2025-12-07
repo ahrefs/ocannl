@@ -1575,6 +1575,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let padding_of_row (row : Row.t) : padding =
     let no_padding = Ir.Ops.{ left = 0; right = 0 } in
     let paddings =
+      (* Guard against insufficient shape information error. *)
+      ignore (row_to_dims row);
       List.map row.dims ~f:(fun d ->
           Option.value (Row.get_dim_padding proj_env d) ~default:no_padding)
     in
@@ -1716,7 +1718,7 @@ let to_dims sh =
   finish_inference ();
   to_dims_impl sh
 
-let to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
+let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
   finish_inference ();
   try
     (* If any row has padding, we need to return padding for all dimensions. Use zero padding for
@@ -1727,15 +1729,15 @@ let to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
       | Some padding -> padding
       | None -> Array.create ~len:(List.length row.Row.dims) no_padding
     in
-    let has_any_padding =
+    let has_any_padding : bool =
       Option.is_some sh.batch_padding || Option.is_some sh.output_padding
       || Option.is_some sh.input_padding
     in
     if not has_any_padding then None
     else
-      let batch = get_padding_array sh.batch_padding sh.batch in
-      let output = get_padding_array sh.output_padding sh.output in
-      let input = get_padding_array sh.input_padding sh.input in
+      let batch : Row.axis_padding array = get_padding_array sh.batch_padding sh.batch in
+      let output : Row.axis_padding array = get_padding_array sh.output_padding sh.output in
+      let input : Row.axis_padding array = get_padding_array sh.input_padding sh.input in
       (* TODO: The padded value should be inferred from the operation. *)
       Some (Array.concat [ batch; output; input ], 0.)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
