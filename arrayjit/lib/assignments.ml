@@ -153,6 +153,26 @@ let sequence l =
 
 let%track4_sexp to_low_level code =
   let open Indexing in
+  (* Apply left padding offsets to convert from semantic to buffer indices.
+     Semantic indices can be negative (e.g., -1 for convolution padding), but buffer
+     indices must be non-negative. Adding left_padding converts semantic to buffer space. *)
+  let apply_padding_offset (tn : Tn.t) (idcs : Indexing.axis_index array) :
+      Indexing.axis_index array =
+    match Tn.get_padding tn with
+    | None -> idcs
+    | Some (padding_arr, _) ->
+        Array.mapi idcs ~f:(fun i idx ->
+            if i >= Array.length padding_arr then idx
+            else
+              let left_pad = padding_arr.(i).Ops.left in
+              if left_pad = 0 then idx
+              else
+                match idx with
+                | Fixed_idx n -> Fixed_idx (n + left_pad)
+                | Iterator s -> Affine { symbols = [ (1, s) ]; offset = left_pad }
+                | Affine { symbols; offset } -> Affine { symbols; offset = offset + left_pad }
+                | Sub_axis -> Sub_axis)
+  in
   let get (buffer : buffer) (idcs : Indexing.axis_index array) : Low_level.scalar_t =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
     let idcs =
@@ -168,6 +188,7 @@ let%track4_sexp to_low_level code =
               "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
                vs. %{idcs}"]
     in
+    let idcs = apply_padding_offset tn idcs in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn -> Low_level.Get_merge_buffer (tn, idcs)
@@ -186,6 +207,7 @@ let%track4_sexp to_low_level code =
               "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
                vs. %{idcs}"]
     in
+    let idcs = apply_padding_offset tn idcs in
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
