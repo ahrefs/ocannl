@@ -1513,18 +1513,16 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
   assert (List.is_empty unsolved);
   let local_env = Row.populate_dim_proj_in_solved local_env in
-  let rhs =
+  let rhs, skip_deriving =
     match update_step.logic with
     | Broadcast (Defined_by_cd_logic, _, _)
     | Transpose (Defined_by_cd_logic, _)
     | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
-        raise
-        @@ Utils.User_error
-             "Defined_by_cd_logic: use explicit ~logic annotations when defining this operation"
-    | Terminal _ -> []
-    | Transpose (_, sh) -> [ sh ]
-    | Broadcast (_, sh1, sh2) -> [ sh1; sh2 ]
-    | Broadcast_tern (_, sh1, sh2, sh3) -> [ sh1; sh2; sh3 ]
+        ([], true)
+    | Terminal _ -> ([], false)
+    | Transpose (_, sh) -> ([ sh ], false)
+    | Broadcast (_, sh1, sh2) -> ([ sh1; sh2 ], false)
+    | Broadcast_tern (_, sh1, sh2, sh3) -> ([ sh1; sh2; sh3 ], false)
   in
   let terminal_rows_for_inputs =
     List.concat_map rhs ~f:(fun sh ->
@@ -1589,30 +1587,32 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     Option.iter (padding_of_row sh.output) ~f:(fun p -> sh.output_padding <- Some p);
     Option.iter (padding_of_row sh.input) ~f:(fun p -> sh.input_padding <- Some p)
   in
-  (* Set padding on all shapes involved *)
-  set_padding lhs;
-  List.iter rhs ~f:set_padding;
-  let projections =
-    try
-      Idx.
-        {
-          product_space;
-          lhs_dims;
-          rhs_dims;
-          product_iterators;
-          project_lhs = indices_of_sh lhs;
-          project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
-          debug_info =
-            {
-              spec = logic_to_spec update_step.logic;
-              derived_for = sexp_of_update_step update_step;
-              trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
-            };
-        }
-    with Row.Shape_error (s, trace) ->
-      raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
-  in
-  update_step.unsafe_projections <- Some projections
+  if skip_deriving then ()
+  else (
+    (* Set padding on all shapes involved *)
+    set_padding lhs;
+    List.iter rhs ~f:set_padding;
+    let projections =
+      try
+        Idx.
+          {
+            product_space;
+            lhs_dims;
+            rhs_dims;
+            product_iterators;
+            project_lhs = indices_of_sh lhs;
+            project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
+            debug_info =
+              {
+                spec = logic_to_spec update_step.logic;
+                derived_for = sexp_of_update_step update_step;
+                trace = [ ("derive_projections", Idx.unique_debug_id ()) ];
+              };
+          }
+      with Row.Shape_error (s, trace) ->
+        raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
+    in
+    update_step.unsafe_projections <- Some projections)
 
 (** {3 Shape inference} *)
 
