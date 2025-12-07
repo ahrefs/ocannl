@@ -147,7 +147,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_conv_padding)
- (libraries base ocannl stdio)
+ (libraries base arrayjit.ir ocannl stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

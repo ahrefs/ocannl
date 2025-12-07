@@ -7,8 +7,8 @@ let conv2d = Nn_blocks.conv2d
 
 (** Test that conv2d with use_padding=true preserves spatial dimensions.
 
-    With use_padding=true, the output spatial dimensions should match input/stride.
-    For stride=1 and any kernel_size, output should have the same spatial dims as input. *)
+    With use_padding=true, the output spatial dimensions should match input/stride. For stride=1 and
+    any kernel_size, output should have the same spatial dims as input. *)
 let test_conv2d_padding_preserves_dims () =
   printf "Testing conv2d with use_padding=true preserves dimensions...\n%!";
   Tensor.unsafe_reinitialize ();
@@ -17,7 +17,9 @@ let test_conv2d_padding_preserves_dims () =
   let input = TDSL.range_of_shape ~output_dims:[ 5; 5; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=1, use_padding=true *)
-  let%op output = conv2d ~label:["test_conv"] ~kernel_size:3 ~stride:1 ~use_padding:true () input in
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:true () input
+  in
 
   let ctx = Context.auto () in
   Train.set_hosted output.value;
@@ -43,7 +45,9 @@ let test_conv2d_no_padding_reduces_dims () =
   let input = TDSL.range_of_shape ~output_dims:[ 5; 5; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=1, use_padding=false *)
-  let%op output = conv2d ~label:["test_conv"] ~kernel_size:3 ~stride:1 ~use_padding:false () input in
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:false () input
+  in
 
   let ctx = Context.auto () in
   Train.set_hosted output.value;
@@ -59,8 +63,8 @@ let test_conv2d_no_padding_reduces_dims () =
 
 (** Test conv2d with stride=2 and use_padding=true.
 
-    With stride=2 and use_padding=true, output dims should be ceil(input/stride).
-    For 6x6 input, stride=2: output should be 3x3. *)
+    With stride=2 and use_padding=true, output dims should be ceil(input/stride). For 6x6 input,
+    stride=2: output should be 3x3. *)
 let test_conv2d_stride_with_padding () =
   printf "Testing conv2d with stride=2 and use_padding=true...\n%!";
   Tensor.unsafe_reinitialize ();
@@ -69,7 +73,9 @@ let test_conv2d_stride_with_padding () =
   let input = TDSL.range_of_shape ~output_dims:[ 6; 6; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=2, use_padding=true *)
-  let%op output = conv2d ~label:["test_conv"] ~kernel_size:3 ~stride:2 ~use_padding:true () input in
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true () input
+  in
 
   let ctx = Context.auto () in
   Train.set_hosted output.value;
@@ -81,7 +87,7 @@ let test_conv2d_stride_with_padding () =
   printf "use_padding: true\n%!";
   printf "Expected output spatial dims: 3x3 (input/stride)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
-  printf "\n%!"
+  printf "\nInput: %s\n%!" @@ Ir.Tnode.dims_to_string input.value
 
 (** Test conv2d with stride=2 and use_padding=false.
 
@@ -95,7 +101,9 @@ let test_conv2d_stride_without_padding () =
   let input = TDSL.range_of_shape ~output_dims:[ 6; 6; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=2, use_padding=false *)
-  let%op output = conv2d ~label:["test_conv"] ~kernel_size:3 ~stride:2 ~use_padding:false () input in
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false () input
+  in
 
   let ctx = Context.auto () in
   Train.set_hosted output.value;

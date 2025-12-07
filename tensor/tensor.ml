@@ -294,18 +294,18 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Fetch fetch_op) -> Terminal { is_param; logic = Fetch fetch_op }
     | Some (Data init_data) -> Terminal { is_param; logic = Data init_data }
   in
-  let dims = lazy_to_dims shape in
+  let unpadded_dims = lazy_to_dims shape in
   let padding = lazy (Shape.to_padding shape) in
   let v =
     match terminal_op with
     | Some (Shape.Data (Asgns.Reshape data)) ->
-        Tn.create_with_reshape ~id ~label ~dims ~padding ~from_padded:false ~base_ndarray:data ()
+        Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false ~base_ndarray:data ()
     | Some (Shape.Data (Asgns.Keep_shape_no_padding data)) ->
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
         let padding = Some (padding_spec, padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
-    | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~dims ~padding ()
+    | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
   let update_infer_prec tn prec =
     (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
@@ -386,7 +386,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
-      Tn.create delayed_prec ~id:grad_id ~label:("grad" :: label) ~dims
+      Tn.create delayed_prec ~id:grad_id ~label:("grad" :: label) ~unpadded_dims
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in

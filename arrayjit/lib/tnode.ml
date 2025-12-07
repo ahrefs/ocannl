@@ -602,8 +602,17 @@ let registry = Registry.create 16
 let prec_of_dalayed tn =
   match tn.delayed_prec_unsafe with Default prec | Specified prec | Inferred (lazy prec) -> prec
 
-let create delayed_prec ~id ~label ~dims ~padding () =
+let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
+  (* Compute padded dimensions: tn.dims stores buffer-inclusive (padded) dimensions *)
+  let dims =
+    lazy
+      (let unpadded = Lazy.force unpadded_dims in
+       match Lazy.force padding with
+       | None -> unpadded
+       | Some (padding_arr, _) ->
+           Array.map2_exn unpadded padding_arr ~f:(fun d Ops.{ left; right } -> d + left + right))
+  in
   let rec array =
     lazy
       (if is_hosted_force tn 30 then
@@ -664,18 +673,28 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
   Registry.add registry tn;
   tn
 
-let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () =
+let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_padded () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
   let prec_val = Nd.get_prec base_ndarray in
+  (* Compute padded dimensions: tn.dims stores buffer-inclusive (padded) dimensions *)
+  let dims =
+    lazy
+      (let unpadded = Lazy.force unpadded_dims in
+       match Lazy.force padding with
+       | None -> unpadded
+       | Some (padding_arr, _) ->
+           Array.map2_exn unpadded padding_arr ~f:(fun d Ops.{ left; right } -> d + left + right))
+  in
   let rec array =
     lazy
-      (let target_dims = Lazy.force dims in
+      (let semantic_dims = Lazy.force unpadded_dims in
+       let padded_dims = Lazy.force dims in
        let target_padding = Lazy.force padding in
        match (target_padding, from_padded) with
        | None, _ | _, true ->
            (* Use reshape to conform to inferred dims *)
            let f_reshape_with_prec prec arr =
-             let total_elems = Array.reduce_exn target_dims ~f:( * ) in
+             let total_elems = Array.reduce_exn padded_dims ~f:( * ) in
              let source_total =
                let source_dims = Bigarray.Genarray.dims arr in
                Array.fold source_dims ~init:1 ~f:( * )
@@ -684,32 +703,28 @@ let create_with_reshape ~id ~label ~base_ndarray ~dims ~padding ~from_padded () 
                raise
                @@ Utils.User_error
                     [%string
-                      "create_with_reshape: target dims %{Nd.int_dims_to_string target_dims} \
+                      "create_with_reshape: target dims %{Nd.int_dims_to_string padded_dims} \
                        require %{total_elems#Int} elements but source has %{source_total#Int} \
                        elements"];
-             Nd.as_array prec (Bigarray.reshape arr target_dims)
+             Nd.as_array prec (Bigarray.reshape arr padded_dims)
            in
            Some (Nd.apply_with_prec { f = f_reshape_with_prec } base_ndarray)
-       | Some (padding, _), false ->
-           (* Create new bigarray with padding and copy source into non-padding parts *)
-           let target = Nd.create_array ~debug prec_val ~dims:target_dims ~padding:target_padding in
+       | Some _, false ->
+           (* Create new bigarray with padding and copy source into non-padding parts.
+              semantic_dims are the data area dimensions (without padding). *)
+           let target = Nd.create_array ~debug prec_val ~dims:padded_dims ~padding:target_padding in
            let source_dims = Nd.dims base_ndarray in
-           (* Calculate actual data dimensions (target dims minus padding) *)
-           let data_dims =
-             Array.map2_exn target_dims padding ~f:(fun dim { Ops.left; right } ->
-                 dim - left - right)
-           in
            (* Check total elements match, allowing shape differences *)
            let source_total = Array.fold source_dims ~init:1 ~f:( * ) in
-           let data_total = Array.fold data_dims ~init:1 ~f:( * ) in
+           let data_total = Array.fold semantic_dims ~init:1 ~f:( * ) in
            if source_total <> data_total then
              invalid_arg
                [%string
                  "create_with_reshape: source has %{source_total#Int} elements but target data \
                   area has %{data_total#Int} elements"];
            (* Use C function for efficient copying *)
-           let source = Nd.reshape base_ndarray data_dims in
-           Nd.copy_with_padding ~source ~target ~padding;
+           let source = Nd.reshape base_ndarray semantic_dims in
+           Nd.copy_with_padding ~source ~target ~padding:(Option.value_exn target_padding |> fst);
            Some target)
   and size_in_bytes =
     lazy
