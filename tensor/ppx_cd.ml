@@ -22,7 +22,51 @@ type expr_type =
 let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Scalar | Nonslot | Undet
-[@@deriving equal, sexp]
+
+let equal_projections_slot a b =
+  match (a, b) with
+  | LHS, LHS | RHS1, RHS1 | RHS2, RHS2 | RHS3, RHS3 | Scalar, Scalar | Nonslot, Nonslot | Undet, Undet
+    ->
+      true
+  | _ -> false
+
+let slot_to_string = function
+  | LHS -> "lhs"
+  | RHS1 -> "rhs1"
+  | RHS2 -> "rhs2"
+  | RHS3 -> "rhs3"
+  | Scalar -> "scalar"
+  | Nonslot -> "nonslot"
+  | Undet -> "?"
+
+(** Generate a slot permutation suffix for projections_debug when slots are permuted.
+    Returns empty string for canonical assignment (lhs←lhs, rhs1←rhs1, etc.),
+    otherwise returns something like " [lhs←rhs1, rhs1←lhs]". *)
+let slot_permutation_suffix ~lhs_slot ~rhs_slots =
+  let canonical_rhs = [| RHS1; RHS2; RHS3 |] in
+  let is_canonical =
+    equal_projections_slot lhs_slot LHS
+    && Array.for_alli rhs_slots ~f:(fun i slot ->
+           i >= Array.length canonical_rhs || equal_projections_slot slot canonical_rhs.(i))
+  in
+  if is_canonical then ""
+  else
+    let parts =
+      ("lhs", lhs_slot)
+      :: Array.to_list (Array.mapi rhs_slots ~f:(fun i slot -> ("rhs" ^ Int.to_string (i + 1), slot)))
+    in
+    let mappings =
+      List.filter_map parts ~f:(fun (target, source) ->
+          let canonical_source =
+            if String.equal target "lhs" then LHS
+            else if String.equal target "rhs1" then RHS1
+            else if String.equal target "rhs2" then RHS2
+            else RHS3
+          in
+          if equal_projections_slot source canonical_source then None
+          else Some (target ^ "←" ^ slot_to_string source))
+    in
+    if List.is_empty mappings then "" else " [" ^ String.concat ~sep:", " mappings ^ "]"
 
 type result = {
   vbs : value_binding Map.M(String).t;
@@ -553,7 +597,17 @@ let translate ?ident_label (expr : expression) : result =
                          };
                      })]
             in
-            (proj_lazy, [%expr projections.Tensor.projections_debug])
+            let slot_suffix =
+              slot_permutation_suffix ~lhs_slot:setup_l.slot
+                ~rhs_slots:[| setup_r1.slot; setup_r2.slot; setup_r3.slot |]
+            in
+            let proj_debug =
+              if String.is_empty slot_suffix then [%expr projections.Tensor.projections_debug]
+              else
+                let suffix_expr = Ast_builder.Default.estring ~loc slot_suffix in
+                [%expr projections.Tensor.projections_debug ^ [%e suffix_expr]]
+            in
+            (proj_lazy, proj_debug)
       in
       (* FIXME: might be better to treat missing [rhs1, rhs2, rhs3] as zeros or errors rather than
          eliding the code, only lhs should decide whether to elide the code. *)
@@ -620,7 +674,17 @@ let translate ?ident_label (expr : expression) : result =
                          };
                      })]
             in
-            (proj_lazy, [%expr projections.Tensor.projections_debug])
+            let slot_suffix =
+              slot_permutation_suffix ~lhs_slot:setup_l.slot
+                ~rhs_slots:[| setup_r1.slot; setup_r2.slot |]
+            in
+            let proj_debug =
+              if String.is_empty slot_suffix then [%expr projections.Tensor.projections_debug]
+              else
+                let suffix_expr = Ast_builder.Default.estring ~loc slot_suffix in
+                [%expr projections.Tensor.projections_debug ^ [%e suffix_expr]]
+            in
+            (proj_lazy, proj_debug)
       in
       (* FIXME: might be better to treat missing [rhs1, rhs2] as zeros or errors rather than eliding
          the code, only lhs should decide whether to elide the code. *)
@@ -680,7 +744,16 @@ let translate ?ident_label (expr : expression) : result =
                          };
                      })]
             in
-            (proj_lazy, [%expr projections.Tensor.projections_debug])
+            let slot_suffix =
+              slot_permutation_suffix ~lhs_slot:setup_l.slot ~rhs_slots:[| setup_r.slot |]
+            in
+            let proj_debug =
+              if String.is_empty slot_suffix then [%expr projections.Tensor.projections_debug]
+              else
+                let suffix_expr = Ast_builder.Default.estring ~loc slot_suffix in
+                [%expr projections.Tensor.projections_debug ^ [%e suffix_expr]]
+            in
+            (proj_lazy, proj_debug)
       in
       (* FIXME: might be better to treat missing [rhs] as zeros or errors rather than eliding the
          code, only lhs should decide whether to elide the code. *)
