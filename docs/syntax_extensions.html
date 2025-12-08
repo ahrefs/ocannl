@@ -1079,13 +1079,25 @@ padding. The dimension relationship is:</p>
 <code>effective_kernel_span = 1 + (kernel_size - 1) * dilation</code>.</p></li>
 </ul>
 <p><strong>Important constraint for valid convolution</strong>: The
-formula must hold exactly. For example, with <code>stride=2</code>,
-<code>kernel_size=2</code>, <code>dilation=1</code>: -
+formula must hold exactly, meaning
+<code>(input_size - effective_kernel_span)</code> must be divisible by
+<code>stride</code>. Otherwise, shape inference will fail with
+“incompatible stride” error.</p>
+<p><strong>General rule (<code>use_padding = false</code>
+case)</strong>:
+<code>(input_size - effective_kernel_span) mod stride = 0</code></p>
+<p>For example, with <code>stride=2</code>, <code>kernel_size=2</code>,
+<code>dilation=1</code>: -
 <code>effective_kernel_span = 1 + (2-1) * 1 = 2</code> - A 4x4 input
 gives output_size: <code>4 = 2 * (output - 1) + 2</code> →
-<code>output = 2</code> - A 5x5 input would fail:
-<code>5 = 2 * (output - 1) + 2</code> → <code>output = 2.5</code> (not
-integer)</p>
+<code>output = 2</code> ✓ - A 5x5 input would fail:
+<code>(5 - 2) mod 2 = 1 ≠ 0</code> → shape inference error</p>
+<p>With <code>stride=2</code>, <code>kernel_size=3</code>,
+<code>dilation=1</code>: -
+<code>effective_kernel_span = 1 + (3-1) * 1 = 3</code> - A 9x9 input
+works: <code>(9 - 3) mod 2 = 0</code> → <code>output = 4</code> ✓ - A
+10x10 input fails: <code>(10 - 3) mod 2 = 1 ≠ 0</code> → shape inference
+error</p>
 <p><strong>Examples</strong>:</p>
 <ul>
 <li>Max pooling 2x2 with stride 2:
