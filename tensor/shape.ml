@@ -1207,6 +1207,8 @@ let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
 
+(** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
+    creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   match delayed_var_ref with
   | { var_ref = { solved_dim = Some dim2; _ }; _ } when dim2 = dim -> ()
@@ -1621,21 +1623,26 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
-let rec compute_row_product env (row : Row.t) : int =
+(** Computes the product of dimensions in a row. Returns [None] if any dimension is not yet
+    resolved (still a variable or unresolved affine). *)
+let rec compute_row_product env (row : Row.t) : int option =
   match row.dims with
-  | [] -> 1
-  | dim :: rest ->
+  | [] -> Some 1
+  | dim :: rest -> (
       let dim_val =
         match dim with
-        | Row.Dim { d; _ } -> d
-        | Row.Var v -> (
-            match Row.get_dim_val env v with
-            | Some d -> d
-            | None -> 1 (* Variable not yet resolved *))
-        | Row.Affine _ -> 1 (* TODO: handle affine/convolution input dimensions *)
+        | Row.Dim { d; _ } -> Some d
+        | Row.Var v -> Row.get_dim_val env v
+        | Row.Affine _ -> None (* TODO: handle affine/convolution input dimensions *)
       in
-      dim_val * compute_row_product env { row with dims = rest }
+      match (dim_val, compute_row_product env { row with dims = rest }) with
+      | Some d, Some rest_product -> Some (d * rest_product)
+      | _ -> None)
 
+(** Updates delayed variable references with inferred dimensions/row products from the environment.
+    If [solved_dim] was previously set by [set_dim], we skip updating to preserve the user's
+    constraint - consistency will be checked later in [finish_inference] when all constraints
+    have been fully processed. *)
 let update_delayed_var_refs env update_step =
   let update_var_ref_list var_refs =
     List.iter var_refs ~f:(fun delayed_ref ->
@@ -1644,18 +1651,22 @@ let update_delayed_var_refs env update_step =
         | `Dim dim_var -> (
             match Row.get_dim_val env dim_var with
             | Some d ->
-                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
-                    assert (solved_dim = d));
-                delayed_ref.var_ref.solved_dim <- Some d
+                (* If solved_dim was set by set_dim, preserve it - consistency checked in
+                   finish_inference. Otherwise, update from inference. *)
+                if Option.is_none delayed_ref.var_ref.solved_dim then
+                  delayed_ref.var_ref.solved_dim <- Some d
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
-            | Some row ->
-                let product = compute_row_product env row in
-                Option.iter delayed_ref.var_ref.solved_dim ~f:(fun solved_dim ->
-                    assert (solved_dim = product));
-                delayed_ref.var_ref.solved_dim <- Some product
-            | None -> () (* Not yet resolved *)))
+            | Some row -> (
+                match compute_row_product env row with
+                | Some product ->
+                    (* If solved_dim was set by set_dim, preserve it - the Total_elems constraint
+                       will be processed in finish_inference to reconcile. Otherwise, update. *)
+                    if Option.is_none delayed_ref.var_ref.solved_dim then
+                      delayed_ref.var_ref.solved_dim <- Some product
+                | None -> () (* Row has unresolved dimensions *))
+            | None -> () (* Row variable not yet resolved *)))
   in
   match update_step.logic with
   | Transpose (Permute (_, var_refs), _) -> update_var_ref_list var_refs
