@@ -223,7 +223,13 @@ let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt
 
 (** {2 Convolutional Neural Network Building Blocks} *)
 
-(** 2D convolution layer with flexible padding and stride options. *)
+(** 2D convolution layer with flexible padding and stride options.
+
+    When [use_padding=false] and [stride > 1], the input spatial dimensions must satisfy:
+    [(input_size - kernel_size) mod stride = 0], otherwise shape inference will fail with
+    "incompatible stride" error. The output size is [(input_size - kernel_size) / stride + 1].
+
+    When [use_padding=true], there is no such restriction and output size is [input_size / stride]. *)
 let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
@@ -236,8 +242,11 @@ let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
   + { bias = 0. }
 
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
-    conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing) *)
-let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
+    conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing).
+
+    See {!conv2d} for dimension constraints when [use_padding=false]. *)
+let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
+    =
   (* Depthwise: each input channel is convolved with its own filter *)
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
@@ -252,7 +261,12 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
   +* { pw_kernel } "... | h, w, ..ic..; ..ic.. -> ..oc.. => ... | h, w, ..oc.."
   + { bias = 0. }
 
-(** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values. *)
+(** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values.
+
+    The input spatial dimensions must satisfy: [(input_size - window_size) mod stride = 0],
+    otherwise shape inference will fail. The output size is [(input_size - window_size) / stride + 1].
+
+    Note: The [<] in the einsum spec indicates no-padding mode (indices stay within bounds). *)
 let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
@@ -265,14 +279,16 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
   @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
         (0.0 + 0.0)
 
-(** Average pooling for 2D spatial data - reduces spatial dimensions by averaging values. *)
+(** Average pooling for 2D spatial data - reduces spatial dimensions by averaging values.
+
+    See {!max_pool2d} for dimension constraints. *)
 let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
   let sum =
     x
-    +++ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
-          (0.0 + 0.0)
+    +++ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.."
+          [ "wh"; "ww" ] (0.0 + 0.0)
   in
   sum /. (dim wh *. dim ww)
 
@@ -328,7 +344,7 @@ let%op resnet_block ~label ?(stride = 1) () =
 
 (** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:
     conv -> pool -> conv -> pool -> fc layers *)
-let%op lenet ~label ?(num_classes = 10) () =
+let%op lenet ?(label = [ "lenet" ]) ?(num_classes = 10) () =
   let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:5 () in
   let pool1 = max_pool2d ~stride:2 () in
   let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:5 () in

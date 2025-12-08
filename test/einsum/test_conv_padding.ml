@@ -89,16 +89,48 @@ let test_conv2d_stride_with_padding () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\nInput: %s\n%!" @@ Ir.Tnode.dims_to_string input.value
 
-(** Test conv2d with stride=2 and use_padding=false.
+(** Test backpropagation for conv2d with stride=2 and use_padding=true.
 
-    With stride=2 and use_padding=false, output dims should be (input - kernel_size + 1) / stride.
-    For 6x6 input, kernel_size=3, stride=2: (6-3+1)/2 = 2, so output should be 2x2. *)
-let test_conv2d_stride_without_padding () =
-  printf "Testing conv2d with stride=2 and use_padding=false...\n%!";
+    This tests that shape inference works correctly during backpropagation for strided convolutions
+    with padding. *)
+let test_conv2d_stride_with_padding_backprop () =
+  printf "\nTesting backprop for conv2d with stride=2 and use_padding=true...\n%!";
   Tensor.unsafe_reinitialize ();
 
   (* Create a 6x6 input with 1 channel *)
   let input = TDSL.range_of_shape ~output_dims:[ 6; 6; 1 ] () in
+
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=true *)
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true () input
+  in
+  (* Sum to scalar for backprop *)
+  let%op loss = output ++ "...|... => 0" in
+
+  let ctx = Context.auto () in
+  Train.set_hosted loss.value;
+  ignore (Train.update_once ctx loss);
+
+  printf "Input shape: 6x6x1\n%!";
+  printf "Kernel size: 3x3\n%!";
+  printf "Stride: 2\n%!";
+  printf "use_padding: true\n%!";
+  printf "Backprop completed successfully!\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
+
+(** Test conv2d with stride=2 and use_padding=false.
+
+    With stride=2 and use_padding=false, output dims are (input - kernel) / stride + 1.
+    IMPORTANT: For no-padding convolutions, (input - kernel) must be divisible by stride.
+    For 9x9 input, kernel_size=3, stride=2: (9-3)/2 + 1 = 4, so output should be 4x4. *)
+let test_conv2d_stride_without_padding () =
+  printf "Testing conv2d with stride=2 and use_padding=false...\n%!";
+  Tensor.unsafe_reinitialize ();
+
+  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding.
+     For no-padding conv: (input - kernel) must be divisible by stride.
+     (9 - 3) = 6, 6 % 2 = 0 ✓ *)
+  let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=2, use_padding=false *)
   let%op output =
@@ -109,17 +141,55 @@ let test_conv2d_stride_without_padding () =
   Train.set_hosted output.value;
   ignore (Train.forward_once ctx output);
 
-  printf "Input shape: 6x6x1\n%!";
+  printf "Input shape: 9x9x1\n%!";
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "use_padding: false\n%!";
-  printf "Expected output spatial dims: 2x2 ((input-kernel+1)/stride)\n%!";
+  printf "Expected output spatial dims: 4x4 ((9-3)/2 + 1)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\n%!"
 
+(** Test backpropagation for conv2d with stride=2 and use_padding=false.
+
+    This tests that shape inference works correctly during backpropagation for strided convolutions
+    without padding.
+
+    IMPORTANT: For no-padding convolutions, (input - kernel) must be divisible by stride,
+    otherwise shape inference will fail with "incompatible stride" error. *)
+let test_conv2d_stride_without_padding_backprop () =
+  printf "\nTesting backprop for conv2d with stride=2 and use_padding=false...\n%!";
+  Tensor.unsafe_reinitialize ();
+
+  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding.
+     For no-padding conv: (input - kernel) must be divisible by stride.
+     (9 - 3) = 6, 6 % 2 = 0 ✓
+     Output size: (9 - 3) / 2 + 1 = 4, so 4x4 output. *)
+  let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
+
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=false *)
+  let%op output =
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false () input
+  in
+  (* Sum to scalar for backprop *)
+  let%op loss = output ++ "...|... => 0" in
+
+  let ctx = Context.auto () in
+  Train.set_hosted loss.value;
+  ignore (Train.update_once ~output_cd_file:false ctx loss);
+
+  printf "Input shape: 9x9x1\n%!";
+  printf "Kernel size: 3x3\n%!";
+  printf "Stride: 2\n%!";
+  printf "use_padding: false\n%!";
+  printf "Expected output shape: 4x4 ((9-3)/2 + 1)\n%!";
+  printf "Backprop completed successfully!\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
+
 let () =
+  test_conv2d_padding_preserves_dims ();
+  test_conv2d_no_padding_reduces_dims ();
   test_conv2d_stride_with_padding ();
-  ignore test_conv2d_padding_preserves_dims;
-  ignore test_conv2d_no_padding_reduces_dims;
-  ignore test_conv2d_stride_without_padding;
-  printf "All conv padding tests completed!\n%!"
+  test_conv2d_stride_with_padding_backprop ();
+  test_conv2d_stride_without_padding ();
+  test_conv2d_stride_without_padding_backprop ();
+  printf "\nAll conv padding tests completed!\n%!"

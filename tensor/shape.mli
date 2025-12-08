@@ -47,6 +47,11 @@
     kernel_iterator. Conv expressions automatically trigger multichar mode and are only supported in
     multichar mode.
 
+    Adding [<] after the output label (e.g., [stride*output<+kernel]) indicates no-padding mode,
+    where indices must stay within the input bounds. In this mode, the input dimension must satisfy:
+    [(input - effective_kernel_span) mod stride = 0], where [effective_kernel_span = 1 + (kernel - 1) * dilation].
+    Without [<], padding is applied and there is no such divisibility constraint.
+
     Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
     axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case
     `row_spec` = `axes_spec`, the axes are the rightmost axes (broadcasting to the left). In the

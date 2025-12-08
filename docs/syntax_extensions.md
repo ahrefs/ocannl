@@ -434,10 +434,19 @@ The affine axis syntax enables convolution and pooling operations directly in ei
   ```
   where `effective_kernel_span = 1 + (kernel_size - 1) * dilation`.
 
-**Important constraint for valid convolution**: The formula must hold exactly. For example, with `stride=2`, `kernel_size=2`, `dilation=1`:
+**Important constraint for valid convolution**: The formula must hold exactly, meaning `(input_size - effective_kernel_span)` must be divisible by `stride`. Otherwise, shape inference will fail with "incompatible stride" error.
+
+**General rule (`use_padding = false` case)**: `(input_size - effective_kernel_span) mod stride = 0`
+
+For example, with `stride=2`, `kernel_size=2`, `dilation=1`:
 - `effective_kernel_span = 1 + (2-1) * 1 = 2`
-- A 4x4 input gives output_size: `4 = 2 * (output - 1) + 2` → `output = 2`
-- A 5x5 input would fail: `5 = 2 * (output - 1) + 2` → `output = 2.5` (not integer)
+- A 4x4 input gives output_size: `4 = 2 * (output - 1) + 2` → `output = 2` ✓
+- A 5x5 input would fail: `(5 - 2) mod 2 = 1 ≠ 0` → shape inference error
+
+With `stride=2`, `kernel_size=3`, `dilation=1`:
+- `effective_kernel_span = 1 + (3-1) * 1 = 3`
+- A 9x9 input works: `(9 - 3) mod 2 = 0` → `output = 4` ✓
+- A 10x10 input fails: `(10 - 3) mod 2 = 1 ≠ 0` → shape inference error
 
 **Examples**:
 
