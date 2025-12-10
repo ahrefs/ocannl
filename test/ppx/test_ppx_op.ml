@@ -8,7 +8,7 @@ let%op y2 x1 x2 = (x1 *. { hey3 }) + x2
 let%op a = [ (1, 2, 3); (4, 5, 6) ]
 let%op b = [| [ 7; 8 ]; [ 9; 10 ] |]
 let%op y = ({ hey4 } * 'q' 2.0) + 'p' 1.0
-let%op z = ('q' 2.0 * { hey5 }) + ({ hey6 } * 'p' 1.0)
+let%op z = ('q' 2.0 *. { hey5 }) + ({ hey6 } *. 'q' 1.0)
 
 let stride = 2
 and dilation = 3
@@ -20,7 +20,8 @@ let z3 =
   let s = 2 and d = 3 in
   [%op { hey9 } +* "i, s*a+d*bc; b => i, a, c" { hey10 }]
 
-let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
+let () = ignore (y0, y1, y2, a, b, y)
+let () = ignore (z, z2, z3)
 let%op mlp_layer ~label ~hid_dim () ~x = relu (({ w } * x) + { b; o = [ hid_dim ] })
 
 let%op _use_layer =

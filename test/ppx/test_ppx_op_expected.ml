@@ -58,8 +58,8 @@ let z =
        "hey6") () in
   let open! TDSL.O in
     (+) ?label:(Some ["z"])
-      (( * ) ?label:None (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
-      (( * ) ?label:None hey6 (TDSL.number ?label:None ~axis_label:"p" 1.0))
+      (( *. ) ?label:None (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
+      (( *. ) ?label:None hey6 (TDSL.number ?label:None ~axis_label:"q" 1.0))
 let stride = 2
 and dilation = 3
 and use_padding = true
@@ -115,7 +115,8 @@ let z3 =
          "a";
          ", ";
          "c"]) hey9 hey10
-let () = ignore (y0, y1, y2, a, b, y, z, z2, z3)
+let () = ignore (y0, y1, y2, a, b, y)
+let () = ignore (z, z2, z3)
 let mlp_layer =
   let open! TDSL.O in
     fun ~label ~hid_dim () ->

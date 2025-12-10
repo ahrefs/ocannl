@@ -596,8 +596,12 @@ struct
   let uint4x32_to_prec_uniform1 = uint4x32_to_prec_uniform1 ~grad_spec
   let embed_self_id = embed_self_id ~grad_spec
 
-  (** The default initialization operation for {!param} calls. *)
-  let default_param_init = ref (uniform ~grad_spec:Require_grad)
+  (** The default initialization operation for {!param} calls.
+
+      To avoid user surprises, this defaults to {!uniform1} which does not impose constraints on the
+      shape of the tensor, but for efficiency, consider setting this to
+      [uniform ~grad_spec:Require_grad] or [normal ~grad_spec:Require_grad] instead. *)
+  let default_param_init = ref (uniform1 ~grad_spec:Require_grad)
   (* Useful for debugging: *)
   (* let default_param_init =
     ref (fun () -> Tensor.term ~grad_spec:Require_grad ?init_data:None ~fetch_op:(Constant 0.)) *)
