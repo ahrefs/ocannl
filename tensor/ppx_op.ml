@@ -233,7 +233,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
           let pat, vb =
             make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
           in
-          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+          ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
             Ast_builder.Default.pexp_extension ~loc
@@ -254,7 +254,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
           let pat, vb =
             make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
           in
-          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+          ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
             Ast_builder.Default.pexp_extension ~loc
@@ -278,7 +278,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             make_vb_nd ~no_grad:no_grads_for_inline_defs ~opt_label ~init_nd ~extra_args ~loc name
           in
           (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
-          (Map.singleton (module String) tensor_name vb, pat2expr pat)
+          ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
             Ast_builder.Default.pexp_extension ~loc
@@ -304,8 +304,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ?param_init ~extra_args ~loc name
           in
           (* Combine with any bindings from the initialization *)
-          let tensor_vbs = Map.singleton (module String) tensor_name vb in
-          let all_vbs = reduce_vbss [ init_vbs; tensor_vbs ] in
+          let all_vbs = reduce_vbss [ init_vbs; [ vb ] ] in
           (all_vbs, pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -455,10 +454,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
                       let vbs, pc_rhs = loop ~label pc_rhs in
                       (vbs, { c with pc_rhs }))
                 in
-                ( List.fold vbs
-                    ~init:(Map.empty (module String))
-                    ~f:(fun acc vbs -> Map.merge_disjoint_exn acc vbs),
-                  Pfunction_cases (cases, loc, attrs) )
+                (List.concat vbs, Pfunction_cases (cases, loc, attrs))
           in
           (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) }))
   | { pexp_desc = Pexp_function (args, constr, body); _ } ->
@@ -474,10 +470,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
                   let vbs, pc_rhs = loop ?label pc_rhs in
                   (vbs, { c with pc_rhs }))
             in
-            ( List.fold vbs
-                ~init:(Map.empty (module String))
-                ~f:(fun acc vbs -> Map.merge_disjoint_exn acc vbs),
-              Pfunction_cases (cases, loc, attrs) )
+            (List.concat vbs, Pfunction_cases (cases, loc, attrs))
       in
       (vbs, { expr with pexp_desc = Pexp_function (args, constr, body) })
   | [%expr

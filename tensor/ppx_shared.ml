@@ -543,25 +543,30 @@ let is_primitive_op op_ident =
   List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
 
 let let_opt ~loc vbs expr =
-  if Map.is_empty vbs then expr else Ast_helper.Exp.let_ ~loc Nonrecursive (Map.data vbs) expr
-
-let no_vbs = Map.empty (module String)
-
-let reduce_vbss vbss =
-  List.reduce_exn vbss ~f:(fun acc vbs ->
-      Map.merge_skewed acc vbs ~combine:(fun ~key _v1 v2 ->
-          (* Get location from the value binding for better error reporting *)
-          let loc = v2.pvb_loc in
-          (* Create an error expression *)
+  (* Check for duplicates and create nested let bindings preserving definition order *)
+  let seen = Hashtbl.create (module String) in
+  List.fold_right vbs ~init:expr ~f:(fun vb acc ->
+      let name =
+        match vb.pvb_pat.ppat_desc with
+        | Ppat_var { txt; _ } -> txt
+        | _ -> "_"
+      in
+      match Hashtbl.add seen ~key:name ~data:() with
+      | `Ok -> Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
+      | `Duplicate ->
+          let loc = vb.pvb_loc in
           let error_expr =
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl: name clash for inline definition or variable capture '%s' - the name \
                   is already defined"
-                 key
+                 name
           in
-          (* Return a value binding with the error *)
-          { v2 with pvb_expr = error_expr }))
+          Ast_helper.Exp.let_ ~loc Nonrecursive [ { vb with pvb_expr = error_expr } ] acc)
+
+let no_vbs = []
+
+let reduce_vbss vbss = List.concat vbss
 
 let expr_expander_with_punning translate ~loc ~path:_ payload =
   match payload with
@@ -655,7 +660,7 @@ let collect_capture_labels ~loc head rest =
     |> List.unzip
   in
   let capture_dims_expr = Ast_builder.Default.elist ~loc (more_errors @ errors @ capture_refs) in
-  let capture_vbs = Map.of_alist_exn (module String) capture_bindings in
+  let capture_vbs = List.map capture_bindings ~f:snd in
   (capture_vbs, capture_dims_expr)
 
 let operators =

@@ -70,9 +70,10 @@ let slot_permutation_suffix ~lhs_slot ~rhs_slots =
     if List.is_empty mappings then "" else " [" ^ String.concat ~sep:", " mappings ^ "]"
 
 type result = {
-  vbs : value_binding Map.M(String).t;
+  vbs : value_binding list;
       (** [vbs] are the bindings introduced by inline tensor declarations (aka. punning). These
-          bindings are discharged with the whole [%cd] extension scope in scope. *)
+          bindings are discharged with the whole [%cd] extension scope in scope, preserving
+          definition order. *)
   typ : expr_type;
   slot : projections_slot;
   expr : expression;
@@ -140,10 +141,7 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
         in
         let hint_data = Option.first_some (List.hd good_hints) (List.hd bad_hints) in
         let hint_label = Option.map ~f:fst hint_data in
-        let vbs =
-          Map.singleton (module String) name
-          @@ make_vb ~loc ~name ~name_expr ~hint_label ~extra_args
-        in
+        let vbs = [ make_vb ~loc ~name ~name_expr ~hint_label ~extra_args ] in
         match hint_data with
         | None -> (vbs, body)
         | Some data -> (
@@ -239,8 +237,10 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   | (Tensor | Unknown), { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _
     when Hashtbl.mem punned name ->
       Hashtbl.find punned name
-  | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ }, _ -> Some (hint, true)
-  | (Tensor | Unknown), _, false -> Some (hint, false)
+  | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ }, _ ->
+      Some ([%expr [%e filler].Tensor.value.Ir.Tnode.label], true)
+  | (Tensor | Unknown), _, false ->
+      Some ([%expr [%e filler].Tensor.value.Ir.Tnode.label], false)
   | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
@@ -292,7 +292,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       pun_hint_tnode = pun_hint_tnode no_filler_label;
     }
   in
-  match (Map.is_empty vbs, filler_typ) with
+  match (List.is_empty vbs, filler_typ) with
   | (false, _ | _, No_grad_tensor_intro _) when not is_lhs ->
       {
         (default_setup false) with
@@ -965,10 +965,9 @@ let translate ?ident_label (expr : expression) : result =
             (* NOTE: this binding is not used in assignments therefore is very unlikely to be used.
                But it's needed for code expressions or standalone non-diff tensor expressions. *)
             let vbs =
-              Map.singleton (module String) tensor_name
-              @@ make_vb ~loc ~name:tensor_name ~name_expr
-                   ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
-                   ~extra_args
+              [ make_vb ~loc ~name:tensor_name ~name_expr
+                  ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
+                  ~extra_args ]
             in
             let slot =
               (* Detect projection slot from tensor name prefix/suffix patterns *)

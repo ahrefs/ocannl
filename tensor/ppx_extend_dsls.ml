@@ -9,7 +9,7 @@ let transform_dsl_binding ~loc ~dsl_name binding =
       Ppx_op.translate ~no_grads_for_inline_defs:true
       @@ add_module_qualifier_to_applied_function ~module_name:dsl_name expr
     in
-    if Map.is_empty vbs then result
+    if List.is_empty vbs then result
     else
       Ast_builder.Default.pexp_extension ~loc
       @@ Location.error_extensionf ~loc

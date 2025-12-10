@@ -436,8 +436,8 @@ let tropical ?(capture_dims = []) spec =
   end in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
-    { sum_lhs } =: t1 + t2;
-    { cond_lhs } =: eq (t, sum_rhs1);
+    { sum_lhs } =: add (t1, t2);
+    { cond_lhs } =: eq (t, sum_lhs);
     g1 =+ where cond_lhs g 0;
     g2 =+ where cond_lhs g 0
   in
