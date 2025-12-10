@@ -524,7 +524,9 @@ let uniform_at ?grad_spec counter =
           ~label:[ "range_over_offsets" ] ())
        ())
 
-(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. *)
+(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits.
+    The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with
+    the 2-round "light" threefry variant. *)
 let uniform1 ?grad_spec () =
   uint4x32_to_prec_uniform1 ?grad_spec
     (threefry4x32
@@ -533,7 +535,9 @@ let uniform1 ?grad_spec () =
           ~label:[ "range_over_offsets" ] ())
        ())
 
-(** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits. *)
+(** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits.
+    The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with
+    the 2-round "light" threefry variant. *)
 let uniform_at1 ?grad_spec counter =
   uint4x32_to_prec_uniform1 ?grad_spec
     (threefry4x32

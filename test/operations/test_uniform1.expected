@@ -1,28 +1,28 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 First 5 uniform1 random values:
-  [0]: 0.8385
-  [1]: 0.2135
-  [2]: 0.08851
-  [3]: 0.4635
-  [4]: 0.3385
+  [0]: 0.45
+  [1]: 0.3959
+  [2]: 0.6949
+  [3]: 0.6408
+  [4]: 0.1866
 All values in [0, 1) range: true
 
 First 5 uniform (vectorized) random values:
-  [0]: 0.7383
-  [1]: 0.8875
-  [2]: 0.7515
-  [3]: 0.0102
-  [4]: 0.8633
+  [0]: 0.04299
+  [1]: 0.3929
+  [2]: 0.2459
+  [3]: 0.6282
+  [4]: 0.06521
 
 Vectorized version produces 40 values from 10 uint4x32 inputs
 Non-vectorized version produces 10 values from 10 uint4x32 inputs
 uniform_at1 random values with counter:
-  [0]: 0.3904
-  [1]: 0.9486
-  [2]: 0.6968
-  [3]: 0.917
-  [4]: 0.7768
+  [0]: 0.9556
+  [1]: 0.9015
+  [2]: 0.5636
+  [3]: 0.5687
+  [4]: 0.4151
 All values in [0, 1) range: true
 Input size: 24 elements
 uniform1 output size: 24 elements

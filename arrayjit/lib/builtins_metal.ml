@@ -378,7 +378,16 @@ using namespace metal;|}, []);
       [] );
     ( "int32_to_uint4x32",
       {|uint4 int32_to_uint4x32(int32_t x) {
-    return uint4(uint32_t(x), 0, 0, 0);
+    /* Spread bits across all 4 components for better entropy with light threefry.
+       Without this, consecutive counter values produce nearly identical v[0] outputs
+       from 2-round threefry, causing periodicity in random number generation. */
+    uint32_t u = uint32_t(x);
+    return uint4(
+        u,
+        u ^ 0x9E3779B9,              /* golden ratio constant */
+        u ^ 0x6C078965,              /* Knuth's MMIX constant */
+        u ^ ((u << 16) | (u >> 16))  /* bit rotation */
+    );
 }|},
       [] );
     ( "int64_to_uint4x32",
@@ -389,7 +398,15 @@ using namespace metal;|}, []);
       [] );
     ( "uint32_to_uint4x32",
       {|uint4 uint32_to_uint4x32(uint32_t x) {
-    return uint4(x, 0, 0, 0);
+    /* Spread bits across all 4 components for better entropy with light threefry.
+       Without this, consecutive counter values produce nearly identical v[0] outputs
+       from 2-round threefry, causing periodicity in random number generation. */
+    return uint4(
+        x,
+        x ^ 0x9E3779B9,              /* golden ratio constant */
+        x ^ 0x6C078965,              /* Knuth's MMIX constant */
+        x ^ ((x << 16) | (x >> 16))  /* bit rotation */
+    );
 }|},
       [] );
     ( "uint64_to_uint4x32",

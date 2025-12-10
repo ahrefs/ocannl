@@ -88,11 +88,14 @@ let () =
     Train.run ctx infer_step;
     let dice_value = dice.@[0] in
 
+    let max_i = List.length Datasets.Names.letters_with_dot - 1 in
     let rec aux i sum =
-      let prob = infer_probs.@{[| i |]} in
-      let new_sum = sum +. prob in
-      if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
-      else aux (i + 1) new_sum
+      if i >= max_i then '.'
+      else
+        let prob = infer_probs.@{[| i |]} in
+        let new_sum = sum +. prob in
+        if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
+        else aux (i + 1) new_sum
     in
 
     aux 0 0.

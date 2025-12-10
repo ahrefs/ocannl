@@ -223,7 +223,16 @@ let builtins =
       [ "uint4x32_t" ] );
     ( "int32_to_uint4x32",
       {|__device__ uint4x32_t int32_to_uint4x32(int x) {
-  uint4x32_t result = {{(unsigned int)x, 0, 0, 0}};
+  /* Spread bits across all 4 components for better entropy with light threefry.
+     Without this, consecutive counter values produce nearly identical v[0] outputs
+     from 2-round threefry, causing periodicity in random number generation. */
+  unsigned int u = (unsigned int)x;
+  uint4x32_t result = {{
+      u,
+      u ^ 0x9E3779B9,              /* golden ratio constant */
+      u ^ 0x6C078965,              /* Knuth's MMIX constant */
+      u ^ ((u << 16) | (u >> 16))  /* bit rotation */
+  }};
   return result;
 }|},
       [ "uint4x32_t" ] );
@@ -236,7 +245,15 @@ let builtins =
       [ "uint4x32_t" ] );
     ( "uint32_to_uint4x32",
       {|__device__ uint4x32_t uint32_to_uint4x32(unsigned int x) {
-  uint4x32_t result = {{x, 0, 0, 0}};
+  /* Spread bits across all 4 components for better entropy with light threefry.
+     Without this, consecutive counter values produce nearly identical v[0] outputs
+     from 2-round threefry, causing periodicity in random number generation. */
+  uint4x32_t result = {{
+      x,
+      x ^ 0x9E3779B9,              /* golden ratio constant */
+      x ^ 0x6C078965,              /* Knuth's MMIX constant */
+      x ^ ((x << 16) | (x >> 16))  /* bit rotation */
+  }};
   return result;
 }|},
       [ "uint4x32_t" ] );

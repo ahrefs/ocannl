@@ -24,7 +24,7 @@ let tensor_of_int_list lst =
   TDSL.rebatch ~l:"tensor" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
 
 let () =
-  Utils.settings.fixed_state_for_init <- Some 13;
+  Utils.settings.fixed_state_for_init <- Some 6;
   Tensor.unsafe_reinitialize ();
 
   let bigrams = Datasets.Names.get_all_bigrams () |> Datasets.Names.bigrams_to_indices in
@@ -69,6 +69,7 @@ let () =
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
+
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
 
   let open Operation.At in
@@ -109,11 +110,14 @@ let () =
     Train.run ctx infer_step;
     let dice_value = dice.@[0] in
 
+    let max_i = List.length Datasets.Names.letters_with_dot - 1 in
     let rec aux i sum =
-      let prob = infer_probs.@{[| i |]} in
-      let new_sum = sum +. prob in
-      if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
-      else aux (i + 1) new_sum
+      if i >= max_i then '.'
+      else
+        let prob = infer_probs.@{[| i |]} in
+        let new_sum = sum +. prob in
+        if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
+        else aux (i + 1) new_sum
     in
 
     aux 0 0.

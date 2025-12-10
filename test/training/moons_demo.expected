@@ -1,20 +1,20 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Epoch=1, step=0, batch=0, lr=0.2, loss=23.75, epoch loss=23.75
-Epoch=1, step=1, batch=1, lr=0.2, loss=2.638, epoch loss=26.39
-Epoch=1, step=2, batch=2, lr=0.2, loss=4.725, epoch loss=31.12
-Epoch=1, step=3, batch=3, lr=0.2, loss=2.45, epoch loss=33.57
-Epoch=1, step=4, batch=4, lr=0.2, loss=1.493, epoch loss=35.06
-Epoch=1, step=5, batch=5, lr=0.2, loss=1.054, epoch loss=36.11
-Epoch=1, step=6, batch=6, lr=0.2, loss=0.8308, epoch loss=36.94
-Epoch=1, step=7, batch=7, lr=0.2, loss=0.6304, epoch loss=37.57
-Epoch=1, step=8, batch=8, lr=0.2, loss=0.4684, epoch loss=38.04
-Epoch=1, step=9, batch=9, lr=0.2, loss=0.2731, epoch loss=38.32
+Epoch=1, step=0, batch=0, lr=0.2, loss=27.29, epoch loss=27.29
+Epoch=1, step=1, batch=1, lr=0.2, loss=1.051, epoch loss=28.34
+Epoch=1, step=2, batch=2, lr=0.2, loss=3.316, epoch loss=31.65
+Epoch=1, step=3, batch=3, lr=0.2, loss=0.6153, epoch loss=32.27
+Epoch=1, step=4, batch=4, lr=0.2, loss=2.469, epoch loss=34.74
+Epoch=1, step=5, batch=5, lr=0.2, loss=0.6122, epoch loss=35.35
+Epoch=1, step=6, batch=6, lr=0.2, loss=0.08047, epoch loss=35.43
+Epoch=1, step=7, batch=7, lr=0.2, loss=0.4598, epoch loss=35.89
+Epoch=1, step=8, batch=8, lr=0.2, loss=0.009037, epoch loss=35.9
+Epoch=1, step=9, batch=9, lr=0.2, loss=0.0162, epoch loss=35.91
 ...............................................................
 
 Loss:
 ┌────────┬─────────────────────────┐
-│ 2.37e+1│-                        │
+│ 2.72e+1│-                        │
 │        │                         │
 │        │                         │
 │l       │                         │
@@ -22,7 +22,7 @@ Loss:
 │s       │                         │
 │s       │                         │
 │        │                         │
-│        │--                       │
+│        │- -                      │
 │ 0.00   │-------------------------│
 ├────────┼─────────────────────────┤
 │        │0.00              6.39e+3│
