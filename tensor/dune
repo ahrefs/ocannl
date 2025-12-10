@@ -54,4 +54,4 @@
  (modules ppx_shared ppx_cd ppx_op ppx_extend_dsls ppx_ocannl)
  (libraries base ppxlib str einsum_parser)
  (preprocess
-  (pps ppxlib.metaquot)))
+  (pps ppxlib.metaquot ppx_variants_conv)))

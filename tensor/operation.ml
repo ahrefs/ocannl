@@ -422,7 +422,10 @@ let einmax1 ?(capture_dims = []) spec =
     module O = NDO_before_einmax1
   end in
   let%cd op_asn ~t ~t1 ~projections = v =:@^ v1 in
-  let%cd grad_asn ~t ~g ~t1 ~projections = g1 =+ where (t = t1) g 0 in
+  let%cd grad_asn ~t ~g ~t1 ~projections =
+    { cond_lhs } =: eq (t, t1);
+    g1 =+ where cond_lhs g 0
+  in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
 (** This generalizes the tropical matrix multiplication to arbitrary indices combinations. *)
@@ -433,8 +436,10 @@ let tropical ?(capture_dims = []) spec =
   end in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
-    g1 =+ where (t = t1 + t2) g 0;
-    g2 =+ where (t = t1 + t2) g 0
+    { sum_lhs } =: t1 + t2;
+    { cond_lhs } =: eq (t, sum_rhs1);
+    g1 =+ where cond_lhs g 0;
+    g2 =+ where cond_lhs g 0
   in
   Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
 
@@ -524,9 +529,9 @@ let uniform_at ?grad_spec counter =
           ~label:[ "range_over_offsets" ] ())
        ())
 
-(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits.
-    The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with
-    the 2-round "light" threefry variant. *)
+(** A wasteful variant of {!uniform} that produces a single value from each 4x32 random bits. The
+    bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with the 2-round
+    "light" threefry variant. *)
 let uniform1 ?grad_spec () =
   uint4x32_to_prec_uniform1 ?grad_spec
     (threefry4x32
@@ -535,9 +540,9 @@ let uniform1 ?grad_spec () =
           ~label:[ "range_over_offsets" ] ())
        ())
 
-(** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits.
-    The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with
-    the 2-round "light" threefry variant. *)
+(** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits. The
+    bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with the 2-round
+    "light" threefry variant. *)
 let uniform_at1 ?grad_spec counter =
   uint4x32_to_prec_uniform1 ?grad_spec
     (threefry4x32

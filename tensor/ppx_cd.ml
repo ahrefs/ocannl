@@ -22,6 +22,7 @@ type expr_type =
 let is_unknown = function Unknown -> true | _ -> false
 
 type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Scalar | Nonslot | Undet
+[@@deriving variants]
 
 let equal_projections_slot a b =
   match (a, b) with
@@ -969,13 +970,24 @@ let translate ?ident_label (expr : expression) : result =
                    ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
                    ~extra_args
             in
+            let slot =
+              (* Detect projection slot from tensor name prefix/suffix patterns *)
+              let has_prefix p = String.is_prefix tensor_name ~prefix:p in
+              let has_suffix s = String.is_suffix tensor_name ~suffix:s in
+              if has_prefix "lhs_" || has_suffix "_lhs" then LHS
+              else if has_prefix "rhs1_" || has_suffix "_rhs1" then RHS1
+              else if has_prefix "rhs2_" || has_suffix "_rhs2" then RHS2
+              else if has_prefix "rhs3_" || has_suffix "_rhs3" then RHS3
+              else if has_prefix "rhs_" || has_suffix "_rhs" then RHS1
+              else Undet
+            in
             {
               vbs;
               typ = No_grad_tensor_intro { name = tensor_name; name_expr; extra_args };
               expr =
                 A.Exp.ident ~loc:first_label.loc { txt = Lident tensor_name; loc = first_label.loc };
               array_opt_of_code = None;
-              slot = Undet;
+              slot;
             }
         | Lident _tensor_name, _ ->
             {
@@ -1045,6 +1057,19 @@ let translate ?ident_label (expr : expression) : result =
         }
     | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } when is_primitive_op op_ident ->
         default_result
+    | { pexp_desc = Pexp_ident { txt = Lident ident_name; _ }; _ } ->
+        (* Detect projection slot from identifier name prefix/suffix patterns *)
+        let has_prefix p = String.is_prefix ident_name ~prefix:p in
+        let has_suffix s = String.is_suffix ident_name ~suffix:s in
+        let slot =
+          if has_prefix "lhs_" || has_suffix "_lhs" then LHS
+          else if has_prefix "rhs1_" || has_suffix "_rhs1" then RHS1
+          else if has_prefix "rhs2_" || has_suffix "_rhs2" then RHS2
+          else if has_prefix "rhs3_" || has_suffix "_rhs3" then RHS3
+          else if has_prefix "rhs_" || has_suffix "_rhs" then RHS1
+          else Undet
+        in
+        { default_result with typ = if is_undet slot then Unknown else Tensor; slot }
     | [%expr !.[%e? expr1]] ->
         (* Hardcoding these two patterns (!. and !..) to improve projection derivation expressivity
            and avoid treating the constants as already tensors. *)

@@ -14,13 +14,13 @@ Loss shape:
 Logits shape:
 ((batch
   ((dims
-    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 99)))))
-     (Dim ((d 7) (label ()) (proj_id ((Proj_id 100)))))))
+    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 90)))))
+     (Dim ((d 7) (label ()) (proj_id ((Proj_id 91)))))))
    (bcast Broadcastable) (prov (((sh_id 437) (kind Batch))))))
  (input
   ((dims ()) (bcast Broadcastable) (prov (((sh_id 437) (kind Input))))))
  (output
-  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 101)))))))
+  ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 92)))))))
    (bcast Broadcastable) (prov (((sh_id 437) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (id 437)
  (debug_name transformer))
