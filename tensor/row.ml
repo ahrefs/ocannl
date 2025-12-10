@@ -2870,10 +2870,12 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : 
   | Var v -> (
       match find_dim env.dim_env v with
       | Some (Solved_dim _) -> assert false
+      | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
+          [ Dim_eq { d1 = dim; d2 = lub; origin } ]
       | Some
           (Bounds_dim
              { is_in_param; has_uniq_constr_unless; lub = None; constr = Unconstrained_dim; _ })
-        when is_stage3_up stage ->
+        when is_stage5_up stage ->
           (* Check if we can guess this variable to 1 *)
           if not (can_guess_dim_to_one env has_uniq_constr_unless) then
             [ Terminal_dim (is_param, dim, origin) ]
@@ -2882,9 +2884,7 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : 
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
           else [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
-      | Some (Bounds_dim { lub = Some lub; _ }) when is_stage4_up stage ->
-          [ Dim_eq { d1 = dim; d2 = lub; origin } ]
-      | _ when not (is_stage5_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
+      | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Affine _ ->
       (* The input dimension itself cannot be dim-1, and the over dimension doesn't become

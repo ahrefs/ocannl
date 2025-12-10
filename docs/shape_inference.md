@@ -244,13 +244,27 @@ The constraints are solved by: unification of the equation constraints, unificat
 
 Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in stages. Currently there are 8 stages, with a fractional stage coming from splitting an earlier design.
 
-* Stage 1 is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2, 3, 4 are only performed once necessary: when projections or dimensions are requested.
-* Stage 2, forces coefficients coming from precision byte sizes.
-* Stage 3, when solving the constraints, sets yet-unknown dimension and row variables in terminal shapes to their least upper bounds LUB (if any), but for rows only if they don't have a `Total_elems 1` constraint. It substitutes dimension variables in terminal shapes that do not have a LUB by dim 1, **except** when the variable has `has_uniq_constr_unless` set (indicating it's in the numerator of a `Total_elems` constraint) and none of the denominator variables are also prevented from guessing -- this prevents premature guessing that would make `Total_elems` constraints unsatisfiable. It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint. In Total_elems constraints with multiple row variables, it substitutes row variables originating from axes of non-output kind, and which do not have a LUB, by no-further-axes -- otherwise these constraints can be too hard to unlock.
-* Stage 4 sets yet-unknown dimensions with >1 lower bounds from direct accesses, or terminal ones, to their LUBs if they have any. It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at stage 6 to all variables.) At this stage, we inject `Shape_row` constraints into the inequalities, so that we can re-process the variables of interest without traversing the whole environment.
-* Stage 5 addresses `Total_elems` and `Exact` constraints with yet-unknown row variables. For `Total_elems` and a single row variable: if the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension. For multiple row variables, if one is of the Output kind, sets the other variables to no-further-axes, and retries.
-* Stage 6 sets row variables in the remaining inequalities and updated shapes to no-further-axes values; it also extends LUB processing to non-terminal shapes. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality. In row constraints, this also unlocks inference for the embedded dim variables.
-* Stage 7 sets all dim variables remaining in updated shapes to the lower bound if they have any, otherwise to dimension-1.
+### Stage overview
+
+| Stage | When | Dim vars | Row vars |
+|:-----:|------|----------|----------|
+| **1** | Online | Unify, propagate | Unify, propagate |
+| **2** | On demand | Force precision coefficients | — |
+| **3** | On demand | — | Terminal → LUB; one axis if constrained |
+| **4** | On demand | Terminal → LUB; propagate `Total_elems` | Terminal → no-further-axes |
+| **5** | On demand | Terminal → guess 1 | `Total_elems`/`Exact` → resolve |
+| **6** | On demand | — | All remaining → no-further-axes |
+| **7** | On demand | All remaining → LB or 1 | — |
+
+### Stage details
+
+* **Stage 1** is online as tensors are composed, and conservatively performs unification and constraint propagation. Stages 2–7 are only performed once necessary: when projections or dimensions are requested.
+* **Stage 2** forces coefficients coming from precision byte sizes.
+* **Stage 3**, when solving the constraints, sets yet-unknown row variables in terminal shapes to their least upper bounds LUB (if any), but only if they don't have a `Total_elems 1` constraint. It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint. In `Total_elems` constraints with multiple row variables, it substitutes row variables originating from axes of non-output kind, and which do not have a LUB, by no-further-axes — otherwise these constraints can be too hard to unlock.
+* **Stage 4** sets yet-unknown dimensions with >1 lower bounds from direct accesses, or terminal ones, to their LUBs if they have any. It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at Stage 6 to all variables.) At this stage, we inject `Shape_row` constraints into the inequalities, so that we can re-process the variables of interest without traversing the whole environment. After row variables are resolved to concrete axes, `Total_elems` constraints with `Num_elems` numerators become simple equations that can be solved deductively — e.g., a row variable resolved to one axis with `Total_elems { numerator = Num_elems n }` yields `dim = n` for that axis.
+* **Stage 5** guesses terminal dimension variables without a LUB to dim 1, **except** when the variable has `has_uniq_constr_unless` set (indicating it's in the numerator of a `Total_elems` constraint) and none of the denominator variables are also prevented from guessing — this prevents premature guessing that would make `Total_elems` constraints unsatisfiable. It also addresses `Total_elems` and `Exact` constraints with yet-unknown row variables heuristically. For `Total_elems` and a single row variable: if the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension. For multiple row variables, if one is of the Output kind, sets the other variables to no-further-axes, and retries.
+* **Stage 6** sets row variables in the remaining inequalities and updated shapes to no-further-axes values; it also extends LUB processing to non-terminal shapes. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality. In row constraints, this also unlocks inference for the embedded dim variables.
+* **Stage 7** sets all dim variables remaining in updated shapes to the lower bound if they have any, otherwise to dimension-1.
 
 Let's explain the shape inference functions.
 
