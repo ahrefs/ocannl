@@ -229,16 +229,20 @@ let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt
     [(input_size - kernel_size) mod stride = 0], otherwise shape inference will fail with
     "incompatible stride" error. The output size is [(input_size - kernel_size) / stride + 1].
 
-    When [use_padding=true], there is no such restriction and output size is [input_size / stride]. *)
-let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x =
+    When [use_padding=true], there is no such restriction and output size is [input_size / stride].
+
+    @param out_channels Optional number of output channels. If not provided, must be inferred from
+    context (e.g., from a downstream operation that constrains the output shape). *)
+let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) ?out_channels () x =
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
+  Option.iter out_channels ~f:(Shape.set_dim oc);
   x
   +* { kernel }
        "... | stride*oh+kh, stride*ow+kw, ..ic..; kh, kw, ..ic.. -> ..oc.. => ... | oh, ow, ..oc.."
-       [ "kh"; "kw" ]
+       [ "kh"; "kw"; "oc" ]
   + { bias = 0. }
 
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise

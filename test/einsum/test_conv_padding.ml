@@ -16,9 +16,10 @@ let test_conv2d_padding_preserves_dims () =
   (* Create a simple 5x5 input with 1 channel *)
   let input = TDSL.range_of_shape ~output_dims:[ 5; 5; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=1, use_padding=true *)
+  (* Apply conv2d with kernel_size=3, stride=1, use_padding=true, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:true () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:true ~out_channels:4 ()
+      input
   in
 
   let ctx = Context.auto () in
@@ -29,6 +30,7 @@ let test_conv2d_padding_preserves_dims () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 1\n%!";
   printf "use_padding: true\n%!";
+  printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 5x5 (same as input)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\n%!"
@@ -44,9 +46,10 @@ let test_conv2d_no_padding_reduces_dims () =
   (* Create a simple 5x5 input with 1 channel *)
   let input = TDSL.range_of_shape ~output_dims:[ 5; 5; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=1, use_padding=false *)
+  (* Apply conv2d with kernel_size=3, stride=1, use_padding=false, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:false () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:1 ~use_padding:false ~out_channels:4 ()
+      input
   in
 
   let ctx = Context.auto () in
@@ -57,6 +60,7 @@ let test_conv2d_no_padding_reduces_dims () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 1\n%!";
   printf "use_padding: false\n%!";
+  printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 3x3 (reduced by kernel_size-1)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\n%!"
@@ -72,9 +76,10 @@ let test_conv2d_stride_with_padding () =
   (* Create a 6x6 input with 1 channel *)
   let input = TDSL.range_of_shape ~output_dims:[ 6; 6; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=2, use_padding=true *)
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=true, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true ~out_channels:4 ()
+      input
   in
 
   let ctx = Context.auto () in
@@ -85,6 +90,7 @@ let test_conv2d_stride_with_padding () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "use_padding: true\n%!";
+  printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 3x3 (input/stride)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\nInput: %s\n%!" @@ Ir.Tnode.dims_to_string input.value
@@ -100,9 +106,10 @@ let test_conv2d_stride_with_padding_backprop () =
   (* Create a 6x6 input with 1 channel *)
   let input = TDSL.range_of_shape ~output_dims:[ 6; 6; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=2, use_padding=true *)
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=true, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:true ~out_channels:4 ()
+      input
   in
   (* Sum to scalar for backprop *)
   let%op loss = output ++ "...|... => 0" in
@@ -115,6 +122,7 @@ let test_conv2d_stride_with_padding_backprop () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "use_padding: true\n%!";
+  printf "out_channels: 4\n%!";
   printf "Backprop completed successfully!\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
 
@@ -132,9 +140,10 @@ let test_conv2d_stride_without_padding () =
      (9 - 3) = 6, 6 % 2 = 0 ✓ *)
   let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=2, use_padding=false *)
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=false, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false ~out_channels:4 ()
+      input
   in
 
   let ctx = Context.auto () in
@@ -145,6 +154,7 @@ let test_conv2d_stride_without_padding () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "use_padding: false\n%!";
+  printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 4x4 ((9-3)/2 + 1)\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
   printf "\n%!"
@@ -166,9 +176,10 @@ let test_conv2d_stride_without_padding_backprop () =
      Output size: (9 - 3) / 2 + 1 = 4, so 4x4 output. *)
   let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
 
-  (* Apply conv2d with kernel_size=3, stride=2, use_padding=false *)
+  (* Apply conv2d with kernel_size=3, stride=2, use_padding=false, out_channels=4 *)
   let%op output =
-    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false () input
+    conv2d ~label:[ "test_conv" ] ~kernel_size:3 ~stride:2 ~use_padding:false ~out_channels:4 ()
+      input
   in
   (* Sum to scalar for backprop *)
   let%op loss = output ++ "...|... => 0" in
@@ -181,6 +192,7 @@ let test_conv2d_stride_without_padding_backprop () =
   printf "Kernel size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "use_padding: false\n%!";
+  printf "out_channels: 4\n%!";
   printf "Expected output shape: 4x4 ((9-3)/2 + 1)\n%!";
   printf "Backprop completed successfully!\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
