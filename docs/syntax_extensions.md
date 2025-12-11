@@ -5,6 +5,7 @@
   - [Primitive operations](#primitive-operations)
   - [The syntax for %op](#the-syntax-for-op)
   - [The syntax for %cd](#the-syntax-for-cd)
+    - [Projection slot detection by naming convention](#projection-slot-detection-by-naming-convention)
   - [Numeric and N-dimensional array literals](#numeric-and-n-dimensional-array-literals)
   - [Wildcard bindings](#wildcard-bindings)
   - [Inline declarations](#inline-declarations)
@@ -267,7 +268,40 @@ p =+ learning_rate *. p.grad
 
 In the first case, we have a binary assignment calculated pointwise. The resulting representation is `Accum_binop` where `accum` is `Add` and `op` is `Mul` (multiplication). In the second case, `*.` is not recognized as one of the built-in operators. This leaves the expression `learning_rate *. p.grad` un-transformed. Since `(*.)` is bound in `NTDSL.O` to pointwise tensor multiplication, this creates an intermediate tensor, that is then added onto p. The resulting representation is `Accum_unop` where `accum` is `Add` and `op` is `Identity`. Both variants end up with the same result, and even with the same computation, because the second variant's computation will get optimized (unless configured not to).
 
-Advanced note: when a `~projections` parameter is in scope but no assignment-specific `~projections` argument is given -- the typical case in `tensor/operation.ml` -- the actual projections field for an assignment is computed by transforming the projections parameter according to hints regarding how tensor nodes relate to the given projections. Specifically, the identifiers `rhs1`, `t1`, `v1`, `g1` are "slot RHS1" of the projections, `rhs2`, `t2`, `v2`, `g2` are "slot RHS2", `lhs,`, `t`, `v`, `g` are "slot LHS". Scalar constants are provided the projection directly, to make the automated derivation more expressive; this is supported both for literals, and (heuristically) for `!.` and `!..` embedding operators.
+Advanced note: when a `~projections` parameter is in scope but no assignment-specific `~projections` argument is given -- the typical case in `tensor/operation.ml` -- the actual projections field for an assignment is computed by transforming the projections parameter according to hints regarding how tensor nodes relate to the given projections. Specifically, the identifiers `rhs1`, `t1`, `v1`, `g1` are "slot RHS1" of the projections, `rhs2`, `t2`, `v2`, `g2` are "slot RHS2", `lhs`, `t`, `v`, `g` are "slot LHS". Scalar constants are provided the projection directly, to make the automated derivation more expressive; this is supported both for literals, and (heuristically) for `!.` and `!..` embedding operators.
+
+### Projection slot detection by naming convention
+
+In addition to the special identifiers (`t`, `t1`, `t2`, `lhs`, `rhs1`, etc.), the `%cd` syntax can detect projection slots from identifier and inline tensor definition names using prefix/suffix patterns. This is particularly useful when defining backpropagation code that needs intermediate tensors with specific projections.
+
+The naming convention patterns:
+
+| Prefix/Suffix | Detected Slot |
+|--------------|---------------|
+| `lhs_*` or `*_lhs` | LHS |
+| `rhs_*` or `*_rhs` | RHS1 |
+| `rhs1_*` or `*_rhs1` | RHS1 |
+| `rhs2_*` or `*_rhs2` | RHS2 |
+| `rhs3_*` or `*_rhs3` | RHS3 |
+
+This applies to:
+- **Inline tensor definitions**: `{ cond_lhs }` declares a tensor with slot LHS
+- **Identifier references**: When `sum_lhs` is used in an expression, it's recognized as having slot LHS
+
+Example from the `tropical` operation's gradient computation:
+
+```ocaml
+let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
+  { sum_lhs } =: add (t1, t2);      (* sum_lhs gets LHS projection *)
+  { cond_lhs } =: eq (t, sum_lhs);  (* cond_lhs gets LHS projection *)
+  g1 =+ where cond_lhs g 0;
+  g2 =+ where cond_lhs g 0
+in
+```
+
+Without the naming convention, intermediate tensors like `sum_lhs` and `cond_lhs` would not inherit the proper projections from the enclosing operation, leading to shape inference errors when the operation involves complex einsum projections (e.g., in max pooling or tropical matrix multiplication).
+
+**Important**: The naming convention affects both projection slot assignment and shape inference. In addition to determining which projection from `~projections` to use when indexing the tensor, a shape equality constraint is generated between the inline-defined tensor and the corresponding operation tensor assumed to be in scope: `t` for `*_lhs`, `t1` for `*_rhs` and `*_rhs1`, `t2` for `*_rhs2`, etc. This means the shape from the tensor's initialization is unified with the shape of the operation component.
 
 ## Numeric and N-dimensional array literals
 
