@@ -52,8 +52,8 @@ let y =
 let z =
   let hey5 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
-       "hey5") ()
-  and hey6 =
+       "hey5") () in
+  let hey6 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey6") () in
   let open! TDSL.O in
@@ -66,8 +66,8 @@ and use_padding = true
 let z2 =
   let hey7 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
-       "hey7") ()
-  and hey8 =
+       "hey7") () in
+  let hey8 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey8") () in
   let open! TDSL.O in
@@ -88,12 +88,12 @@ let z2 =
 let z3 =
   let s = 2
   and d = 3 in
-  let hey10 =
-    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
-       "hey10") ()
-  and hey9 =
+  let hey9 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey9") () in
+  let hey10 =
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey10") () in
   let open! TDSL.O in
     einsum ?label:(Some [])
       (String.concat ~sep:""
@@ -120,12 +120,12 @@ let () = ignore (z, z2, z3)
 let mlp_layer =
   let open! TDSL.O in
     fun ~label ~hid_dim () ->
-      let b =
-        ((TDSL.param ?more_label:(Some label) ?value:None ?values:None
-            ?param_init:None "b") ~output_dims:[hid_dim]) ()
-      and w =
+      let w =
         (TDSL.param ?more_label:(Some label) ?value:None ?values:None
            ?param_init:None "w") () in
+      let b =
+        ((TDSL.param ?more_label:(Some label) ?value:None ?values:None
+            ?param_init:None "b") ~output_dims:[hid_dim]) () in
       fun ~x ->
         relu ?label:(Some ["mlp_layer"])
           ((+) ?label:None (( * ) ?label:None w x) b)

@@ -438,13 +438,13 @@ let%expect_test "2D neuron hosted" =
                    7.00e-1
                   #9 grad_+_v
                    1.00
-             #6 *              │#0 b non-emb
+             #6 *              │#4 b non-emb
               -6.00            │ 6.70
-             #7 grad_*         │#1 grad_b
+             #7 grad_*         │#5 grad_b
               1.00             │ 1.00
-    #2 w non-emb │#4 x non-emb │
+    #0 w non-emb │#2 x non-emb │
      -3.00  1.00 │ 2.00  0.00  │
-    #3 grad_w    │#5 grad_x    │
+    #1 grad_w    │#3 grad_x    │
      2.00  0.00  │ -3.00  1.00 │
     |}]
 
@@ -463,12 +463,12 @@ let%expect_test "2D neuron virtual" =
                7.00e-1
               #9 grad_+_v Virt/40
               <void>
-         #6 * Local/1046       │#0 b non-emb
+         #6 * Local/1046       │#4 b non-emb
          <void>                │ 6.70
-         #7 grad_* Virt/40     │#1 grad_b
+         #7 grad_* Virt/40     │#5 grad_b
          <void>                │ 1.00
-    #2 w non-emb │#4 x non-emb │
+    #0 w non-emb │#2 x non-emb │
      -3.00  1.00 │ 2.00  0.00  │
-    #3 grad_w    │#5 grad_x    │
+    #1 grad_w    │#3 grad_x    │
      2.00  0.00  │ -3.00  1.00 │
     |}]

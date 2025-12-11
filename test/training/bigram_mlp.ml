@@ -24,7 +24,7 @@ let tensor_of_int_list lst =
   TDSL.rebatch ~l:"tensor" (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
 
 let () =
-  Utils.settings.fixed_state_for_init <- Some 6;
+  Utils.settings.fixed_state_for_init <- Some 3;
   Tensor.unsafe_reinitialize ();
 
   let bigrams = Datasets.Names.get_all_bigrams () |> Datasets.Names.bigrams_to_indices in

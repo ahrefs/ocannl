@@ -1,28 +1,28 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Epoch=1, step=0, batch=0, lr=0.2, loss=27.29, epoch loss=27.29
-Epoch=1, step=1, batch=1, lr=0.2, loss=1.051, epoch loss=28.34
-Epoch=1, step=2, batch=2, lr=0.2, loss=3.316, epoch loss=31.65
-Epoch=1, step=3, batch=3, lr=0.2, loss=0.6153, epoch loss=32.27
-Epoch=1, step=4, batch=4, lr=0.2, loss=2.469, epoch loss=34.74
-Epoch=1, step=5, batch=5, lr=0.2, loss=0.6122, epoch loss=35.35
-Epoch=1, step=6, batch=6, lr=0.2, loss=0.08047, epoch loss=35.43
-Epoch=1, step=7, batch=7, lr=0.2, loss=0.4598, epoch loss=35.89
-Epoch=1, step=8, batch=8, lr=0.2, loss=0.009037, epoch loss=35.9
-Epoch=1, step=9, batch=9, lr=0.2, loss=0.0162, epoch loss=35.91
+Epoch=1, step=0, batch=0, lr=0.2, loss=27.98, epoch loss=27.98
+Epoch=1, step=1, batch=1, lr=0.2, loss=8.779, epoch loss=36.76
+Epoch=1, step=2, batch=2, lr=0.2, loss=8.451, epoch loss=45.21
+Epoch=1, step=3, batch=3, lr=0.2, loss=1.793, epoch loss=47.01
+Epoch=1, step=4, batch=4, lr=0.2, loss=0.9315, epoch loss=47.94
+Epoch=1, step=5, batch=5, lr=0.2, loss=0.5725, epoch loss=48.51
+Epoch=1, step=6, batch=6, lr=0.2, loss=0.3079, epoch loss=48.82
+Epoch=1, step=7, batch=7, lr=0.2, loss=0.05887, epoch loss=48.88
+Epoch=1, step=8, batch=8, lr=0.2, loss=0.1126, epoch loss=48.99
+Epoch=1, step=9, batch=9, lr=0.2, loss=0.3386, epoch loss=49.33
 ...............................................................
 
 Loss:
 ┌────────┬─────────────────────────┐
-│ 2.72e+1│-                        │
+│ 2.79e+1│-                        │
 │        │                         │
 │        │                         │
 │l       │                         │
 │o       │                         │
 │s       │                         │
 │s       │                         │
-│        │                         │
-│        │- -                      │
+│        │-                        │
+│        │       -                 │
 │ 0.00   │-------------------------│
 ├────────┼─────────────────────────┤
 │        │0.00              6.39e+3│
