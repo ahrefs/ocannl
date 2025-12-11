@@ -776,56 +776,75 @@ detection by naming convention</h3>
 <code>t1</code>, <code>t2</code>, <code>lhs</code>, <code>rhs1</code>,
 etc.), the <code>%cd</code> syntax can detect projection slots from
 identifier and inline tensor definition names using prefix/suffix
-patterns. This is particularly useful when defining backpropagation code
-that needs intermediate tensors with specific projections.</p>
+patterns. This is essential when defining backpropagation code that
+needs intermediate tensors with specific projections and shapes.</p>
 <p>The naming convention patterns:</p>
 <table>
 <thead>
 <tr>
 <th>Prefix/Suffix</th>
 <th>Detected Slot</th>
+<th>Shape Source</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>lhs_*</code> or <code>*_lhs</code></td>
 <td>LHS</td>
+<td>output shape (from <code>t</code>)</td>
 </tr>
 <tr>
 <td><code>rhs_*</code> or <code>*_rhs</code></td>
 <td>RHS1</td>
+<td>first input shape (from <code>t1</code>)</td>
 </tr>
 <tr>
 <td><code>rhs1_*</code> or <code>*_rhs1</code></td>
 <td>RHS1</td>
+<td>first input shape (from <code>t1</code>)</td>
 </tr>
 <tr>
 <td><code>rhs2_*</code> or <code>*_rhs2</code></td>
 <td>RHS2</td>
+<td>second input shape (from <code>t2</code>)</td>
 </tr>
 <tr>
 <td><code>rhs3_*</code> or <code>*_rhs3</code></td>
 <td>RHS3</td>
+<td>third input shape (from <code>t3</code>)</td>
 </tr>
 </tbody>
 </table>
 <p>This applies to: - <strong>Inline tensor definitions</strong>:
-<code>{ cond_lhs }</code> declares a tensor with slot LHS -
-<strong>Identifier references</strong>: When <code>sum_lhs</code> is
-used in an expression, it’s recognized as having slot LHS</p>
+<code>{ cond_rhs1 }</code> declares a tensor with slot RHS1 and shape of
+<code>t1</code> - <strong>Identifier references</strong>: When
+<code>sum_rhs1</code> is used in an expression, it’s recognized as
+having slot RHS1</p>
+<p><strong>Why this matters for gradient computation</strong>: In
+operations like max pooling or tropical convolution, the gradient must
+flow back to positions that achieved the argmax. Using an intermediate
+tensor with the wrong shape causes incorrect gradients. For example, in
+a 4×4 → 2×2 max pooling: - <code>*_lhs</code> suffix gives shape 2×2
+(output shape) — wrong for tracking per-input-position gradients -
+<code>*_rhs1</code> suffix gives shape 4×4 (input shape) — correct for
+sparse gradient at argmax positions</p>
 <p>Example from the <code>tropical</code> operation’s gradient
 computation:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd grad_asn ~t ~g ~t1 ~t2 ~projections =</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  { sum_lhs } =: add (t1, t2);      <span class="co">(* sum_lhs gets LHS projection *)</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  { cond_lhs } =: eq (t, sum_lhs);  <span class="co">(* cond_lhs gets LHS projection *)</span></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  g1 =+ where cond_lhs g <span class="dv">0</span>;</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  g2 =+ where cond_lhs g <span class="dv">0</span></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span></span></code></pre></div>
-<p>Without the naming convention, intermediate tensors like
-<code>sum_lhs</code> and <code>cond_lhs</code> would not inherit the
-proper projections from the enclosing operation, leading to shape
-inference errors when the operation involves complex einsum projections
-(e.g., in max pooling or tropical matrix multiplication).</p>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Use _rhs1 suffix: gives input shape to track which positions achieved argmax *)</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  { sum_rhs1 } =:@^ add (t1, t2);   <span class="co">(* max over each input position&#39;s window *)</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  { cond_rhs1 } =: eq (t, sum_rhs1); <span class="co">(* true where input+kernel achieved the argmax *)</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  g1 =+ where cond_rhs1 g <span class="dv">0</span>;         <span class="co">(* gradient flows to argmax input positions *)</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  g2 =+ where cond_rhs1 g <span class="dv">0</span>          <span class="co">(* gradient flows to argmax kernel positions *)</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span></span></code></pre></div>
+<p>For convolution-like operations with einsum
+<code>&quot;...|stride*oh&lt;+wh, stride*ow&lt;+ww, ..c..; wh, ww =&gt; ...|oh, ow, ..c..&quot;</code>,
+the RHS1 index space (ih, iw) effectively encodes the outer product of
+output (oh, ow) and kernel (wh, ww) dimensions via
+<code>ih = stride*oh + wh</code>. This means using <code>_rhs1</code>
+for intermediate condition tensors correctly tracks which (input
+position, kernel position) pair achieved the argmax for each output
+position.</p>
 <p><strong>Important</strong>: The naming convention affects both
 projection slot assignment and shape inference. In addition to
 determining which projection from <code>~projections</code> to use when
