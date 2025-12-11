@@ -8,19 +8,10 @@ open Stdio
     This tests backpropagation for tropical operations with both input (t1/rhs1)
     and kernel (t2/rhs2) gradients.
 
-    LIMITATION: The current implementation using LHS projection for kernel gradients
-    computes correct INPUT gradients (g1) but INCORRECT KERNEL gradients (g2).
-
-    The issue: with `_lhs` suffix, `sum_lhs[oh,ow]` computes max over (wh,ww) for each
-    output position, which equals `max_pool2d[oh,ow]`. So `cond_lhs` is always true,
-    and every kernel position gets gradient from every output position.
-
-    For correct kernel gradients, we would need tensors of shape (oh,ow,wh,ww) to track
-    which specific kernel position achieved the argmax for each output. This would require
-    either a different approach or explicit support for such "outer product" projections.
-
-    For max_pool2d (zero kernel), this is fine since kernel gradients don't matter.
-    For learnable tropical kernels, only the input gradients are reliable. *)
+    The implementation uses `_rhs1` suffix for both input and kernel gradient paths.
+    This gives condition tensors input shape (ih,iw) which is effectively the "outer
+    product" of output (oh,ow) and kernel (wh,ww) dimensions. This correctly tracks
+    which (input position, kernel position) pair achieved the argmax for each output. *)
 
 (** Create a tropical convolution-like operation with a learnable kernel.
 
@@ -103,10 +94,7 @@ let test_tropical_kernel_forward () =
     - Window [1,1]: max at (3,2)=6, argmax kernel position (1,0)
 
     Expected input gradients: 1 at positions (0,0), (1,3), (2,1), (3,2); 0 elsewhere.
-
-    Kernel gradients (LIMITATION): Due to the current implementation, all kernel positions
-    get gradient 4.0 (each position is visited once per output, and cond_lhs is always true).
-    Ideally, each position should get 1.0 since each is argmax for exactly one output. *)
+    Expected kernel gradients: 1 at each position (each is argmax for exactly one output). *)
 let test_tropical_kernel_backprop_zero_kernel () =
   printf "Testing tropical conv backprop with zero kernel...\n%!";
   Tensor.unsafe_reinitialize ();
@@ -143,7 +131,7 @@ let test_tropical_kernel_backprop_zero_kernel () =
   printf "Expected loss: 9 + 8 + 7 + 6 = 30\n%!";
   printf "\n%!";
   printf "Expected input gradients: 1 at argmax positions, 0 elsewhere\n%!";
-  printf "Kernel gradients (LIMITATION): all 4s due to cond_lhs always being true\n%!";
+  printf "Expected kernel gradients: all 1s (each position is argmax once)\n%!";
   printf "\n%!";
   Train.printf ~here:[%here] ~with_code:false loss;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true input;
@@ -172,10 +160,7 @@ let test_tropical_kernel_backprop_zero_kernel () =
     Expected output: all 11 (value 1 + kernel 10 at position (1,1) of each window)
     Expected input gradients: 1 at positions (1,1), (1,3), (3,1), (3,3); 0 elsewhere
       (these are the input positions corresponding to kernel (1,1) in each window)
-
-    Kernel gradients (LIMITATION): Due to the current implementation, all kernel positions
-    get gradient 4.0 instead of the expected [0,0; 0,4]. The implementation doesn't track
-    which kernel position achieved argmax for each output position. *)
+    Expected kernel gradients: [[0,0],[0,4]] - only (1,1) was argmax, used 4 times *)
 let test_tropical_kernel_backprop_nonzero_kernel () =
   printf "Testing tropical conv backprop with non-zero kernel...\n%!";
   Tensor.unsafe_reinitialize ();
@@ -214,7 +199,7 @@ let test_tropical_kernel_backprop_nonzero_kernel () =
   printf "Expected input gradients:\n%!";
   printf "  1 at positions (1,1), (1,3), (3,1), (3,3) - these correspond to kernel[1,1]\n%!";
   printf "  0 elsewhere\n%!";
-  printf "Kernel gradients (LIMITATION): all 4s (should be [[0,0],[0,4]])\n%!";
+  printf "Expected kernel gradients: [[0,0],[0,4]] - only (1,1) was argmax\n%!";
   printf "\n%!";
   Train.printf ~here:[%here] ~with_code:false loss;
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true input;

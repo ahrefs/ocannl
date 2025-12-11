@@ -428,7 +428,12 @@ let einmax1 ?(capture_dims = []) spec =
   in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
-(** This generalizes the tropical matrix multiplication to arbitrary indices combinations. *)
+(** This generalizes the tropical matrix multiplication to arbitrary indices combinations.
+
+    LIMITATION: Backpropagation is only correct when the RHS1 (t1) index space includes
+    the RHS2 (t2) index space. This is the case for convolution-like operations where
+    the kernel indices are contracted with strided input indices. For general tropical
+    operations where RHS2 has independent indices, the g2 gradient will be incorrect. *)
 let tropical ?(capture_dims = []) spec =
   let module NTDSL = struct
     include Initial_NTDSL
@@ -436,12 +441,12 @@ let tropical ?(capture_dims = []) spec =
   end in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
+    (* Use _rhs1 suffix for both: gives input shape (ih,iw) = (oh,ow) x (wh,ww) outer product.
+       This correctly tracks which (input position, kernel position) pair achieved argmax. *)
     { sum_rhs1 } =:@^ add (t1, t2);
-    { sum_lhs } =:@^ add (t1, t2);
     { cond_rhs1 } =: eq (t, sum_rhs1);
-    { cond_lhs } =: eq (t, sum_lhs);
     g1 =+ where cond_rhs1 g 0;
-    g2 =+ where cond_lhs g 0
+    g2 =+ where cond_rhs1 g 0
   in
   Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
 

@@ -34,7 +34,7 @@ HERE: test/einsum/test_max_pool2d.ml:30:21
 └──────────────────────────────┘
 HERE: test/einsum/test_max_pool2d.ml:31:21
 ┌────────────────────────────────────────┐
-│[8]: @^=>+_max_pool2d shape 0:2,1:2,2:1 │
+│[6]: @^=>+_max_pool2d shape 0:2,1:2,2:1 │
 │┌──────┬─────────┐                      │
 ││      │axis 2   │                      │
 │├──────┼─────────┤                      │
@@ -86,7 +86,7 @@ HERE: test/einsum/test_max_pool2d.ml:56:21
 └──────────────────────────────┘
 HERE: test/einsum/test_max_pool2d.ml:57:21
 ┌────────────────────────────────────────┐
-│[8]: @^=>+_max_pool2d shape 0:3,1:3,2:2 │
+│[6]: @^=>+_max_pool2d shape 0:3,1:3,2:2 │
 │┌──────┬──────────────────┐             │
 ││      │axis 2            │             │
 │├──────┼──────────────────┤             │
@@ -130,7 +130,7 @@ HERE: test/einsum/test_max_pool2d.ml:83:21
 └──────────────────────────────┘
 HERE: test/einsum/test_max_pool2d.ml:84:21
 ┌────────────────────────────────────────┐
-│[8]: @^=>+_max_pool2d shape 0:1,1:1,2:1 │
+│[6]: @^=>+_max_pool2d shape 0:1,1:1,2:1 │
 │┌──────┬──────┐                         │
 ││      │axis 2│                         │
 │├──────┼──────┤                         │
@@ -144,7 +144,7 @@ Input shape: 4x4x3
 Expected output shape: 2x2x3 (channels preserved)
 HERE: test/einsum/test_max_pool2d.ml:106:21
 ┌────────────────────────────────────────┐
-│[8]: @^=>+_max_pool2d shape 0:2,1:2,2:3 │
+│[6]: @^=>+_max_pool2d shape 0:2,1:2,2:3 │
 │┌──────┬───────────────────────────┐    │
 ││      │axis 2                     │    │
 │├──────┼───────────────────────────┤    │
@@ -166,7 +166,7 @@ Expected loss (sum): 9 + 8 + 7 + 6 = 30
 Backprop completed successfully!
 HERE: test/einsum/test_max_pool2d.ml:175:21
 ┌────────────────────────┐
-│[12]: =>_loss shape 0:1 │
+│[10]: =>_loss shape 0:1 │
 │┌┬─────────┐            │
 │││axis 0   │            │
 │├┼─────────┤            │
