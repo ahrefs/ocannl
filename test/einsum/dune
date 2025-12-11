@@ -164,3 +164,17 @@
  ; Disable virtualization because tropical backprop uses input-shaped tensors
  ; with affine indices like 2*oh+wh, which virtualization doesn't yet support.
  (action (run %{test} --ocannl_virtualize_max_visits=0)))
+
+(test
+ (name test_tropical_kernel)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_tropical_kernel)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ ; Disable virtualization because tropical backprop uses input-shaped tensors
+ ; with affine indices like 2*oh+wh, which virtualization doesn't yet support.
+ (action (run %{test} --ocannl_virtualize_max_visits=0)))
