@@ -1207,6 +1207,27 @@ let state = ref Row.empty_env
 let active_update_steps = ref []
 let active_constraints = ref []
 
+let infer_equal (sh1 : t) (sh2 : t) =
+  Hash_set.remove unused_shapes sh1.id;
+  Hash_set.remove unused_shapes sh2.id;
+  let get_origin kind =
+    [
+      Row.
+        {
+          lhs_name = sh1.debug_name;
+          lhs_kind = kind;
+          rhs_name = sh2.debug_name;
+          rhs_kind = kind;
+          operation = Some "shape_equals";
+        };
+    ]
+  in
+  active_constraints :=
+    Row.Row_eq { r1 = sh1.batch; r2 = sh2.batch; origin = get_origin `Batch }
+    :: Row.Row_eq { r1 = sh1.input; r2 = sh2.input; origin = get_origin `Input }
+    :: Row.Row_eq { r1 = sh1.output; r2 = sh2.output; origin = get_origin `Output }
+    :: !active_constraints
+
 (** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
@@ -1623,8 +1644,8 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
-(** Computes the product of dimensions in a row. Returns [None] if any dimension is not yet
-    resolved (still a variable or unresolved affine). *)
+(** Computes the product of dimensions in a row. Returns [None] if any dimension is not yet resolved
+    (still a variable or unresolved affine). *)
 let rec compute_row_product env (row : Row.t) : int option =
   match row.dims with
   | [] -> Some 1
@@ -1641,8 +1662,8 @@ let rec compute_row_product env (row : Row.t) : int option =
 
 (** Updates delayed variable references with inferred dimensions/row products from the environment.
     If [solved_dim] was previously set by [set_dim], we skip updating to preserve the user's
-    constraint - consistency will be checked later in [finish_inference] when all constraints
-    have been fully processed. *)
+    constraint - consistency will be checked later in [finish_inference] when all constraints have
+    been fully processed. *)
 let update_delayed_var_refs env update_step =
   let update_var_ref_list var_refs =
     List.iter var_refs ~f:(fun delayed_ref ->

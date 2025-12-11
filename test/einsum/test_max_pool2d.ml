@@ -147,7 +147,5 @@ let () =
   test_max_pool2d_window3 ();
   test_max_pool2d_output_dim_1 ();
   test_max_pool2d_channels ();
-  (* TODO: Uncomment when the strided backprop bug is fixed:
-     test_max_pool2d_backprop (); *)
-  ignore test_max_pool2d_backprop;
+  test_max_pool2d_backprop ();
   printf "\nAll max_pool2d tests completed!\n%!"

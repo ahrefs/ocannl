@@ -77,6 +77,8 @@ type t = {
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp]
 
+val infer_equal : t -> t -> unit
+
 type delayed_var_ref = {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];

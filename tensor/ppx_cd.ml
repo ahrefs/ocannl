@@ -21,13 +21,17 @@ type expr_type =
 
 let is_unknown = function Unknown -> true | _ -> false
 
-type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Scalar | Nonslot | Undet
-[@@deriving variants]
+type projections_slot = LHS | RHS1 | RHS2 | RHS3 | Scalar | Nonslot | Undet [@@deriving variants]
 
 let equal_projections_slot a b =
   match (a, b) with
-  | LHS, LHS | RHS1, RHS1 | RHS2, RHS2 | RHS3, RHS3 | Scalar, Scalar | Nonslot, Nonslot | Undet, Undet
-    ->
+  | LHS, LHS
+  | RHS1, RHS1
+  | RHS2, RHS2
+  | RHS3, RHS3
+  | Scalar, Scalar
+  | Nonslot, Nonslot
+  | Undet, Undet ->
       true
   | _ -> false
 
@@ -40,21 +44,22 @@ let slot_to_string = function
   | Nonslot -> "nonslot"
   | Undet -> "?"
 
-(** Generate a slot permutation suffix for projections_debug when slots are permuted.
-    Returns empty string for canonical assignment (lhs←lhs, rhs1←rhs1, etc.),
-    otherwise returns something like " [lhs←rhs1, rhs1←lhs]". *)
+(** Generate a slot permutation suffix for projections_debug when slots are permuted. Returns empty
+    string for canonical assignment (lhs←lhs, rhs1←rhs1, etc.), otherwise returns something like "
+    [lhs←rhs1, rhs1←lhs]". *)
 let slot_permutation_suffix ~lhs_slot ~rhs_slots =
   let canonical_rhs = [| RHS1; RHS2; RHS3 |] in
   let is_canonical =
     equal_projections_slot lhs_slot LHS
     && Array.for_alli rhs_slots ~f:(fun i slot ->
-           i >= Array.length canonical_rhs || equal_projections_slot slot canonical_rhs.(i))
+        i >= Array.length canonical_rhs || equal_projections_slot slot canonical_rhs.(i))
   in
   if is_canonical then ""
   else
     let parts =
       ("lhs", lhs_slot)
-      :: Array.to_list (Array.mapi rhs_slots ~f:(fun i slot -> ("rhs" ^ Int.to_string (i + 1), slot)))
+      :: Array.to_list
+           (Array.mapi rhs_slots ~f:(fun i slot -> ("rhs" ^ Int.to_string (i + 1), slot)))
     in
     let mappings =
       List.filter_map parts ~f:(fun (target, source) ->
@@ -239,8 +244,7 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
       Hashtbl.find punned name
   | (Tensor | Unknown), { pexp_desc = Pexp_ident _; _ }, _ ->
       Some ([%expr [%e filler].Tensor.value.Ir.Tnode.label], true)
-  | (Tensor | Unknown), _, false ->
-      Some ([%expr [%e filler].Tensor.value.Ir.Tnode.label], false)
+  | (Tensor | Unknown), _, false -> Some ([%expr [%e filler].Tensor.value.Ir.Tnode.label], false)
   | ( ( Value_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Grad_of_tensor { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
       | Merge_value { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }
@@ -544,13 +548,24 @@ let translate ?ident_label (expr : expression) : result =
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%cd: expected a ternary operator, one of: where, fma" ))
     in
+    let shape_infer loc (lhs : result) =
+      match (lhs.slot, lhs.typ) with
+      | LHS, No_grad_tensor_intro _ ->
+          [%expr Shape.infer_equal [%e lhs.expr].Tensor.shape t.Tensor.shape]
+      | RHS1, No_grad_tensor_intro _ ->
+          [%expr Shape.infer_equal [%e lhs.expr].Tensor.shape t1.Tensor.shape]
+      | RHS2, No_grad_tensor_intro _ ->
+          [%expr Shape.infer_equal [%e lhs.expr].Tensor.shape t2.Tensor.shape]
+      | RHS3, No_grad_tensor_intro _ ->
+          [%expr Shape.infer_equal [%e lhs.expr].Tensor.shape t3.Tensor.shape]
+      | _ -> [%expr ()]
+    in
     (* TODO: collapse these (code reuse) *)
     let process_assign_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ?projections ~proj_in_scope
         () =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l =
-        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
-      in
+      let lhs_result = loop ~proj_in_scope:true lhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS lhs_result in
       let _, tern_op = ternary_op tern_op in
       let setup_r1 =
         setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
@@ -614,6 +629,7 @@ let translate ?ident_label (expr : expression) : result =
          eliding the code, only lhs should decide whether to elide the code. *)
       let body_for_lhs =
         [%expr
+          [%e shape_infer loc lhs_result];
           Option.map3 [%e setup_r1.array_opt] [%e setup_r2.array_opt] [%e setup_r3.array_opt]
             ~f:(fun rhs1 rhs2 rhs3 ->
               Ir.Assignments.Accum_op
@@ -630,9 +646,8 @@ let translate ?ident_label (expr : expression) : result =
     in
     let process_assign_binop ~accu_op ~lhs ~bin_op ~rhs1 ~rhs2 ?projections ~proj_in_scope () =
       let initialize_neutral, accu_op = assignment_op accu_op in
-      let setup_l =
-        setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope:true lhs
-      in
+      let lhs_result = loop ~proj_in_scope:true lhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS lhs_result in
       let _, bin_op = binary_op bin_op in
       let setup_r1 =
         setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs1
@@ -691,6 +706,7 @@ let translate ?ident_label (expr : expression) : result =
          the code, only lhs should decide whether to elide the code. *)
       let body_for_lhs =
         [%expr
+          [%e shape_infer loc lhs_result];
           Option.map2 [%e setup_r1.array_opt] [%e setup_r2.array_opt] ~f:(fun rhs1 rhs2 ->
               Ir.Assignments.Accum_op
                 {
@@ -710,7 +726,8 @@ let translate ?ident_label (expr : expression) : result =
       (* FIXME: I think this ignores the slot information here! Just assuming [projections] is
          as-should-be, but that's not consistent with omitting the projections arg (assuming it
          comes from the context). *)
-      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let lhs_result = loop ~proj_in_scope:true lhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS lhs_result in
       let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let initialize_neutral = if initialize_neutral then [%expr true] else [%expr false] in
       let projections_lazy, projections_debug =
@@ -760,6 +777,7 @@ let translate ?ident_label (expr : expression) : result =
          code, only lhs should decide whether to elide the code. *)
       let body_for_lhs =
         [%expr
+          [%e shape_infer loc lhs_result];
           Option.map [%e setup_r.array_opt] ~f:(fun rhs ->
               Ir.Assignments.Accum_op
                 {
@@ -776,7 +794,8 @@ let translate ?ident_label (expr : expression) : result =
     let process_vec_unop ~lhs ~vec_un_op ~rhs ?projections ~proj_in_scope () =
       (* Vector unary operations do not have accumulation, they directly set values *)
       let _, op = vec_unary_op vec_un_op in
-      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS @@ loop ~proj_in_scope lhs in
+      let lhs_result = loop ~proj_in_scope:true lhs in
+      let setup_l = setup_array ~punned ~bad_pun_hints ~for_slot:LHS lhs_result in
       let setup_r = setup_array ~punned ~bad_pun_hints ~for_slot:RHS1 @@ loop ~proj_in_scope rhs in
       let projections_lazy, projections_debug =
         match projections with
@@ -813,6 +832,7 @@ let translate ?ident_label (expr : expression) : result =
       in
       let body_for_lhs =
         [%expr
+          [%e shape_infer loc lhs_result];
           Option.map [%e setup_r.array_opt] ~f:(fun rhs ->
               Ir.Assignments.Set_vec_unop
                 {
@@ -965,9 +985,11 @@ let translate ?ident_label (expr : expression) : result =
             (* NOTE: this binding is not used in assignments therefore is very unlikely to be used.
                But it's needed for code expressions or standalone non-diff tensor expressions. *)
             let vbs =
-              [ make_vb ~loc ~name:tensor_name ~name_expr
+              [
+                make_vb ~loc ~name:tensor_name ~name_expr
                   ~hint_label:(Option.map ~f:(fun s -> [%expr [ [%e s] ]]) ident_label)
-                  ~extra_args ]
+                  ~extra_args;
+              ]
             in
             let slot =
               (* Detect projection slot from tensor name prefix/suffix patterns *)
@@ -1068,7 +1090,7 @@ let translate ?ident_label (expr : expression) : result =
           else if has_prefix "rhs_" || has_suffix "_rhs" then RHS1
           else Undet
         in
-        { default_result with typ = if is_undet slot then Unknown else Tensor; slot }
+        { default_result with typ = (if is_undet slot then Unknown else Tensor); slot }
     | [%expr !.[%e? expr1]] ->
         (* Hardcoding these two patterns (!. and !..) to improve projection derivation expressivity
            and avoid treating the constants as already tensors. *)
