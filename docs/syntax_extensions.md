@@ -272,34 +272,39 @@ Advanced note: when a `~projections` parameter is in scope but no assignment-spe
 
 ### Projection slot detection by naming convention
 
-In addition to the special identifiers (`t`, `t1`, `t2`, `lhs`, `rhs1`, etc.), the `%cd` syntax can detect projection slots from identifier and inline tensor definition names using prefix/suffix patterns. This is particularly useful when defining backpropagation code that needs intermediate tensors with specific projections.
+In addition to the special identifiers (`t`, `t1`, `t2`, `lhs`, `rhs1`, etc.), the `%cd` syntax can detect projection slots from identifier and inline tensor definition names using prefix/suffix patterns. This is essential when defining backpropagation code that needs intermediate tensors with specific projections and shapes.
 
 The naming convention patterns:
 
-| Prefix/Suffix | Detected Slot |
-|--------------|---------------|
-| `lhs_*` or `*_lhs` | LHS |
-| `rhs_*` or `*_rhs` | RHS1 |
-| `rhs1_*` or `*_rhs1` | RHS1 |
-| `rhs2_*` or `*_rhs2` | RHS2 |
-| `rhs3_*` or `*_rhs3` | RHS3 |
+| Prefix/Suffix | Detected Slot | Shape Source |
+|--------------|---------------|--------------|
+| `lhs_*` or `*_lhs` | LHS | output shape (from `t`) |
+| `rhs_*` or `*_rhs` | RHS1 | first input shape (from `t1`) |
+| `rhs1_*` or `*_rhs1` | RHS1 | first input shape (from `t1`) |
+| `rhs2_*` or `*_rhs2` | RHS2 | second input shape (from `t2`) |
+| `rhs3_*` or `*_rhs3` | RHS3 | third input shape (from `t3`) |
 
 This applies to:
-- **Inline tensor definitions**: `{ cond_lhs }` declares a tensor with slot LHS
-- **Identifier references**: When `sum_lhs` is used in an expression, it's recognized as having slot LHS
+- **Inline tensor definitions**: `{ cond_rhs1 }` declares a tensor with slot RHS1 and shape of `t1`
+- **Identifier references**: When `sum_rhs1` is used in an expression, it's recognized as having slot RHS1
+
+**Why this matters for gradient computation**: In operations like max pooling or tropical convolution, the gradient must flow back to positions that achieved the argmax. Using an intermediate tensor with the wrong shape causes incorrect gradients. For example, in a 4×4 → 2×2 max pooling:
+- `*_lhs` suffix gives shape 2×2 (output shape) — wrong for tracking per-input-position gradients
+- `*_rhs1` suffix gives shape 4×4 (input shape) — correct for sparse gradient at argmax positions
 
 Example from the `tropical` operation's gradient computation:
 
 ```ocaml
 let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
-  { sum_lhs } =: add (t1, t2);      (* sum_lhs gets LHS projection *)
-  { cond_lhs } =: eq (t, sum_lhs);  (* cond_lhs gets LHS projection *)
-  g1 =+ where cond_lhs g 0;
-  g2 =+ where cond_lhs g 0
+  (* Use _rhs1 suffix: gives input shape to track which positions achieved argmax *)
+  { sum_rhs1 } =:@^ add (t1, t2);   (* max over each input position's window *)
+  { cond_rhs1 } =: eq (t, sum_rhs1); (* true where input+kernel achieved the argmax *)
+  g1 =+ where cond_rhs1 g 0;         (* gradient flows to argmax input positions *)
+  g2 =+ where cond_rhs1 g 0          (* gradient flows to argmax kernel positions *)
 in
 ```
 
-Without the naming convention, intermediate tensors like `sum_lhs` and `cond_lhs` would not inherit the proper projections from the enclosing operation, leading to shape inference errors when the operation involves complex einsum projections (e.g., in max pooling or tropical matrix multiplication).
+For convolution-like operations with einsum `"...|stride*oh<+wh, stride*ow<+ww, ..c..; wh, ww => ...|oh, ow, ..c.."`, the RHS1 index space (ih, iw) effectively encodes the outer product of output (oh, ow) and kernel (wh, ww) dimensions via `ih = stride*oh + wh`. This means using `_rhs1` for intermediate condition tensors correctly tracks which (input position, kernel position) pair achieved the argmax for each output position.
 
 **Important**: The naming convention affects both projection slot assignment and shape inference. In addition to determining which projection from `~projections` to use when indexing the tensor, a shape equality constraint is generated between the inline-defined tensor and the corresponding operation tensor assumed to be in scope: `t` for `*_lhs`, `t1` for `*_rhs` and `*_rhs1`, `t2` for `*_rhs2`, etc. This means the shape from the tensor's initialization is unified with the shape of the operation component.
 
