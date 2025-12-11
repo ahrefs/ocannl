@@ -437,11 +437,11 @@ let tropical ?(capture_dims = []) spec =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:@^ v1 + v2 in
   let%cd grad_asn ~t ~g ~t1 ~t2 ~projections =
     { sum_rhs1 } =:@^ add (t1, t2);
-    { sum_rhs2 } =:@^ add (t1, t2);
+    { sum_lhs } =:@^ add (t1, t2);
     { cond_rhs1 } =: eq (t, sum_rhs1);
-    { cond_rhs2 } =: eq (t, sum_rhs2);
+    { cond_lhs } =: eq (t, sum_lhs);
     g1 =+ where cond_rhs1 g 0;
-    g2 =+ where cond_rhs2 g 0
+    g2 =+ where cond_lhs g 0
   in
   Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
 
