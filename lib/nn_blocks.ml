@@ -347,18 +347,18 @@ let%op resnet_block ~label ?(stride = 1) () =
     relu (out + identity train_step x)
 
 (** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:
-    conv -> pool -> conv -> pool -> fc layers *)
-let%op lenet ?(label = [ "lenet" ]) ?(num_classes = 10) () =
-  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:5 () in
+    conv -> pool -> conv -> pool -> fc layers. Output shape is inferred from training data. *)
+let%op lenet ?(label = [ "lenet" ]) ?(out_channels1 = 6) ?(out_channels2 = 16) () =
+  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:5 ~out_channels:out_channels1 () in
   let pool1 = max_pool2d ~stride:2 () in
-  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:5 () in
+  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:5 ~out_channels:out_channels2 () in
   let pool2 = max_pool2d ~stride:2 () in
   let fc1 = mlp_layer ~label:("fc1" :: label) ~hid_dim:120 () in
   let fc2 = mlp_layer ~label:("fc2" :: label) ~hid_dim:84 () in
   fun ~train_step:_ x ->
     let x = conv1 x |> relu |> pool1 |> conv2 |> relu |> pool2 |> fc1 |> fc2 in
-    (* Final classification layer *)
-    ({ w_logits } * x) + { b_logits = 0.; o = [ num_classes ] }
+    (* Final classification layer - output shape inferred from training data *)
+    ({ w_logits } * x) + { b_logits = 0. }
 
 (** VGG-style block - multiple convolutions with same filter count followed by pooling *)
 let%op vgg_block ~label ~num_convs ?(kernel_size = 3) () =

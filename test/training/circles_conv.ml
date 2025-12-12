@@ -1,29 +1,19 @@
 (** Circle counting training test using synthetic dataset.
 
-    This test trains a model to classify images by the number of circles they contain.
-    Uses cross-entropy loss for classification.
+    This test trains a model to classify images by the number of circles they contain. Uses
+    cross-entropy loss for classification.
 
     {2 Known Issues with conv2d in Training}
 
-    When attempting to use [Nn_blocks.lenet] with SGD training, several shape inference issues were
+    When attempting to use [Nn_blocks.lenet] with SGD training, a shape inference issue was
     encountered:
 
     1. {b max_pool2d row variable mismatch}: [max_pool2d] uses [..c..] for channel row variable,
     while [conv2d] uses [..oc..] for output channels. When composing [max_pool2d (conv2d x)], the
     shape inference fails with "incompatible stride" errors because the row variables don't unify.
 
-    2. {b Unconstrained output channels}: The [conv2d] kernel's output channels [..oc..] are not
-    automatically constrained by the network structure. This causes "You forgot to specify the
-    hidden dimension(s)" errors during SGD update compilation, as the gradient tensors cannot
-    determine their shapes.
-
-    3. {b Workaround}: Use an MLP instead - OCANNL's matrix multiplication handles
-    multi-dimensional inputs automatically without explicit flattening.
-
-    These issues suggest that [conv2d] may need:
-    - An explicit [out_channels] parameter to constrain output shape
-    - Consistent row variable naming with pooling operations
-    - Or specialized handling in [Train.grad_update] for conv kernels *)
+    {b Workaround}: Use an MLP instead - OCANNL's matrix multiplication handles multi-dimensional
+    inputs automatically without explicit flattening. *)
 
 open Base
 open Ocannl
@@ -44,7 +34,8 @@ let () =
   (* Configuration for circle dataset *)
   let image_size = 16 in
   let max_circles = 3 in
-  let num_classes = max_circles in (* Classes: 1, 2, 3 circles -> indices 0, 1, 2 *)
+  let num_classes = max_circles in
+  (* Classes: 1, 2, 3 circles -> indices 0, 1, 2 *)
   let config =
     Datasets.Circles.Config.
       { image_size; max_radius = 4; min_radius = 2; max_circles; seed = Some seed }
@@ -83,24 +74,7 @@ let () =
   let%op batch_images = images @| batch_n in
   let%op batch_labels = labels_one_hot @| batch_n in
 
-  (* Try lenet - this will likely fail due to conv2d shape inference issues.
-     Fallback to MLP if needed. *)
-  let use_lenet = false in (* Set to true to test lenet - currently fails *)
-
-  let logits =
-    if use_lenet then (
-      printf "Using LeNet model (conv2d)...\n%!";
-      let model = lenet ~label:[ "lenet" ] ~num_classes () in
-      [%op model ~train_step:None batch_images])
-    else (
-      printf "Using MLP model (fallback)...\n%!";
-      let%op mlp x =
-        let h1 = relu (({ w1 } * x) + { b1 = 0.; o = [ 32 ] }) in
-        let h2 = relu (({ w2 } * h1) + { b2 = 0.; o = [ 16 ] }) in
-        ({ w_out } * h2) + { b_out = 0.; o = [ num_classes ] }
-      in
-      [%op mlp batch_images])
-  in
+  let%op logits = lenet () ~train_step:None batch_images in
 
   (* Softmax and cross-entropy loss *)
   (* Use Nn_blocks.softmax with named axis 'v' for the output dimension *)
@@ -110,7 +84,6 @@ let () =
   (* Cross-entropy: -log(p) for each sample, then average *)
   let%op sample_loss = neg (log correct_prob) in
   let%op batch_loss = (sample_loss ++ "...|... => 0") /. !..batch_size in
-
 
   (* Training setup *)
   let epochs = 10 in
@@ -133,7 +106,6 @@ let () =
   printf "\nStarting training for %d epochs (%d steps)...\n%!" epochs total_steps;
 
   let open Operation.At in
-
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
