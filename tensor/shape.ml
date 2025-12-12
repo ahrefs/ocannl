@@ -1518,7 +1518,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   if Option.is_some update_step.unsafe_projections then
     raise
     @@ Utils.User_error "derive_projections: projections already computed for this update_step";
-  let resolved_padding, inferred_padding = fresh_proj_ids update_step in
+  let resolved_padding, _old_inferred_padding = fresh_proj_ids update_step in
+  (* We will not use the old inferred padding so that we can derive precisely the padding
+     contributed by this step. *)
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
     get_inequalities ~for_projections:true update_step
@@ -1560,8 +1562,11 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let proj_eqs : Row.proj_equation list =
     Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
   in
+  (* resolved_padding is passed for verification only - to check that operation padding doesn't
+     exceed already-locked padding. It won't be used to set padding on shapes (get_dim_padding only
+     returns inferred_padding of proj_env, which is for the current operation only). *)
   let proj_env : Row.proj_env =
-    Row.solve_proj_equations ~resolved_padding ~inferred_padding proj_eqs
+    Row.solve_proj_equations ~resolved_padding ~inferred_padding:[] proj_eqs
   in
   let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
   let lhs = update_step.shape in
@@ -1593,26 +1598,33 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
   in
   (* Extract padding from proj_env and set the padding fields on shapes *)
-  let padding_of_row (row : Row.t) : padding =
-    let no_padding = Ir.Ops.{ left = 0; right = 0 } in
+  let update_padding old_padding new_padding =
+    let default = Ir.Ops.{ left = 0; right = 0 } in
+    Option.value ~default
+    @@ Option.merge old_padding new_padding ~f:(fun old new_p ->
+        Ir.Ops.{ left = max old.left new_p.left; right = max old.right new_p.right })
+  in
+  let padding_of_row old_padding (row : Row.t) : padding =
     let paddings =
       (* Guard against insufficient shape information error. *)
       ignore (row_to_dims row);
-      List.map row.dims ~f:(fun d ->
-          Option.value (Row.get_dim_padding proj_env d) ~default:no_padding)
+      List.mapi row.dims ~f:(fun i d ->
+          update_padding
+            (Option.map old_padding ~f:(fun p -> p.(i)))
+            (Row.get_dim_padding proj_env d))
     in
     (* Only return Some if at least one dimension has non-zero padding *)
     if List.for_all paddings ~f:(fun p -> p.left = 0 && p.right = 0) then None
     else Some (Array.of_list paddings)
   in
   let set_padding (sh : t) : unit =
-    Option.iter (padding_of_row sh.batch) ~f:(fun p -> sh.batch_padding <- Some p);
-    Option.iter (padding_of_row sh.output) ~f:(fun p -> sh.output_padding <- Some p);
-    Option.iter (padding_of_row sh.input) ~f:(fun p -> sh.input_padding <- Some p)
+    Option.iter (padding_of_row sh.batch_padding sh.batch) ~f:(fun p -> sh.batch_padding <- Some p);
+    Option.iter (padding_of_row sh.output_padding sh.output) ~f:(fun p ->
+        sh.output_padding <- Some p);
+    Option.iter (padding_of_row sh.input_padding sh.input) ~f:(fun p -> sh.input_padding <- Some p)
   in
   if skip_deriving then ()
   else (
-    (* Set padding on all shapes involved *)
     set_padding lhs;
     List.iter rhs ~f:set_padding;
     let projections =

@@ -1,0 +1,7 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+
+images.value dims: single prec 2x4x3x3x1
+batch_images.value dims: single prec 4x3+3x3+3x1
+images.value padding: None
+batch_images.value padding: Some

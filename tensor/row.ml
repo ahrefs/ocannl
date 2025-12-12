@@ -3732,9 +3732,9 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
                              right=%{operation_padding.right#Int}) exceeds resolved padding \
                              (left=%{resolved_pad.left#Int}, right=%{resolved_pad.right#Int})"],
                           [ Projection_mismatch [ proj ] ] )
-               | Some _ -> (* Resolved padding is sufficient *) ()
-               | None -> (
-                   (* Update inferred padding to be sufficient for this operation *)
+               | _ -> (
+                   (* Update inferred padding to be sufficient for this operation, even if resolved
+                      padding is present. *)
                    match Hashtbl.find proj_env.inferred_padding repr with
                    | Some existing_pad
                      when operation_padding.left > existing_pad.left
@@ -4044,12 +4044,9 @@ let get_product_proj proj_env dim =
 
 let%debug6_sexp get_dim_padding (proj_env : proj_env) (dim : dim) : axis_padding option =
   match dim with
-  | Dim { proj_id = Some proj_id; _ } -> (
+  | Dim { proj_id = Some proj_id; _ } ->
       let repr = proj_repr proj_env proj_id in
-      (* Check inferred_padding first (mutable), then resolved_padding *)
-      match Hashtbl.find proj_env.inferred_padding repr with
-      | Some pad -> Some pad
-      | None -> Map.find proj_env.resolved_padding repr)
+      Hashtbl.find proj_env.inferred_padding repr
   | _ -> assert false
 
 let proj_to_iterator_exn proj_env p =

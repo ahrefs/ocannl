@@ -399,6 +399,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl ppx_expect)))
 
+(test
+ (name check_slice_shapes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules check_slice_shapes)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

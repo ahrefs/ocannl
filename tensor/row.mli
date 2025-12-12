@@ -216,11 +216,15 @@ val solve_proj_equations :
   resolved_padding:(proj_id, axis_padding) List.Assoc.t ->
   inferred_padding:(proj_id, axis_padding) List.Assoc.t ->
   proj_env
+(** [resolved_padding] is used for verification only. [inferred_padding] is updated in [proj_env]
+    even if [resolved_padding] is present. *)
 
 val get_proj_index : proj_env -> proj -> Ir.Indexing.axis_index
 val get_dim_index : proj_env -> dim -> Ir.Indexing.axis_index
 val get_product_proj : proj_env -> dim -> (proj_id * int) option
+
 val get_dim_padding : proj_env -> dim -> axis_padding option
+(** [resolved_padding] from [proj_env] is ignored (it is meant for verification only). *)
 
 val proj_to_iterator_exn : proj_env -> proj_id -> Ir.Indexing.symbol
 (** [proj_to_iterator_exn proj_env p] returns the iterator for [p] in [proj_env]. Raises
