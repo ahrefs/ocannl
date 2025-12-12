@@ -153,9 +153,9 @@ let sequence l =
 
 let%track4_sexp to_low_level code =
   let open Indexing in
-  (* Apply left padding offsets to convert from semantic to buffer indices.
-     Semantic indices can be negative (e.g., -1 for convolution padding), but buffer
-     indices must be non-negative. Adding left_padding converts semantic to buffer space. *)
+  (* Apply left padding offsets to convert from semantic to buffer indices. Semantic indices can be
+     negative (e.g., -1 for convolution padding), but buffer indices must be non-negative. Adding
+     left_padding converts semantic to buffer space. *)
   let apply_padding_offset (tn : Tn.t) (idcs : Indexing.axis_index array) :
       Indexing.axis_index array =
     match Tn.get_padding tn with
@@ -173,6 +173,7 @@ let%track4_sexp to_low_level code =
                 | Affine { symbols; offset } -> Affine { symbols; offset = offset + left_pad }
                 | Sub_axis -> Sub_axis)
   in
+  let is_padded tn = Option.is_some (Tn.get_padding tn) in
   let get (buffer : buffer) (idcs : Indexing.axis_index array) : Low_level.scalar_t =
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
     let idcs =
@@ -188,7 +189,8 @@ let%track4_sexp to_low_level code =
               "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
                vs. %{idcs}"]
     in
-    let idcs = apply_padding_offset tn idcs in
+    (* The same projection can be used to access a padded or a non-padded tensor. *)
+    let idcs = if is_padded tn then apply_padding_offset tn idcs else idcs in
     match buffer with
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn -> Low_level.Get_merge_buffer (tn, idcs)
@@ -207,17 +209,17 @@ let%track4_sexp to_low_level code =
               "Assignments.to_low_level: indexing mismatch for %{Tn.debug_name tn}: shape %{dims} \
                vs. %{idcs}"]
     in
-    let idcs = apply_padding_offset tn idcs in
+    let idcs = if is_padded tn then apply_padding_offset tn idcs else idcs in
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
     let basecase rev_iters =
-      (* Create a substitution from product iterators to loop iterators.
-         Fresh loop symbols are needed because product_iterators may be shared across
-         different operations/tensors, but each lowered operation needs private loop symbols
-         to avoid conflicts in low_level.ml's symbol-to-tensor tracking. *)
+      (* Create a substitution from product iterators to loop iterators. Fresh loop symbols are
+         needed because product_iterators may be shared across different operations/tensors, but
+         each lowered operation needs private loop symbols to avoid conflicts in low_level.ml's
+         symbol-to-tensor tracking. *)
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
         Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
@@ -368,7 +370,6 @@ let%track4_sexp to_low_level code =
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
-        (* TODO: doublecheck this always gets optimized away. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
