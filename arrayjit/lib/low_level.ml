@@ -468,7 +468,9 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                    |> function
                    | [] -> None
                    | [ s ] -> Some s
-                   | _ -> failwith "check_idcs: multiple non-static symbols in affine index"))
+                   | _ ->
+                       (* TODO(#133): multiple non-static symbols in affine index not yet supported *)
+                       raise @@ Non_virtual 51))
     in
     let num_syms =
       Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
