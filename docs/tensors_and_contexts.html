@@ -473,11 +473,15 @@ fan_out:</p>
 <span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.<span class="fl">6.0</span> /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
 <p>Usage example:</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default *)</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := PDSL.kaiming (<span class="kw">fun</span> () -&gt; PDSL.O.uniform1 ());</span>
+<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default: PDSL outside, TDSL inside *)</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or use directly in parameter definition *)</span></span>
 <span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform1 () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
+<p>When setting <code>default_param_init</code>, we call
+<code>PDSL.kaiming</code> so that the result is differentiable, but
+<code>TDSL.O.uniform1</code> or <code>NTDSL.O.uniform1</code> so the
+intermediate values are not differentiable.</p>
 <h2 id="memory-management">Memory Management</h2>
 <p>OCANNL manages tensor memory through memory modes:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Make a tensor&#39;s value accessible on host *)</span></span>
