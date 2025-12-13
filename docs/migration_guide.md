@@ -143,7 +143,7 @@ OCANNL's einsum has two syntax modes:
 | Matrix multiply | `torch.einsum('ij,jk->ik', a, b)` | `a +* "i j; j k => i k" b` | `a +* "i, j; j, k => i, k" b` |
 | Batch matmul | `torch.einsum('bij,bjk->bik', a, b)` | `a +* "b i j; b j k => b i k" b` | `a +* "batch, i -> j; batch, j -> k => batch, i -> k" b` |
 | Attention scores | `torch.einsum('bqhd,bkhd->bhqk', q, k)` | `q +* "bq|hd; bk|hd => b|qk->h" k` | `q +* "b, q | h, d; b, k | h, d => b | q, k -> h" k` |
-| Convolution | N/A | better use multi-char | `x +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" kernel` |
+| Convolution | N/A | always multi-char | `x +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" kernel` |
 
 ### Row Variables
 - `...` context-dependent ellipsis: expands to `..batch..` in batch position, `..input..` before `->`, `..output..` after `->`
