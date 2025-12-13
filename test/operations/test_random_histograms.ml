@@ -2,6 +2,25 @@ open Base
 open Ocannl.Nn_blocks.DSL_modules
 open Stdio
 
+(** {1 Random Number Generation Tests}
+
+    IMPORTANT: Understanding OCANNL's counter-based PRNG architecture:
+
+    The [uniform_at], [normal_at], [kaiming_at], [xavier_at] functions use a counter-based
+    PRNG (Threefry). The [counter] argument is NOT meant to determine the output shape!
+    It is a "mix-in" to bifurcate randomness across different counter values.
+
+    The architecture:
+    1. [counter] should be scalar or small (dimension-1) so it broadcasts to any result shape
+    2. [Range_over_offsets] generates indices over the result shape for mixing
+    3. [uint4x32_to_prec_uniform] reshapes from the uint4x32 backbone to the target shape
+    4. The output shape is determined by shape inference from how the result is used
+
+    For [kaiming] and [xavier] operations:
+    - The result tensor's shape determines fan_in/fan_out through einsum dimension capture
+    - The counter is just for randomness bifurcation (e.g., different steps in training)
+*)
+
 let create_histogram values ~num_bins ~min_val ~max_val =
   let bins = Array.create ~len:num_bins 0 in
   let bin_width = (max_val -. min_val) /. Float.of_int num_bins in
@@ -23,17 +42,23 @@ let print_histogram bins ~title ~max_width =
       let percentage = Float.of_int count /. Float.of_int total *. 100.0 in
       printf "Bin %2d: %s %4d (%.1f%%)\n" i bar count percentage)
 
-let test_uniform_at_histogram () =
+(** Test uniform_at with a SCALAR counter, letting shape be inferred from usage.
+    This is the correct way to use uniform_at - counter is for randomness bifurcation,
+    not for determining the output shape. *)
+let test_uniform_at_with_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-  (* Generate a large batch of random numbers using uniform_at *)
-  (* Note: uniform_at produces 4 values per counter input (from uint4x32) *)
-  let num_counters = 2500 in
-  let counter = TDSL.range num_counters in
 
-  (* Generate uniform random values using uniform_at *)
-  let uniform_values = O.uniform_at counter in
+  (* Scalar counter - just for randomness bifurcation *)
+  let counter = NTDSL.number 42.0 in
+
+  (* Create a target tensor with the desired shape to drive shape inference *)
+  let num_values = 10000 in
+  let target = TDSL.range num_values in
+
+  (* uniform_at with scalar counter, shape inferred from pointwise operation with target *)
+  let%op uniform_values = O.uniform_at counter + (target *. 0.0) in
   Ir.Tnode.update_prec uniform_values.value Ir.Ops.single;
 
   (* Compile and run *)
@@ -41,9 +66,9 @@ let test_uniform_at_histogram () =
   ignore (Ocannl.Train.forward_once ctx uniform_values);
   let result = Ir.Tnode.get_values uniform_values.value in
 
-  printf "Generated %d values from %d counters (%.1fx expansion)\n" (Array.length result)
-    num_counters
-    (Float.of_int (Array.length result) /. Float.of_int num_counters);
+  printf "Uniform Distribution Test (shape-inferred, scalar counter)\n";
+  printf "===========================================================\n";
+  printf "Generated %d values with scalar counter\n" (Array.length result);
 
   (* Create and print histogram *)
   let num_bins = 20 in
@@ -78,17 +103,23 @@ let test_uniform_at_histogram () =
   let all_in_range = Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)) in
   printf "  All values in [0, 1) range: %b\n" all_in_range
 
-let test_normal_at_histogram () =
+(** Test normal_at1 which works pointwise (one output per uint4x32 input).
+
+    NOTE: normal_at internally uses box_muller which creates TWO uniform random tensors.
+    The non-1 variants have shape constraints from uint4x32. Use normal_at1 which works
+    pointwise, combined with a target tensor to drive shape inference. *)
+let test_normal_at_with_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-  (* Generate a large batch of random numbers using normal_at *)
-  (* Note: normal_at also produces 4 values per counter input *)
-  let num_counters = 2500 in
-  let counter = TDSL.range num_counters in
 
-  (* Generate normal random values using normal_at *)
-  let normal_values = O.normal_at counter in
+  (* Scalar counter for randomness bifurcation *)
+  let counter = NTDSL.number 123.0 in
+
+  (* Use normal_at1 (pointwise) with shape from target tensor *)
+  let num_values = 10000 in
+  let target = TDSL.range num_values in
+  let%op normal_values = O.normal_at1 counter + (target *. 0.0) in
   Ir.Tnode.update_prec normal_values.value Ir.Ops.single;
 
   (* Compile and run *)
@@ -136,12 +167,9 @@ let test_normal_at_histogram () =
     (sum_fourth /. (Float.of_int n *. std_dev *. std_dev *. std_dev *. std_dev)) -. 3.0
   in
 
-  (* Note: Box-Muller transformation uses transcendental functions (log, cos) which may produce
-     slightly different results across different CPU architectures and math libraries. We only
-     verify statistical properties are within acceptable bounds, not exact values. *)
   printf "\nNormal Distribution N(0,1) Statistical Test\n";
   printf "============================================\n";
-  printf "Generated %d values\n" n;
+  printf "Generated %d values with scalar counter\n" n;
 
   (* Verify statistical properties - only print PASS/FAIL to avoid machine-specific output *)
   let check name value expected tolerance =
@@ -172,112 +200,176 @@ let test_normal_at_histogram () =
 
   printf "\nOverall: %s\n" (if all_passed then "ALL TESTS PASSED" else "SOME TESTS FAILED")
 
-let test_batched_generation_consistency () =
+(** Test that different counter values produce different random sequences.
+    This demonstrates the counter's purpose: bifurcating randomness. *)
+let test_counter_bifurcation () =
+  printf "\nCounter Bifurcation Test\n";
+  printf "========================\n";
+  printf "Testing that different counter values produce different random streams\n\n";
+
+  (* Use a small target shape for easy comparison *)
+  let num_values = 100 in
+
+  let get_values counter_val =
+    Tensor.unsafe_reinitialize ();
+    let ctx = Context.auto () in
+    let module O = TDSL.O in
+    let counter = NTDSL.number (Float.of_int counter_val) in
+    let target = TDSL.range num_values in
+    let%op uniform_values = O.uniform_at counter + (target *. 0.0) in
+    Ir.Tnode.update_prec uniform_values.value Ir.Ops.single;
+    Ocannl.Train.set_hosted uniform_values.value;
+    ignore (Ocannl.Train.forward_once ctx uniform_values);
+    Ir.Tnode.get_values uniform_values.value
+  in
+
+  let values_0 = get_values 0 in
+  let values_1 = get_values 1 in
+  let values_0_again = get_values 0 in
+
+  (* Check that counter=0 and counter=1 produce different values *)
+  let diff_count = ref 0 in
+  for i = 0 to num_values - 1 do
+    if Float.(abs (values_0.(i) -. values_1.(i)) > 1e-6) then Int.incr diff_count
+  done;
+  printf "Counter 0 vs Counter 1: %d/%d values differ (expected: ~100%%)\n" !diff_count num_values;
+
+  (* Check that same counter produces same values (deterministic) *)
+  let same_count = ref 0 in
+  for i = 0 to num_values - 1 do
+    if Float.(abs (values_0.(i) -. values_0_again.(i)) < 1e-6) then Int.incr same_count
+  done;
+  printf "Counter 0 vs Counter 0 (repeat): %d/%d values same (expected: 100%%)\n" !same_count
+    num_values;
+
+  if !diff_count > 90 && !same_count = num_values then printf "\nBifurcation test: PASS\n"
+  else printf "\nBifurcation test: FAIL\n"
+
+(** Test kaiming_at with proper shape structure.
+    The result tensor needs input dimensions for kaiming to extract fan_in.
+
+    This test demonstrates specifying dimensions explicitly via TDSL (not TDSL.O).
+    The counter is scalar (for randomness bifurcation), and output shape is given
+    directly to uniform_at via ~input_dims and ~output_dims. *)
+let test_kaiming_at_with_proper_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let module O = TDSL.O in
-  (* Test that batched generation gives consistent results *)
-  let batch_size = 100 in
-  let num_batches = 10 in
 
-  printf "\nBatched Generation Consistency Test\n";
-  printf "====================================\n";
+  (* Define weight matrix dimensions *)
+  let fan_in = 100 in
+  let fan_out = 50 in
 
-  (* Generate values in batches and check they don't repeat across batches *)
-  let all_uniform_values = ref [||] in
-  let all_normal_values = ref [||] in
+  (* Scalar counter for randomness bifurcation *)
+  let counter = NTDSL.number 42.0 in
 
-  for _batch = 0 to num_batches - 1 do
-    (* Each batch uses its own counter range - values are just seeds *)
-    let counter = TDSL.range batch_size in
-
-    (* Generate uniform batch *)
-    let uniform_batch = O.uniform_at counter in
-    Ir.Tnode.update_prec uniform_batch.value Ir.Ops.single;
-    Ocannl.Train.set_hosted uniform_batch.value;
-    ignore (Ocannl.Train.forward_once ctx uniform_batch);
-    let uniform_result = Ir.Tnode.get_values uniform_batch.value in
-    all_uniform_values := Array.append !all_uniform_values uniform_result;
-
-    (* Generate normal batch *)
-    let normal_batch = O.normal_at counter in
-    Ir.Tnode.update_prec normal_batch.value Ir.Ops.single;
-    Ocannl.Train.set_hosted normal_batch.value;
-    ignore (Ocannl.Train.forward_once ctx normal_batch);
-    let normal_result = Ir.Tnode.get_values normal_batch.value in
-    all_normal_values := Array.append !all_normal_values normal_result
-  done;
-
-  (* Check for uniqueness (with small tolerance for floating point) *)
-  let count_unique arr =
-    let sorted = Array.copy arr in
-    Array.sort sorted ~compare:Float.compare;
-    let unique = ref 1 in
-    for i = 1 to Array.length sorted - 1 do
-      let diff = Float.abs (sorted.(i) -. sorted.(i - 1)) in
-      if Float.(diff > 1e-7) then unique := !unique + 1
-    done;
-    !unique
+  (* Use TDSL.uniform_at (not TDSL.O.uniform_at) to specify dimensions explicitly.
+     This is an alternative to shape inference from a target tensor. *)
+  let kaiming_values =
+    TDSL.O.kaiming_at
+      (fun c -> TDSL.uniform_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] c ())
+      counter
   in
+  Ir.Tnode.update_prec kaiming_values.value Ir.Ops.single;
 
-  let total_values = batch_size * num_batches in
-  let unique_uniform = count_unique !all_uniform_values in
-  let unique_normal = count_unique !all_normal_values in
+  (* Compile and run *)
+  Ocannl.Train.set_hosted kaiming_values.value;
+  ignore (Ocannl.Train.forward_once ctx kaiming_values);
+  let result = Ir.Tnode.get_values kaiming_values.value in
 
-  printf "Generated %d values in %d batches of %d\n" total_values num_batches batch_size;
-  printf "Uniform values: %d unique out of %d (%.1f%%)\n" unique_uniform total_values
-    (Float.of_int unique_uniform /. Float.of_int total_values *. 100.0);
-  printf "Normal values: %d unique out of %d (%.1f%%)\n" unique_normal total_values
-    (Float.of_int unique_normal /. Float.of_int total_values *. 100.0);
+  (* Expected: uniform [0,1) scaled by sqrt(6/fan_in) = sqrt(6/100) ≈ 0.245
+     So values should be in [0, 0.245) with mean ≈ 0.122 *)
+  let expected_scale = Float.sqrt (6.0 /. Float.of_int fan_in) in
 
-  (* Verify batch consistency of statistical properties *)
-  let batch_means_uniform = Array.create ~len:num_batches 0.0 in
-  let batch_means_normal = Array.create ~len:num_batches 0.0 in
+  printf "Kaiming Initialization Test (fan_in=%d, fan_out=%d)\n" fan_in fan_out;
+  printf "====================================================\n";
+  printf "Generated %d values (shape [%d; %d])\n" (Array.length result) fan_out fan_in;
+  printf "Expected scale: sqrt(6/%d) = %.4f\n" fan_in expected_scale;
 
-  for batch = 0 to num_batches - 1 do
-    let start_idx = batch * batch_size in
-    let uniform_batch = Array.sub !all_uniform_values ~pos:start_idx ~len:batch_size in
-    let normal_batch = Array.sub !all_normal_values ~pos:start_idx ~len:batch_size in
-
-    batch_means_uniform.(batch) <-
-      Array.fold uniform_batch ~init:0.0 ~f:( +. ) /. Float.of_int batch_size;
-    batch_means_normal.(batch) <-
-      Array.fold normal_batch ~init:0.0 ~f:( +. ) /. Float.of_int batch_size
-  done;
-
-  let mean_of_means_uniform =
-    Array.fold batch_means_uniform ~init:0.0 ~f:( +. ) /. Float.of_int num_batches
+  (* Calculate statistics *)
+  let n = Array.length result in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
+  let variance =
+    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
+    /. Float.of_int n
   in
-  let mean_of_means_normal =
-    Array.fold batch_means_normal ~init:0.0 ~f:( +. ) /. Float.of_int num_batches
-  in
+  let std_dev = Float.sqrt variance in
+  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
 
-  let std_of_means_uniform =
-    let diff_sum =
-      Array.fold batch_means_uniform ~init:0.0 ~f:(fun acc x ->
-          let diff = x -. mean_of_means_uniform in
-          acc +. (diff *. diff))
-    in
-    Float.sqrt (diff_sum /. Float.of_int num_batches)
-  in
-  let std_of_means_normal =
-    let diff_sum =
-      Array.fold batch_means_normal ~init:0.0 ~f:(fun acc x ->
-          let diff = x -. mean_of_means_normal in
-          acc +. (diff *. diff))
-    in
-    Float.sqrt (diff_sum /. Float.of_int num_batches)
-  in
+  printf "  Mean: %.4f (expected: ~%.4f)\n" mean (expected_scale /. 2.0);
+  printf "  Std Dev: %.4f\n" std_dev;
+  printf "  Min: %.4f\n" min_val;
+  printf "  Max: %.4f (expected: <%.4f)\n" max_val expected_scale;
 
-  printf "\nBatch means consistency:\n";
-  printf "  Uniform: mean of batch means = %.4f, std = %.4f\n" mean_of_means_uniform
-    std_of_means_uniform;
-  printf "  Normal: mean of batch means = %.4f, std = %.4f\n" mean_of_means_normal
-    std_of_means_normal
+  (* Create and print histogram *)
+  let num_bins = 20 in
+  let bins = create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01) in
+  print_histogram bins ~title:"Kaiming Distribution Histogram" ~max_width:40
+
+(** Test xavier_at with proper shape structure.
+    Xavier needs both input and output dimensions for scaling.
+
+    Similar to kaiming test, uses TDSL with explicit dimensions. *)
+let test_xavier_at_with_proper_shape () =
+  Tensor.unsafe_reinitialize ();
+  let ctx = Context.auto () in
+
+  (* Define weight matrix dimensions *)
+  let fan_in = 100 in
+  let fan_out = 50 in
+
+  (* Scalar counter for randomness bifurcation *)
+  let counter = NTDSL.number 42.0 in
+
+  (* Use TDSL.uniform_at with explicit dimensions *)
+  let xavier_values =
+    TDSL.O.xavier_at
+      (fun c -> TDSL.uniform_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] c ())
+      counter
+  in
+  Ir.Tnode.update_prec xavier_values.value Ir.Ops.single;
+
+  (* Compile and run *)
+  Ocannl.Train.set_hosted xavier_values.value;
+  ignore (Ocannl.Train.forward_once ctx xavier_values);
+  let result = Ir.Tnode.get_values xavier_values.value in
+
+  (* Expected: uniform [0,1) scaled by sqrt(6/(fan_in + fan_out)) = sqrt(6/150) ≈ 0.2 *)
+  let expected_scale = Float.sqrt (6.0 /. Float.of_int (fan_in + fan_out)) in
+
+  printf "Xavier Initialization Test (fan_in=%d, fan_out=%d)\n" fan_in fan_out;
+  printf "===================================================\n";
+  printf "Generated %d values (shape [%d; %d])\n" (Array.length result) fan_out fan_in;
+  printf "Expected scale: sqrt(6/%d) = %.4f\n" (fan_in + fan_out) expected_scale;
+
+  (* Calculate statistics *)
+  let n = Array.length result in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
+  let variance =
+    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
+    /. Float.of_int n
+  in
+  let std_dev = Float.sqrt variance in
+  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+
+  printf "  Mean: %.4f (expected: ~%.4f)\n" mean (expected_scale /. 2.0);
+  printf "  Std Dev: %.4f\n" std_dev;
+  printf "  Min: %.4f\n" min_val;
+  printf "  Max: %.4f (expected: <%.4f)\n" max_val expected_scale;
+
+  (* Create and print histogram *)
+  let num_bins = 20 in
+  let bins = create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01) in
+  print_histogram bins ~title:"Xavier Distribution Histogram" ~max_width:40
 
 let () =
-  test_uniform_at_histogram ();
+  test_uniform_at_with_shape ();
   printf "\n";
-  test_normal_at_histogram ();
+  test_normal_at_with_shape ();
   printf "\n";
-  test_batched_generation_consistency ()
+  test_counter_bifurcation ();
+  printf "\n";
+  test_kaiming_at_with_proper_shape ();
+  printf "\n";
+  test_xavier_at_with_proper_shape ()

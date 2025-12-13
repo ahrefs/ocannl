@@ -31,6 +31,10 @@ let () =
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
 
+  (* Use scaled initialization to prevent activation explosion. Default uniform1() in [0,1] causes
+     logits to grow to millions. *)
+  TDSL.default_param_init := PDSL.xavier (fun () -> PDSL.O.uniform1 ());
+
   (* Configuration for circle dataset *)
   let image_size = 16 in
   let max_circles = 3 in
@@ -77,7 +81,6 @@ let () =
   let%op logits = lenet () ~train_step:None batch_images in
 
   (* Softmax and cross-entropy loss *)
-  (* Use Nn_blocks.softmax with named axis 'v' for the output dimension *)
   let%op probs = softmax ~spec:"...|v" () logits in
   (* Sum the probability mass for the correct class *)
   let%op correct_prob = (probs *. batch_labels) ++ "...|... => ...|0" in
@@ -110,6 +113,7 @@ let () =
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
         Train.run ctx sgd_routine;
+        printf "batch_loss = %.4f\n%!" batch_loss.@[0];
         epoch_loss := !epoch_loss +. batch_loss.@[0];
         Int.incr step_ref);
     printf "Epoch %d: avg loss = %.4f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)

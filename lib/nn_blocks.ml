@@ -28,11 +28,25 @@ let%op box_muller grad_spec init_f () =
     (sqrt (-2. *. log (u1 + (!.epsilon *. (1. - u1)))))
     (cos (2. *. !.Float.pi *. u2))
 
+let%op kaiming_impl grad_spec init_f () =
+  let w_raw = init_f () in
+  let%op _ = w_raw ++ "...|..i.. -> ... => 0" [ "i" ] in
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw (sqrt (!.6.0 /. dim i))
+
+let%op xavier_impl grad_spec init_f () =
+  let w_raw = init_f () in
+  let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw (sqrt (!.6.0 /. (dim i + dim o)))
+
 [%%extend_dsls
 let normal () = [%oc box_muller grad_spec uniform ()]
 let normal1 () = [%oc box_muller grad_spec uniform1 ()]
 let normal_at counter = [%oc box_muller grad_spec (fun () -> uniform_at counter) ()]
-let normal_at1 counter = [%oc box_muller grad_spec (fun () -> uniform_at1 counter) ()]]
+let normal_at1 counter = [%oc box_muller grad_spec (fun () -> uniform_at1 counter) ()]
+let kaiming init_f () = [%oc kaiming_impl grad_spec init_f ()]
+let xavier init_f () = [%oc xavier_impl grad_spec init_f ()]
+let kaiming_at init_f counter = [%oc kaiming_impl grad_spec (fun () -> init_f counter) ()]
+let xavier_at init_f counter = [%oc xavier_impl grad_spec (fun () -> init_f counter) ()]]
 
 open DSL_modules
 
@@ -231,8 +245,9 @@ let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt
 
     When [use_padding=true], there is no such restriction and output size is [input_size / stride].
 
-    @param out_channels Optional number of output channels. If not provided, must be inferred from
-    context (e.g., from a downstream operation that constrains the output shape). *)
+    @param out_channels
+      Optional number of output channels. If not provided, must be inferred from context (e.g., from
+      a downstream operation that constrains the output shape). *)
 let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) ?out_channels () x =
   (* Notation: kernel height (kh), kernel width (kw), input channels (ic), output channels (oc),
      output height (oh), output width (ow) *)
@@ -268,7 +283,8 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
 (** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values.
 
     The input spatial dimensions must satisfy: [(input_size - window_size) mod stride = 0],
-    otherwise shape inference will fail. The output size is [(input_size - window_size) / stride + 1].
+    otherwise shape inference will fail. The output size is
+    [(input_size - window_size) / stride + 1].
 
     Note: The [<] in the einsum spec indicates no-padding mode (indices stay within bounds). *)
 let%op max_pool2d ?(stride = 2) ?(window_size = 2) () x =
