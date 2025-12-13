@@ -229,7 +229,7 @@ tensor’s value - <strong><code>shape</code></strong>: Shape information,
 progressively refined during inference</p>
 <h3 id="creating-tensors">Creating Tensors</h3>
 <p>OCANNL provides multiple ways to create tensors:</p>
-<p><strong>Using DSL modules</strong> (recommended):</p>
+<p><strong>Using DSL modules</strong>:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">open</span> Ocannl.Operation.DSL_modules</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co">(* Differentiable tensor with gradient tracking when needed *)</span></span>
@@ -241,11 +241,13 @@ progressively refined during inference</p>
 <span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter with gradient (for model weights) *)</span></span>
 <span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> w = TDSL.param <span class="st">&quot;weights&quot;</span> ~output_dims:[hidden_dim] ()</span></code></pre></div>
 <p><strong>Using syntax extensions</strong> (see <a href="syntax_extensions.md">syntax_extensions.md</a>):</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* %op creates differentiable tensors *)</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w } * x + { b = <span class="dv">0</span>.; o = [hidden_dim] }</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* %cd creates assignment code with non-differentiable intermediate tensors *)</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd update = p =- learning_rate *. p.grad</span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">open</span> Ocannl.Operation.DSL_modules</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">(* %op creates differentiable tensors *)</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w } * x + { b = <span class="dv">0</span>.; o = [hidden_dim] }</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* %cd creates assignment code with non-differentiable intermediate tensors *)</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd update = p =- learning_rate *. p.grad</span></code></pre></div>
 <h3 id="gradient-specifications">Gradient Specifications</h3>
 <p>The <code>grad_spec</code> parameter controls gradient behavior:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> grad_spec = Require_grad | Prohibit_grad | If_needed</span></code></pre></div>
@@ -257,10 +259,14 @@ nodes (for learnable parameters)</li>
 <li><strong><code>If_needed</code></strong>: Create gradients only if
 required by the computation graph</li>
 </ul>
-<p>The DSL modules set appropriate defaults: - <code>TDSL</code> uses
-<code>If_needed</code> (automatic gradient propagation) -
-<code>NTDSL</code> uses <code>Prohibit_grad</code> (non-differentiable)
-- <code>PDSL</code> uses <code>Require_grad</code> (parameters)</p>
+<p>The DSL modules set appropriate defaults:</p>
+<ul>
+<li><code>TDSL</code> uses <code>If_needed</code> (automatic gradient
+propagation)</li>
+<li><code>NTDSL</code> uses <code>Prohibit_grad</code>
+(non-differentiable)</li>
+<li><code>PDSL</code> uses <code>Require_grad</code> (parameters)</li>
+</ul>
 <h3 id="tensor-precision">Tensor Precision</h3>
 <p>OCANNL supports multiple numeric precisions:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>Tensor.default_value_prec := Ir.Ops.single  <span class="co">(* float32, the default *)</span></span>
@@ -367,10 +373,13 @@ Parameter Initialization</h2>
 generation, which differs significantly from traditional imperative
 RNGs.</p>
 <h3 id="counter-based-prng">Counter-Based PRNG</h3>
-<p>OCANNL implements the Threefry algorithm, a counter-based PRNG that:
-- Produces deterministic sequences from a seed and counter - Enables
-reproducible initialization across runs - Supports parallel random
-generation without synchronization</p>
+<p>OCANNL implements the Threefry algorithm, a counter-based PRNG
+that:</p>
+<ul>
+<li>Produces deterministic sequences from a seed and counter</li>
+<li>Enables reproducible initialization across runs</li>
+<li>Supports parallel random generation without synchronization</li>
+</ul>
 <p>The random seed is managed globally:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set the random seed *)</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>Tensor.set_random_seed ~seed:<span class="dv">42</span> ()</span>
@@ -453,24 +462,24 @@ arbitrary shapes at the cost of some efficiency.</p>
 Scaling Operations</h3>
 <p>For weight matrices, OCANNL provides scaled initialization functions
 that use shape inference to determine the scaling factor:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Kaiming (He) initialization: sqrt(6 / fan_in) scaling *)</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming init_f () = ...</span>
+<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Kaiming (He) initialization: sqrt(scale_sq / fan_in) scaling, default scale_sq=6 *)</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming ?scale_sq init_f () = ...</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Xavier (Glorot) initialization: sqrt(6 / (fan_in + fan_out)) scaling *)</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier init_f () = ...</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Xavier (Glorot) initialization: sqrt(scale_sq / (fan_in + fan_out)) scaling *)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier ?scale_sq init_f () = ...</span>
 <span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Counter-based variants for deferred initialization *)</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming_at init_f counter = ...</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier_at init_f counter = ...</span></code></pre></div>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming_at ?scale_sq init_f counter = ...</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier_at ?scale_sq init_f counter = ...</span></code></pre></div>
 <p>These functions use einsum dimension capture to extract fan_in and
 fan_out:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* kaiming_impl captures input dimension *)</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ... =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span> ] <span class="kw">in</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.<span class="fl">6.0</span> /. dim i)</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. dim i)</span>
 <span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* xavier_impl captures both input and output dimensions *)</span></span>
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
-<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.<span class="fl">6.0</span> /. (dim i + dim o))</span></code></pre></div>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
 <p>Usage example:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default: PDSL outside, TDSL inside *)</span></span>
