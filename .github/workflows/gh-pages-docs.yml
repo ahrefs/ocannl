@@ -38,6 +38,9 @@ jobs:
       - name: Syntax extensions
         run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/syntax_extensions.md -o docs/html/syntax_extensions.html
 
+      - name: Tensors and Contexts
+        run: pandoc --toc -s --embed-resources --css=docs/html/style.css docs/tensors_and_contexts.md -o docs/html/tensors_and_contexts.html
+
       - name: Shapes and Einsum slides
         run: slipshow compile docs/slides-shapes_and_einsum.md -o docs/html/shapes_and_einsum.html
 
