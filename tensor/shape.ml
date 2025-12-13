@@ -826,7 +826,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                                 };
                               ];
                           })
-                      delayed_ref.var_ref.solved_dim
+                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
                 | None ->
                     raise
                     @@ Row.Shape_error
@@ -1050,7 +1050,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                                 };
                               ];
                           })
-                      delayed_ref.var_ref.solved_dim
+                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
                 | None ->
                     raise
                     @@ Row.Shape_error
