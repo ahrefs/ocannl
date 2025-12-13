@@ -28,25 +28,29 @@ let%op box_muller grad_spec init_f () =
     (sqrt (-2. *. log (u1 + (!.epsilon *. (1. - u1)))))
     (cos (2. *. !.Float.pi *. u2))
 
-let kaiming_impl grad_spec init_f () =
+let kaiming_impl ?(scale_sq = 6.0) grad_spec init_f () =
   let w_raw = init_f () in
   let%op _ = w_raw ++ "...|..i.. -> ... => 0" [ "i" ] in
-  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.6.0 /. dim i)]
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.scale_sq /. dim i)]
 
-let xavier_impl grad_spec init_f () =
+let xavier_impl ?(scale_sq = 6.0) grad_spec init_f () =
   let w_raw = init_f () in
   let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
-  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.6.0 /. (dim i + dim o))]
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.scale_sq /. (dim i + dim o))]
 
 [%%extend_dsls
 let normal () = [%oc box_muller grad_spec uniform ()]
 let normal1 () = [%oc box_muller grad_spec uniform1 ()]
 let normal_at counter = [%oc box_muller grad_spec (fun () -> uniform_at counter) ()]
 let normal_at1 counter = [%oc box_muller grad_spec (fun () -> uniform_at1 counter) ()]
-let kaiming init_f () = [%oc kaiming_impl grad_spec init_f ()]
-let xavier init_f () = [%oc xavier_impl grad_spec init_f ()]
-let kaiming_at init_f counter = [%oc kaiming_impl grad_spec (fun () -> init_f counter) ()]
-let xavier_at init_f counter = [%oc xavier_impl grad_spec (fun () -> init_f counter) ()]]
+let kaiming ?scale_sq init_f () = [%oc kaiming_impl ?scale_sq grad_spec init_f ()]
+let xavier ?scale_sq init_f () = [%oc xavier_impl ?scale_sq grad_spec init_f ()]
+
+let kaiming_at ?scale_sq init_f counter =
+  [%oc kaiming_impl ?scale_sq grad_spec (fun () -> init_f counter) ()]
+
+let xavier_at ?scale_sq init_f counter =
+  [%oc xavier_impl ?scale_sq grad_spec (fun () -> init_f counter) ()]]
 
 open DSL_modules
 

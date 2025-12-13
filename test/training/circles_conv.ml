@@ -33,7 +33,7 @@ let () =
 
   (* Use scaled initialization to prevent activation explosion. Default uniform1() in [0,1] causes
      logits to grow to millions. *)
-  TDSL.default_param_init := PDSL.xavier TDSL.O.uniform1;
+  TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
   (* Configuration for circle dataset *)
   let image_size = 16 in
@@ -89,10 +89,10 @@ let () =
   let%op batch_loss = (sample_loss ++ "...|... => 0") /. !..batch_size in
 
   (* Training setup *)
-  let epochs = 10 in
+  let epochs = 1000 in
   let total_steps = epochs * n_batches in
   let update = Train.grad_update batch_loss in
-  let%op learning_rate = 0.1 *. ((2 *. !..total_steps) - !@step_n) /. !..total_steps in
+  let%op learning_rate = 0.01 *. ((1.2 *. !..total_steps) - !@step_n) /. !..total_steps in
   Train.set_hosted learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate batch_loss in
 
@@ -113,7 +113,7 @@ let () =
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
         Train.run ctx sgd_routine;
-        printf "batch_loss = %.4f\n%!" batch_loss.@[0];
+        (* printf "batch_loss = %.4f\n%!" batch_loss.@[0]; *)
         epoch_loss := !epoch_loss +. batch_loss.@[0];
         Int.incr step_ref);
     printf "Epoch %d: avg loss = %.4f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)

@@ -68,7 +68,7 @@ Key fields:
 
 OCANNL provides multiple ways to create tensors:
 
-**Using DSL modules** (recommended):
+**Using DSL modules**:
 ```ocaml
 open Ocannl.Operation.DSL_modules
 
@@ -83,7 +83,10 @@ let w = TDSL.param "weights" ~output_dims:[hidden_dim] ()
 ```
 
 **Using syntax extensions** (see [syntax_extensions.md](syntax_extensions.md)):
+
 ```ocaml
+open Ocannl.Operation.DSL_modules
+
 (* %op creates differentiable tensors *)
 let%op layer x = { w } * x + { b = 0.; o = [hidden_dim] }
 
@@ -104,6 +107,7 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed
 - **`If_needed`**: Create gradients only if required by the computation graph
 
 The DSL modules set appropriate defaults:
+
 - `TDSL` uses `If_needed` (automatic gradient propagation)
 - `NTDSL` uses `Prohibit_grad` (non-differentiable)
 - `PDSL` uses `Require_grad` (parameters)
@@ -250,6 +254,7 @@ OCANNL uses a deterministic, counter-based approach to random number generation,
 ### Counter-Based PRNG
 
 OCANNL implements the Threefry algorithm, a counter-based PRNG that:
+
 - Produces deterministic sequences from a seed and counter
 - Enables reproducible initialization across runs
 - Supports parallel random generation without synchronization
@@ -301,26 +306,27 @@ let%op dropout ~rate () ~train_step x =
 For weight matrices, OCANNL provides scaled initialization functions that use shape inference to determine the scaling factor:
 
 ```ocaml
-(* Kaiming (He) initialization: sqrt(6 / fan_in) scaling *)
-let kaiming init_f () = ...
+(* Kaiming (He) initialization: sqrt(scale_sq / fan_in) scaling, default scale_sq=6 *)
+let kaiming ?scale_sq init_f () = ...
 
-(* Xavier (Glorot) initialization: sqrt(6 / (fan_in + fan_out)) scaling *)
-let xavier init_f () = ...
+(* Xavier (Glorot) initialization: sqrt(scale_sq / (fan_in + fan_out)) scaling *)
+let xavier ?scale_sq init_f () = ...
 
 (* Counter-based variants for deferred initialization *)
-let kaiming_at init_f counter = ...
-let xavier_at init_f counter = ...
+let kaiming_at ?scale_sq init_f counter = ...
+let xavier_at ?scale_sq init_f counter = ...
 ```
 
 These functions use einsum dimension capture to extract fan_in and fan_out:
+
 ```ocaml
 (* kaiming_impl captures input dimension *)
 let%op _ = w_raw ++ "...|..i.. -> ... => 0" [ "i" ] in
-... sqrt (!.6.0 /. dim i)
+... sqrt (!.scale_sq /. dim i)
 
 (* xavier_impl captures both input and output dimensions *)
 let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
-... sqrt (!.6.0 /. (dim i + dim o))
+... sqrt (!.scale_sq /. (dim i + dim o))
 ```
 
 ### Parameter Initialization
