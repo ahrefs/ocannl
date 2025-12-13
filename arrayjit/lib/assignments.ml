@@ -365,11 +365,13 @@ let%track4_sexp to_low_level code =
         Low_level.Seq (c1, c2)
     | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Low_level.Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
+        (* FIXME: Claude claims this is leaving the padding region uninitialized. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
     | Fetch { array; fetch_op = Constant_bits i; dims } ->
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
+        (* FIXME: Claude claims this is leaving the padding region uninitialized. *)
         Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
