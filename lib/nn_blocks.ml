@@ -28,15 +28,15 @@ let%op box_muller grad_spec init_f () =
     (sqrt (-2. *. log (u1 + (!.epsilon *. (1. - u1)))))
     (cos (2. *. !.Float.pi *. u2))
 
-let%op kaiming_impl grad_spec init_f () =
+let kaiming_impl grad_spec init_f () =
   let w_raw = init_f () in
   let%op _ = w_raw ++ "...|..i.. -> ... => 0" [ "i" ] in
-  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw (sqrt (!.6.0 /. dim i))
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.6.0 /. dim i)]
 
-let%op xavier_impl grad_spec init_f () =
+let xavier_impl grad_spec init_f () =
   let w_raw = init_f () in
   let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
-  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw (sqrt (!.6.0 /. (dim i + dim o)))
+  Ocannl_tensor.Operation.pointmul ~grad_spec w_raw [%op sqrt (!.6.0 /. (dim i + dim o))]
 
 [%%extend_dsls
 let normal () = [%oc box_muller grad_spec uniform ()]
