@@ -277,7 +277,7 @@ OCANNL provides several random operations in the DSL modules:
 | `normal ()`, `normal1 ()` | Standard normal N(0,1) | Uses Box-Muller transform |
 | `normal_at counter`, `normal_at1 counter` | Normal with explicit counter | For training-time randomness |
 
-**Important**: The `counter` argument in `_at` variants is for **randomness bifurcation**, not shape determination. The counter should typically be scalar or small (e.g., a training step number). Different counter values produce different random streams; the same counter reproduces the same stream.
+**Important**: The `counter` argument in `_at` variants is for **randomness bifurcation**, not shape determination. The counter should be scalar / dimension-1 (e.g., a training step number). Different counter values produce different random streams across the resulting tensor cells.
 
 The output shape is determined by:
 1. **Shape inference** from how the result is used (e.g., pointwise ops with shaped tensors)
