@@ -327,12 +327,14 @@ let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
 
 Usage example:
 ```ocaml
-(* Set kaiming initialization as default *)
-TDSL.default_param_init := PDSL.kaiming (fun () -> PDSL.O.uniform1 ());
+(* Set kaiming initialization as default: PDSL outside, TDSL inside *)
+TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;
 
 (* Or use directly in parameter definition *)
 let%op layer x = { w = kaiming uniform1 () } * x + { b = 0. }
 ```
+
+When setting `default_param_init`, we call `PDSL.kaiming` so that the result is differentiable, but `TDSL.O.uniform1` or `NTDSL.O.uniform1` so the intermediate values are not differentiable.
 
 ## Memory Management
 
