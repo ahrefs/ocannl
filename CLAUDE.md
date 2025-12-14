@@ -80,7 +80,9 @@ opam install cudajit  # for CUDA backend
    - Einsum notation supports convolutions, reductions, and arbitrary permutations
    - "Principle of least commitment": use row variables where axis count doesn't matter
    - Shape inference completion is forced by lowering: via `Context.compile`, or wrappers such as `Train.to_routine`, `Train.run_once` or `Train.forward_once`
-
+   - Operations in `Operation`, `TDSL`, `NTDSL`, `PDSL` return functions with `Tensor.op_fun` type, so that shapes can be specified at call sites if needed
+   -  Operations in `TDSL.O` (opened for `%op`), `NTDSL.O` (opened for `%cd`) hide this so that shapes have to be inferred
+   
 3. **Backend Architecture**: Unified interface supporting CPU (multicore), CUDA, and Metal backends
 
 4. **Memory Management**: Sophisticated tensor node memory modes (Virtual, Local, On_device, Hosted) with automatic host transfers
@@ -188,10 +190,10 @@ opam install cudajit  # for CUDA backend
 - See `docs/syntax_extensions.md` for comprehensive documentation
 
 **Record syntax features**:
-- OCaml punning: `{ x }` expands to default initialization (uniform() for parameters in %op)
+- OCaml punning: `{ x }` expands to default initialization (uniform1() for parameters in %op, but configurable via `TDSL.default_param_init`)
 - Shorthand field names: `o` → `output_dims`, `i` → `input_dims`, `b` → `batch_dims`
-- Additional fields map to labeled arguments of tensor creation functions
-- Dimension specification: lists `[...]` for output, tuples `(...)` for input, arrays `[|...|]` for batch
+- Additional fields map to labeled arguments of tensor creation functions `Tensor.op_fun`
+- Dimension specification for tensor literals: lists `[...]` for output, tuples `(...)` for input, arrays `[|...|]` for batch
 
 **Einsum notation**:
 - Binary form: `tensor1 +* "spec1; spec2 => result_spec" tensor2`
