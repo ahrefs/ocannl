@@ -612,7 +612,7 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
   in
   let v = t.value in
   (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)
-  Tn.update_memory_mode v (Hosted Nonconstant) 24;
+  Tn.update_memory_mode v (Hosted Nonconstant) 241;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
      update computations. *)
   (match t.diff with
