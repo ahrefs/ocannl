@@ -51,7 +51,7 @@ let test_uniform_at_with_shape () =
   let module O = TDSL.O in
 
   (* Scalar counter - just for randomness bifurcation *)
-  let counter = NTDSL.number 42.0 in
+  let counter = NTDSL.number 44.0 in
 
   (* Create a target tensor with the desired shape to drive shape inference *)
   let num_values = 10000 in
@@ -257,17 +257,17 @@ let test_kaiming_at_with_proper_shape () =
 
   (* Define weight matrix dimensions *)
   let fan_in = 100 in
-  let fan_out = 50 in
+  let fan_out = 40 in
 
   (* Scalar counter for randomness bifurcation *)
-  let counter = NTDSL.number 42.0 in
+  let counter = NTDSL.number 45.0 in
 
   (* Use TDSL.uniform_at (not TDSL.O.uniform_at) to specify dimensions explicitly.
      This is an alternative to shape inference from a target tensor. *)
   let kaiming_values =
-    TDSL.O.kaiming_at
-      (fun c -> TDSL.uniform_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] c ())
-      counter
+    TDSL.kaiming_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ]
+      TDSL.O.uniform_at
+      counter ()
   in
   Ir.Tnode.update_prec kaiming_values.value Ir.Ops.single;
 
@@ -316,16 +316,16 @@ let test_xavier_at_with_proper_shape () =
 
   (* Define weight matrix dimensions *)
   let fan_in = 100 in
-  let fan_out = 50 in
+  let fan_out = 40 in
 
   (* Scalar counter for randomness bifurcation *)
-  let counter = NTDSL.number 42.0 in
+  let counter = NTDSL.number 43.0 in
 
   (* Use TDSL.uniform_at with explicit dimensions *)
   let xavier_values =
-    TDSL.O.xavier_at
-      (fun c -> TDSL.uniform_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] c ())
-      counter
+    TDSL.xavier_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ]
+      TDSL.O.uniform_at
+      counter ()
   in
   Ir.Tnode.update_prec xavier_values.value Ir.Ops.single;
 

@@ -2977,6 +2977,25 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
   | { bcast = Broadcastable; _ } -> keep_constr ()
   | { bcast = Row_var { v; beg_dims }; dims; prov } -> (
       let r1 = row_of_var v prov in
+      (* If lub is not provided from context, try to get it from the row environment.
+         This is critical for non-terminal shapes where LUBs are populated through
+         inequalities but wouldn't otherwise be available until Stage 6.
+         However, we only use the environment LUB if it has fully resolved dimensions
+         (no dimension variables), as partially resolved LUBs can prevent proper
+         constraint resolution. *)
+      let lub =
+        match lub with
+        | Some _ -> lub
+        | None -> (
+            match find_row env.row_env v with
+            | Some (Bounds_row { lub = Some env_lub; _ }) ->
+                (* We need to substitute environment dimensions into the LUB to see if it's resolved *)
+                let env_lub = subst_row env env_lub in
+                (match collect_factors env_lub.dims with
+                | Some (_, []) -> Some env_lub (* All dims are known constants after substitution *)
+                | _ -> None (* LUB has unresolved dimension variables or collect_factors failed *))
+            | _ -> None)
+      in
       let opt_row_error () =
         if row_var_is_in_param v env && not (is_safe_to_guess v) then
           raise
@@ -3052,18 +3071,22 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                      ( "You forgot to specify the hidden dimension(s) 3",
                        [ Dim_mismatch [ Var var ] ] )
               else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
-          | ( Strided_var { coeff; var = _; denom },
+          | ( Strided_var { coeff; var; denom },
               [],
               Some ({ dims = lub_dims; bcast = _; prov = lub_prov } as lub) )
             when is_stage5_up stage && Utils.safe_force coeff > denom -> (
-              (* Check if coeff > denom * product of known dimensions of the LUB *)
+              (* Check if coeff > denom * product of known dimensions of the LUB.
+                 The constraint is: coeff * var / denom = total_elements(row).
+                 So: var = total_elements * denom / coeff. *)
               match collect_factors lub_dims with
               | Some (known_product, []) ->
                   let coeff_val = Utils.safe_force coeff in
                   if coeff_val > denom * known_product then
                     ([ Row_eq { r1; r2 = lub; origin } ], env)
                   else
-                    (* Equate the row variable to the dimensions of the LUB *)
+                    (* Equate the row variable to the dimensions of the LUB,
+                       and compute var from the total elements *)
+                    let var_value = known_product * denom / coeff_val in
                     ( [
                         Row_eq
                           {
@@ -3071,6 +3094,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                             r2 = { dims = lub_dims; bcast = Broadcastable; prov = lub_prov };
                             origin;
                           };
+                        Dim_eq { d1 = Var var; d2 = get_dim ~d:var_value (); origin };
                       ],
                       env )
               | _ -> keep_constr ())
