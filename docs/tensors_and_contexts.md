@@ -8,6 +8,7 @@ This document describes how to work with tensors and execution contexts in OCANN
 - [Tensors](#tensors)
   - [Tensor Structure](#tensor-structure)
   - [Creating Tensors](#creating-tensors)
+  - [Operation Functions and Shape Parameters](#operation-functions-and-shape-parameters)
   - [Gradient Specifications](#gradient-specifications)
   - [Tensor Precision](#tensor-precision)
 - [Contexts](#contexts)
@@ -92,6 +93,72 @@ let%op layer x = { w } * x + { b = 0.; o = [hidden_dim] }
 
 (* %cd creates assignment code with non-differentiable intermediate tensors *)
 let%cd update = p =- learning_rate *. p.grad
+```
+
+### Operation Functions and Shape Parameters
+
+Most tensor-creating operations in OCANNL return an **operation function** (`op_fun`) rather than a tensor directly. This allows you to specify shape constraints and other options at the call site:
+
+```ocaml
+(* param_op_fun: the innermost layer of optional parameters *)
+type param_op_fun =
+  ?input_dims:int list ->
+  ?output_dims:int list ->
+  ?input_axes:(string * int) list ->
+  ?output_axes:(string * int) list ->
+  ?deduced:Shape.deduce_within_shape ->
+  unit ->
+  t
+
+(* op_fun: extends param_op_fun with label and precision options *)
+type op_fun =
+  ?label:string list ->
+  ?top_down_prec:bool ->
+  ?batch_dims:int list ->
+  ?batch_axes:(string * int) list ->
+  param_op_fun
+```
+
+**Key parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `~input_dims:[n; m]` | Set input axis dimensions (rightmost in memory layout) |
+| `~output_dims:[p; q]` | Set output axis dimensions |
+| `~batch_dims:[b]` | Set batch axis dimensions (leftmost in memory layout) |
+| `~input_axes:[("hidden", 64)]` | Input axes with labeled dimensions |
+| `~output_axes:[("classes", 10)]` | Output axes with labeled dimensions |
+| `~label:["layer1"]` | Labels for debugging/printing |
+| `~top_down_prec:true` | Force precision from parent operation |
+| `~deduced:Input_equals_output` | Shape constraint (input = output dims) |
+| `()` | **Required**: finalizes the tensor creation |
+
+**Usage examples:**
+
+```ocaml
+(* Operations like pointmul return op_fun, allowing shape specification *)
+let scaled = pointmul x scale ~output_dims:[hidden_dim] ()
+
+(* The kaiming/xavier functions return op_fun for deferred shape binding *)
+let weights = kaiming uniform1 ~input_dims:[784] ~output_dims:[256] ()
+
+(* Term creates a terminal tensor with shape *)
+let input = TDSL.term ~batch_dims:[batch_size] ~input_dims:[784] ()
+
+(* Params use the same interface *)
+let w = TDSL.param "weights" ~input_dims:[in_dim] ~output_dims:[out_dim] ()
+```
+
+**Why this design?**
+
+1. **Deferred shape binding**: Shape can be specified at the use site rather than definition site
+2. **Shape inference integration**: Unspecified dimensions are inferred from context
+3. **Flexible composition**: Functions like `kaiming` can wrap other functions while preserving the interface
+
+For example, `kaiming_at init_f counter` returns an `op_fun`, so you can write:
+```ocaml
+(* Shape specified at call site, not in kaiming_at definition *)
+let w = kaiming_at uniform_at counter ~input_dims:[100] ~output_dims:[40] ()
 ```
 
 ### Gradient Specifications
