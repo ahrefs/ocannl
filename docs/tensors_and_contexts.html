@@ -107,6 +107,8 @@ Concepts</a></li>
 Structure</a></li>
 <li><a href="#creating-tensors" id="toc-creating-tensors">Creating
 Tensors</a></li>
+<li><a href="#operation-functions-and-shape-parameters" id="toc-operation-functions-and-shape-parameters">Operation Functions
+and Shape Parameters</a></li>
 <li><a href="#gradient-specifications" id="toc-gradient-specifications">Gradient Specifications</a></li>
 <li><a href="#tensor-precision" id="toc-tensor-precision">Tensor
 Precision</a></li>
@@ -156,6 +158,8 @@ contexts in OCANNL. It covers the core <code>Tensor</code> module, the
 <ul>
 <li><a href="#tensor-structure">Tensor Structure</a></li>
 <li><a href="#creating-tensors">Creating Tensors</a></li>
+<li><a href="#operation-functions-and-shape-parameters">Operation
+Functions and Shape Parameters</a></li>
 <li><a href="#gradient-specifications">Gradient Specifications</a></li>
 <li><a href="#tensor-precision">Tensor Precision</a></li>
 </ul></li>
@@ -248,9 +252,109 @@ progressively refined during inference</p>
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* %cd creates assignment code with non-differentiable intermediate tensors *)</span></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd update = p =- learning_rate *. p.grad</span></code></pre></div>
+<h3 id="operation-functions-and-shape-parameters">Operation Functions
+and Shape Parameters</h3>
+<p>Most tensor-creating operations in OCANNL return an <strong>operation
+function</strong> (<code>op_fun</code>) rather than a tensor directly.
+This allows you to specify shape constraints and other options at the
+call site:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* param_op_fun: the innermost layer of optional parameters *)</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> param_op_fun =</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  ?input_dims:<span class="dt">int</span> <span class="dt">list</span> -&gt;</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  ?output_dims:<span class="dt">int</span> <span class="dt">list</span> -&gt;</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  ?input_axes:(<span class="dt">string</span> * <span class="dt">int</span>) <span class="dt">list</span> -&gt;</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  ?output_axes:(<span class="dt">string</span> * <span class="dt">int</span>) <span class="dt">list</span> -&gt;</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  ?deduced:Shape.deduce_within_shape -&gt;</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unit</span> -&gt;</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  t</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="co">(* op_fun: extends param_op_fun with label and precision options *)</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> op_fun =</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  ?label:<span class="dt">string</span> <span class="dt">list</span> -&gt;</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>  ?top_down_prec:<span class="dt">bool</span> -&gt;</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>  ?batch_dims:<span class="dt">int</span> <span class="dt">list</span> -&gt;</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>  ?batch_axes:(<span class="dt">string</span> * <span class="dt">int</span>) <span class="dt">list</span> -&gt;</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>  param_op_fun</span></code></pre></div>
+<p><strong>Key parameters:</strong></p>
+<table>
+<colgroup>
+<col style="width: 45%" />
+<col style="width: 54%" />
+</colgroup>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>~input_dims:[n; m]</code></td>
+<td>Set input axis dimensions (rightmost in memory layout)</td>
+</tr>
+<tr>
+<td><code>~output_dims:[p; q]</code></td>
+<td>Set output axis dimensions</td>
+</tr>
+<tr>
+<td><code>~batch_dims:[b]</code></td>
+<td>Set batch axis dimensions (leftmost in memory layout)</td>
+</tr>
+<tr>
+<td><code>~input_axes:[(&quot;hidden&quot;, 64)]</code></td>
+<td>Input axes with labeled dimensions</td>
+</tr>
+<tr>
+<td><code>~output_axes:[(&quot;classes&quot;, 10)]</code></td>
+<td>Output axes with labeled dimensions</td>
+</tr>
+<tr>
+<td><code>~label:[&quot;layer1&quot;]</code></td>
+<td>Labels for debugging/printing</td>
+</tr>
+<tr>
+<td><code>~top_down_prec:true</code></td>
+<td>Force precision from parent operation</td>
+</tr>
+<tr>
+<td><code>~deduced:Input_equals_output</code></td>
+<td>Shape constraint (input = output dims)</td>
+</tr>
+<tr>
+<td><code>()</code></td>
+<td><strong>Required</strong>: finalizes the tensor creation</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Usage examples:</strong></p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Operations like pointmul return op_fun, allowing shape specification *)</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> scaled = pointmul x scale ~output_dims:[hidden_dim] ()</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* The kaiming/xavier functions return op_fun for deferred shape binding *)</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> weights = kaiming uniform1 ~input_dims:[<span class="dv">784</span>] ~output_dims:[<span class="dv">256</span>] ()</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Term creates a terminal tensor with shape *)</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="dt">input</span> = TDSL.term ~batch_dims:[batch_size] ~input_dims:[<span class="dv">784</span>] ()</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="co">(* Params use the same interface *)</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> w = TDSL.param <span class="st">&quot;weights&quot;</span> ~input_dims:[in_dim] ~output_dims:[out_dim] ()</span></code></pre></div>
+<p><strong>Why this design?</strong></p>
+<ol type="1">
+<li><strong>Deferred shape binding</strong>: Shape can be specified at
+the use site rather than definition site</li>
+<li><strong>Shape inference integration</strong>: Unspecified dimensions
+are inferred from context</li>
+<li><strong>Flexible composition</strong>: Functions like
+<code>kaiming</code> can wrap other functions while preserving the
+interface</li>
+</ol>
+<p>For example, <code>kaiming_at init_f counter</code> returns an
+<code>op_fun</code>, so you can write:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Shape specified at call site, not in kaiming_at definition *)</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> w = kaiming_at uniform_at counter ~input_dims:[<span class="dv">100</span>] ~output_dims:[<span class="dv">40</span>] ()</span></code></pre></div>
 <h3 id="gradient-specifications">Gradient Specifications</h3>
 <p>The <code>grad_spec</code> parameter controls gradient behavior:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> grad_spec = Require_grad | Prohibit_grad | If_needed</span></code></pre></div>
+<div class="sourceCode" id="cb7"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> grad_spec = Require_grad | Prohibit_grad | If_needed</span></code></pre></div>
 <ul>
 <li><strong><code>Require_grad</code></strong>: Always create gradient
 nodes (for learnable parameters)</li>
@@ -269,102 +373,102 @@ propagation)</li>
 </ul>
 <h3 id="tensor-precision">Tensor Precision</h3>
 <p>OCANNL supports multiple numeric precisions:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>Tensor.default_value_prec := Ir.Ops.single  <span class="co">(* float32, the default *)</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>Tensor.default_grad_prec := Ir.Ops.single</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Available precisions *)</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>Ir.Ops.half    <span class="co">(* float16 *)</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>Ir.Ops.single  <span class="co">(* float32 *)</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>Ir.Ops.double  <span class="co">(* float64 *)</span></span></code></pre></div>
+<div class="sourceCode" id="cb8"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>Tensor.default_value_prec := Ir.Ops.single  <span class="co">(* float32, the default *)</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>Tensor.default_grad_prec := Ir.Ops.single</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Available precisions *)</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>Ir.Ops.half    <span class="co">(* float16 *)</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>Ir.Ops.single  <span class="co">(* float32 *)</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>Ir.Ops.double  <span class="co">(* float64 *)</span></span></code></pre></div>
 <p>Individual tensor nodes can have their precision updated:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>Ir.Tnode.update_prec tensor.value Ir.Ops.double</span></code></pre></div>
+<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>Ir.Tnode.update_prec tensor.value Ir.Ops.double</span></code></pre></div>
 <p>See <a href="docs/precision_inference.md">Precision Inference</a> for
 details.</p>
 <h2 id="contexts">Contexts</h2>
 <p>The <code>Context</code> module provides a simplified interface for
 backend management, introduced in v0.6.1.</p>
 <h3 id="context-creation">Context Creation</h3>
-<div class="sourceCode" id="cb7"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Automatic backend selection (respects OCANNL_BACKEND env var) *)</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto ()</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Explicit backend selection *)</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~device_id:<span class="dv">0</span> ()  <span class="co">(* NVIDIA GPU *)</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.metal ~device_id:<span class="dv">0</span> () <span class="co">(* Apple Metal *)</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cpu ~threads:<span class="dv">4</span> ()     <span class="co">(* Multi-threaded CPU *)</span></span></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Automatic backend selection (respects OCANNL_BACKEND env var) *)</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto ()</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Explicit backend selection *)</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~device_id:<span class="dv">0</span> ()  <span class="co">(* NVIDIA GPU *)</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.metal ~device_id:<span class="dv">0</span> () <span class="co">(* Apple Metal *)</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cpu ~threads:<span class="dv">4</span> ()     <span class="co">(* Multi-threaded CPU *)</span></span></code></pre></div>
 <h3 id="compilation-and-execution">Compilation and Execution</h3>
-<div class="sourceCode" id="cb8"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile a computation *)</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Context.compile ctx computation bindings</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute the routine *)</span></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.run ctx routine</span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Access routine metadata *)</span></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> bindings = Context.bindings routine</span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.context routine</span></code></pre></div>
+<div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile a computation *)</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Context.compile ctx computation bindings</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute the routine *)</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.run ctx routine</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Access routine metadata *)</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> bindings = Context.bindings routine</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.context routine</span></code></pre></div>
 <h3 id="node-initialization-tracking">Node Initialization Tracking</h3>
 <p>Contexts track which tensor nodes have been initialized:</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Check if a node is initialized *)</span></span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> is_init = Context.is_initialized ctx tensor.value</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize from host memory *)</span></span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.init_from_host_deprecated ctx tensor.value</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Copy between contexts *)</span></span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>Context.copy ~src:ctx1 ~dst:ctx2 tensor.value</span></code></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Check if a node is initialized *)</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> is_init = Context.is_initialized ctx tensor.value</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize from host memory *)</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.init_from_host_deprecated ctx tensor.value</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Copy between contexts *)</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>Context.copy ~src:ctx1 ~dst:ctx2 tensor.value</span></code></pre></div>
 <h2 id="the-train-module">The Train Module</h2>
 <p>The <code>Train</code> module provides high-level utilities for
 training workflows.</p>
 <h3 id="parameter-initialization">Parameter Initialization</h3>
-<div class="sourceCode" id="cb10"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize all parameters of a tensor *)</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx bindings loss</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* With options *)</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params</span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  ~reinit_all:<span class="kw">true</span>      <span class="co">(* Reinitialize even if already initialized *)</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  ~hosted:<span class="kw">true</span>          <span class="co">(* Keep values accessible on host *)</span></span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>  ctx bindings loss</span></code></pre></div>
+<div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize all parameters of a tensor *)</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx bindings loss</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* With options *)</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  ~reinit_all:<span class="kw">true</span>      <span class="co">(* Reinitialize even if already initialized *)</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  ~hosted:<span class="kw">true</span>          <span class="co">(* Keep values accessible on host *)</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  ctx bindings loss</span></code></pre></div>
 <h3 id="forward-and-backward-passes">Forward and Backward Passes</h3>
-<div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Forward pass only *)</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.forward_once ctx tensor</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Forward + backward (gradient update) *)</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.update_once ctx loss</span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build gradient update computation *)</span></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss</span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Returns: forward + zero_grads + set grad to 1 + backprop *)</span></span>
-<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build SGD parameter update *)</span></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss</span></code></pre></div>
+<div class="sourceCode" id="cb14"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Forward pass only *)</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.forward_once ctx tensor</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Forward + backward (gradient update) *)</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.update_once ctx loss</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build gradient update computation *)</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Returns: forward + zero_grads + set grad to 1 + backprop *)</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build SGD parameter update *)</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss</span></code></pre></div>
 <h3 id="training-loops">Training Loops</h3>
 <p>For efficient training, compile routines once and execute
 repeatedly:</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto () <span class="kw">in</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_n, bindings = IDX.get_static_symbol IDX.empty <span class="kw">in</span></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Define model and loss *)</span></span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op loss = ... <span class="kw">in</span></span>
-<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build update computations *)</span></span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op learning_rate = <span class="fl">0.01</span> <span class="kw">in</span></span>
-<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span></span>
-<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span></span>
-<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize parameters *)</span></span>
-<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx bindings loss <span class="kw">in</span></span>
-<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile training routine *)</span></span>
-<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine = Train.to_routine ctx bindings</span>
-<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
-<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop *)</span></span>
-<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
-<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a><span class="kw">for</span> step = <span class="dv">1</span> <span class="kw">to</span> num_steps <span class="kw">do</span></span>
-<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>  step_ref := step;</span>
-<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>  Train.run ctx routine;</span>
-<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> step <span class="kw">mod</span> <span class="dv">100</span> = <span class="dv">0</span> <span class="kw">then</span></span>
-<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>    printf <span class="st">&quot;Step %d, Loss: %.4f</span><span class="ch">\n</span><span class="st">&quot;</span> step loss.@[<span class="dv">0</span>]</span>
-<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a><span class="kw">done</span></span></code></pre></div>
+<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto () <span class="kw">in</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_n, bindings = IDX.get_static_symbol IDX.empty <span class="kw">in</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Define model and loss *)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op loss = ... <span class="kw">in</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Build update computations *)</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op learning_rate = <span class="fl">0.01</span> <span class="kw">in</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Initialize parameters *)</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx bindings loss <span class="kw">in</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile training routine *)</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine = Train.to_routine ctx bindings</span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop *)</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a><span class="kw">for</span> step = <span class="dv">1</span> <span class="kw">to</span> num_steps <span class="kw">do</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>  step_ref := step;</span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>  Train.run ctx routine;</span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> step <span class="kw">mod</span> <span class="dv">100</span> = <span class="dv">0</span> <span class="kw">then</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>    printf <span class="st">&quot;Step %d, Loss: %.4f</span><span class="ch">\n</span><span class="st">&quot;</span> step loss.@[<span class="dv">0</span>]</span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a><span class="kw">done</span></span></code></pre></div>
 <p>See <a href="migration_guide.md">migration_guide.md</a> for more
 training patterns.</p>
 <h2 id="randomness-and-parameter-initialization">Randomness and
@@ -381,12 +485,12 @@ that:</p>
 <li>Supports parallel random generation without synchronization</li>
 </ul>
 <p>The random seed is managed globally:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set the random seed *)</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>Tensor.set_random_seed ~seed:<span class="dv">42</span> ()</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or configure via settings before tensor creation *)</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>Utils.settings.fixed_state_for_init &lt;- <span class="dt">Some</span> <span class="dv">42</span>;</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>Tensor.unsafe_reinitialize ()</span></code></pre></div>
+<div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set the random seed *)</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>Tensor.set_random_seed ~seed:<span class="dv">42</span> ()</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or configure via settings before tensor creation *)</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>Utils.settings.fixed_state_for_init &lt;- <span class="dt">Some</span> <span class="dv">42</span>;</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>Tensor.unsafe_reinitialize ()</span></code></pre></div>
 <h3 id="randomness-operations">Randomness Operations</h3>
 <p>OCANNL provides several random operations in the DSL modules:</p>
 <table>
@@ -445,14 +549,14 @@ cells.</p>
 inference</strong> from how the result is used (e.g., pointwise ops with
 shaped tensors) 2. <strong>Explicit dimensions</strong> via
 <code>TDSL.uniform_at ~output_dims:[...] counter ()</code></p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Dropout with training-step-dependent randomness *)</span></span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op dropout ~rate () ~train_step x =</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> train_step <span class="kw">with</span></span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  | <span class="dt">Some</span> train_step <span class="kw">when</span> Float.(rate &gt; <span class="fl">0.0</span>) -&gt;</span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* !@train_step embeds the step counter as a scalar tensor *)</span></span>
-<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Shape is inferred from pointwise comparison with x *)</span></span>
-<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>      x *. (!.rate &lt; uniform_at !@train_step) /. (<span class="fl">1.0</span> - !.rate)</span>
-<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>  | _ -&gt; x</span></code></pre></div>
+<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Dropout with training-step-dependent randomness *)</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op dropout ~rate () ~train_step x =</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> train_step <span class="kw">with</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  | <span class="dt">Some</span> train_step <span class="kw">when</span> Float.(rate &gt; <span class="fl">0.0</span>) -&gt;</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* !@train_step embeds the step counter as a scalar tensor *)</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Shape is inferred from pointwise comparison with x *)</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>      x *. (!.rate &lt; uniform_at !@train_step) /. (<span class="fl">1.0</span> - !.rate)</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  | _ -&gt; x</span></code></pre></div>
 <p><strong>Note on shape constraints</strong>: The <code>uniform</code>
 function (without <code>1</code>) requires the total number of elements
 to be appropriately divisible, e.g. by 4 for single precision (due to
@@ -462,45 +566,45 @@ arbitrary shapes at the cost of some efficiency.</p>
 Scaling Operations</h3>
 <p>For weight matrices, OCANNL provides scaled initialization functions
 that use shape inference to determine the scaling factor:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Kaiming (He) initialization: sqrt(scale_sq / fan_in) scaling, default scale_sq=6 *)</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming ?scale_sq init_f () = ...</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Xavier (Glorot) initialization: sqrt(scale_sq / (fan_in + fan_out)) scaling *)</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier ?scale_sq init_f () = ...</span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Counter-based variants for deferred initialization *)</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming_at ?scale_sq init_f counter = ...</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier_at ?scale_sq init_f counter = ...</span></code></pre></div>
+<div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Kaiming (He) initialization: sqrt(scale_sq / fan_in) scaling, default scale_sq=6 *)</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming ?scale_sq init_f () = ...</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Xavier (Glorot) initialization: sqrt(scale_sq / (fan_in + fan_out)) scaling *)</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier ?scale_sq init_f () = ...</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Counter-based variants for deferred initialization *)</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> kaiming_at ?scale_sq init_f counter = ...</span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> xavier_at ?scale_sq init_f counter = ...</span></code></pre></div>
 <p>These functions use einsum dimension capture to extract fan_in and
 fan_out:</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* kaiming_impl captures input dimension *)</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ... =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span> ] <span class="kw">in</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. dim i)</span>
-<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* xavier_impl captures both input and output dimensions *)</span></span>
-<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
-<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
+<div class="sourceCode" id="cb19"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* kaiming_impl captures input dimension *)</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ... =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span> ] <span class="kw">in</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. dim i)</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* xavier_impl captures both input and output dimensions *)</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
 <p>Usage example:</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default: PDSL outside, TDSL inside *)</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;</span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or use directly in parameter definition *)</span></span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform1 () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
+<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default: PDSL outside, TDSL inside *)</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or use directly in parameter definition *)</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform1 () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
 <p>When setting <code>default_param_init</code>, we call
 <code>PDSL.kaiming</code> so that the result is differentiable, but
 <code>TDSL.O.uniform1</code> or <code>NTDSL.O.uniform1</code> so the
 intermediate values are not differentiable.</p>
 <h2 id="memory-management">Memory Management</h2>
 <p>OCANNL manages tensor memory through memory modes:</p>
-<div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Make a tensor&#39;s value accessible on host *)</span></span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>Train.set_hosted tensor.value</span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set as materialized (on-device only) *)</span></span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>Train.set_materialized tensor.value</span>
-<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set as virtual (inlined during compilation) *)</span></span>
-<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>Train.set_virtual tensor.value</span></code></pre></div>
+<div class="sourceCode" id="cb21"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Make a tensor&#39;s value accessible on host *)</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>Train.set_hosted tensor.value</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set as materialized (on-device only) *)</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>Train.set_materialized tensor.value</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set as virtual (inlined during compilation) *)</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>Train.set_virtual tensor.value</span></code></pre></div>
 <p>The <code>Train</code> module functions often set appropriate memory
 modes automatically: - <code>forward</code> and
 <code>forward_once</code> set the result as hosted -
