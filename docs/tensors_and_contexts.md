@@ -7,6 +7,7 @@ This document describes how to work with tensors and execution contexts in OCANN
 - [Core Concepts](#core-concepts)
 - [Tensors](#tensors)
   - [Tensor Structure](#tensor-structure)
+  - [Roots, Embedded Nodes, and Params](#roots-embedded-nodes-and-params)
   - [Creating Tensors](#creating-tensors)
   - [Operation Functions and Shape Parameters](#operation-functions-and-shape-parameters)
   - [Gradient Specifications](#gradient-specifications)
@@ -61,9 +62,58 @@ type t = {
 Key fields:
 - **`value`**: The tensor node (`Ir.Tnode.t`) holding the actual data
 - **`diff`**: Contains gradient node and backpropagation code (if differentiable)
-- **`params`**: Set of parameter tensors whose initialization is not included in `forward`
-- **`forward`**: Computation to produce this tensor's value
+- **`params`**: Set of tensors requiring separate initialization (see [Roots, Embedded Nodes, and Params](#roots-embedded-nodes-and-params))
+- **`forward`**: Computation to produce this tensor's value, including embedded subtensor computations
 - **`shape`**: Shape information, progressively refined during inference
+
+### Roots, Embedded Nodes, and Params
+
+Understanding how OCANNL manages computation inclusion is essential for advanced usage.
+
+#### Forward Roots and Embedding
+
+When you build a computation graph, OCANNL tracks **forward roots** - tensors whose forward computation code hasn't yet been included in another tensor's forward code. When a tensor T uses subtensor S:
+
+1. If S is a forward root, S's forward code is **embedded** into T's forward code
+2. S is then removed from the forward roots set
+3. S's `value` node is added to T's `forward.embedded_nodes`
+
+This ensures each tensor's initialization code appears exactly once - in the first tensor that uses it. The `embedded_nodes` set tracks which tensor nodes' computations are included in a given forward computation.
+
+```ocaml
+(* When creating: let%op result = a + b *)
+(* If 'a' is a forward root:
+   - a.forward code is included in result.forward
+   - a.value is added to result.forward.embedded_nodes
+   - 'a' is removed from forward_roots *)
+```
+
+#### The `params` Field
+
+The `params` field of a tensor is slightly misnamed from a user perspective. It contains tensors that:
+1. Need initialization (their forward code computes initial values)
+2. Are NOT embedded in the parent tensor's forward code
+
+This typically corresponds to "parameters" in the ML sense (learnable weights), but more precisely it means "tensors requiring separate initialization". When you call `Train.init_params`, it:
+1. Collects all tensors in `t.params` recursively
+2. Gathers their `forward.embedded_nodes`
+3. Compiles and runs their initialization code
+
+A tensor becomes a "param" when created via `Tensor.param` or inline `{ name }` syntax - its forward code is kept separate rather than embedded into the computation that uses it.
+
+#### Why This Matters
+
+This design enables efficient execution:
+- Initialization code runs once, not every forward pass
+- Forward pass code only includes the actual computation
+- Context tracks which nodes are initialized to remind the programmer of potential bugs
+- Tensors can be computed in one routine and used in another routine
+
+**Potential pitfall**: If a tensor T1 embeds another tensor S (capturing S's forward code), but T1 is never used in the final computation, S's initialization may be "lost" - it won't appear in `init_params` because T1 isn't in anyone's `params`. OCANNL handles the common case of `random_seed` specially, but custom initialization patterns may need care.
+
+#### Backprop Roots
+
+Similarly, **backprop roots** track tensors whose backpropagation code hasn't been consumed. When you call `Train.grad_update` or similar, the backprop code flows from loss backward through the graph, with each tensor's backprop code included exactly once.
 
 ### Creating Tensors
 
