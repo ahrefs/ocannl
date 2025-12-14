@@ -114,6 +114,9 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
+(* Global singleton for random seed, used in init_params and random number generation *)
+let random_seed : (t option) ref = ref None
+
 let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
   let params : t list =
@@ -135,7 +138,21 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
               Seq (Seq (comp.Asgns.asgns, param.forward.asgns), acc)) )
   in
   let embedded_nodes =
-    List.fold params ~init:!more_embedded ~f:(fun acc p -> Set.add acc p.value)
+    List.fold params ~init:!more_embedded ~f:(fun acc p ->
+        Set.add (Set.union acc p.forward.embedded_nodes) p.value)
+  in
+  (* Handle random_seed specially: it's a global singleton whose forward code might have been
+     "stolen" by a tensor that isn't part of params (e.g., from an untaken conditional branch).
+     If random_seed exists and was used (no longer a fwd_root) but not in embedded_nodes,
+     we need to include random_seed's own embedded_nodes. *)
+  let embedded_nodes =
+    match !random_seed with
+    | None -> embedded_nodes
+    | Some rs ->
+        (* If random_seed was used (not a fwd_root) but not in embedded_nodes, include it *)
+        if (not (is_fwd_root rs)) && not (Set.mem embedded_nodes rs.value) then
+          Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value
+        else embedded_nodes
   in
   { Asgns.asgns; embedded_nodes }
 
@@ -688,8 +705,6 @@ found conflicting roots with shared non-embedded grad descendants: %{String.conc
            Some t );
   remove_bprop_root t;
   diff.backprop
-
-let random_seed = ref None
 
 let set_random_seed ?seed () =
   let seed =

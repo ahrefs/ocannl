@@ -221,9 +221,11 @@ let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
   (* Compile and run the initialization *)
   let ctx, routine = Context.compile ctx comp bindings in
   let ctx = Context.run ctx routine in
-  (* Mark embedded nodes as initialized via init_from_host *)
+  (* Mark embedded nodes as initialized via init_from_host (skip those without host arrays) *)
   Set.fold comp.Asgns.embedded_nodes ~init:ctx ~f:(fun ctx tn ->
-      if not (Context.is_initialized ctx tn) then Context.init_from_host_deprecated ctx tn else ctx)
+      if (not (Context.is_initialized ctx tn)) && Tn.has tn then
+        Context.init_from_host_deprecated ctx tn
+      else ctx)
 
 type example_train_result = {
   inputs : Tensor.t;

@@ -2,6 +2,7 @@ open! Base
 open Ocannl.Nn_blocks.DSL_modules
 
 let () =
+  Tensor.unsafe_reinitialize ();
   (* Basic transformer test with teacher forcing *)
   let ctx = Context.auto () in
   (* Test configuration *)
