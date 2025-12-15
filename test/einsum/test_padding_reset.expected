@@ -1,0 +1,71 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Testing padding margin initialization and reset...
+
+=== Forward pass (both operations in sequence) ===
+
+Input (4x4 logical, with padding margins shown):
+HERE: test/einsum/test_padding_reset.ml:66:21
+[2]: -_input shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -12.00 ; -11.00 ; -10.00 ; -9.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -8.00 ; -7.00 ; -6.00 ; -5.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -4.00 ; -3.00 ; -2.00 ; -1.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+Pooled - max of 3x3 windows of INPUT (padding should be -inf for max):
+HERE: test/einsum/test_padding_reset.ml:69:21
+[8]: @^=>+_pooled shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -6.00 ; -5.00 ; 0.00 ]
+  ; [ 0.00 ; -2.00 ; -1.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+Conv - sum of 3x3 windows of INPUT (padding should be 0 for sum):
+HERE: test/einsum/test_padding_reset.ml:72:21
+[12]: ;=>_conv_out shape 0:4,1:4  [
+  [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
+  ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
+  ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]
+  ; [ -22.00 ; -30.00 ; -24.00 ; -14.00 ]
+]
+
+=== Second forward pass (checking reset across iterations) ===
+
+Pooled after second pass:
+HERE: test/einsum/test_padding_reset.ml:79:21
+[8]: @^=>+_pooled shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -6.00 ; -5.00 ; 0.00 ]
+  ; [ 0.00 ; -2.00 ; -1.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+Conv after second pass:
+HERE: test/einsum/test_padding_reset.ml:82:21
+[12]: ;=>_conv_out shape 0:4,1:4  [
+  [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
+  ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
+  ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]
+  ; [ -22.00 ; -30.00 ; -24.00 ; -14.00 ]
+]
+
+=== Expected Behavior Analysis ===
+Input values: -16 to -1 (all negative)
+
+For MAX-POOL (padding should be -infinity):
+  With pad=0 (BUG): corners show 0 because max(0, negative) = 0
+  With pad=-inf (correct): pooled[0,0]=-6, pooled[1,1]=-6, etc.
+
+For CONV/SUM (padding should be 0):
+  conv[0,0] = sum of 4 values (corner) = -16-15-12-11 = -54
+  conv[1,1] = sum of 9 values (center) = -16-15-14-12-11-10-8-7-6 = -99
+
+If we see 0s in pooled corners, max-pool padding is wrong.
+If conv values are wrong, the padding reset between operations failed.
+
+Padding reset test completed!
