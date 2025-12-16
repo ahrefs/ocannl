@@ -60,9 +60,9 @@ let main () =
         let batch_ref = IDX.find_exn (Context.bindings sgd_routine) batch_n in
         epoch_loss := !epoch_loss +. scalar_loss.@[0];
         if !step_ref = steps - 5 then Stdio.printf "\n%!";
-        if !step_ref < 10 then
-          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%.3g, loss=%.4g, epoch loss=%.4g\n%!" epoch
-            !step_ref !batch_ref learning_rate.@[0] scalar_loss.@[0] !epoch_loss;
+        if !step_ref < 10 || steps - !step_ref < 5 then
+          Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%.3g, epoch loss=%.4g\n%!" epoch
+            !step_ref !batch_ref learning_rate.@[0] !epoch_loss;
         if !step_ref > 10 && !step_ref % 100 = 0 then Stdio.printf ".%!";
         learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
         losses := scalar_loss.@[0] :: !losses;
@@ -97,13 +97,13 @@ let main () =
   in
   (* Stdio.printf "Half-moons scatterplot and decision boundary:\n%!"; *)
   (* PrintBox_text.output Stdio.stdout plot_moons; *)
-  Stdio.printf "\nLoss:\n%!";
-  let plot_loss =
+  (* Stdio.printf "\nLoss:\n%!"; *)
+  let _plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"loss" ~small:true
       [ Line_plot { points = Array.of_list_rev !losses; content = PrintBox.line "-" } ]
   in
-  PrintBox_text.output Stdio.stdout plot_loss;
-  Stdio.printf "Log-loss, for better visibility:\n%!";
+  (* PrintBox_text.output Stdio.stdout plot_loss; *)
+  (* Stdio.printf "Log-loss, for better visibility:\n%!"; *)
   let _plot_loss =
     PrintBox_utils.plot ~x_label:"step" ~y_label:"log loss"
       [ Line_plot { points = Array.of_list_rev !log_losses; content = PrintBox.line "-" } ]
