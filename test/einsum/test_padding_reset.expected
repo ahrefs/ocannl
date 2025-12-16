@@ -69,3 +69,51 @@ If we see 0s in pooled corners, max-pool padding is wrong.
 If conv values are wrong, the padding reset between operations failed.
 
 Padding reset test completed!
+
+
+========================================
+Testing single-operation padding (max-pool only)...
+
+=== First forward pass (single max-pool operation) ===
+
+Input (4x4 logical, with padding margins shown):
+HERE: test/einsum/test_padding_reset.ml:150:21
+[2]: -_input shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -12.00 ; -11.00 ; -10.00 ; -9.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -8.00 ; -7.00 ; -6.00 ; -5.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -4.00 ; -3.00 ; -2.00 ; -1.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+Pooled - max of 3x3 windows (padding should be -inf for max):
+HERE: test/einsum/test_padding_reset.ml:153:21
+[8]: @^=>+_pooled shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -6.00 ; -5.00 ; 0.00 ]
+  ; [ 0.00 ; -2.00 ; -1.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+=== Second forward pass ===
+
+Pooled after second pass (should be identical):
+HERE: test/einsum/test_padding_reset.ml:160:21
+[8]: @^=>+_pooled shape 0:4,1:4  [
+  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+  ; [ 0.00 ; -6.00 ; -5.00 ; 0.00 ]
+  ; [ 0.00 ; -2.00 ; -1.00 ; 0.00 ]
+  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ]
+]
+
+=== Expected Behavior ===
+With single operation, padding can be initialized once to -infinity.
+Expected pooled values (if padding=-inf):
+  pooled[0,0] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6
+  pooled[1,1] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6
+  pooled[3,3] = max(-4,-3,-2,-8,-7,-6,-12,-11,-10) = -2
+With pad=0 (BUG): corners show 0 instead of correct negative max.
+
+Single-operation padding test completed!

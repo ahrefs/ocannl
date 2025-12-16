@@ -116,6 +116,59 @@ let test_padding_reset () =
   printf "\nIf we see 0s in pooled corners, max-pool padding is wrong.\n%!";
   printf "If conv values are wrong, the padding reset between operations failed.\n%!"
 
+(** Test case where input is only used with a single operation (max-pool).
+    This tests the simpler code path where padding can be initialized once
+    with the correct neutral value, without needing reset between operations. *)
+let test_single_operation_padding () =
+  printf "\n\n========================================\n%!";
+  printf "Testing single-operation padding (max-pool only)...\n%!";
+  Tensor.unsafe_reinitialize ();
+
+  (* Create a 4x4 input with negative values: -16..-1 *)
+  let%op input = TDSL.range_of_shape ~output_dims:[ 4; 4 ] () - 16. in
+
+  (* Only max-pool operation on input - no other operations use this input.
+     This is the simpler case where padding can be initialized once to -infinity. *)
+  let%op pooled =
+    input @^+ "oh=+wh, ow=+ww; wh, ww => oh, ow" [ "wh"; "ww" ] (0.0 + 0.0)
+  in
+  Shape.set_dim wh 3;
+  Shape.set_dim ww 3;
+
+  let ctx = Context.auto () in
+  Train.set_hosted input.value;
+  Train.set_hosted pooled.value;
+
+  let ctx = Train.init_params ctx Train.IDX.empty pooled in
+  let fwd_pooled = Train.forward pooled in
+  let routine = Train.to_routine ctx Train.IDX.empty fwd_pooled in
+
+  printf "\n=== First forward pass (single max-pool operation) ===\n%!";
+  Train.run ctx routine;
+
+  printf "\nInput (4x4 logical, with padding margins shown):\n%!";
+  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline input;
+
+  printf "\nPooled - max of 3x3 windows (padding should be -inf for max):\n%!";
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline pooled;
+
+  (* Run second pass - padding should remain correctly initialized *)
+  printf "\n=== Second forward pass ===\n%!";
+  Train.run ctx routine;
+
+  printf "\nPooled after second pass (should be identical):\n%!";
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline pooled;
+
+  printf "\n=== Expected Behavior ===\n%!";
+  printf "With single operation, padding can be initialized once to -infinity.\n%!";
+  printf "Expected pooled values (if padding=-inf):\n%!";
+  printf "  pooled[0,0] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6\n%!";
+  printf "  pooled[1,1] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6\n%!";
+  printf "  pooled[3,3] = max(-4,-3,-2,-8,-7,-6,-12,-11,-10) = -2\n%!";
+  printf "With pad=0 (BUG): corners show 0 instead of correct negative max.\n%!"
+
 let () =
   test_padding_reset ();
-  printf "\nPadding reset test completed!\n%!"
+  printf "\nPadding reset test completed!\n%!";
+  test_single_operation_padding ();
+  printf "\nSingle-operation padding test completed!\n%!"
