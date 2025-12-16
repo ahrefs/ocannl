@@ -53,7 +53,7 @@ let test_padding () =
 
   let arr =
     Ndarray.create_array ~debug:"padded_test" Ops.single ~dims:padded_dims
-      ~padding:(Some (padding_config, padding_value))
+      ~padding:(Some (padding_config, Some padding_value))
   in
   Ndarray.set_flat_values ~padding:padding_config arr [| 1.0; 2.0; 3.0; 4.0; 5.0; 6.0 |];
   Stdio.printf "Padded array (dims 4x6, unpadded region 2x3):\n";

@@ -74,9 +74,10 @@ type t = {
   array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
-  padding : (Ops.axis_padding array * float) option Lazy.t;
-      (** If the tensor node is pre-padded, this is the pair (left padding, right padding) and the
-          padding value. *)
+  padding : (Ops.axis_padding array * float option) option Lazy.t;
+      (** If the tensor node is pre-padded, this is the pair of (left padding, right padding) per axis
+          and the padding/neutral value. The inner [float option] is [None] when the tensor is used
+          by operations with different neutral elements, requiring margin resets before each operation. *)
   size_in_bytes : int Lazy.t;
   id : int;
   label : string list;

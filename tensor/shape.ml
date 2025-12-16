@@ -1762,7 +1762,7 @@ let to_dims sh =
   finish_inference ();
   to_dims_impl sh
 
-let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
+let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option) option =
   finish_inference ();
   try
     (* If any row has padding, we need to return padding for all dimensions. Use zero padding for
@@ -1782,8 +1782,9 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option
       let batch : Row.axis_padding array = get_padding_array sh.batch_padding sh.batch in
       let output : Row.axis_padding array = get_padding_array sh.output_padding sh.output in
       let input : Row.axis_padding array = get_padding_array sh.input_padding sh.input in
-      (* TODO: The padded value should be inferred from the operation. *)
-      Some (Array.concat [ batch; output; input ], 0.)
+      (* The padded value is None, meaning the margin must be reset before each operation
+         that reads from this tensor. The neutral element depends on the accumulator. *)
+      Some (Array.concat [ batch; output; input ], None)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
 let to_labels (sh : t) : string array =

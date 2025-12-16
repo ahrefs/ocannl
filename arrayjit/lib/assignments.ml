@@ -276,11 +276,30 @@ let%track4_sexp to_low_level code =
       initialize_neutral
       && not (Indexing.is_surjective projections && Indexing.is_injective projections)
     in
+    (* Check if any RHS tensor has padding with None neutral value (needs reset before this op) *)
+    let neutral_value = Ops.neutral_elem accum in
+    let padding_resets =
+      Array.filter_map rhses ~f:(fun buf ->
+          let tn = match buf with Node tn | Merge_buffer tn -> tn in
+          match Lazy.force tn.padding with
+          | Some (_, None) ->
+              (* Padding exists but neutral value is None - needs reset for this operation *)
+              Some (Low_level.Reset_padding { tn; value = neutral_value })
+          | Some (_, Some v) when Float.( <> ) v neutral_value ->
+              (* Padding exists with different neutral value - also needs reset *)
+              Some (Low_level.Reset_padding { tn; value = neutral_value })
+          | _ -> None)
+      |> Array.to_list
+    in
+    let for_loops_with_resets =
+      if List.is_empty padding_resets then for_loops
+      else Low_level.unflat_lines (padding_resets @ [ for_loops ])
+    in
     if needs_init then
       let dims = lazy projections.lhs_dims in
-      let fetch_op = Constant (Ops.neutral_elem accum) in
-      Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops)
-    else for_loops
+      let fetch_op = Constant neutral_value in
+      Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops_with_resets)
+    else for_loops_with_resets
   and loop (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } ->

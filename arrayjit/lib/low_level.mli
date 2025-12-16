@@ -24,6 +24,7 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
+  | Reset_padding of { tn : Tnode.t; value : float }
   | Set of {
       tn : Tnode.t;
       idcs : Indexing.axis_index array;
@@ -64,6 +65,12 @@ val flat_lines : t list -> t list
 val unflat_lines : t list -> t
 val loop_over_dims : int array -> body:(Indexing.axis_index array -> t) -> t
 val unroll_dims : int array -> body:(Indexing.axis_index array -> offset:int -> t) -> t
+
+val loop_over_padding_region :
+  dims:int array -> padding:Ops.axis_padding array -> body:(Indexing.axis_index array -> t) -> t
+(** Generate loops that iterate only over the padding margins of a tensor.
+    For dimensions with padding, generates separate loops for left margin, middle (recursing),
+    and right margin. The middle region continues recursing to find padding in other dimensions. *)
 
 (** {2 Optimization} *)
 

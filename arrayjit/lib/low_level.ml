@@ -37,6 +37,9 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
+  | Reset_padding of { tn : Tn.t; value : float }
+      (** Sets only the padding margins of a tensor to the given value. Used when a tensor is read
+          by operations with different neutral elements (e.g., max-pool needs -inf, conv needs 0). *)
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
   | Set_from_vec of {
       tn : Tn.t;
@@ -291,6 +294,11 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
+    | Reset_padding { tn; value = _ } ->
+        (* Reset_padding only touches padding margins, not the data region.
+           It doesn't zero-initialize or make the tensor a scalar constexpr. *)
+        let _traced : traced_array = get_node traced_store tn in
+        ()
     | Set { tn; idcs; llsc; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) llsc;
         let traced : traced_array = get_node traced_store tn in
@@ -489,6 +497,9 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Set.add env_dom index) body
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
+    | Reset_padding { tn; value = _ } ->
+        (* Reset_padding doesn't set the data region, only padding margins *)
+        if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
           check_idcs idcs;
@@ -676,6 +687,7 @@ let%track7_sexp inline_computation ~id
           (* For vector operations, we cannot inline them as scalar operations *)
           raise @@ Non_virtual 140
       | Zero_out _ -> None
+      | Reset_padding _ -> None
       | Set _ -> None
       | Set_from_vec _ -> None
       | Set_local (id, llsc) -> Some (Set_local (id, loop_scalar env llsc))
@@ -759,6 +771,12 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out tn ->
+        let traced : traced_array = get_node traced_store tn in
+        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
+          check_and_store_virtual computations_table traced static_indices llc;
+        llc
+    | Reset_padding { tn; _ } ->
+        (* Reset_padding touches padding margins only; similar handling to Zero_out *)
         let traced : traced_array = get_node traced_store tn in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual computations_table traced static_indices llc;
@@ -851,6 +869,12 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
           Tn.update_memory_mode tn Virtual 151;
+          None)
+        else Some llc
+    | Reset_padding { tn; _ } ->
+        if not @@ Tn.known_non_virtual tn then (
+          (* FIXME(#296): *)
+          Tn.update_memory_mode tn Virtual 1511;
           None)
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
@@ -960,6 +984,7 @@ and substitute_proc ~var ~value llc =
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
+  | Reset_padding _ -> llc
   | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_scalar llsc; debug }
   | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
       Set_from_vec { tn; idcs; length; vec_unop; arg = (loop_scalar arg_scalar, arg_prec); debug }
@@ -979,6 +1004,7 @@ let simplify_llc llc =
         Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
+    | Reset_padding _ -> llc
     | Set { tn; idcs; llsc; debug } ->
         Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.prec)); debug }
     | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
@@ -1151,6 +1177,7 @@ let simplify_llc llc =
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out _ -> ()
+    | Reset_padding _ -> ()
     | Set { tn; llsc; _ } -> check_float tn llsc
     | Set_from_vec { tn; arg = arg_scalar, _; _ } -> check_float tn arg_scalar
     | Set_local (id, llsc) -> check_float id.tn llsc
@@ -1257,6 +1284,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out la -> visit la
+    | Reset_padding { tn; _ } -> visit tn
     | Set { tn; llsc; _ } ->
         visit tn;
         loop_scalar llsc
@@ -1324,6 +1352,9 @@ let to_doc_cstyle ?name ?static_indices () llc =
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
+    | Reset_padding { tn; value } ->
+        string "reset_padding " ^^ doc_ident tn ^^ string " := " ^^ string (Float.to_string value)
+        ^^ string ";"
     | Set p ->
         let prec = Lazy.force p.tn.prec in
         let result =
@@ -1424,6 +1455,9 @@ let to_doc ?name ?static_indices () llc =
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
+    | Reset_padding { tn; value } ->
+        string "reset_padding " ^^ doc_ident tn ^^ string " := " ^^ string (Float.to_string value)
+        ^^ string ";"
     | Set p ->
         let result =
           group
@@ -1549,3 +1583,106 @@ let unroll_dims dims ~body =
         unflat_lines (List.rev !results)
     in
     generate_all_combinations [] 0 0
+
+let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
+  (* Generate loops that iterate ONLY over the padding margins (NOT the data region).
+
+     The padding region is the union of "strips" where at least one dimension's index
+     is in the padding range [0, left) or [dim-right, dim).
+
+     For each dimension with padding, we generate:
+     1. Left padding strip: index in [0, left) - iterate ALL remaining dims
+     2. Middle: index in [left, dim-right) - recurse to find padding in other dims
+     3. Right padding strip: index in [dim-right, dim) - iterate ALL remaining dims
+
+     For dimensions with NO padding, we just iterate the full range while recursing.
+
+     The recursion stops when we've processed all dimensions. If we reach the end
+     without any dimension having contributed padding, we DON'T call body (that's data). *)
+  let rec build_loops ~any_padding_so_far dim_idx rev_idcs =
+    if dim_idx >= Array.length dims then
+      (* Only generate body if we're actually in a padding region *)
+      if any_padding_so_far then body @@ Array.of_list_rev rev_idcs else Noop
+    else
+      let dim = dims.(dim_idx) in
+      let pad = padding.(dim_idx) in
+      let index = Indexing.get_symbol () in
+      let has_padding = pad.left > 0 || pad.right > 0 in
+      if not has_padding then
+        (* No padding on this dimension - iterate full range, keep looking for padding *)
+        For_loop
+          {
+            index;
+            from_ = 0;
+            to_ = dim - 1;
+            body = build_loops ~any_padding_so_far (dim_idx + 1) (Indexing.Iterator index :: rev_idcs);
+            trace_it = true;
+          }
+      else
+        (* Has padding - generate left strip, middle (recurse), right strip *)
+        let left_loop =
+          if pad.left > 0 then
+            For_loop
+              {
+                index;
+                from_ = 0;
+                to_ = pad.left - 1;
+                body =
+                  (* In left padding - iterate ALL remaining dims (they're all in padding region) *)
+                  loop_over_dims
+                    (Array.sub dims ~pos:(dim_idx + 1) ~len:(Array.length dims - dim_idx - 1))
+                    ~body:(fun rest_idcs ->
+                      body
+                      @@ Array.concat
+                           [
+                             Array.of_list_rev rev_idcs;
+                             [| Indexing.Iterator index |];
+                             rest_idcs;
+                           ]);
+                trace_it = true;
+              }
+          else Noop
+        in
+        let middle_loop =
+          let middle_from = pad.left in
+          let middle_to = dim - pad.right - 1 in
+          if middle_from <= middle_to then
+            For_loop
+              {
+                index;
+                from_ = middle_from;
+                to_ = middle_to;
+                body =
+                  (* In middle - NOT in padding for this dim, recurse to find other padded dims *)
+                  build_loops ~any_padding_so_far (dim_idx + 1) (Indexing.Iterator index :: rev_idcs);
+                trace_it = true;
+              }
+          else Noop
+        in
+        let right_loop =
+          if pad.right > 0 then
+            let right_index = Indexing.get_symbol () in
+            For_loop
+              {
+                index = right_index;
+                from_ = dim - pad.right;
+                to_ = dim - 1;
+                body =
+                  (* In right padding - iterate ALL remaining dims *)
+                  loop_over_dims
+                    (Array.sub dims ~pos:(dim_idx + 1) ~len:(Array.length dims - dim_idx - 1))
+                    ~body:(fun rest_idcs ->
+                      body
+                      @@ Array.concat
+                           [
+                             Array.of_list_rev rev_idcs;
+                             [| Indexing.Iterator right_index |];
+                             rest_idcs;
+                           ]);
+                trace_it = true;
+              }
+          else Noop
+        in
+        unflat_lines [ left_loop; middle_loop; right_loop ]
+  in
+  build_loops ~any_padding_so_far:false 0 []

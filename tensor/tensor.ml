@@ -320,7 +320,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Some (Shape.Data (Asgns.Keep_shape_no_padding data)) ->
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
-        let padding = Some (padding_spec, padded_value) in
+        let padding = Some (padding_spec, Some padded_value) in
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
     | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
