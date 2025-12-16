@@ -12,5 +12,5 @@ Output shape:
  (output
   ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 3)))))))
    (bcast Broadcastable) (prov (((sh_id 154) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (id 154)
- (debug_name layer_norm))
+ (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
+ (id 154) (debug_name layer_norm))

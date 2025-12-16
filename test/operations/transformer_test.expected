@@ -9,8 +9,8 @@ Loss shape:
  (output
   ((dims ((Dim ((d 1) (label ()) (proj_id ((Proj_id 1)))))))
    (bcast Broadcastable) (prov (((sh_id 463) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (id 463)
- (debug_name loss))
+ (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
+ (id 463) (debug_name loss))
 Logits shape:
 ((batch
   ((dims
@@ -22,5 +22,5 @@ Logits shape:
  (output
   ((dims ((Dim ((d 100) (label ()) (proj_id ((Proj_id 95)))))))
    (bcast Broadcastable) (prov (((sh_id 437) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (id 437)
- (debug_name transformer))
+ (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
+ (id 437) (debug_name transformer))
