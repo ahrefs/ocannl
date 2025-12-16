@@ -1,3 +1,43 @@
+
+
+## [0.6.3] -- 2025-12-16
+
+### Added
+
+- Neutral element tracking during shape inference for proper padding reset
+- `use_padding` syntax in einsum notation (replacing global flag)
+- Circle counting dataset and MLP training test
+- Cross-entropy loss and `one_hot_of_int_list` helper for classification tasks
+- `out_channels` parameter to `conv2d` for explicit channel specification
+- Projection slot detection by naming convention in `%cd` syntax extension
+- Configurable scaling to `kaiming` and `xavier` initialization functions
+- New documentation: `tensors_and_contexts.md`, affine indexing for convolutions
+- Documentation for `op_fun` and `param_op_fun` types, roots, embedded nodes, and params concepts
+
+### Changed
+
+- Padding is now reset by tracking neutral elements through shape inference
+- Changed default random initialization to `uniform1` which doesn't impose shape constraints
+- Refactored `vbs` from Map to list for order-preserving let bindings in syntax extensions
+- Infer the shape of inline definitions assigned a slot for `%cd` expressions with `projections` in scope
+
+### Fixed
+
+- Gracefully disable inlining for convolution patterns
+- Don't propagate padding across operations, even if the same tensor participates in them
+- Padding margin initialization for tensors with multiple operations
+- Padding initialization bug for max-pool operations
+- `uniform1` periodicity by spreading bits in `*_to_uint4x32` conversions
+- `tropical` (max-reduce) backprop to use input-shaped condition tensors
+- `tropical` g2 gradient by using correct projection for kernel gradients
+- Kernel extent calculation to depend on kernel size parity
+- Shape inference for `Total_elems` constraints with `Strided_var` numerators
+- `compute_row_product` to return `None` for unresolved variables
+- Deferred dim variable guessing to Stage 5 for `Total_elems` propagation
+- Padding offset application during lowering for correct buffer indexing
+- Intermediate grads from `kaiming`, `xavier` appearing in `zero_grads`
+- Random seed initialization missing in transformer test
+
 ## [0.6.2] -- 2025-11-27
 
 ### Added

@@ -58,14 +58,10 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 (August 24, 2026)**.
 
-* **0.6.3 (Mid-Dec 2025): Padding inference for convolutions.**
-  * Padding inference during shape inference.
-  * Toy CNN example: counting.
-  * Sokoban RL policy gradient example with a CNN.
-  * HIP backend (AMD hardware) -- tentative, can slip to 0.6.4.
 * **0.6.4 (End Dec 2025): Shape concatenation and position embeddings.**
   * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
     * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
+  * Sokoban RL policy gradient example with a CNN.
   * RoPE embeddings.
   * Transformer for the Names dataset.
 * **0.7.0 (End Jan 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
@@ -100,6 +96,9 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
 
 For more details, see [CHANGES](CHANGES.md).
 
+* **0.6.3: Padding inference for convolutions.**
+  * Padding inference during shape inference.
+  * Toy CNN example: circle counting.
 * **0.6.2: "you forgot to specify a hidden dimension".**
   * Menhir einsum parser.
   * Detection of user errors where there is missing information about a hidden dimension: disables guessing "no axes" or "dimension 1" for shapes of parameters.
