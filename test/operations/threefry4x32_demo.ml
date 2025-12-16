@@ -27,4 +27,4 @@ let () =
 
   (* Print the results *)
   Stdio.printf "Generated %d uniform random numbers:\n" (Array.length result);
-  Array.iteri result ~f:(fun i x -> Stdio.printf "  [%d]: %.4g\n" i x)
+  Array.iteri result ~f:(fun i x -> Stdio.printf "  [%d]: %.3g\n" i x)
