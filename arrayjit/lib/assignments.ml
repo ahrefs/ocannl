@@ -151,6 +151,22 @@ let sequence l =
            { asgns = sts; embedded_nodes = embs } { asgns = another_st; embedded_nodes = emb } ->
          { asgns = Seq (sts, another_st); embedded_nodes = Set.union embs emb })
 
+let collect_neutral_elem (asgns : t) : float option =
+  let rec loop acc = function
+    | Noop -> acc
+    | Seq (t1, t2) -> loop (loop acc t1) t2
+    | Block_comment (_, t) -> loop acc t
+    | Accum_op { accum; _ } ->
+        let neutral = Ops.neutral_elem accum in
+        (match acc with
+        | None -> Some (Some neutral)
+        | Some (Some v) when Float.( = ) v neutral -> acc
+        | Some (Some _) -> Some None
+        | Some None -> acc)
+    | Set_vec_unop _ | Fetch _ -> acc
+  in
+  match loop None asgns with None -> None | Some v -> v
+
 let%track4_sexp to_low_level code =
   let open Indexing in
   (* Apply left padding offsets to convert from semantic to buffer indices. Semantic indices can be

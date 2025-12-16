@@ -59,11 +59,18 @@ let test_padding_reset () =
   let combined = Ir.Assignments.sequence [ fwd_pooled; fwd_conv ] in
   let routine = Train.to_routine ctx Train.IDX.empty combined in
 
+  (* After compilation, input.shape.padding_elem should be Some None (conflicting)
+     because input is used with both max-pool (-infinity) and conv (0) operations. *)
+  assert (
+    match input.shape.padding_elem with
+    | Some None -> true (* Expected: conflicting padding requirements *)
+    | _ -> false);
+
   printf "\n=== Forward pass (both operations in sequence) ===\n%!";
   Train.run ctx routine;
 
   printf "\nInput (4x4 logical, with padding margins shown):\n%!";
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline input;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline input;
 
   printf "\nPooled - max of 3x3 windows of INPUT (padding should be -inf for max):\n%!";
   Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline pooled;
@@ -88,33 +95,37 @@ let test_padding_reset () =
        -8   -7   -6   -5
        -4   -3   -2   -1
 
-     For MAX-POOL at (0,0) with 3x3 window:
-       - Window covers input[0..2, 0..2] = top-left 3x3
-       - Values: -16,-15,-14,-12,-11,-10,-8,-7,-6
-       - Correct max = -6
-       - But with padding=0 at corners, window includes padding positions
-       - If pad=0: max = 0 (BUG!)
+     With use_padding=true (the "=" marker), the 3x3 window is centered at each output position.
+     Padding extends the input with margins. For a 3x3 window: left_pad=1, right_pad=2.
 
-     For CONV at (0,0) with 3x3 window:
-       - Same window, but summing with kernel of 1s
-       - With padding=0, sum = -16-15-14-12-11-10-8-7-6 = -99
-       - Corner positions include fewer real values due to padding
-       - sum at (0,0) = 0+0+0+0+(-16)+(-15)+0+(-12)+(-11) = -54
+     For MAX-POOL at (0,0) with 3x3 window:
+       - Window includes padding positions (filled with -infinity for max)
+       - Only valid input cells: input[0,0], input[0,1], input[1,0], input[1,1]
+       - Values: -16, -15, -12, -11, and -inf elsewhere
+       - Correct max = -11
+       - If pad=0 (BUG): max = 0 because max(0, negative) = 0
+
+     For CONV/SUM at (0,0) with 3x3 window:
+       - Same window positions, but summing with kernel of 1s
+       - Padding should be 0 for sum (doesn't affect the sum)
+       - sum at (0,0) = -16 + -15 + -12 + -11 = -54 (4 valid values)
+       - sum at (1,1) = -16 + -15 + -14 + -12 + -11 + -10 + -8 + -7 + -6 = -99 (9 valid values)
 
      The key test: if input's padding is not reset between max-pool and conv,
-     the results will be wrong for one or both operations.
+     the results will be wrong for one or both operations. Before the fix,
+     conv showed -inf at edges because padding was stuck at -infinity.
   *)
 
   printf "\n=== Expected Behavior Analysis ===\n%!";
   printf "Input values: -16 to -1 (all negative)\n%!";
   printf "\nFor MAX-POOL (padding should be -infinity):\n%!";
-  printf "  With pad=0 (BUG): corners show 0 because max(0, negative) = 0\n%!";
-  printf "  With pad=-inf (correct): pooled[0,0]=-6, pooled[1,1]=-6, etc.\n%!";
+  printf "  pooled[0,0] = -11 (max of 4 valid cells with -inf padding elsewhere)\n%!";
+  printf "  pooled[1,1] = -6 (max of 9-cell window fully inside input)\n%!";
+  printf "  With pad=0 (BUG): corners would show 0 because max(0, negative) = 0\n%!";
   printf "\nFor CONV/SUM (padding should be 0):\n%!";
   printf "  conv[0,0] = sum of 4 values (corner) = -16-15-12-11 = -54\n%!";
   printf "  conv[1,1] = sum of 9 values (center) = -16-15-14-12-11-10-8-7-6 = -99\n%!";
-  printf "\nIf we see 0s in pooled corners, max-pool padding is wrong.\n%!";
-  printf "If conv values are wrong, the padding reset between operations failed.\n%!"
+  printf "\nIf conv shows -inf at edges, the padding reset failed.\n%!"
 
 (** Test case where input is only used with a single operation (max-pool).
     This tests the simpler code path where padding can be initialized once
@@ -147,7 +158,7 @@ let test_single_operation_padding () =
   Train.run ctx routine;
 
   printf "\nInput (4x4 logical, with padding margins shown):\n%!";
-  Tensor.print ~here:[%here] ~with_code:false ~with_grad:false `Inline input;
+  Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline input;
 
   printf "\nPooled - max of 3x3 windows (padding should be -inf for max):\n%!";
   Tensor.print ~here:[%here] ~force:true ~with_code:false ~with_grad:false `Inline pooled;
@@ -161,11 +172,11 @@ let test_single_operation_padding () =
 
   printf "\n=== Expected Behavior ===\n%!";
   printf "With single operation, padding can be initialized once to -infinity.\n%!";
-  printf "Expected pooled values (if padding=-inf):\n%!";
-  printf "  pooled[0,0] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6\n%!";
-  printf "  pooled[1,1] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6\n%!";
-  printf "  pooled[3,3] = max(-4,-3,-2,-8,-7,-6,-12,-11,-10) = -2\n%!";
-  printf "With pad=0 (BUG): corners show 0 instead of correct negative max.\n%!"
+  printf "Expected pooled values (with padding=-inf):\n%!";
+  printf "  pooled[0,0] = -11 (max of 4 valid cells, rest are -inf padding)\n%!";
+  printf "  pooled[1,1] = -6 (max of 9-cell window fully inside input)\n%!";
+  printf "  pooled[3,3] = -1 (max of 4 valid cells in bottom-right corner)\n%!";
+  printf "With pad=0 (BUG): corners would show 0 instead of correct negative max.\n%!"
 
 let () =
   test_padding_reset ();

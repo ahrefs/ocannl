@@ -183,8 +183,9 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
     Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
+  let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -211,8 +212,9 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
     ~rhs3_is_grad ~rhs3_is_merge ~logic : Asgns.t =
   let shape = t.shape in
   let shape_logic = Shape.Broadcast_tern (logic, t1.shape, t2.shape, t3.shape) in
+  let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -240,8 +242,9 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
     ~(rhs_is_grad : bool) ~(rhs_is_merge : bool) ~logic =
   let shape = t.shape in
   let shape_logic = Shape.Transpose (logic, t1.shape) in
+  let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None }
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -345,17 +348,6 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         (* Let's implement what we need when we need it. *)
         assert false
   in
-  let local_shape_updates =
-    List.map
-      ~f:(fun logic -> Shape.{ shape; logic; id = get_update_id (); unsafe_projections = None })
-    @@ shape_logics orig_ts
-  in
-  List.iter ~f:Shape.propagate_shapes local_shape_updates;
-  let shape_update = List.hd_exn local_shape_updates in
-  let projections_debug = Shape.logic_to_spec shape_update.logic in
-  let projections =
-    { projections_debug; projections = lazy (Shape.get_projections shape_update) }
-  in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
     List.folding_map orig_ts
@@ -367,7 +359,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         (Set.add used ti.id, { subtensor = ti; embedded }))
   in
   let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
-
+  (* Create a preliminary shape_update to get projections_debug and projections for op_asn. *)
+  let preliminary_shape_update =
+    let logic = List.hd_exn @@ shape_logics orig_ts in
+    Shape.{ shape; logic; id = get_update_id (); unsafe_projections = None; neutral_elem = None }
+  in
+  Shape.propagate_shapes preliminary_shape_update;
+  let projections_debug = Shape.logic_to_spec preliminary_shape_update.logic in
+  let projections =
+    { projections_debug; projections = lazy (Shape.get_projections preliminary_shape_update) }
+  in
   let t =
     {
       params;
@@ -383,7 +384,12 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let fwds =
     List.filter_map ordered_ts ~f:(fun ti -> if is_fwd_root ti then Some ti.forward else None)
   in
-  let forward = Asgns.sequence @@ fwds @ [ op_asn ~t ~projections ] in
+  let this_op_asn = op_asn ~t ~projections in
+  let forward = Asgns.sequence @@ fwds @ [ this_op_asn ] in
+  (* Extract the neutral element from THIS operation's assignments only, not the whole forward chain.
+     The dependencies may have different accumulation operations which would cause false conflicts. *)
+  let neutral_elem = Asgns.collect_neutral_elem this_op_asn.asgns in
+  preliminary_shape_update.neutral_elem <- neutral_elem;
   let forward =
     Asgns.
       { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }

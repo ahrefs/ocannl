@@ -26,6 +26,10 @@ type t = {
   mutable batch_padding : padding;
   mutable input_padding : padding;
   mutable output_padding : padding;
+  mutable padding_elem : float option option;
+      (** The padding element for this shape's tensors. [None] means "unknown" (not yet determined),
+          [Some (Some v)] means all operations use neutral element [v], [Some None] means different
+          operations require different neutral elements (margin must be reset before each operation). *)
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
@@ -117,6 +121,10 @@ type update_step = {
   logic : logic;
   id : update_id;
   mutable unsafe_projections : Idx.projections option;
+  mutable neutral_elem : float option;
+      (** The neutral element for the accumulator operation. [Some v] when all assignment ops in the
+          update step use the same neutral element [v], [None] when different operations have different
+          neutral elements or when there are no accumulator operations. *)
 }
 [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
@@ -1623,10 +1631,29 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
         sh.output_padding <- Some p);
     Option.iter (padding_of_row sh.input_padding sh.input) ~f:(fun p -> sh.input_padding <- Some p)
   in
+  let update_padding_elem (sh : t) : unit =
+    (* Update padding_elem based on the neutral element from the update step.
+       None means unknown, Some (Some v) means consistent, Some None means conflicting. *)
+    let has_padding =
+      Option.is_some sh.batch_padding || Option.is_some sh.output_padding
+      || Option.is_some sh.input_padding
+    in
+    if has_padding then
+      sh.padding_elem <-
+        (match (sh.padding_elem, update_step.neutral_elem) with
+        | None, None -> None (* Both unknown *)
+        | None, Some v -> Some (Some v) (* First operation sets the value *)
+        | Some (Some v1), Some v2 when Float.( = ) v1 v2 -> sh.padding_elem (* Consistent *)
+        | Some (Some _), Some _ -> Some None (* Conflicting - different neutral elements *)
+        | Some None, _ -> Some None (* Already conflicting, stays conflicting *)
+        | Some _, None -> sh.padding_elem) (* Operation has no neutral elem, keep current *)
+  in
   if skip_deriving then ()
   else (
     set_padding lhs;
     List.iter rhs ~f:set_padding;
+    (* Update padding_elem for RHS shapes based on the operation's neutral element *)
+    List.iter rhs ~f:update_padding_elem;
     let projections =
       try
         Idx.
@@ -1782,9 +1809,13 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
       let batch : Row.axis_padding array = get_padding_array sh.batch_padding sh.batch in
       let output : Row.axis_padding array = get_padding_array sh.output_padding sh.output in
       let input : Row.axis_padding array = get_padding_array sh.input_padding sh.input in
-      (* The padded value is None, meaning the margin must be reset before each operation
-         that reads from this tensor. The neutral element depends on the accumulator. *)
-      Some (Array.concat [ batch; output; input ], None)
+      (* The padded value comes from padding_elem: Some (Some v) means all operations use v,
+         Some None means different operations need different neutral elements (reset before each),
+         None means unknown (default to needing reset). *)
+      let padded_value =
+        match sh.padding_elem with Some v -> v | None -> None
+      in
+      Some (Array.concat [ batch; output; input ], padded_value)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
 let to_labels (sh : t) : string array =
@@ -1877,6 +1908,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
       batch_padding = None;
       input_padding = None;
       output_padding = None;
+      padding_elem = None;
     }
   in
   (match deduced with
@@ -1966,6 +1998,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
       batch_padding = None;
       input_padding = None;
       output_padding = None;
+      padding_elem = None;
     }
   in
   (match deduced with

@@ -5,7 +5,7 @@ Testing padding margin initialization and reset...
 === Forward pass (both operations in sequence) ===
 
 Input (4x4 logical, with padding margins shown):
-HERE: test/einsum/test_padding_reset.ml:66:21
+HERE: test/einsum/test_padding_reset.ml:73:21
 [2]: -_input shape 0:4,1:4  [
   [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
   ; [ 0.00 ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; 0.00 ; 0.00 ]
@@ -17,7 +17,7 @@ HERE: test/einsum/test_padding_reset.ml:66:21
 ]
 
 Pooled - max of 3x3 windows of INPUT (padding should be -inf for max):
-HERE: test/einsum/test_padding_reset.ml:69:21
+HERE: test/einsum/test_padding_reset.ml:76:21
 [8]: @^=>+_pooled shape 0:4,1:4  [
   [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
   ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
@@ -26,7 +26,7 @@ HERE: test/einsum/test_padding_reset.ml:69:21
 ]
 
 Conv - sum of 3x3 windows of INPUT (padding should be 0 for sum):
-HERE: test/einsum/test_padding_reset.ml:72:21
+HERE: test/einsum/test_padding_reset.ml:79:21
 [12]: ;=>_conv_out shape 0:4,1:4  [
   [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
   ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
@@ -37,7 +37,7 @@ HERE: test/einsum/test_padding_reset.ml:72:21
 === Second forward pass (checking reset across iterations) ===
 
 Pooled after second pass:
-HERE: test/einsum/test_padding_reset.ml:79:21
+HERE: test/einsum/test_padding_reset.ml:86:21
 [8]: @^=>+_pooled shape 0:4,1:4  [
   [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
   ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
@@ -46,7 +46,7 @@ HERE: test/einsum/test_padding_reset.ml:79:21
 ]
 
 Conv after second pass:
-HERE: test/einsum/test_padding_reset.ml:82:21
+HERE: test/einsum/test_padding_reset.ml:89:21
 [12]: ;=>_conv_out shape 0:4,1:4  [
   [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
   ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
@@ -58,15 +58,15 @@ HERE: test/einsum/test_padding_reset.ml:82:21
 Input values: -16 to -1 (all negative)
 
 For MAX-POOL (padding should be -infinity):
-  With pad=0 (BUG): corners show 0 because max(0, negative) = 0
-  With pad=-inf (correct): pooled[0,0]=-6, pooled[1,1]=-6, etc.
+  pooled[0,0] = -11 (max of 4 valid cells with -inf padding elsewhere)
+  pooled[1,1] = -6 (max of 9-cell window fully inside input)
+  With pad=0 (BUG): corners would show 0 because max(0, negative) = 0
 
 For CONV/SUM (padding should be 0):
   conv[0,0] = sum of 4 values (corner) = -16-15-12-11 = -54
   conv[1,1] = sum of 9 values (center) = -16-15-14-12-11-10-8-7-6 = -99
 
-If we see 0s in pooled corners, max-pool padding is wrong.
-If conv values are wrong, the padding reset between operations failed.
+If conv shows -inf at edges, the padding reset failed.
 
 Padding reset test completed!
 
@@ -77,7 +77,7 @@ Testing single-operation padding (max-pool only)...
 === First forward pass (single max-pool operation) ===
 
 Input (4x4 logical, with padding margins shown):
-HERE: test/einsum/test_padding_reset.ml:150:21
+HERE: test/einsum/test_padding_reset.ml:161:21
 [2]: -_input shape 0:4,1:4  [
   [ -inf ; -inf ; -inf ; -inf ; -inf ; -inf ; -inf ]
   ; [ -inf ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; -inf ; -inf ]
@@ -89,7 +89,7 @@ HERE: test/einsum/test_padding_reset.ml:150:21
 ]
 
 Pooled - max of 3x3 windows (padding should be -inf for max):
-HERE: test/einsum/test_padding_reset.ml:153:21
+HERE: test/einsum/test_padding_reset.ml:164:21
 [8]: @^=>+_pooled shape 0:4,1:4  [
   [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
   ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
@@ -100,7 +100,7 @@ HERE: test/einsum/test_padding_reset.ml:153:21
 === Second forward pass ===
 
 Pooled after second pass (should be identical):
-HERE: test/einsum/test_padding_reset.ml:160:21
+HERE: test/einsum/test_padding_reset.ml:171:21
 [8]: @^=>+_pooled shape 0:4,1:4  [
   [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
   ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
@@ -110,10 +110,10 @@ HERE: test/einsum/test_padding_reset.ml:160:21
 
 === Expected Behavior ===
 With single operation, padding can be initialized once to -infinity.
-Expected pooled values (if padding=-inf):
-  pooled[0,0] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6
-  pooled[1,1] = max(-16,-15,-14,-12,-11,-10,-8,-7,-6) = -6
-  pooled[3,3] = max(-4,-3,-2,-8,-7,-6,-12,-11,-10) = -2
-With pad=0 (BUG): corners show 0 instead of correct negative max.
+Expected pooled values (with padding=-inf):
+  pooled[0,0] = -11 (max of 4 valid cells, rest are -inf padding)
+  pooled[1,1] = -6 (max of 9-cell window fully inside input)
+  pooled[3,3] = -1 (max of 4 valid cells in bottom-right corner)
+With pad=0 (BUG): corners would show 0 instead of correct negative max.
 
 Single-operation padding test completed!
