@@ -4,18 +4,16 @@
 
 open Base
 
-(** Use_padding specification for convolutions. *)
 type use_padding_spec = [ `True | `False | `Unspecified ] [@@deriving compare, sexp]
+(** Use_padding specification for convolutions. *)
 
-(** Convolution component for affine axis specifications.
-    Note: [dilation] is a string because it can be an identifier at parse time,
-    and is resolved to an int at runtime. *)
 type conv_spec = { dilation : string; kernel_label : string; use_padding : use_padding_spec }
 [@@deriving compare, sexp]
+(** Convolution component for affine axis specifications. Note: [dilation] is a string because it
+    can be an identifier at parse time, and is resolved to an int at runtime. *)
 
-(** Specification for individual axes in the einsum notation.
-    Note: [stride] is a string because it can be an identifier at parse time,
-    and is resolved to an int at runtime. *)
+(** Specification for individual axes in the einsum notation. Note: [stride] is a string because it
+    can be an identifier at parse time, and is resolved to an int at runtime. *)
 type axis_spec =
   | Label of string  (** A variable axis label. *)
   | Fixed_index of int  (** A fixed index, used for projection. *)
@@ -25,8 +23,8 @@ type axis_spec =
       conv : conv_spec option;  (** Optional convolution: dilation*kernel. *)
       stride_offset : int;  (** Constant offset added after stride*over. *)
     }
-      (** Affine axis specification: stride*over + stride_offset [+ dilation*kernel].
-          Corresponds to [Row.Affine] in shape inference. *)
+      (** Affine axis specification: stride*over + stride_offset [+ dilation*kernel]. Corresponds to
+          [Row.Affine] in shape inference. *)
 [@@deriving compare, sexp]
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input,
@@ -75,8 +73,8 @@ type parsed_axis_labels = {
 (** The labels are strings assigned to [AxisKey] axes. Moreover the [bcast_] fields represent
     whether additional leading/middle axes are allowed (corresponding to the dot-ellipsis syntax for
     broadcasting). The string can be used to identify a row variable, and defaults to ["batch"],
-    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields are lists of
-    axis specs of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
+    ["input"], ["output"] respectively when parsing ["..."]. The [given_] fields are lists of axis
+    specs of the corresponding kind in [labels] where [from_end=true], [given_beg_] where
     [from_end=false]. *)
 
 let axis_labels parsed = parsed.labels

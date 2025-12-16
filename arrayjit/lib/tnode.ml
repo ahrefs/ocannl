@@ -75,9 +75,10 @@ type t = {
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
   padding : (Ops.axis_padding array * float option) option Lazy.t;
-      (** If the tensor node is pre-padded, this is the pair of (left padding, right padding) per axis
-          and the padding/neutral value. The inner [float option] is [None] when the tensor is used
-          by operations with different neutral elements, requiring margin resets before each operation. *)
+      (** If the tensor node is pre-padded, this is the pair of (left padding, right padding) per
+          axis and the padding/neutral value. The inner [float option] is [None] when the tensor is
+          used by operations with different neutral elements, requiring margin resets before each
+          operation. *)
   size_in_bytes : int Lazy.t;
   id : int;
   label : string list;
@@ -713,8 +714,8 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
            in
            Some (Nd.apply_with_prec { f = f_reshape_with_prec } base_ndarray)
        | Some _, false ->
-           (* Create new bigarray with padding and copy source into non-padding parts.
-              semantic_dims are the data area dimensions (without padding). *)
+           (* Create new bigarray with padding and copy source into non-padding parts. semantic_dims
+              are the data area dimensions (without padding). *)
            let target = Nd.create_array ~debug prec_val ~dims:padded_dims ~padding:target_padding in
            let source_dims = Nd.dims base_ndarray in
            (* Check total elements match, allowing shape differences *)

@@ -125,7 +125,7 @@ Stride: 2
 use_padding: false
 out_channels: 4
 Expected output spatial dims: 4x4 ((9-3)/2 + 1)
-HERE: test/einsum/test_conv_padding.ml:159:21
+HERE: test/einsum/test_conv_padding.ml:158:21
 ┌─────────────────────────────────────────────┐
 │[12]: +_conv2d shape 0:4,1:4,2:4             │
 │┌──────┬────────────────────────────────────┐│
@@ -162,7 +162,7 @@ use_padding: false
 out_channels: 4
 Expected output shape: 4x4 ((9-3)/2 + 1)
 Backprop completed successfully!
-HERE: test/einsum/test_conv_padding.ml:198:21
+HERE: test/einsum/test_conv_padding.ml:196:21
 ┌────────────────────────┐
 │[14]: =>_loss shape 0:1 │
 │┌┬─────────┐            │

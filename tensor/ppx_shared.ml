@@ -115,12 +115,12 @@ let ndarray_constant expr =
 
 (** Convert an einsum spec string to an OCaml expression that constructs the runtime string.
 
-    This function parses the einsum spec using the Einsum_parser, then reconstructs a runtime
-    string expression, handling:
-    - stride and dilation values: if they look like integer literals, emit them directly;
-      otherwise emit [Int.to_string identifier] to convert at runtime
-    - use_padding: if unspecified (legacy syntax), emit [if use_padding then "=" else "<"]
-      to read the value from [Row.use_padding] at runtime
+    This function parses the einsum spec using the Einsum_parser, then reconstructs a runtime string
+    expression, handling:
+    - stride and dilation values: if they look like integer literals, emit them directly; otherwise
+      emit [Int.to_string identifier] to convert at runtime
+    - use_padding: if unspecified (legacy syntax), emit [if use_padding then "=" else "<"] to read
+      the value from [Row.use_padding] at runtime
 
     Example: ["stride*x=+k; y => z"] where [stride] is a variable, generates an expression that
     evaluates to e.g. ["2*x=+k; y => z"] if [stride = 2]. *)
@@ -216,11 +216,12 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
     let output_segments =
       row_to_segments ~kind:"output" parsed.bcast_output parsed.given_beg_output parsed.given_output
     in
-    let has_batch = not (List.is_empty batch_segments) || Option.is_some parsed.bcast_batch in
-    let has_input = not (List.is_empty input_segments) || Option.is_some parsed.bcast_input in
+    let has_batch = (not (List.is_empty batch_segments)) || Option.is_some parsed.bcast_batch in
+    let has_input = (not (List.is_empty input_segments)) || Option.is_some parsed.bcast_input in
     let segments =
       if has_batch then
-        batch_segments @ [ estring ~loc "|" ]
+        batch_segments
+        @ [ estring ~loc "|" ]
         @ (if has_input then input_segments @ [ estring ~loc "->" ] else [])
         @ output_segments
       else if has_input then input_segments @ [ estring ~loc "->" ] @ output_segments
@@ -248,33 +249,34 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
       let combined =
         String.concat
           (List.filter_map all_segments ~f:(fun e ->
-               match e.pexp_desc with Pexp_constant (Pconst_string (s, _, _)) -> Some s | _ -> None))
+               match e.pexp_desc with
+               | Pexp_constant (Pconst_string (s, _, _)) -> Some s
+               | _ -> None))
       in
       estring ~loc combined
     else [%expr String.concat ~sep:"" [%e elist ~loc all_segments]]
-  with Parse_error _ ->
+  with Parse_error _ -> (
     (* If parsing fails, try as axis_labels_spec *)
-    (try
-       let parsed = axis_labels_of_spec str_input in
-       let segments = parsed_to_segments parsed in
-       let all_literals =
-         List.for_all segments ~f:(fun e ->
-             match e.pexp_desc with Pexp_constant (Pconst_string _) -> true | _ -> false)
-       in
-       if all_literals then
-         let combined =
-           String.concat
-             (List.filter_map segments ~f:(fun e ->
-                  match e.pexp_desc with
-                  | Pexp_constant (Pconst_string (s, _, _)) -> Some s
-                  | _ -> None))
-         in
-         estring ~loc combined
-       else [%expr String.concat ~sep:"" [%e elist ~loc segments]]
-     with Parse_error msg ->
-       (* Fall back to returning the original string with an error note *)
-       pexp_extension ~loc
-       @@ Location.error_extensionf ~loc "Failed to parse einsum spec: %s" msg)
+    try
+      let parsed = axis_labels_of_spec str_input in
+      let segments = parsed_to_segments parsed in
+      let all_literals =
+        List.for_all segments ~f:(fun e ->
+            match e.pexp_desc with Pexp_constant (Pconst_string _) -> true | _ -> false)
+      in
+      if all_literals then
+        let combined =
+          String.concat
+            (List.filter_map segments ~f:(fun e ->
+                 match e.pexp_desc with
+                 | Pexp_constant (Pconst_string (s, _, _)) -> Some s
+                 | _ -> None))
+        in
+        estring ~loc combined
+      else [%expr String.concat ~sep:"" [%e elist ~loc segments]]
+    with Parse_error msg ->
+      (* Fall back to returning the original string with an error note *)
+      pexp_extension ~loc @@ Location.error_extensionf ~loc "Failed to parse einsum spec: %s" msg)
 
 let string_expr ~loc s = Ast_helper.Exp.constant @@ Pconst_string (s, loc, None)
 
@@ -546,11 +548,7 @@ let let_opt ~loc vbs expr =
   (* Check for duplicates and create nested let bindings preserving definition order *)
   let seen = Hashtbl.create (module String) in
   List.fold_right vbs ~init:expr ~f:(fun vb acc ->
-      let name =
-        match vb.pvb_pat.ppat_desc with
-        | Ppat_var { txt; _ } -> txt
-        | _ -> "_"
-      in
+      let name = match vb.pvb_pat.ppat_desc with Ppat_var { txt; _ } -> txt | _ -> "_" in
       match Hashtbl.add seen ~key:name ~data:() with
       | `Ok -> Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
       | `Duplicate ->
@@ -565,7 +563,6 @@ let let_opt ~loc vbs expr =
           Ast_helper.Exp.let_ ~loc Nonrecursive [ { vb with pvb_expr = error_expr } ] acc)
 
 let no_vbs = []
-
 let reduce_vbss vbss = List.concat vbss
 
 let expr_expander_with_punning translate ~loc ~path:_ payload =

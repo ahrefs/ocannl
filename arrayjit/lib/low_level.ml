@@ -469,7 +469,8 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                    | [] -> None
                    | [ s ] -> Some s
                    | _ ->
-                       (* TODO(#133): multiple non-static symbols in affine index not yet supported *)
+                       (* TODO(#133): multiple non-static symbols in affine index not yet
+                          supported *)
                        raise @@ Non_virtual 51))
     in
     let num_syms =
@@ -1553,18 +1554,17 @@ let unroll_dims dims ~body =
 let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
   (* Generate loops that iterate ONLY over the padding margins (NOT the data region).
 
-     The padding region is the union of "strips" where at least one dimension's index
-     is in the padding range [0, left) or [dim-right, dim).
+     The padding region is the union of "strips" where at least one dimension's index is in the
+     padding range [0, left) or [dim-right, dim).
 
-     For each dimension with padding, we generate:
-     1. Left padding strip: index in [0, left) - iterate ALL remaining dims
-     2. Middle: index in [left, dim-right) - recurse to find padding in other dims
-     3. Right padding strip: index in [dim-right, dim) - iterate ALL remaining dims
+     For each dimension with padding, we generate: 1. Left padding strip: index in [0, left) -
+     iterate ALL remaining dims 2. Middle: index in [left, dim-right) - recurse to find padding in
+     other dims 3. Right padding strip: index in [dim-right, dim) - iterate ALL remaining dims
 
      For dimensions with NO padding, we just iterate the full range while recursing.
 
-     The recursion stops when we've processed all dimensions. If we reach the end
-     without any dimension having contributed padding, we DON'T call body (that's data). *)
+     The recursion stops when we've processed all dimensions. If we reach the end without any
+     dimension having contributed padding, we DON'T call body (that's data). *)
   let rec build_loops ~any_padding_so_far dim_idx rev_idcs =
     if dim_idx >= Array.length dims then
       (* Only generate body if we're actually in a padding region *)
@@ -1581,7 +1581,8 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
             index;
             from_ = 0;
             to_ = dim - 1;
-            body = build_loops ~any_padding_so_far (dim_idx + 1) (Indexing.Iterator index :: rev_idcs);
+            body =
+              build_loops ~any_padding_so_far (dim_idx + 1) (Indexing.Iterator index :: rev_idcs);
             trace_it = true;
           }
       else
@@ -1600,11 +1601,7 @@ let loop_over_padding_region ~dims ~(padding : Ops.axis_padding array) ~body =
                     ~body:(fun rest_idcs ->
                       body
                       @@ Array.concat
-                           [
-                             Array.of_list_rev rev_idcs;
-                             [| Indexing.Iterator index |];
-                             rest_idcs;
-                           ]);
+                           [ Array.of_list_rev rev_idcs; [| Indexing.Iterator index |]; rest_idcs ]);
                 trace_it = true;
               }
           else Noop

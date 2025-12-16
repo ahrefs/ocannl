@@ -11,21 +11,19 @@ module Config = struct
     seed : int option;  (** Optional random seed for reproducibility *)
   }
 
-  let default =
-    { image_size = 32; max_radius = 8; min_radius = 2; max_circles = 5; seed = None }
+  let default = { image_size = 32; max_radius = 8; min_radius = 2; max_circles = 5; seed = None }
 end
 
 module Random = Rand.Random_for_tests
 
-(** Draw a filled circle on the image at (cx, cy) with radius r.
-    Values are clamped to [0, 1] range. *)
+(** Draw a filled circle on the image at (cx, cy) with radius r. Values are clamped to [0, 1] range.
+*)
 let draw_circle ~image_size image cx cy r =
   for y = 0 to image_size - 1 do
     for x = 0 to image_size - 1 do
       let dx = x - cx in
       let dy = y - cy in
-      if (dx * dx) + (dy * dy) <= r * r then
-        Genarray.set image [| y; x; 0 |] 1.0
+      if (dx * dx) + (dy * dy) <= r * r then Genarray.set image [| y; x; 0 |] 1.0
     done
   done
 
@@ -36,7 +34,8 @@ let draw_circle ~image_size image cx cy r =
     @param len Number of images to generate
     @return
       A tuple of (images, labels) where:
-      - images is a bigarray of shape [len; image_size; image_size; 1] (batch, height, width, channels)
+      - images is a bigarray of shape [len; image_size; image_size; 1] (batch, height, width,
+        channels)
       - labels is a bigarray of shape [len; 1] (batch, output) containing the circle count *)
 let generate_with_kind kind ?(config = Config.default) ~len () =
   (match config.seed with Some seed -> Random.init seed | None -> ());

@@ -49,8 +49,9 @@
 
     Adding [<] after the output label (e.g., [stride*output<+kernel]) indicates no-padding mode,
     where indices must stay within the input bounds. In this mode, the input dimension must satisfy:
-    [(input - effective_kernel_span) mod stride = 0], where [effective_kernel_span = 1 + (kernel - 1) * dilation].
-    Without [<], padding is applied and there is no such divisibility constraint.
+    [(input - effective_kernel_span) mod stride = 0], where
+    [effective_kernel_span = 1 + (kernel - 1) * dilation]. Without [<], padding is applied and there
+    is no such divisibility constraint.
 
     Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
     axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case
@@ -73,7 +74,8 @@ type t = {
   mutable padding_elem : float option option;
       (** The padding element for this shape's tensors. [None] means "unknown" (not yet determined),
           [Some (Some v)] means all operations use neutral element [v], [Some None] means different
-          operations require different neutral elements (margin must be reset before each operation). *)
+          operations require different neutral elements (margin must be reset before each
+          operation). *)
   id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }
@@ -230,8 +232,8 @@ type update_step = {
   mutable unsafe_projections : Ir.Indexing.projections option;
   mutable neutral_elem : float option;
       (** The neutral element for the accumulator operation. [Some v] when all assignment ops in the
-          update step use the same neutral element [v], [None] when different operations have different
-          neutral elements or when there are no accumulator operations. *)
+          update step use the same neutral element [v], [None] when different operations have
+          different neutral elements or when there are no accumulator operations. *)
 }
 [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
@@ -252,9 +254,9 @@ val to_padding : t -> (Ir.Ops.axis_padding array * float option) option
 val propagate_shapes : update_step -> unit
 
 val get_projections : update_step -> Ir.Indexing.projections
-(** Returns the projections for this update step, computing them if not already done.
-    This triggers [finish_inference] and then retrieves the projections from
-    [unsafe_projections]. Use this instead of [derive_projections] directly. *)
+(** Returns the projections for this update step, computing them if not already done. This triggers
+    [finish_inference] and then retrieves the projections from [unsafe_projections]. Use this
+    instead of [derive_projections] directly. *)
 
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
@@ -263,5 +265,5 @@ val to_labels : t -> string array
 (** Uses the matrix convention of putting the input axes last. *)
 
 val parse_n5_layout : string -> int array
-(** Parse a N5_layout priority string (e.g., "0,1,2") into display indices.
-    Only supports integer labels (Fixed_index). *)
+(** Parse a N5_layout priority string (e.g., "0,1,2") into display indices. Only supports integer
+    labels (Fixed_index). *)

@@ -164,7 +164,7 @@ Stride: 2
 Expected max pool output: [[9, 8], [7, 6]]
 Expected loss (sum): 9 + 8 + 7 + 6 = 30
 Backprop completed successfully!
-HERE: test/einsum/test_max_pool2d.ml:175:21
+HERE: test/einsum/test_max_pool2d.ml:173:21
 ┌────────────────────────┐
 │[10]: =>_loss shape 0:1 │
 │┌┬─────────┐            │
@@ -174,7 +174,7 @@ HERE: test/einsum/test_max_pool2d.ml:175:21
 │└┴─────────┘            │
 └────────────────────────┘
 grad_=>_loss <not-hosted>
-HERE: test/einsum/test_max_pool2d.ml:176:21
+HERE: test/einsum/test_max_pool2d.ml:174:21
 ┌─────────────────────────┐
 │[0]: x shape 0:4,1:4,2:1 │
 │┌──────┬──────┐          │

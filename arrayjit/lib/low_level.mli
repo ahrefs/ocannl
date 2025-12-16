@@ -67,9 +67,9 @@ val unroll_dims : int array -> body:(Indexing.axis_index array -> offset:int -> 
 
 val loop_over_padding_region :
   dims:int array -> padding:Ops.axis_padding array -> body:(Indexing.axis_index array -> t) -> t
-(** Generate loops that iterate only over the padding margins of a tensor.
-    For dimensions with padding, generates separate loops for left margin, middle (recursing),
-    and right margin. The middle region continues recursing to find padding in other dimensions. *)
+(** Generate loops that iterate only over the padding margins of a tensor. For dimensions with
+    padding, generates separate loops for left margin, middle (recursing), and right margin. The
+    middle region continues recursing to find padding in other dimensions. *)
 
 (** {2 Optimization} *)
 

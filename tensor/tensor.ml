@@ -115,7 +115,7 @@ let iter_embedded ~f t =
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
 (* Global singleton for random seed, used in init_params and random number generation *)
-let random_seed : (t option) ref = ref None
+let random_seed : t option ref = ref None
 
 let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
@@ -142,9 +142,9 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
         Set.add (Set.union acc p.forward.embedded_nodes) p.value)
   in
   (* Handle random_seed specially: it's a global singleton whose forward code might have been
-     "stolen" by a tensor that isn't part of params (e.g., from an untaken conditional branch).
-     If random_seed exists and was used (no longer a fwd_root) but not in embedded_nodes,
-     we need to include random_seed's own embedded_nodes. *)
+     "stolen" by a tensor that isn't part of params (e.g., from an untaken conditional branch). If
+     random_seed exists and was used (no longer a fwd_root) but not in embedded_nodes, we need to
+     include random_seed's own embedded_nodes. *)
   let embedded_nodes =
     match !random_seed with
     | None -> embedded_nodes
@@ -185,7 +185,8 @@ let raw_binop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1
   let shape_logic = Shape.Broadcast (logic, t1.shape, t2.shape) in
   let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
+    Shape.
+      { shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -214,7 +215,8 @@ let raw_ternop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t
   let shape_logic = Shape.Broadcast_tern (logic, t1.shape, t2.shape, t3.shape) in
   let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
+    Shape.
+      { shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -244,7 +246,8 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
   let shape_logic = Shape.Transpose (logic, t1.shape) in
   let neutral_elem = Some (Ir.Ops.neutral_elem accum) in
   let local_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
+    Shape.
+      { shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
   in
   Shape.propagate_shapes local_shape_update;
   let projections_debug = Shape.logic_to_spec shape_logic in
@@ -319,7 +322,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let v =
     match terminal_op with
     | Some (Shape.Data (Asgns.Reshape data)) ->
-        Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false ~base_ndarray:data ()
+        Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false
+          ~base_ndarray:data ()
     | Some (Shape.Data (Asgns.Keep_shape_no_padding data)) ->
         Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
@@ -386,8 +390,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   in
   let this_op_asn = op_asn ~t ~projections in
   let forward = Asgns.sequence @@ fwds @ [ this_op_asn ] in
-  (* Extract the neutral element from THIS operation's assignments only, not the whole forward chain.
-     The dependencies may have different accumulation operations which would cause false conflicts. *)
+  (* Extract the neutral element from THIS operation's assignments only, not the whole forward
+     chain. The dependencies may have different accumulation operations which would cause false
+     conflicts. *)
   let neutral_elem = Asgns.collect_neutral_elem this_op_asn.asgns in
   preliminary_shape_update.neutral_elem <- neutral_elem;
   let forward =

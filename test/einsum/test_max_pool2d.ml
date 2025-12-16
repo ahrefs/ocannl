@@ -133,13 +133,11 @@ let test_max_pool2d_backprop () =
   printf "\nTesting backprop for max_pool2d...\n%!";
   Tensor.unsafe_reinitialize ();
 
-  (* Create a 4x4 input with 1 channel using a parameter (requires grad).
-     Design: each 2x2 window has its max in a different position:
-     Window positions: (row within window, col within window)
-     - Top-left window [0-1, 0-1]: max 9 at (0,0)
-     - Top-right window [0-1, 2-3]: max 8 at (1,1)
-     - Bottom-left window [2-3, 0-1]: max 7 at (0,1)
-     - Bottom-right window [2-3, 2-3]: max 6 at (1,0) *)
+  (* Create a 4x4 input with 1 channel using a parameter (requires grad). Design: each 2x2 window
+     has its max in a different position: Window positions: (row within window, col within window) -
+     Top-left window [0-1, 0-1]: max 9 at (0,0) - Top-right window [0-1, 2-3]: max 8 at (1,1) -
+     Bottom-left window [2-3, 0-1]: max 7 at (0,1) - Bottom-right window [2-3, 2-3]: max 6 at
+     (1,0) *)
   let%op input =
     {
       x =

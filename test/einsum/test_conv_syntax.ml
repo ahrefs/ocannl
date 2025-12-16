@@ -8,43 +8,50 @@ let test_conv_parsing () =
   let spec1 = "2*o+3*k" in
   let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
   printf "Test 1: Parsed '%s' successfully\n%!" spec1;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
 
   (* Test 2: Simple conv expression without coefficients (multichar - requires commas) *)
   let spec2 = "o+k" in
   let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
   printf "Test 2: Parsed '%s' successfully\n%!" spec2;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
 
   (* Test 3: Mixed spec with comma (multichar mode) *)
   let spec3 = "a, 2*b+c" in
   let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
   printf "Test 3: Parsed '%s' successfully\n%!" spec3;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
 
   (* Test 4: Conv expression with multiple identifiers (multichar - requires commas) *)
   let spec4 = "i, o+k, j" in
   let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
   printf "Test 4: Parsed '%s' successfully (multichar mode)\n%!" spec4;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
 
   (* Test 5: Conv expression with multi-char identifiers (multichar) *)
   let spec5 = "a+bc" in
   let labels5 = Einsum_parser.axis_labels_of_spec spec5 in
   printf "Test 5: Parsed '%s' successfully (multichar mode)\n%!" spec5;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
 
   (* Test 6: Test in einsum notation with multichar conv *)
   let spec6 = "i, j -> 2*i+j" in
   let labels6 = Einsum_parser.axis_labels_of_spec spec6 in
   printf "Test 6: Parsed '%s' successfully\n%!" spec6;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
 
   (* Test 7: Complex batch-input-output spec with conv *)
   let spec7 = "batch|input->3*output+1*kernel," in
   let labels7 = Einsum_parser.axis_labels_of_spec spec7 in
   printf "Test 7: Parsed '%s' successfully\n%!" spec7;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels7));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels7));
 
   printf "All conv syntax parsing tests passed!\n%!"
 
@@ -55,25 +62,29 @@ let test_strided_iteration_parsing () =
   let spec1 = "2*output" in
   let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
   printf "Test 1: Parsed strided iteration '%s' successfully\n%!" spec1;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
 
   (* Test 2: Strided iteration with single-char identifier (multichar mode) *)
   let spec2 = "3*i" in
   let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
   printf "Test 2: Parsed strided iteration '%s' successfully\n%!" spec2;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
 
   (* Test 3: Strided iteration in einsum context (multichar due to multiplication) *)
   let spec3 = "input -> 2*output" in
   let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
   printf "Test 3: Parsed einsum with strided iteration '%s' successfully\n%!" spec3;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
 
   (* Test 4: Mixed regular labels and strided iteration (multichar due to comma) *)
   let spec4 = "regular, 3*strided" in
   let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
   printf "Test 4: Parsed mixed labels with strided iteration '%s' successfully\n%!" spec4;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
 
   printf "\nAll strided iteration parsing tests completed!\n%!"
 
@@ -138,37 +149,43 @@ let test_use_padding_syntax () =
   let spec1 = "o=+k" in
   let labels1 = Einsum_parser.axis_labels_of_spec spec1 in
   printf "Test 1: Parsed '%s' (use_padding=true)\n%!" spec1;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels1));
 
   (* Test 2: use_padding=false with < syntax *)
   let spec2 = "o<+k" in
   let labels2 = Einsum_parser.axis_labels_of_spec spec2 in
   printf "Test 2: Parsed '%s' (use_padding=false)\n%!" spec2;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels2));
 
   (* Test 3: use_padding with stride *)
   let spec3 = "2*o=+k" in
   let labels3 = Einsum_parser.axis_labels_of_spec spec3 in
   printf "Test 3: Parsed '%s' (stride with use_padding=true)\n%!" spec3;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels3));
 
   (* Test 4: use_padding with dilation *)
   let spec4 = "o<+3*k" in
   let labels4 = Einsum_parser.axis_labels_of_spec spec4 in
   printf "Test 4: Parsed '%s' (dilation with use_padding=false)\n%!" spec4;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels4));
 
   (* Test 5: use_padding with stride and dilation *)
   let spec5 = "2*o=+3*k" in
   let labels5 = Einsum_parser.axis_labels_of_spec spec5 in
   printf "Test 5: Parsed '%s' (stride, dilation, use_padding=true)\n%!" spec5;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels5));
 
   (* Test 6: unspecified use_padding (legacy syntax) *)
   let spec6 = "o+k" in
   let labels6 = Einsum_parser.axis_labels_of_spec spec6 in
   printf "Test 6: Parsed '%s' (unspecified use_padding)\n%!" spec6;
-  printf "  Structure: %s\n\n%!" (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
+  printf "  Structure: %s\n\n%!"
+    (Sexp.to_string_hum (Einsum_parser.sexp_of_parsed_axis_labels labels6));
 
   printf "All use_padding syntax tests completed!\n%!"
 

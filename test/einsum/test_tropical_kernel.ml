@@ -5,20 +5,21 @@ open Stdio
 
 (** Test tropical semiring (max-plus) operations with a learnable kernel.
 
-    This tests backpropagation for tropical operations with both input (t1/rhs1)
-    and kernel (t2/rhs2) gradients.
+    This tests backpropagation for tropical operations with both input (t1/rhs1) and kernel
+    (t2/rhs2) gradients.
 
-    The implementation uses `_rhs1` suffix for both input and kernel gradient paths.
-    This gives condition tensors input shape (ih,iw) which is effectively the "outer
-    product" of output (oh,ow) and kernel (wh,ww) dimensions. This correctly tracks
-    which (input position, kernel position) pair achieved the argmax for each output. *)
+    The implementation uses `_rhs1` suffix for both input and kernel gradient paths. This gives
+    condition tensors input shape (ih,iw) which is effectively the "outer product" of output (oh,ow)
+    and kernel (wh,ww) dimensions. This correctly tracks which (input position, kernel position)
+    pair achieved the argmax for each output. *)
 
 (** Create a tropical convolution-like operation with a learnable kernel.
 
-    This is similar to max_pool2d but with a non-zero learnable kernel, allowing us to
-    verify that g2 (kernel) gradients are computed correctly.
+    This is similar to max_pool2d but with a non-zero learnable kernel, allowing us to verify that
+    g2 (kernel) gradients are computed correctly.
 
-    The tropical operation computes: output[oh,ow] = max over (wh,ww) of (input[2*oh+wh, 2*ow+ww] + kernel[wh,ww])
+    The tropical operation computes: output[oh,ow] = max over (wh,ww) of (input[2*oh+wh, 2*ow+ww] +
+    kernel[wh,ww])
 
     For backprop:
     - g1 (input grad): gradient flows to input positions that achieved the argmax
@@ -27,8 +28,9 @@ let tropical_conv2d ?(stride = 2) ?(window_size = 2) () =
   let%op op x kernel =
     Shape.set_dim wh window_size;
     Shape.set_dim ww window_size;
-    x @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.." [ "wh"; "ww" ]
-          kernel
+    x
+    @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; wh, ww => ... | oh, ow, ..c.."
+          [ "wh"; "ww" ] kernel
   in
   op
 
@@ -73,19 +75,10 @@ let test_tropical_kernel_forward () =
 
     This is the key test: verifies that gradients flow correctly to both input and kernel.
 
-    Input pattern (4x4, values designed so argmax varies):
-    ```
-      [[9, 0, 0, 0],
-       [0, 0, 0, 8],
-       [0, 7, 0, 0],
-       [0, 0, 6, 0]]
-    ```
+    Input pattern (4x4, values designed so argmax varies): ```
+    [[9, 0, 0, 0], [0, 0, 0, 8], [0, 7, 0, 0], [0, 0, 6, 0]] ```
 
-    Kernel (2x2, small values so input determines argmax):
-    ```
-      [[0, 0],
-       [0, 0]]
-    ```
+    Kernel (2x2, small values so input determines argmax): ``` [[0, 0], [0, 0]] ```
 
     With zero kernel, this is like max_pool2d - argmax is at input max positions.
     - Window [0,0]: max at (0,0)=9, argmax kernel position (0,0)
@@ -93,8 +86,8 @@ let test_tropical_kernel_forward () =
     - Window [1,0]: max at (2,1)=7, argmax kernel position (0,1)
     - Window [1,1]: max at (3,2)=6, argmax kernel position (1,0)
 
-    Expected input gradients: 1 at positions (0,0), (1,3), (2,1), (3,2); 0 elsewhere.
-    Expected kernel gradients: 1 at each position (each is argmax for exactly one output). *)
+    Expected input gradients: 1 at positions (0,0), (1,3), (2,1), (3,2); 0 elsewhere. Expected
+    kernel gradients: 1 at each position (each is argmax for exactly one output). *)
 let test_tropical_kernel_backprop_zero_kernel () =
   printf "Testing tropical conv backprop with zero kernel...\n%!";
   Tensor.unsafe_reinitialize ();
@@ -140,27 +133,18 @@ let test_tropical_kernel_backprop_zero_kernel () =
 
 (** Test tropical conv backprop with non-zero kernel that affects argmax.
 
-    Input (4x4, uniform low values):
-    ```
-      [[1, 1, 1, 1],
-       [1, 1, 1, 1],
-       [1, 1, 1, 1],
-       [1, 1, 1, 1]]
+    Input (4x4, uniform low values): ``` [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]]
     ```
 
-    Kernel (2x2, large value at position (1,1)):
-    ```
-      [[0, 0],
-       [0, 10]]
-    ```
+    Kernel (2x2, large value at position (1,1)): ``` [[0, 0], [0, 10]] ```
 
-    With this kernel, the argmax for every window is at kernel position (1,1)
-    because 1+10=11 > 1+0=1 for all other positions.
+    With this kernel, the argmax for every window is at kernel position (1,1) because 1+10=11 >
+    1+0=1 for all other positions.
 
-    Expected output: all 11 (value 1 + kernel 10 at position (1,1) of each window)
-    Expected input gradients: 1 at positions (1,1), (1,3), (3,1), (3,3); 0 elsewhere
-      (these are the input positions corresponding to kernel (1,1) in each window)
-    Expected kernel gradients: [[0,0],[0,4]] - only (1,1) was argmax, used 4 times *)
+    Expected output: all 11 (value 1 + kernel 10 at position (1,1) of each window) Expected input
+    gradients: 1 at positions (1,1), (1,3), (3,1), (3,3); 0 elsewhere (these are the input positions
+    corresponding to kernel (1,1) in each window) Expected kernel gradients: [[0,0],[0,4]] - only
+    (1,1) was argmax, used 4 times *)
 let test_tropical_kernel_backprop_nonzero_kernel () =
   printf "Testing tropical conv backprop with non-zero kernel...\n%!";
   Tensor.unsafe_reinitialize ();

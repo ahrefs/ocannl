@@ -155,8 +155,8 @@ let create_bigarray_of_prec (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precis
 let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~dims ~padding :
     (ocaml, elt_t) bigarray =
   let arr = create_bigarray_of_prec prec dims in
-  (* Fill with padding value if padding is specified and has a unique neutral value.
-     When the neutral value is None, the margins will be reset before each operation. *)
+  (* Fill with padding value if padding is specified and has a unique neutral value. When the
+     neutral value is None, the margins will be reset before each operation. *)
   (match padding with
   | None | Some (_, None) -> ()
   | Some (_, Some pad_value) -> (

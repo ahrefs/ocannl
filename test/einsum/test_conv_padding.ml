@@ -128,16 +128,15 @@ let test_conv2d_stride_with_padding_backprop () =
 
 (** Test conv2d with stride=2 and use_padding=false.
 
-    With stride=2 and use_padding=false, output dims are (input - kernel) / stride + 1.
-    IMPORTANT: For no-padding convolutions, (input - kernel) must be divisible by stride.
-    For 9x9 input, kernel_size=3, stride=2: (9-3)/2 + 1 = 4, so output should be 4x4. *)
+    With stride=2 and use_padding=false, output dims are (input - kernel) / stride + 1. IMPORTANT:
+    For no-padding convolutions, (input - kernel) must be divisible by stride. For 9x9 input,
+    kernel_size=3, stride=2: (9-3)/2 + 1 = 4, so output should be 4x4. *)
 let test_conv2d_stride_without_padding () =
   printf "Testing conv2d with stride=2 and use_padding=false...\n%!";
   Tensor.unsafe_reinitialize ();
 
-  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding.
-     For no-padding conv: (input - kernel) must be divisible by stride.
-     (9 - 3) = 6, 6 % 2 = 0 ✓ *)
+  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding. For
+     no-padding conv: (input - kernel) must be divisible by stride. (9 - 3) = 6, 6 % 2 = 0 ✓ *)
   let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=2, use_padding=false, out_channels=4 *)
@@ -164,16 +163,15 @@ let test_conv2d_stride_without_padding () =
     This tests that shape inference works correctly during backpropagation for strided convolutions
     without padding.
 
-    IMPORTANT: For no-padding convolutions, (input - kernel) must be divisible by stride,
-    otherwise shape inference will fail with "incompatible stride" error. *)
+    IMPORTANT: For no-padding convolutions, (input - kernel) must be divisible by stride, otherwise
+    shape inference will fail with "incompatible stride" error. *)
 let test_conv2d_stride_without_padding_backprop () =
   printf "\nTesting backprop for conv2d with stride=2 and use_padding=false...\n%!";
   Tensor.unsafe_reinitialize ();
 
-  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding.
-     For no-padding conv: (input - kernel) must be divisible by stride.
-     (9 - 3) = 6, 6 % 2 = 0 ✓
-     Output size: (9 - 3) / 2 + 1 = 4, so 4x4 output. *)
+  (* Create a 9x9 input with 1 channel - sized for stride=2, kernel=3 without padding. For
+     no-padding conv: (input - kernel) must be divisible by stride. (9 - 3) = 6, 6 % 2 = 0 ✓ Output
+     size: (9 - 3) / 2 + 1 = 4, so 4x4 output. *)
   let input = TDSL.range_of_shape ~output_dims:[ 9; 9; 1 ] () in
 
   (* Apply conv2d with kernel_size=3, stride=2, use_padding=false, out_channels=4 *)

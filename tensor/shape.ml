@@ -29,7 +29,8 @@ type t = {
   mutable padding_elem : float option option;
       (** The padding element for this shape's tensors. [None] means "unknown" (not yet determined),
           [Some (Some v)] means all operations use neutral element [v], [Some None] means different
-          operations require different neutral elements (margin must be reset before each operation). *)
+          operations require different neutral elements (margin must be reset before each
+          operation). *)
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
@@ -123,8 +124,8 @@ type update_step = {
   mutable unsafe_projections : Idx.projections option;
   mutable neutral_elem : float option;
       (** The neutral element for the accumulator operation. [Some v] when all assignment ops in the
-          update step use the same neutral element [v], [None] when different operations have different
-          neutral elements or when there are no accumulator operations. *)
+          update step use the same neutral element [v], [None] when different operations have
+          different neutral elements or when there are no accumulator operations. *)
 }
 [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
@@ -1632,8 +1633,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     Option.iter (padding_of_row sh.input_padding sh.input) ~f:(fun p -> sh.input_padding <- Some p)
   in
   let update_padding_elem (sh : t) : unit =
-    (* Update padding_elem based on the neutral element from the update step.
-       None means unknown, Some (Some v) means consistent, Some None means conflicting. *)
+    (* Update padding_elem based on the neutral element from the update step. None means unknown,
+       Some (Some v) means consistent, Some None means conflicting. *)
     let has_padding =
       Option.is_some sh.batch_padding || Option.is_some sh.output_padding
       || Option.is_some sh.input_padding
@@ -1646,7 +1647,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
         | Some (Some v1), Some v2 when Float.( = ) v1 v2 -> sh.padding_elem (* Consistent *)
         | Some (Some _), Some _ -> Some None (* Conflicting - different neutral elements *)
         | Some None, _ -> Some None (* Already conflicting, stays conflicting *)
-        | Some _, None -> sh.padding_elem) (* Operation has no neutral elem, keep current *)
+        | Some _, None -> sh.padding_elem)
+    (* Operation has no neutral elem, keep current *)
   in
   if skip_deriving then ()
   else (
@@ -1809,12 +1811,10 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
       let batch : Row.axis_padding array = get_padding_array sh.batch_padding sh.batch in
       let output : Row.axis_padding array = get_padding_array sh.output_padding sh.output in
       let input : Row.axis_padding array = get_padding_array sh.input_padding sh.input in
-      (* The padded value comes from padding_elem: Some (Some v) means all operations use v,
-         Some None means different operations need different neutral elements (reset before each),
-         None means unknown (default to needing reset). *)
-      let padded_value =
-        match sh.padding_elem with Some v -> v | None -> None
-      in
+      (* The padded value comes from padding_elem: Some (Some v) means all operations use v, Some
+         None means different operations need different neutral elements (reset before each), None
+         means unknown (default to needing reset). *)
+      let padded_value = match sh.padding_elem with Some v -> v | None -> None in
       Some (Array.concat [ batch; output; input ], padded_value)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 

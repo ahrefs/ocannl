@@ -6,20 +6,18 @@ open Stdio
 
     IMPORTANT: Understanding OCANNL's counter-based PRNG architecture:
 
-    The [uniform_at], [normal_at], [kaiming_at], [xavier_at] functions use a counter-based
-    PRNG (Threefry). The [counter] argument is NOT meant to determine the output shape!
-    It is a "mix-in" to bifurcate randomness across different counter values.
+    The [uniform_at], [normal_at], [kaiming_at], [xavier_at] functions use a counter-based PRNG
+    (Threefry). The [counter] argument is NOT meant to determine the output shape! It is a "mix-in"
+    to bifurcate randomness across different counter values.
 
-    The architecture:
-    1. [counter] should be scalar or small (dimension-1) so it broadcasts to any result shape
-    2. [Range_over_offsets] generates indices over the result shape for mixing
-    3. [uint4x32_to_prec_uniform] reshapes from the uint4x32 backbone to the target shape
-    4. The output shape is determined by shape inference from how the result is used
+    The architecture: 1. [counter] should be scalar or small (dimension-1) so it broadcasts to any
+    result shape 2. [Range_over_offsets] generates indices over the result shape for mixing 3.
+    [uint4x32_to_prec_uniform] reshapes from the uint4x32 backbone to the target shape 4. The output
+    shape is determined by shape inference from how the result is used
 
     For [kaiming] and [xavier] operations:
     - The result tensor's shape determines fan_in/fan_out through einsum dimension capture
-    - The counter is just for randomness bifurcation (e.g., different steps in training)
-*)
+    - The counter is just for randomness bifurcation (e.g., different steps in training) *)
 
 let create_histogram values ~num_bins ~min_val ~max_val =
   let bins = Array.create ~len:num_bins 0 in
@@ -42,14 +40,13 @@ let print_histogram bins ~title ~max_width =
       let percentage = Float.of_int count /. Float.of_int total *. 100.0 in
       printf "Bin %2d: %s %4d (%.1f%%)\n" i bar count percentage)
 
-(** Test uniform_at with a SCALAR counter, letting shape be inferred from usage.
-    This is the correct way to use uniform_at - counter is for randomness bifurcation,
-    not for determining the output shape. *)
+(** Test uniform_at with a SCALAR counter, letting shape be inferred from usage. This is the correct
+    way to use uniform_at - counter is for randomness bifurcation, not for determining the output
+    shape. *)
 let test_uniform_at_with_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-
   (* Scalar counter - just for randomness bifurcation *)
   let counter = NTDSL.number 44.0 in
 
@@ -105,14 +102,13 @@ let test_uniform_at_with_shape () =
 
 (** Test normal_at1 which works pointwise (one output per uint4x32 input).
 
-    NOTE: normal_at internally uses box_muller which creates TWO uniform random tensors.
-    The non-1 variants have shape constraints from uint4x32. Use normal_at1 which works
-    pointwise, combined with a target tensor to drive shape inference. *)
+    NOTE: normal_at internally uses box_muller which creates TWO uniform random tensors. The non-1
+    variants have shape constraints from uint4x32. Use normal_at1 which works pointwise, combined
+    with a target tensor to drive shape inference. *)
 let test_normal_at_with_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let module O = TDSL.O in
-
   (* Scalar counter for randomness bifurcation *)
   let counter = NTDSL.number 123.0 in
 
@@ -200,8 +196,8 @@ let test_normal_at_with_shape () =
 
   printf "\nOverall: %s\n" (if all_passed then "ALL TESTS PASSED" else "SOME TESTS FAILED")
 
-(** Test that different counter values produce different random sequences.
-    This demonstrates the counter's purpose: bifurcating randomness. *)
+(** Test that different counter values produce different random sequences. This demonstrates the
+    counter's purpose: bifurcating randomness. *)
 let test_counter_bifurcation () =
   printf "\nCounter Bifurcation Test\n";
   printf "========================\n";
@@ -245,12 +241,12 @@ let test_counter_bifurcation () =
   if !diff_count > 90 && !same_count = num_values then printf "\nBifurcation test: PASS\n"
   else printf "\nBifurcation test: FAIL\n"
 
-(** Test kaiming_at with proper shape structure.
-    The result tensor needs input dimensions for kaiming to extract fan_in.
+(** Test kaiming_at with proper shape structure. The result tensor needs input dimensions for
+    kaiming to extract fan_in.
 
-    This test demonstrates specifying dimensions explicitly via TDSL (not TDSL.O).
-    The counter is scalar (for randomness bifurcation), and output shape is given
-    directly to uniform_at via ~input_dims and ~output_dims. *)
+    This test demonstrates specifying dimensions explicitly via TDSL (not TDSL.O). The counter is
+    scalar (for randomness bifurcation), and output shape is given directly to uniform_at via
+    ~input_dims and ~output_dims. *)
 let test_kaiming_at_with_proper_shape () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
@@ -262,12 +258,10 @@ let test_kaiming_at_with_proper_shape () =
   (* Scalar counter for randomness bifurcation *)
   let counter = NTDSL.number 45.0 in
 
-  (* Use TDSL.uniform_at (not TDSL.O.uniform_at) to specify dimensions explicitly.
-     This is an alternative to shape inference from a target tensor. *)
+  (* Use TDSL.uniform_at (not TDSL.O.uniform_at) to specify dimensions explicitly. This is an
+     alternative to shape inference from a target tensor. *)
   let kaiming_values =
-    TDSL.kaiming_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ]
-      TDSL.O.uniform_at
-      counter ()
+    TDSL.kaiming_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] TDSL.O.uniform_at counter ()
   in
   Ir.Tnode.update_prec kaiming_values.value Ir.Ops.single;
 
@@ -276,8 +270,8 @@ let test_kaiming_at_with_proper_shape () =
   ignore (Ocannl.Train.forward_once ctx kaiming_values);
   let result = Ir.Tnode.get_values kaiming_values.value in
 
-  (* Expected: uniform [0,1) scaled by sqrt(6/fan_in) = sqrt(6/100) ≈ 0.245
-     So values should be in [0, 0.245) with mean ≈ 0.122 *)
+  (* Expected: uniform [0,1) scaled by sqrt(6/fan_in) = sqrt(6/100) ≈ 0.245 So values should be in
+     [0, 0.245) with mean ≈ 0.122 *)
   let expected_scale = Float.sqrt (6.0 /. Float.of_int fan_in) in
 
   printf "Kaiming Initialization Test (fan_in=%d, fan_out=%d)\n" fan_in fan_out;
@@ -303,11 +297,13 @@ let test_kaiming_at_with_proper_shape () =
 
   (* Create and print histogram *)
   let num_bins = 20 in
-  let bins = create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01) in
+  let bins =
+    create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01)
+  in
   print_histogram bins ~title:"Kaiming Distribution Histogram" ~max_width:40
 
-(** Test xavier_at with proper shape structure.
-    Xavier needs both input and output dimensions for scaling.
+(** Test xavier_at with proper shape structure. Xavier needs both input and output dimensions for
+    scaling.
 
     Similar to kaiming test, uses TDSL with explicit dimensions. *)
 let test_xavier_at_with_proper_shape () =
@@ -323,9 +319,7 @@ let test_xavier_at_with_proper_shape () =
 
   (* Use TDSL.uniform_at with explicit dimensions *)
   let xavier_values =
-    TDSL.xavier_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ]
-      TDSL.O.uniform_at
-      counter ()
+    TDSL.xavier_at ~input_dims:[ fan_in ] ~output_dims:[ fan_out ] TDSL.O.uniform_at counter ()
   in
   Ir.Tnode.update_prec xavier_values.value Ir.Ops.single;
 
@@ -360,7 +354,9 @@ let test_xavier_at_with_proper_shape () =
 
   (* Create and print histogram *)
   let num_bins = 20 in
-  let bins = create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01) in
+  let bins =
+    create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01)
+  in
   print_histogram bins ~title:"Xavier Distribution Histogram" ~max_width:40
 
 let () =
