@@ -116,7 +116,7 @@ let () =
         (* printf "batch_loss = %.4f\n%!" batch_loss.@[0]; *)
         epoch_loss := !epoch_loss +. batch_loss.@[0];
         Int.incr step_ref);
-    if epoch % 10 = 0 || epoch = epochs then
+    if epoch % 10 = 0 && (epoch <= 100 || epochs - epoch <= 100) then
       printf "Epoch %d: avg loss = %.2f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)
   done;
 
