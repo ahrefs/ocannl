@@ -11,10 +11,10 @@ Epoch=1, step=7, batch=7, lr=0.2, epoch loss=21.76
 Epoch=1, step=8, batch=8, lr=0.2, epoch loss=21.76
 Epoch=1, step=9, batch=9, lr=0.2, epoch loss=21.76
 ...............................................................
-Epoch=80, step=6396, batch=76, lr=0.1, epoch loss=0
-Epoch=80, step=6397, batch=77, lr=0.1, epoch loss=0
-Epoch=80, step=6398, batch=78, lr=0.1, epoch loss=0
-Epoch=80, step=6399, batch=79, lr=0.1, epoch loss=0
+Epoch=80, step=6396, batch=76, lr=0.1, epoch loss=0.00
+Epoch=80, step=6397, batch=77, lr=0.1, epoch loss=0.00
+Epoch=80, step=6398, batch=78, lr=0.1, epoch loss=0.00
+Epoch=80, step=6399, batch=79, lr=0.1, epoch loss=0.00
 
 Learning rate:
 ┌─────────┬─────────────────────────┐
