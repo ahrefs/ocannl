@@ -24,7 +24,6 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tnode.t
-  | Reset_padding of { tn : Tnode.t; value : float }
   | Set of {
       tn : Tnode.t;
       idcs : Indexing.axis_index array;

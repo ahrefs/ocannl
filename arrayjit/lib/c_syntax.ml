@@ -333,20 +333,6 @@ module C_syntax (B : C_syntax_config) = struct
         pp_ll
           (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
                Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
-    | Reset_padding { tn; value } -> (
-        match Lazy.force tn.padding with
-        | None -> empty (* No padding, nothing to reset *)
-        | Some (padding, _) ->
-            pp_ll
-              (Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding
-                 ~body:(fun idcs ->
-                   Low_level.Set
-                     {
-                       tn;
-                       idcs;
-                       llsc = Constant value;
-                       debug = get_ident tn ^ " padding := " ^ Float.to_string value;
-                     })))
     | Set { tn; idcs; llsc; debug } ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in

@@ -37,9 +37,6 @@ type t =
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; trace_it : bool }
   | Zero_out of Tn.t
-  | Reset_padding of { tn : Tn.t; value : float }
-      (** Sets only the padding margins of a tensor to the given value. Used when a tensor is read
-          by operations with different neutral elements (e.g., max-pool needs -inf, conv needs 0). *)
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
   | Set_from_vec of {
       tn : Tn.t;
@@ -294,11 +291,6 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
-    | Reset_padding { tn; value = _ } ->
-        (* Reset_padding only touches padding margins, not the data region.
-           It doesn't zero-initialize or make the tensor a scalar constexpr. *)
-        let _traced : traced_array = get_node traced_store tn in
-        ()
     | Set { tn; idcs; llsc; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) llsc;
         let traced : traced_array = get_node traced_store tn in
@@ -497,9 +489,6 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
         loop_proc ~env_dom:(Set.add env_dom index) body
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
-    | Reset_padding { tn; value = _ } ->
-        (* Reset_padding doesn't set the data region, only padding margins *)
-        if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
           check_idcs idcs;
@@ -687,7 +676,6 @@ let%track7_sexp inline_computation ~id
           (* For vector operations, we cannot inline them as scalar operations *)
           raise @@ Non_virtual 140
       | Zero_out _ -> None
-      | Reset_padding _ -> None
       | Set _ -> None
       | Set_from_vec _ -> None
       | Set_local (id, llsc) -> Some (Set_local (id, loop_scalar env llsc))
@@ -771,12 +759,6 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
             result
         | _ -> For_loop { for_config with body = loop body })
     | Zero_out tn ->
-        let traced : traced_array = get_node traced_store tn in
-        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual computations_table traced static_indices llc;
-        llc
-    | Reset_padding { tn; _ } ->
-        (* Reset_padding touches padding margins only; similar handling to Zero_out *)
         let traced : traced_array = get_node traced_store tn in
         if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
           check_and_store_virtual computations_table traced static_indices llc;
@@ -869,12 +851,6 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
           Tn.update_memory_mode tn Virtual 151;
-          None)
-        else Some llc
-    | Reset_padding { tn; _ } ->
-        if not @@ Tn.known_non_virtual tn then (
-          (* FIXME(#296): *)
-          Tn.update_memory_mode tn Virtual 1511;
           None)
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
@@ -984,7 +960,6 @@ and substitute_proc ~var ~value llc =
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
   | Zero_out _ -> llc
-  | Reset_padding _ -> llc
   | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_scalar llsc; debug }
   | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
       Set_from_vec { tn; idcs; length; vec_unop; arg = (loop_scalar arg_scalar, arg_prec); debug }
@@ -1004,7 +979,6 @@ let simplify_llc llc =
         Seq (c1, c2)
     | For_loop for_config -> For_loop { for_config with body = loop for_config.body }
     | Zero_out _ -> llc
-    | Reset_padding _ -> llc
     | Set { tn; idcs; llsc; debug } ->
         Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.prec)); debug }
     | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
@@ -1177,7 +1151,6 @@ let simplify_llc llc =
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out _ -> ()
-    | Reset_padding _ -> ()
     | Set { tn; llsc; _ } -> check_float tn llsc
     | Set_from_vec { tn; arg = arg_scalar, _; _ } -> check_float tn arg_scalar
     | Set_local (id, llsc) -> check_float id.tn llsc
@@ -1284,7 +1257,6 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
         loop c2
     | For_loop { body; _ } -> loop body
     | Zero_out la -> visit la
-    | Reset_padding { tn; _ } -> visit tn
     | Set { tn; llsc; _ } ->
         visit tn;
         loop_scalar llsc
@@ -1352,9 +1324,6 @@ let to_doc_cstyle ?name ?static_indices () llc =
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
-    | Reset_padding { tn; value } ->
-        string "reset_padding " ^^ doc_ident tn ^^ string " := " ^^ string (Float.to_string value)
-        ^^ string ";"
     | Set p ->
         let prec = Lazy.force p.tn.prec in
         let result =
@@ -1455,9 +1424,6 @@ let to_doc ?name ?static_indices () llc =
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
     | Zero_out tn -> string "zero_out " ^^ doc_ident tn ^^ string ";"
-    | Reset_padding { tn; value } ->
-        string "reset_padding " ^^ doc_ident tn ^^ string " := " ^^ string (Float.to_string value)
-        ^^ string ";"
     | Set p ->
         let result =
           group

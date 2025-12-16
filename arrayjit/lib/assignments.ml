@@ -276,20 +276,49 @@ let%track4_sexp to_low_level code =
       initialize_neutral
       && not (Indexing.is_surjective projections && Indexing.is_injective projections)
     in
-    (* Check if any RHS tensor has padding with None neutral value (needs reset before this op) *)
+    (* Check if any RHS tensor has padding with None neutral value (needs reset before this op).
+       Generate loops that set padding margins to the correct neutral value for this operation. *)
     let neutral_value = Ops.neutral_elem accum in
     let padding_resets =
       Array.filter_map rhses ~f:(fun buf ->
           let tn = match buf with Node tn | Merge_buffer tn -> tn in
           match Lazy.force tn.padding with
-          | Some (_, None) ->
-              (* Padding exists but neutral value is None - needs reset for this operation *)
-              Some (Low_level.Reset_padding { tn; value = neutral_value })
-          | Some (_, Some v) when Float.( <> ) v neutral_value ->
+          | Some (padding, None) ->
+              (* Padding exists but neutral value is None - needs reset for this operation.
+                 Generate loops to set padding margins to the neutral value. *)
+              Some
+                (Low_level.Comment
+                   ("reset padding margins of " ^ Tnode.debug_name tn ^ " to "
+                  ^ Float.to_string neutral_value)
+                :: [ Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding
+                       ~body:(fun idcs ->
+                         Low_level.Set
+                           {
+                             tn;
+                             idcs;
+                             llsc = Constant neutral_value;
+                             debug =
+                               Tnode.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
+                           }) ])
+          | Some (padding, Some v) when Float.( <> ) v neutral_value ->
               (* Padding exists with different neutral value - also needs reset *)
-              Some (Low_level.Reset_padding { tn; value = neutral_value })
+              Some
+                (Low_level.Comment
+                   ("reset padding margins of " ^ Tnode.debug_name tn ^ " to "
+                  ^ Float.to_string neutral_value)
+                :: [ Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding
+                       ~body:(fun idcs ->
+                         Low_level.Set
+                           {
+                             tn;
+                             idcs;
+                             llsc = Constant neutral_value;
+                             debug =
+                               Tnode.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
+                           }) ])
           | _ -> None)
       |> Array.to_list
+      |> List.concat
     in
     let for_loops_with_resets =
       if List.is_empty padding_resets then for_loops
