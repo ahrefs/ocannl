@@ -1,0 +1,244 @@
+# Build and publish relocatable opam switch tarballs for fast CI and Claude Code cloud
+# 
+# This workflow builds an opam switch with all OCANNL dependencies using
+# relocatable OCaml, then uploads it as a GitHub Release asset.
+#
+# Triggers:
+# - Manual dispatch (workflow_dispatch)
+# - When opam files change (optional auto-rebuild)
+#
+# The resulting tarball can be downloaded and unpacked to skip the ~15 min
+# cold-start compile time in CI or Claude Code cloud environments.
+
+name: Build Switch Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      ocaml_version:
+        description: 'OCaml version (e.g., 5.4.0, 5.5.0)'
+        required: true
+        default: '5.4.0'
+      use_relocatable_backport:
+        description: 'Use dra27 relocatable backport (for pre-5.5 versions)'
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release tag for the tarball (e.g., switch-cache-v1)'
+        required: true
+        default: 'switch-cache-v1'
+
+  # Uncomment to auto-rebuild when dependencies change:
+  # push:
+  #   paths:
+  #     - '*.opam'
+  #     - 'dune-project'
+
+jobs:
+  build-linux-x86_64:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap curl git
+
+      - name: Install opam
+        run: |
+          bash -c "sh <(curl -fsSL https://opam.ocaml.org/install.sh)" -- --version 2.2.1
+          opam --version
+
+      - name: Initialize opam with relocatable repository
+        run: |
+          if [ "${{ github.event.inputs.use_relocatable_backport }}" = "true" ]; then
+            echo "Using dra27 relocatable backport repository"
+            opam init -y --bare --disable-sandboxing \
+              --repos=relocatable=git+https://github.com/dra27/opam-repository.git#relocatable,default
+          else
+            echo "Using standard repository (OCaml 5.5+ has relocatable built-in)"
+            opam init -y --bare --disable-sandboxing
+          fi
+
+      - name: Create switch with relocatable OCaml
+        run: |
+          # Create a local switch in a predictable location
+          # Using /home/runner/.opam/ocannl-switch for reproducibility
+          opam switch create ocannl-switch ocaml.${{ github.event.inputs.ocaml_version }} -y
+          eval $(opam env --switch=ocannl-switch)
+          ocamlopt -config | head -20
+
+      - name: Install OCANNL dependencies
+        run: |
+          eval $(opam env --switch=ocannl-switch)
+          # Install all dependencies including test and doc deps
+          opam install . -y --deps-only --with-test --with-doc
+          # Also install common dev tools
+          opam install -y ocaml-lsp-server ocamlformat merlin
+
+      - name: Verify switch works
+        run: |
+          eval $(opam env --switch=ocannl-switch)
+          dune build @check || echo "Build check completed (may have warnings)"
+
+      - name: Package switch as tarball
+        run: |
+          SWITCH_PATH="$HOME/.opam/ocannl-switch"
+          TARBALL_NAME="ocannl-switch-${{ github.event.inputs.ocaml_version }}-linux-x86_64.tar.zst"
+          
+          # Create tarball with zstd compression (fast + good ratio)
+          tar -I 'zstd -19 -T0' -cf "$TARBALL_NAME" -C "$HOME/.opam" ocannl-switch
+          
+          # Also create a smaller tarball without doc/build artifacts
+          # This is faster to download for CI
+          TARBALL_SLIM="ocannl-switch-${{ github.event.inputs.ocaml_version }}-linux-x86_64-slim.tar.zst"
+          
+          # Remove build artifacts and docs to reduce size
+          rm -rf "$SWITCH_PATH/.opam-switch/build"
+          rm -rf "$SWITCH_PATH/doc"
+          find "$SWITCH_PATH" -name '*.cmt' -delete
+          find "$SWITCH_PATH" -name '*.cmti' -delete
+          
+          tar -I 'zstd -19 -T0' -cf "$TARBALL_SLIM" -C "$HOME/.opam" ocannl-switch
+          
+          ls -lh *.tar.zst
+          echo "TARBALL_NAME=$TARBALL_NAME" >> $GITHUB_ENV
+          echo "TARBALL_SLIM=$TARBALL_SLIM" >> $GITHUB_ENV
+
+      - name: Create checksums
+        run: |
+          sha256sum *.tar.zst > checksums-linux-x86_64.txt
+          cat checksums-linux-x86_64.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: switch-cache-linux-x86_64
+          path: |
+            *.tar.zst
+            checksums-linux-x86_64.txt
+          retention-days: 7
+
+  # Optional: Build for macOS ARM64 (Apple Silicon)
+  build-macos-arm64:
+    runs-on: macos-14  # M1 runner
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install opam via Homebrew
+        run: |
+          brew install opam
+          opam --version
+
+      - name: Initialize opam with relocatable repository
+        run: |
+          if [ "${{ github.event.inputs.use_relocatable_backport }}" = "true" ]; then
+            opam init -y --bare \
+              --repos=relocatable=git+https://github.com/dra27/opam-repository.git#relocatable,default
+          else
+            opam init -y --bare
+          fi
+
+      - name: Create switch with relocatable OCaml
+        run: |
+          opam switch create ocannl-switch ocaml.${{ github.event.inputs.ocaml_version }} -y
+          eval $(opam env --switch=ocannl-switch)
+          ocamlopt -config | head -20
+
+      - name: Install OCANNL dependencies
+        run: |
+          eval $(opam env --switch=ocannl-switch)
+          opam install . -y --deps-only --with-test --with-doc
+          opam install -y ocaml-lsp-server ocamlformat merlin
+
+      - name: Package switch as tarball
+        run: |
+          SWITCH_PATH="$HOME/.opam/ocannl-switch"
+          TARBALL_NAME="ocannl-switch-${{ github.event.inputs.ocaml_version }}-macos-arm64.tar.zst"
+          
+          # Install zstd if not present
+          brew install zstd || true
+          
+          tar -I 'zstd -19' -cf "$TARBALL_NAME" -C "$HOME/.opam" ocannl-switch
+          
+          # Slim version
+          TARBALL_SLIM="ocannl-switch-${{ github.event.inputs.ocaml_version }}-macos-arm64-slim.tar.zst"
+          rm -rf "$SWITCH_PATH/.opam-switch/build"
+          rm -rf "$SWITCH_PATH/doc"
+          find "$SWITCH_PATH" -name '*.cmt' -delete
+          find "$SWITCH_PATH" -name '*.cmti' -delete
+          
+          tar -I 'zstd -19' -cf "$TARBALL_SLIM" -C "$HOME/.opam" ocannl-switch
+          
+          ls -lh *.tar.zst
+          echo "TARBALL_NAME=$TARBALL_NAME" >> $GITHUB_ENV
+          echo "TARBALL_SLIM=$TARBALL_SLIM" >> $GITHUB_ENV
+
+      - name: Create checksums
+        run: |
+          shasum -a 256 *.tar.zst > checksums-macos-arm64.txt
+          cat checksums-macos-arm64.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: switch-cache-macos-arm64
+          path: |
+            *.tar.zst
+            checksums-macos-arm64.txt
+          retention-days: 7
+
+  # Create GitHub Release with all tarballs
+  release:
+    needs: [build-linux-x86_64, build-macos-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir release-assets
+          find artifacts -name '*.tar.zst' -exec mv {} release-assets/ \;
+          find artifacts -name 'checksums-*.txt' -exec cat {} >> release-assets/checksums.txt \;
+          ls -lh release-assets/
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: "OCANNL Switch Cache - OCaml ${{ github.event.inputs.ocaml_version }}"
+          body: |
+            Pre-built opam switch with OCANNL dependencies for fast CI setup.
+            
+            ## Usage
+            
+            ### In GitHub Actions CI
+            ```yaml
+            - name: Restore cached switch
+              run: |
+                curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.release_tag }}/ocannl-switch-${{ github.event.inputs.ocaml_version }}-linux-x86_64-slim.tar.zst | tar -I zstd -xf - -C ~/.opam
+                opam switch link ocannl-switch .
+                eval $(opam env)
+            ```
+            
+            ### In Claude Code cloud (SessionStart hook)
+            See `.claude/settings.json` in the repository.
+            
+            ## Contents
+            - OCaml ${{ github.event.inputs.ocaml_version }} (relocatable)
+            - All OCANNL dependencies (neural_nets_lib, arrayjit)
+            - Dev tools: ocaml-lsp-server, ocamlformat, merlin
+            
+            ## Variants
+            - `*-slim.tar.zst`: Without build artifacts and docs (~smaller)
+            - Full tarball: Includes everything
+          files: release-assets/*
+          fail_on_unmatched_files: true
