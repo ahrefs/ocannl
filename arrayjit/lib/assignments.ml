@@ -228,6 +228,31 @@ let%track4_sexp to_low_level code =
     let idcs = if is_padded tn then apply_padding_offset tn idcs else idcs in
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
+  let reset_padding_regions tn neutral_value : Low_level.t list =
+    match Tn.get_padding tn with
+    | None -> []
+    | Some (padding_arr, _) ->
+        Low_level.Comment
+          ("reset padding margins of " ^ Tnode.debug_name tn ^ " to "
+         ^ Float.to_string neutral_value)
+        :: [
+             Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding:padding_arr
+               ~body:(fun idcs ->
+                 Low_level.Set
+                   {
+                     tn;
+                     idcs;
+                     llsc = Low_level.Constant neutral_value;
+                     debug = Tn.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
+                   });
+           ]
+  in
+  let default_padding_before array llc =
+    let padding_loops =
+      match Tn.get_padding array with Some (_, Some v) -> reset_padding_regions array v | _ -> []
+    in
+    Low_level.unflat_lines @@ padding_loops @ [ llc ]
+  in
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
@@ -299,43 +324,13 @@ let%track4_sexp to_low_level code =
       Array.filter_map rhses ~f:(fun buf ->
           let tn = match buf with Node tn | Merge_buffer tn -> tn in
           match Lazy.force tn.padding with
-          | Some (padding, None) ->
+          | Some (_, None) ->
               (* Padding exists but neutral value is None - needs reset for this operation. Generate
                  loops to set padding margins to the neutral value. *)
-              Some
-                (Low_level.Comment
-                   ("reset padding margins of " ^ Tnode.debug_name tn ^ " to "
-                  ^ Float.to_string neutral_value)
-                :: [
-                     Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding
-                       ~body:(fun idcs ->
-                         Low_level.Set
-                           {
-                             tn;
-                             idcs;
-                             llsc = Constant neutral_value;
-                             debug =
-                               Tnode.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
-                           });
-                   ])
-          | Some (padding, Some v) when Float.( <> ) v neutral_value ->
+              Some (reset_padding_regions tn neutral_value)
+          | Some (_, Some v) when Float.( <> ) v neutral_value ->
               (* Padding exists with different neutral value - also needs reset *)
-              Some
-                (Low_level.Comment
-                   ("reset padding margins of " ^ Tnode.debug_name tn ^ " to "
-                  ^ Float.to_string neutral_value)
-                :: [
-                     Low_level.loop_over_padding_region ~dims:(Lazy.force tn.dims) ~padding
-                       ~body:(fun idcs ->
-                         Low_level.Set
-                           {
-                             tn;
-                             idcs;
-                             llsc = Constant neutral_value;
-                             debug =
-                               Tnode.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
-                           });
-                   ])
+              Some (reset_padding_regions tn neutral_value)
           | _ -> None)
       |> Array.to_list |> List.concat
     in
@@ -430,29 +425,36 @@ let%track4_sexp to_low_level code =
         let c1 = loop c1 in
         let c2 = loop c2 in
         Low_level.Seq (c1, c2)
-    | Fetch { array; fetch_op = Constant 0.0; dims = _ } -> Low_level.Zero_out array
+    | Fetch { array; fetch_op = Constant 0.0; dims = _ } ->
+        default_padding_before array @@ Low_level.Zero_out array
     | Fetch { array; fetch_op = Constant c; dims } ->
-        (* FIXME: Claude claims this is leaving the padding region uninitialized. *)
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs -> set array idcs @@ Constant c)
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+            set array idcs @@ Constant c)
     | Fetch { array; fetch_op = Constant_bits i; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
-        (* FIXME: Claude claims this is leaving the padding region uninitialized. *)
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Embed_index (Iterator s.static_symbol))
     | Fetch { array; fetch_op = Embed_self_id; dims } ->
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits (Int64.of_int array.id))
     | Fetch { array; fetch_op = Embed_dim variable_ref; dims } ->
         (* Note: we are guaranteed all shape inference is forced before we access variable_ref. *)
-        Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant (Float.of_int @@ Option.value_exn variable_ref.solved_dim))
     | Fetch { array; fetch_op = Range_over_offsets; dims = (lazy dims) } ->
-        Low_level.loop_over_dims dims ~body:(fun idcs ->
+        default_padding_before array
+        @@ Low_level.loop_over_dims dims ~body:(fun idcs ->
             let offset = Indexing.reflect_projection ~dims ~projection:idcs in
             set array idcs @@ Embed_index offset)
     | Fetch { array; fetch_op = Constant_fill values; dims = (lazy dims) } ->
@@ -468,7 +470,8 @@ let%track4_sexp to_low_level code =
                  "Constant_fill size is too large to unroll for %{Tn.debug_name array} (size: \
                   %{size#Int}, limit: %{limit_constant_fill_size#Int}), either increase \
                   ocannl_limit_constant_fill_size or use Tnode.set_values instead"];
-        Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
+        default_padding_before array
+        @@ Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
             set array idcs @@ Constant values.(offset % size))
   in
   loop code
