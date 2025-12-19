@@ -1,10 +1,13 @@
 # Fast OCaml Development Setup
 
+FIXME: NOTE: **This functionality is not available yet, ignore this document.**
+
 This guide explains how to use pre-built relocatable opam switches to dramatically speed up OCaml environment setup for CI, cloud development, and local installation.
 
 ## The Problem
 
 A typical `opam install . --deps-only` for a project like OCANNL takes **10-20 minutes** because:
+
 1. The OCaml compiler must be built from source
 2. All dependencies must be compiled
 3. This happens on every fresh CI run or cloud session

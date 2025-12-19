@@ -10,6 +10,9 @@
 
 set -e
 
+# FIXME: Not ready yet
+exit 0
+
 # Only run in Claude Code cloud environment
 if [ "$CLAUDE_CODE_REMOTE" != "true" ]; then
     echo "Not in Claude Code cloud environment, skipping OCaml setup"
