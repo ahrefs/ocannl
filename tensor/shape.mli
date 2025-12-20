@@ -5,19 +5,21 @@
     Definition and properties of the syntax of labels specifications and einsum notation:
     - Whitespace-insensitive except that whitespace separates identifiers.
     - Comes in two variants: single-character and multicharacter;
-    - if there is a comma [','] anywhere in the initial text, the multicharacter version is used,
+    - if there is one of [',', '+', '*', '^'] anywhere in the initial text, the multicharacter
+      version is used,
     - otherwise the single character version is used.
     - Currently, the only non-whitespace, non-alphanumeric characters that make sense / are allowed
-      in a spec are: ['>', '|', '-', ',', '=', ';', '+', '*', '_'].
+      in a spec are: ['>', '|', '-', ',', '=', ';', '+', '*', '_', '^'].
+    - The lexer handles whitespace.
     - identifier: single alphanum character or '_' in single-char mode, a sequence of alphanum
-      characters or '_' otherwise (whitespace not allowed).
-    - separators: a sequence of commas and whitespaces.
-    - separators_with_comma: commas and whitespaces containing at least one comma.
-    - axes_spec_single_char: separators? identifier+ separators?
-    - axes_spec_multichar: separators? (identifier separators_with_comma)* identifier separators?
-    - conv_expression: term '+' term
+      characters or '_' otherwise
+    - axes_spec_single_char: identifier+
+    - axes_spec_multichar: (axis_spec comma)* axis_spec
+    - axis_spec: identifier <|> conv_expression
+    - conv_expression: term '<' '+' term <|> term '=' '+' term -- syntax extensions allow omitting
+      ['<' | '='] when [use_padding] is in scope.
     - term: (coeff '*')? identifier
-    - coeff: integer -- note that syntax extensions will splice in the value of an OCaml identifier
+    - coeff: integer -- syntax extensions will splice in the value of an OCaml identifier
     - ellipsis_spec: '...' <|> '..' identifier '..'
     - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
     - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|'
@@ -41,17 +43,19 @@
     The label ["_"] is a place-holder: it is not output to the resulting map but aligns the axes of
     other labels.
 
-    Conv expressions have the form [stride*output+dilation*kernel] where stride and dilation are
-    optional integer coefficients (defaulting to 1), and output/kernel are axis labels. This syntax
-    enables convolution-style indexing where input_dimension = stride * output_iterator + dilation *
-    kernel_iterator. Conv expressions automatically trigger multichar mode and are only supported in
-    multichar mode.
+    Conv expressions have the form [stride*output< + dilation*kernel + stride_offset] or with [=] in
+    place of [<], where stride and dilation are optional integer coefficients (defaulting to 1),
+    output/kernel are axis labels, and stride_offset is an optional integer offset that's smaller
+    than stride. This syntax enables convolution-style indexing where input_dimension = stride *
+    output_iterator + dilation * kernel_iterator. Conv expressions automatically trigger multichar
+    mode. Under syntax extensions [%cd] and [%op], the integer coefficients can be spliced-in OCaml
+    identifiers and the specifier [<] vs. [=] can be omitted if [use_padding] is in scope.
 
     Adding [<] after the output label (e.g., [stride*output<+kernel]) indicates no-padding mode,
     where indices must stay within the input bounds. In this mode, the input dimension must satisfy:
     [(input - effective_kernel_span) mod stride = 0], where
-    [effective_kernel_span = 1 + (kernel - 1) * dilation]. Without [<], padding is applied and there
-    is no such divisibility constraint.
+    [effective_kernel_span = 1 + (kernel - 1) * dilation]. With [=] instead, padding is applied for
+    the kernel needs, and the constraint is simply [input mod stride = 0].
 
     Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
     axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case
