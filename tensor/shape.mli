@@ -15,11 +15,12 @@
       characters or '_' otherwise
     - axes_spec_single_char: identifier+
     - axes_spec_multichar: (axis_spec comma)* axis_spec
-    - axis_spec: identifier <|> conv_expression
-    - conv_expression: term '<' '+' term <|> term '=' '+' term -- syntax extensions allow omitting
+    - axis_spec: identifier <|> conv_expr <|> concat_expr
+    - conv_expr: term '<' '+' term <|> term '=' '+' term -- syntax extensions allow omitting
       ['<' | '='] when [use_padding] is in scope.
     - term: (coeff '*')? identifier
     - coeff: integer -- syntax extensions will splice in the value of an OCaml identifier
+    - concat_expr: identifier '^' identifier ('^' identifier)*
     - ellipsis_spec: '...' <|> '..' identifier '..'
     - row_spec: axes_spec <|> ellipsis_spec axes_spec <|> axes_spec ellipsis_spec axes_spec
     - labels_spec: row_spec <|> row_spec '|' row_spec <|> row_spec '->' row_spec <|> row_spec '|'
@@ -56,6 +57,9 @@
     [(input - effective_kernel_span) mod stride = 0], where
     [effective_kernel_span = 1 + (kernel - 1) * dilation]. With [=] instead, padding is applied for
     the kernel needs, and the constraint is simply [input mod stride = 0].
+
+    Concat expressions have the form [label1 ^ label2 ^ ...], indicating that multiple axes are
+    concatenated into a single axis. Concat expressions automatically trigger multichar mode.
 
     Note: currently, OCANNL shapes always allow broadcasting. Row variables track the broadcasted
     axes -- if there is no row variable, broadcasted axes are not tracked. In the notation case

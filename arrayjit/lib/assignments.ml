@@ -44,6 +44,15 @@ type accum_rhs =
   | Ternop of { op : Ops.ternop; rhs1 : buffer; rhs2 : buffer; rhs3 : buffer }
   | Binop of { op : Ops.binop; rhs1 : buffer; rhs2 : buffer }
   | Unop of { op : Ops.unop; rhs : buffer }
+  | Block of { op : Ops.unop; rhses : buffer array }
+      (** [Block] is the only assignment type that allows [Concat] axes in projections.
+
+          Similar to [Unop] except it's a projection of potentially multiple tensors, e.g.
+          concatenation or block tensor; or with just a single RHS, it can be a slice taking part of
+          an argument axis or producing part of a result axis. The corresponding [projections] must
+          use [Concat] in such a way that every choice of [Concat] components uses at most one of
+          the [rhses] (note: none is allowed). Note: it is also allowed that there is no LHS (i.e.
+          no valid LHS projection) for some choices of the [Concat] components. *)
 [@@deriving sexp_of, equal]
 
 type t =
@@ -107,6 +116,7 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
           | Unop { rhs; _ } -> [ of_node rhs ]
           | Binop { rhs1; rhs2; _ } -> [ of_node rhs1; of_node rhs2 ]
           | Ternop { rhs1; rhs2; rhs3; _ } -> [ of_node rhs1; of_node rhs2; of_node rhs3 ]
+          | Block { rhses; _ } -> Array.to_list rhses |> List.map ~f:of_node
         in
         Set.union_list (module Tn) (one lhs :: rhses)
     | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
@@ -134,6 +144,7 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
           | Unop { rhs; _ } -> of_node rhs
           | Binop { rhs1; rhs2; _ } -> of_node rhs1 + of_node rhs2
           | Ternop { rhs1; rhs2; rhs3; _ } -> of_node rhs1 + of_node rhs2 + of_node rhs3
+          | Block { rhses; _ } -> Array.fold rhses ~init:empty ~f:(fun acc buf -> acc + of_node buf)
         in
         (inputs, one lhs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
@@ -187,7 +198,8 @@ let%track4_sexp to_low_level code =
                 | Fixed_idx n -> Fixed_idx (n + left_pad)
                 | Iterator s -> Affine { symbols = [ (1, s) ]; offset = left_pad }
                 | Affine { symbols; offset } -> Affine { symbols; offset = offset + left_pad }
-                | Sub_axis -> Sub_axis)
+                | Sub_axis -> Sub_axis
+                | Concat _ -> assert false)
   in
   let is_padded tn = Option.is_some (Tn.get_padding tn) in
   let get (buffer : buffer) (idcs : Indexing.axis_index array) : Low_level.scalar_t =
@@ -263,7 +275,10 @@ let%track4_sexp to_low_level code =
          symbol-to-tensor tracking. *)
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
-        Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
+        let flattened_prod_iters =
+          Array.concat_map projections.product_iterators ~f:Array.of_list
+        in
+        Array.mapi flattened_prod_iters ~f:(fun i prod_iter ->
             (prod_iter, Indexing.Iterator loop_iters.(i)))
         |> Array.to_list
         |> Map.of_alist_exn (module Indexing.Symbol)
@@ -279,9 +294,21 @@ let%track4_sexp to_low_level code =
                   | Some (Indexing.Iterator s') -> (coeff, s')
                   | Some (Indexing.Affine _) ->
                       failwith "Affine substitution in Affine index not supported"
+                  | Some (Indexing.Concat _) ->
+                      failwith "Concat substitution in Affine index not supported"
                   | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
             in
             Indexing.Affine { symbols; offset }
+        | Indexing.Concat syms ->
+            (* Substitute each symbol in the concat list *)
+            let syms' =
+              List.map syms ~f:(fun s ->
+                  match Map.find subst_map s with
+                  | Some (Indexing.Iterator s') -> s'
+                  | Some _ -> failwith "Only Iterator substitution supported in Concat"
+                  | None -> s)
+            in
+            Indexing.Concat syms'
       in
       let lhs_idcs : Indexing.axis_index array = Array.map projections.project_lhs ~f:subst_index in
       let rhses_idcs : Indexing.axis_index array array =
@@ -351,6 +378,7 @@ let%track4_sexp to_low_level code =
           | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
           | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
           | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
+          | Block { op; rhses } -> (Ops.Unop op, rhses)
         in
         loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections
     | Set_vec_unop { op; lhs; rhs; projections; _ } ->
@@ -514,6 +542,7 @@ let get_ident_within_code ?no_dots c =
           | Unop { rhs; _ } -> [ tn rhs ]
           | Binop { rhs1; rhs2; _ } -> [ tn rhs1; tn rhs2 ]
           | Ternop { rhs1; rhs2; rhs3; _ } -> [ tn rhs1; tn rhs2; tn rhs3 ]
+          | Block { rhses; _ } -> Array.to_list rhses |> List.map ~f:tn
         in
         List.iter ~f:visit (lhs :: rhses)
     | Set_vec_unop { op = _; lhs; rhs; projections = _; projections_debug = _ } ->
@@ -604,6 +633,19 @@ let to_doc ?name ?static_indices () c =
             ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
                 else empty)
             ^^ string (buffer_ident rhs)
+            ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+                else empty)
+            ^^ string ";" ^^ break 1
+        | Block { op; rhses } ->
+            (* TODO: Pretty-print Block operations *)
+            string (ident lhs)
+            ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+            ^^ space
+            ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
+                else empty)
+            ^^ brackets
+                 (separate (semi ^^ space)
+                    (Array.to_list (Array.map rhses ~f:(Fn.compose string buffer_ident))))
             ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
                 else empty)
             ^^ string ";" ^^ break 1)

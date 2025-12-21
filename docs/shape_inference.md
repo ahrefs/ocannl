@@ -88,6 +88,10 @@ Equivalently, solving for output_dim: `output_dim = (input_dim - effective_kerne
 
 Shape inference does not maintain padding for axes of individual tensor nodes—these padding values are computed and updated during projections inference.
 
+### Concatenation
+
+The `Concat` constructor represents an axis arising from concatenating of the component dimensions. While for uniformity we use `dim list` here, currently we don't support the components themselves being affine. During shape inference, once the components are known, `Concat` resolves to the sum of the dimensions of the components. When not called from projections inference, also do simplifications that are valid arithmetically but don't make sense as projections: e.g. converting a `Concat` that repeats the same `dim` value (e.g. a variable), into a stride-only `Affine`.
+
 ### Preventing Premature Guessing with Total_elems Constraints
 
 A critical aspect of shape inference is avoiding premature "guessing" of dimension variables to minimal values (dimension-1-no-label or no-further-axes for rows) when such guessing would make pending constraints unsatisfiable. This is particularly important for `Total_elems` constraints of the form:
@@ -314,6 +318,12 @@ The projection inference functions.
 ### Convolutions
 
 There is an important and intentional difference between `dims` in the `arrayjit` part of the project: tensor nodes, `Ndarray` buffers, code generation -- they include padding in the dimension sizes; and on the other hand shape types, shape inference and tensors exclude padding from the dimension sizes. There is a tension: once the delayed computations of padding, projections and dims (dimension sizes) are forced for a particular node, the padding can no longer be updated (the underlying `Ndarray` buffer might already be created). Since during inference we update the padding incrementally without variables standing in for insufficient information, this unfortunately causes observability of the during-inference and post-inference distinction for the padding of a tensor node.
+
+### Concatenation
+
+Projections inference for `Concat` variants is significantly more than deriving the `Concat` constructors of the `axis_index` type: concatenation affects how `product_space` and `product_iterators` are computed. Without any use of `Concat`, the `product_space` and `product_iterators` fields would be arrays of singleton lists. With occurrences of `Concat`, we need to build a hypergraph where vertices are the symbols (or canonical `proj_id`s), and hyperedges are the `Concat` axis indices. We decompose this graph into connected components. Then, `product_iterators` lists are the connected components, and `product_space` lists are the sizes of the corresponding dimensions (mapping over the array and the lists).
+
+Importantly, dim-1 projections that participate in `Concat` axes are not converted to `Fixed_idx 0` expressions; we need symbols for all `Concat` participants for book-keeping during lowering.
 
 ## Deriving the constraints
 

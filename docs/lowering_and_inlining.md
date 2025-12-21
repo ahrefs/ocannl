@@ -1,6 +1,6 @@
 # Compilation to Cross-Backend Low-Level Representation, and Backend-Independent Optimizations
 
-Computation in OCANNL is imperative. At the high-level, we store tensor node assignments as `Assignments.t`, which provides high-level operations like `Accum_op` (with `Ternop`/`Binop`/`Unop` right-hand sides), `Set_vec_unop`, and `Fetch`. This is translated to a low-level representation `Low_level.t` which is a C-like mini-language operating on scalars.
+Computation in OCANNL is imperative. At the high-level, we store tensor node assignments as `Assignments.t`, which provides high-level operations like `Accum_op` (with `Ternop`/`Binop`/`Unop`/`Block` right-hand sides), `Set_vec_unop`, and `Fetch`. This is translated to a low-level representation `Low_level.t` which is a C-like mini-language operating on scalars.
 
 ## Low-Level Representation
 
@@ -47,15 +47,20 @@ type axis_index =
   | Affine of { symbols : (int * symbol) list; offset : int }
       (* An affine expression: Σ(coeff_i * symbol_i) + offset *)
   | Sub_axis                   (* Part of a multi-axis vectorized access *)
+  | Concat of symbol list
+      (** This axis is formed by concatenating multiple axes, each represented by an iterator
+          symbol. [Concat] indices are eliminated during lowering. *)
 ```
 
 `Affine` indices are crucial for convolutions: `symbols = [(stride, i1); (dilation, i2)]` with `offset = -padding`.
+
+`Concat` indices are used in operations like tensor concatenation or block tensor construction. Currently, we only intend to support `Concat` for assignments of the `Block` variety (variant of the `Assignments.accum_rhs` type).
 
 ## Translation from Assignments
 
 The translation `Assignments.to_low_level` converts high-level operations to low-level code:
 
-1. **Projections to Loops**: `projections.product_space` elements become nested for loops with fresh loop index symbols
+1. **Projections to Loops**: `projections.product_space` elements become nested for loops with fresh loop index symbols; elements in the same list become loops sequenced after each other
 2. **Index Translation**: Tensor indices are derived from `projections.project_lhs` and `projections.project_rhs` with symbol substitution
 3. **Operations**: High-level operations like `Accum_op` become loops over scalar operations
 4. **Initialization**: If `initialize_neutral` is true and the projection isn't surjective+injective, we initialize with the neutral element
@@ -63,6 +68,10 @@ The translation `Assignments.to_low_level` converts high-level operations to low
 ### Symbol Freshening During Lowering
 
 An important detail: `projections.product_iterators` may be shared across different operations, so lowering creates **fresh symbols** for each loop. The substitution map tracks how product iterators map to fresh loop iterators, including handling `Affine` indices by substituting each symbol in the affine combination.
+
+### Converting Concatenation to Sequencing
+
+When the elements of `projections.product_space` and `projections.product_iterators` being processed are lists of more than one element, we generate one (nested) loop for each as usual, and put the loops in sequence (preserving the list order). We remember which of the components was picked for the given loop in the recursive call. When we get down to the base case, we select the specific buffer out of `Block`, so that the projection of this buffer (i.e. the `project_rhs` at the same position as the buffer) has only symbols that were picked when descending this path of the nested loop recursive calls. With the RHS projection and the RHS buffer thus selected, we lower the assignment as if it were a unary assignment with identity as the unary operation. We emit `Noop` if either the LHS is invalid, or no RHS can be selected. If multiple RHS buffers are valid, we raise a user error about block tensor operation ambiguity.
 
 ## Backend-Independent Optimizations
 

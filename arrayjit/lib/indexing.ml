@@ -114,6 +114,9 @@ type axis_index =
           [Affine] to not be ambiguous: [symbols] should be longer than 1 or have a coefficient
           different from 1 and 0. *)
   | Sub_axis  (** This axis belongs to an adjacent multi-axis index. *)
+  | Concat of symbol list
+      (** This axis is formed by concatenating multiple axes, each represented by an iterator
+          symbol. [Concat] indices are eliminated during lowering. *)
 [@@deriving compare, equal, sexp]
 
 type str_osym_map = (string, symbol option, Base.String.comparator_witness) Base.Map.t
@@ -131,16 +134,19 @@ let unique_debug_id =
     !projections_uid
 
 type projections = {
-  product_space : int array;
-      (** The product space dimensions that an operation should parallelize (map-reduce) over. *)
+  product_space : int list array;
+      (** The product space dimensions that an operation should parallelize (map-reduce) over.
+          Singletons except for concatenation dimensions. *)
   lhs_dims : int array;  (** The dimensions of the LHS array. *)
   rhs_dims : int array array;
       (** The dimensions of the RHS arrays, needed for deriving projections from other projections.
       *)
-  product_iterators : symbol array;
+  product_iterators : symbol list array;
       (** The product space iterators (concatentation of the relevant batch, output, input axes) for
           iterating over the [product_space] axes, where same axes are at same array indices. These
-          may be shared; lowering creates fresh symbols for loop indices. *)
+          may be shared; lowering creates fresh symbols for loop indices. Singletons except for
+          concatenation dimensions. A concatenation dimension is a connected component of symbols
+          participating in concatenated axes. *)
   project_lhs : axis_index array;
       (** A projection that takes an [product_space]-bound index and produces an index into the
           result of an operation. *)
@@ -169,62 +175,80 @@ let is_surjective proj =
   if has_non_trivial_fixed then false
   else
     (* Collect symbols used in LHS *)
-    let lhs_symbols, has_affine, has_sub_axis =
-      Array.fold proj.project_lhs ~init:([], false, false) ~f:(fun (syms, has_aff, has_sub) idx ->
+    let lhs_symbols, has_affine, has_sub_axis, num_concat_axes =
+      Array.fold proj.project_lhs ~init:([], false, false, 0)
+        ~f:(fun (syms, has_aff, has_sub, num_concat) idx ->
           match idx with
-          | Iterator s -> (s :: syms, has_aff, has_sub)
-          | Fixed_idx _ -> (syms, has_aff, has_sub)
+          | Iterator s -> (s :: syms, has_aff, has_sub, num_concat)
+          | Fixed_idx _ -> (syms, has_aff, has_sub, num_concat)
           | Affine { symbols; _ } ->
               let coeff1_syms =
                 List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
               in
-              (coeff1_syms @ syms, true, has_sub)
-          | Sub_axis -> (syms, has_aff, true))
+              (coeff1_syms @ syms, true, has_sub, num_concat)
+          | Sub_axis -> (syms, has_aff, true, num_concat)
+          | Concat syms_list -> (syms_list @ syms, has_aff, has_sub, num_concat + 1))
     in
-    let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
-    let product_symbol_set = Set.of_array (module Symbol) proj.product_iterators in
-
-    (* All lhs symbols must be from product iterators (no bound symbols) *)
-    if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
-    else if has_sub_axis then
-      (* Conservative: Sub_axis case is complex, so assume non-surjective. This is pessimistic but
-         safe - Sub_axis would require comparing lhs_dims and product_space dimensions carefully. *)
+    if num_concat_axes > 1 then
+      (* With multiple LHS Concat axes, we either have a block tensor (disjoint symbols in Concats),
+         or a partially-diagonal tensor (overlapping symbols in Concats). *)
       false
-    else if has_affine then
-      (* For Affine indices with strides: check coefficient compatibility. A strided access pattern
-         may skip elements. *)
-      let symbol_dims =
-        Array.filter_mapi proj.product_iterators ~f:(fun i sym ->
-            if Set.mem lhs_symbol_set sym then Some (sym, proj.product_space.(i)) else None)
-        |> Array.to_list
-        |> Map.of_alist_exn (module Symbol)
-      in
-      let check_affine_surjective =
-        Array.for_all proj.project_lhs ~f:(function
-          | Affine { symbols; _ } ->
-              (* Find max dimension of coeff=1 symbols *)
-              let max_coeff1_dim =
-                List.filter_map symbols ~f:(fun (coeff, s) ->
-                    if coeff = 1 then Map.find symbol_dims s else None)
-                |> List.max_elt ~compare:Int.compare
-                |> Option.value ~default:Int.max_value
-              in
-              (* Check that coeff=1 dimension is not smaller than any stride *)
-              List.for_all symbols ~f:(fun (coeff, _) -> coeff = 1 || max_coeff1_dim >= coeff)
-          | _ -> true)
-      in
-      if not check_affine_surjective then false
-      else
-        (* Check that we have enough unique symbols to cover all LHS dimensions *)
-        Set.length lhs_symbol_set >= Array.length proj.project_lhs
     else
-      (* Simple case: only Iterator and Fixed_idx *)
-      (* Need enough unique symbols to cover all dimensions *)
-      Set.length lhs_symbol_set >= Array.length proj.project_lhs
+      let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
+      let product_symbol_set =
+        Set.of_list (module Symbol) (Array.to_list proj.product_iterators |> List.concat)
+      in
+
+      (* All lhs symbols must be from product iterators (no bound symbols) *)
+      if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
+      else if has_sub_axis then
+        (* Conservative: Sub_axis case is complex, so assume non-surjective. This is pessimistic but
+           safe - Sub_axis would require comparing lhs_dims and product_space dimensions
+           carefully. *)
+        false
+      else if has_affine then
+        (* For Affine indices with strides: check coefficient compatibility. A strided access
+           pattern may skip elements. *)
+        let symbol_dims =
+          Array.foldi proj.product_iterators ~init:[] ~f:(fun i acc syms ->
+              let dims = proj.product_space.(i) in
+              let pairs = List.zip_exn syms dims in
+              List.fold pairs ~init:acc ~f:(fun acc (sym, d) ->
+                  if Set.mem lhs_symbol_set sym then (sym, d) :: acc else acc))
+          |> Map.of_alist_exn (module Symbol)
+        in
+        let check_affine_surjective =
+          Array.for_all proj.project_lhs ~f:(function
+            | Affine { symbols; _ } ->
+                (* Find max dimension of coeff=1 symbols *)
+                let max_coeff1_dim =
+                  List.filter_map symbols ~f:(fun (coeff, s) ->
+                      if coeff = 1 then Map.find symbol_dims s else None)
+                  |> List.max_elt ~compare:Int.compare
+                  |> Option.value ~default:Int.max_value
+                in
+                (* Check that coeff=1 dimension is not smaller than any stride *)
+                List.for_all symbols ~f:(fun (coeff, _) -> coeff = 1 || max_coeff1_dim >= coeff)
+            | _ -> true)
+        in
+        if not check_affine_surjective then false
+        else
+          (* Check that we have enough unique symbols to cover all LHS dimensions *)
+          Set.length lhs_symbol_set >= Array.length proj.project_lhs
+      else
+        (* Simple case: only Iterator and Fixed_idx *)
+        (* Need enough unique symbols to cover all dimensions *)
+        Set.length lhs_symbol_set >= Array.length proj.project_lhs
 
 let is_injective proj =
-  let product_iterator_set = Set.of_array (module Symbol) proj.product_iterators in
-
+  let all_product_iterators =
+    Set.of_list (module Symbol) (Array.to_list proj.product_iterators |> List.concat)
+  in
+  let product_iterator_sets =
+    Array.fold proj.product_iterators ~init:[ [] ] ~f:(fun acc syms ->
+        List.concat_map acc ~f:(fun combination -> List.map syms ~f:(fun s -> s :: combination)))
+    |> List.map ~f:(Set.of_list (module Symbol))
+  in
   (* Check each LHS index for injectivity *)
   let lhs_symbols, is_injective_mapping =
     Array.fold proj.project_lhs ~init:([], true) ~f:(fun (syms, still_injective) idx ->
@@ -236,29 +260,39 @@ let is_injective proj =
           | Affine { symbols; _ } ->
               (* Filter for symbols that are product iterators *)
               let product_symbols =
-                List.filter symbols ~f:(fun (_coeff, s) -> Set.mem product_iterator_set s)
+                List.filter symbols ~f:(fun (_coeff, s) -> Set.mem all_product_iterators s)
               in
               (* If more than one product iterator in this Affine index, not injective *)
               if List.length product_symbols > 1 then (syms, false)
               else
                 (* (coefficients don't matter for injectivity) *)
                 (List.map product_symbols ~f:snd @ syms, true)
-          | Sub_axis -> (syms, true))
+          | Sub_axis -> (syms, true)
+          | Concat syms_list -> (syms_list @ syms, true))
   in
 
   if not is_injective_mapping then false
   else
     let lhs_symbol_set = Set.of_list (module Symbol) lhs_symbols in
-    (* For injectivity, each product iterator must map to at most one position *)
-    Set.is_subset (Set.of_array (module Symbol) proj.product_iterators) ~of_:lhs_symbol_set
+    (* For injectivity, each product iterator of a valid input block must map to at most one
+       position *)
+    let good, bad =
+      List.partition_tf product_iterator_sets ~f:(Set.is_subset ~of_:lhs_symbol_set)
+    in
+    if List.is_empty good then false
+    else List.for_all bad ~f:(fun s -> not @@ Set.is_subset ~of_:s lhs_symbol_set)
 
 (** Projections for a pointwise unary operator. Provide only one of [debug_info] or [derived_for].
 *)
 let identity_projections ?debug_info ?derived_for ~lhs_dims () =
-  let product_iterators = Array.map lhs_dims ~f:opt_symbol in
-  let project_lhs = Array.map product_iterators ~f:opt_iterator in
-  let product_space = Array.filter ~f:iterated lhs_dims in
-  let product_iterators = Array.filter_map ~f:Fn.id product_iterators in
+  let product_iterators_opt = Array.map lhs_dims ~f:opt_symbol in
+  let project_lhs = Array.map product_iterators_opt ~f:opt_iterator in
+  let product_space =
+    Array.filter_map lhs_dims ~f:(fun d -> if iterated d then Some [ d ] else None)
+  in
+  let product_iterators =
+    Array.filter_map product_iterators_opt ~f:(Option.map ~f:(fun s -> [ s ]))
+  in
   let debug_info =
     match (debug_info, derived_for) with
     | Some debug_info, _ ->
@@ -290,6 +324,7 @@ let identity_projections ?debug_info ?derived_for ~lhs_dims () =
   }
 
 let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
+  (* FIXME: handle concatenation *)
   Array.zip_exn dims projection
   |> Array.fold_right ~init:(1, [], 0) ~f:(fun (dim, idx) (stride, symbols, offset) ->
       match idx with
@@ -300,7 +335,11 @@ let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
             List.map affine_symbols ~f:(fun (coeff, sym) -> (coeff * stride, sym))
           in
           (stride * dim, new_symbols @ symbols, offset + (affine_offset * stride))
-      | Sub_axis -> (stride * dim, symbols, offset))
+      | Sub_axis -> (stride * dim, symbols, offset)
+      | Concat syms_list ->
+          (* For Concat, add all symbols with the current stride *)
+          let concat_symbols = List.map syms_list ~f:(fun sym -> (stride, sym)) in
+          (stride * dim, concat_symbols @ symbols, offset))
   |> fun (_, symbols, offset) -> Affine { symbols; offset }
 
 type variable_ref = { ref_label : string; mutable solved_dim : int option }
@@ -341,6 +380,9 @@ module Doc_helpers = struct
         | [ t ] -> t
         | t :: ts -> List.fold ts ~init:t ~f:(fun acc t -> acc ^^ string "+" ^^ t))
     | Sub_axis -> PPrint.empty
+    | Concat syms ->
+        let open PPrint in
+        separate (string " ^ ") (List.map syms ~f:pp_symbol)
 
   let pp_indices idcs =
     PPrint.separate (pp_comma ()) (Array.to_list idcs |> List.map ~f:pp_axis_index)

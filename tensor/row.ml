@@ -70,6 +70,7 @@ and dim =
   | Var of dim_var
   | Dim of solved_dim
   | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
+  | Concat of dim list
 [@@deriving equal, hash, compare, sexp]
 
 let equal_dim d1 d2 =
@@ -3484,6 +3485,7 @@ and proj =
       stride_offset : int;
       mutable target_id : proj_id option;
     }
+  | Concat of (proj_id * solved_dim) list5
 [@@deriving compare, equal, sexp]
 
 type error_trace += Projection_mismatch of proj list

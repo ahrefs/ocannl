@@ -265,7 +265,11 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       | Iterator s -> Option.value ~default:(* static index *) 0 @@ Map.find env s
       | Indexing.Affine { symbols; offset } ->
           List.fold symbols ~init:offset ~f:(fun acc (coeff, s) ->
-              acc + (coeff * (Option.value ~default:0 @@ Map.find env s))))
+              acc + (coeff * (Option.value ~default:0 @@ Map.find env s)))
+      | Indexing.Concat _syms ->
+          (* Concat should be eliminated during lowering before we get here *)
+          invalid_arg
+            "BUG: Concat index encountered during virtualization - should have been eliminated during lowering")
   in
   let rec loop_proc ~first_visit env llc =
     let loop = loop_proc ~first_visit env in
@@ -314,6 +318,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           | Indexing.Affine { symbols; _ } ->
               List.iter symbols ~f:(fun (_, s) ->
                   let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+                  assert (Tn.equal old_tn tn))
+          | Indexing.Concat syms ->
+              List.iter syms ~f:(fun s ->
+                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
                   assert (Tn.equal old_tn tn)))
     | Set_from_vec { tn; idcs; length; vec_unop = _; arg = arg, _; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) arg;
@@ -357,6 +365,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               assert (Tn.equal old_tn tn)
           | Indexing.Affine { symbols; _ } ->
               List.iter symbols ~f:(fun (_, s) ->
+                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
+                  assert (Tn.equal old_tn tn))
+          | Indexing.Concat syms ->
+              List.iter syms ~f:(fun s ->
                   let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
                   assert (Tn.equal old_tn tn)))
     | Set_local (_, llsc) -> loop_scalar env None llsc
@@ -471,7 +483,10 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                    | _ ->
                        (* TODO(#133): multiple non-static symbols in affine index not yet
                           supported *)
-                       raise @@ Non_virtual 51))
+                       raise @@ Non_virtual 51)
+               | Concat _syms ->
+                   (* Concat indices should be eliminated before virtualization *)
+                   raise @@ Non_virtual 52)
     in
     let num_syms =
       Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
@@ -572,6 +587,15 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                   (s : Indexing.symbol),
                   (top_llc : t)];
               raise @@ Non_virtual 10))
+    | Embed_index (Concat syms) ->
+        List.iter syms ~f:(fun s ->
+            if not @@ Set.mem env_dom s then (
+              if not (Set.mem static_indices s) then
+                [%log2
+                  "Inlining candidate has an escaping variable",
+                  (s : Indexing.symbol),
+                  (top_llc : t)];
+              raise @@ Non_virtual 10))
     | Ternop (_, (llv1, _), (llv2, _), (llv3, _)) ->
         loop_scalar ~env_dom llv1;
         loop_scalar ~env_dom llv2;
@@ -638,6 +662,9 @@ let%track7_sexp inline_computation ~id
                 (* Expand nested affine: coeff * (inner_symbols + inner_offset) *)
                 List.map inner_symbols ~f:(fun (inner_coeff, inner_s) ->
                     (coeff * inner_coeff, inner_s))
+            | Some (Indexing.Concat _) ->
+                (* Concat should not appear in affine substitution *)
+                failwith "BUG: Concat in affine substitution not supported"
             | None -> [ (coeff, s) ]
           in
           let all_terms = List.concat_map symbols ~f:expand_symbol in
@@ -920,6 +947,9 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Embed_index (Affine { symbols; _ }) ->
         List.iter symbols ~f:(fun (_, s) -> assert (Set.mem env_dom s));
         llsc
+    | Embed_index (Concat syms) ->
+        List.iter syms ~f:(fun s -> assert (Set.mem env_dom s));
+        llsc
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
         Ternop (op, (loop llv1, prec1), (loop llv2, prec2), (loop llv3, prec3))
     | Binop (op, (llv1, prec1), (llv2, prec2)) -> Binop (op, (loop llv1, prec1), (loop llv2, prec2))
@@ -1022,6 +1052,7 @@ let simplify_llc llc =
     | Embed_index Sub_axis -> (Constant 0., prec)
     | Embed_index (Iterator _) -> (llsc, prec)
     | Embed_index (Affine _) -> (llsc, prec) (* Cannot simplify affine expressions to constants *)
+    | Embed_index (Concat _) -> (llsc, prec) (* Cannot simplify concat to constants *)
     | Binop (Arg1, (llv1, prec1), _) -> loop_scalar (llv1, prec1)
     | Binop (Arg2, _, (llv2, prec2)) -> loop_scalar (llv2, prec2)
     | Binop ((Threefry4x32_crypto | Threefry4x32_light), _, _) -> (llsc, prec)

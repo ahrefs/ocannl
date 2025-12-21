@@ -75,7 +75,7 @@ let make_parsed_labels batch_opt input_opt output =
 %token SEMICOLON
 %token PLUS
 %token STAR
-%token CARET        /* ^ - reserved for future use */
+%token CARET        /* ^ */
 %token AMPERSAND    /* & - reserved for future use */
 %token UNDERSCORE   /* _ */
 %token ELLIPSIS     /* ... */
@@ -192,6 +192,8 @@ affine_expr:
   /* stride*over (no offset, no conv) */
   | stride = stride_value; STAR; over = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = 0; conv = None } }
+  | head = IDENT; CARET; tail = separated_nonempty_list(CARET, IDENT)
+    { Concat_spec (head :: tail) }
 
 /* List of axis specifications - can be empty, allows trailing comma */
 axes_spec:

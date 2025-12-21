@@ -25,6 +25,9 @@ type axis_spec =
     }
       (** Affine axis specification: stride*over + stride_offset [+ dilation*kernel]. Corresponds to
           [Row.Affine] in shape inference. *)
+  | Concat_spec of string list
+      (** Concatenation of multiple axis labels into a single axis. Corresponds to [Row.Concat] in
+          shape inference. *)
 [@@deriving compare, sexp]
 
 (** An index pointing to any of a shape's axes, including the kind of the axis ([Batch, Input,

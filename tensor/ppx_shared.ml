@@ -177,6 +177,11 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
         in
         let conv_segments = match conv with None -> [] | Some c -> conv_to_segments c in
         base_segments @ conv_segments @ offset_segments
+    | Concat_spec labels ->
+        (* Join labels with " ^ " separator *)
+        List.concat_mapi labels ~f:(fun i label ->
+            let prefix = if i > 0 then [ estring ~loc " ^ " ] else [] in
+            prefix @ [ estring ~loc label ])
   in
   (* Convert a list of axis_spec to segments with comma separators *)
   let axes_to_segments axes =

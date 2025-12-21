@@ -37,6 +37,7 @@ and dim =
       (** An affine transformation of a dimension. When [conv] is [None], this is a simple strided
           dimension. When [conv] is [Some], this includes convolution parameters. Invariants:
           [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+  | Concat of dim list  (** Concatenation of multiple dimensions into a single axis. *)
 [@@deriving equal, hash, compare, sexp]
 
 val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
