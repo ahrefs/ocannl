@@ -222,12 +222,12 @@ info between phases.</p>
 <tbody>
 <tr>
 <td><code>x.view(-1, d)</code> or <code>x.reshape(-1, d)</code></td>
-<td>Not supported yet</td>
+<td>Only supported for wrapping non-tensor data</td>
 <td>Use shape inference and let tensors have the shape they want</td>
 </tr>
 <tr>
 <td><code>x.flatten()</code></td>
-<td>Not supported yet</td>
+<td>Might get supported for explicit axes</td>
 <td>Future syntax might be: <code>&quot;x,y =&gt; x&amp;y&quot;</code></td>
 </tr>
 <tr>
@@ -262,28 +262,28 @@ info between phases.</p>
 </tr>
 <tr>
 <td><code>F.softmax(x, dim=-1)</code></td>
-<td><code>softmax ~spec:&quot;... | ... -&gt; ... d&quot; () x</code></td>
+<td><code>softmax ~spec:&quot;... \| ... -&gt; ... d&quot; () x</code></td>
 <td>Specify axes explicitly</td>
 </tr>
 <tr>
 <td><code>torch.matmul(a, b)</code></td>
 <td><code>a * b</code> or
-<code>a +* &quot;..b.. -&gt; ..a..; ..b.. =&gt; ..a..&quot; b</code></td>
+<code>a +* b &quot;..b.. -&gt; ..a..; ..b.. =&gt; ..a..&quot;</code></td>
 <td>Einsum for complex cases</td>
 </tr>
 <tr>
 <td><code>x.mean(dim=[1,2])</code></td>
-<td><code>x ++ &quot;... | h, w, c =&gt; ... | 0, 0, c&quot; [&quot;h&quot;; &quot;w&quot;] /. (dim h *. dim w)</code></td>
+<td><code>x ++ &quot;... \| h, w, c =&gt; ... \| 0, 0, c&quot; [&quot;h&quot;; &quot;w&quot;] /. (dim h *. dim w)</code></td>
 <td>Sum then divide</td>
 </tr>
 <tr>
 <td><code>x.sum(dim=-1, keepdim=True)</code></td>
-<td><code>x ++ &quot;... | ... d =&gt; ... | ... 0&quot;</code></td>
+<td><code>x ++ &quot;... \| ... d =&gt; ... \| ... 0&quot;</code></td>
 <td>Reduce by summing</td>
 </tr>
 <tr>
 <td><code>x.sum(dim=-1, keepdim=False)</code></td>
-<td><code>x ++ &quot;... | ... d =&gt; ... | ...&quot;</code></td>
+<td><code>x ++ &quot;... \| ... d =&gt; ... \| ...&quot;</code></td>
 <td>Reduce by summing</td>
 </tr>
 </tbody>
@@ -457,14 +457,14 @@ mode)</li>
 <tr>
 <td>Attention scores</td>
 <td><code>torch.einsum(&#39;bqhd,bkhd-&gt;bhqk&#39;, q, k)</code></td>
-<td><code>q +* &quot;bq|hd; bk|hd =&gt; b|qk-&gt;h&quot; k</code></td>
-<td><code>q +* &quot;b, q | h, d; b, k | h, d =&gt; b | q, k -&gt; h&quot; k</code></td>
+<td><code>q +* k &quot;bq\|hd; bk\|hd =&gt; b\|qk-&gt;h&quot; k</code></td>
+<td><code>q +* &quot;b, q \| h, d; b, k \| h, d =&gt; b \| q, k -&gt; h&quot;</code></td>
 </tr>
 <tr>
 <td>Convolution</td>
 <td>N/A</td>
 <td>always multi-char</td>
-<td><code>x +* &quot;... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -&gt; oc =&gt; ... | oh, ow, oc&quot; kernel</code></td>
+<td><code>x +* kernel &quot;... \| stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -&gt; oc =&gt; ... \| oh, ow, oc&quot;</code></td>
 </tr>
 </tbody>
 </table>
@@ -477,9 +477,8 @@ mode)</li>
 <li>Single-char mode example: <code>..b..|</code> for batch axes
 (arbitrary number)</li>
 <li>Multi-char mode examples: <code>h, w, ..ic..</code>,
-<code>h, w, ..oc..</code> for input/output channels (can be
-multi-dimensional), <code>..spatial.., channel</code> for spatial
-dimensions</li>
+<code>h, w, ..oc..</code> for input/output channels (can be multi-axis),
+<code>..spatial.., channel</code> for spatial dimensions</li>
 </ul>
 <h2 id="common-gotchas-and-solutions">Common Gotchas and Solutions</h2>
 <h3 id="variable-capture-with-einsum">Variable Capture with Einsum</h3>
@@ -511,15 +510,18 @@ Constants</h3>
 <span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co">       used here, but defined before layer1 *)</span></span>
 <span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    { global_param } + layer1 x</span></code></pre></div>
 <h3 id="flattening-for-linear-layers">Flattening for Linear Layers</h3>
-<p>⚠️ <strong>Important:</strong> OCANNL doesn’t currently support
+<p>⚠️ <strong>Important:</strong> OCANNL doesn’t support
 flattening/reshaping operations.</p>
+<p>In the future, OCANNL may support structured flattening /
+unflattening, where particular axes are selected for joining /
+splitting.</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* This performs REDUCTION (sum), not flattening: *)</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>x ++ <span class="st">&quot;... | ..spatial.. =&gt; ... | 0&quot;</span>  </span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* OCANNL&#39;s approach: Let FC layers work with multiple axes!</span></span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="co">   Instead of flattening [batch, h, w, c] to [batch, h*w*c],</span></span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="co">   just let your FC layer handle [batch, h, w, c] directly.</span></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">   The matrix multiplication will work across all the axes. *)</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">   The tensor multiplication will work across all the axes. *)</span></span>
 <span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Example: FC layer after conv without flattening *)</span></span>
 <span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op fc_after_conv () x =</span>
@@ -885,19 +887,6 @@ easily write your own:</p>
 <span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list loss.Tensor.params </span>
 <span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f:adam_one</span>
 <span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence</span></code></pre></div>
-<p><strong>Custom training pattern:</strong></p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Gradient accumulation over multiple batches *)</span></span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> accumulated_grad_step ~accumulation_steps loss =</span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  [%cd</span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Accumulate gradients *)</span></span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>    loss.forward;</span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>    loss.grad =: <span class="fl">1.0</span> / !..accumulation_steps;  <span class="co">(* Scale gradient *)</span></span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    loss.backprop ~accumulate:<span class="kw">true</span>;  <span class="co">(* Add to existing gradients *)</span></span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    </span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Only update every N steps *)</span></span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> (!@step_n % !..accumulation_steps) == <span class="dv">0</span> <span class="kw">then</span> (</span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>      sgd_update ~learning_rate loss;</span>
-<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>      loss.zero_grads)]</span></code></pre></div>
 <h3 id="key-insights">Key Insights</h3>
 <ol type="1">
 <li><strong>No magic</strong>: <code>Train</code> functions are just
@@ -945,7 +934,7 @@ Details</h2>
 <p>OCANNL’s random initialization has some important nuances:</p>
 <ol type="1">
 <li><p><strong>Default initialization is configurable</strong> - There
-is a global reference that defaults to the <code>uniform</code>
+is a global reference that defaults to the <code>uniform1</code>
 operation but can be changed to any nullary operation.</p></li>
 <li><p><strong>Divisibility requirements</strong> - Functions like
 <code>uniform</code> require the total number of elements to be
@@ -969,12 +958,12 @@ with <code>~train_step</code> to split the randomness key</li>
 </ul></li>
 </ol>
 <p><strong>Example:</strong></p>
-<div class="sourceCode" id="cb32"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter init - happens once, deterministic is fine *)</span></span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>{ w = uniform () }</span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting *)</span></span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at !@train_step *)</span></span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter init - happens once, deterministic is fine *)</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>{ w = uniform () }</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting *)</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at !@train_step *)</span></span></code></pre></div>
 <h2 id="further-resources">Further Resources</h2>
 <ul>
 <li><a href="../dev/neural_nets_lib/Ocannl/Shape/index.html">Shape
