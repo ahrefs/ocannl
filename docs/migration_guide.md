@@ -23,19 +23,19 @@ This is why pooling needs a dummy constant kernel - to carry shape info between 
 
 | PyTorch/TensorFlow | OCANNL | Notes |
 |-----|------|----|
-| `x.view(-1, d)` or `x.reshape(-1, d)` | Not supported yet | Use shape inference and let tensors have the shape they want |
-| `x.flatten()` | Not supported yet | Future syntax might be: `"x,y => x&y"` |
+| `x.view(-1, d)` or `x.reshape(-1, d)` | Only supported for wrapping non-tensor data | Use shape inference and let tensors have the shape they want |
+| `x.flatten()` | Might get supported for explicit axes | Future syntax might be: `"x,y => x&y"` |
 | `nn.Conv2d(in_c, out_c, kernel_size=k)` | `conv2d ~kernel_size:k () x` | Channels inferred or use row vars |
 | `F.max_pool2d(x, kernel_size=k)` | `max_pool2d ~window_size:k () x` | Uses `(0.5 + 0.5)` trick internally |
 | `F.avg_pool2d(x, kernel_size=k)` | `avg_pool2d ~window_size:k () x` | Normalized by window size |
 | `nn.BatchNorm2d(channels)` | `batch_norm2d () ~train_step x` | Channels inferred |
 | `F.dropout(x, p=0.5)` | `dropout ~rate:0.5 () ~train_step x` | Needs train_step for PRNG |
 | `F.relu(x)` | `relu x` | Direct function application |
-| `F.softmax(x, dim=-1)` | `softmax ~spec:"... | ... -> ... d" () x` | Specify axes explicitly |
-| `torch.matmul(a, b)` | `a * b` or `a +* "..b.. -> ..a..; ..b.. => ..a.." b` | Einsum for complex cases |
-| `x.mean(dim=[1,2])` | `x ++ "... | h, w, c => ... | 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
-| `x.sum(dim=-1, keepdim=True)` | `x ++ "... | ... d => ... | ... 0"` | Reduce by summing |
-| `x.sum(dim=-1, keepdim=False)` | `x ++ "... | ... d => ... | ..."` | Reduce by summing |
+| `F.softmax(x, dim=-1)` | `softmax ~spec:"... \| ... -> ... d" () x` | Specify axes explicitly |
+| `torch.matmul(a, b)` | `a * b` or `a +* b "..b.. -> ..a..; ..b.. => ..a.."` | Einsum for complex cases |
+| `x.mean(dim=[1,2])` | `x ++ "... \| h, w, c => ... \| 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
+| `x.sum(dim=-1, keepdim=True)` | `x ++ "... \| ... d => ... \| ... 0"` | Reduce by summing |
+| `x.sum(dim=-1, keepdim=False)` | `x ++ "... \| ... d => ... \| ..."` | Reduce by summing |
 
 ## Tensor Creation Patterns
 
@@ -142,13 +142,13 @@ OCANNL's einsum has two syntax modes:
 |--------|------------------|-------------------|-------------------|
 | Matrix multiply | `torch.einsum('ij,jk->ik', a, b)` | `a +* "i j; j k => i k" b` | `a +* "i, j; j, k => i, k" b` |
 | Batch matmul | `torch.einsum('bij,bjk->bik', a, b)` | `a +* "b i j; b j k => b i k" b` | `a +* "batch, i -> j; batch, j -> k => batch, i -> k" b` |
-| Attention scores | `torch.einsum('bqhd,bkhd->bhqk', q, k)` | `q +* "bq|hd; bk|hd => b|qk->h" k` | `q +* "b, q | h, d; b, k | h, d => b | q, k -> h" k` |
-| Convolution | N/A | always multi-char | `x +* "... | stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... | oh, ow, oc" kernel` |
+| Attention scores | `torch.einsum('bqhd,bkhd->bhqk', q, k)` | `q +* k "bq\|hd; bk\|hd => b\|qk->h" k` | `q +* "b, q \| h, d; b, k \| h, d => b \| q, k -> h"` |
+| Convolution | N/A | always multi-char | `x +* kernel "... \| stride*oh+kh, stride*ow+kw, ic; kh, kw, ic -> oc => ... \| oh, ow, oc"` |
 
 ### Row Variables
 - `...` context-dependent ellipsis: expands to `..batch..` in batch position, `..input..` before `->`, `..output..` after `->`
 - Single-char mode example: `..b..|` for batch axes (arbitrary number)
-- Multi-char mode examples: `h, w, ..ic..`, `h, w, ..oc..` for input/output channels (can be multi-dimensional), `..spatial.., channel` for spatial dimensions
+- Multi-char mode examples: `h, w, ..ic..`, `h, w, ..oc..` for input/output channels (can be multi-axis), `..spatial.., channel` for spatial dimensions
 
 ## Common Gotchas and Solutions
 
@@ -199,7 +199,9 @@ let%op network () =
 
 ### Flattening for Linear Layers
 
-⚠️ **Important:** OCANNL doesn't currently support flattening/reshaping operations.
+⚠️ **Important:** OCANNL doesn't support flattening/reshaping operations.
+
+In the future, OCANNL may support structured flattening / unflattening, where particular axes are selected for joining / splitting.
 
 ```ocaml
 (* This performs REDUCTION (sum), not flattening: *)
@@ -208,7 +210,7 @@ x ++ "... | ..spatial.. => ... | 0"
 (* OCANNL's approach: Let FC layers work with multiple axes!
    Instead of flattening [batch, h, w, c] to [batch, h*w*c],
    just let your FC layer handle [batch, h, w, c] directly.
-   The matrix multiplication will work across all the axes. *)
+   The tensor multiplication will work across all the axes. *)
 
 (* Example: FC layer after conv without flattening *)
 let%op fc_after_conv () x =
@@ -621,22 +623,6 @@ let adam_update ~learning_rate ~beta1 ~beta2 ~epsilon loss =
   |> Asgns.sequence
 ```
 
-**Custom training pattern:**
-```ocaml
-(* Gradient accumulation over multiple batches *)
-let accumulated_grad_step ~accumulation_steps loss =
-  [%cd
-    (* Accumulate gradients *)
-    loss.forward;
-    loss.grad =: 1.0 / !..accumulation_steps;  (* Scale gradient *)
-    loss.backprop ~accumulate:true;  (* Add to existing gradients *)
-    
-    (* Only update every N steps *)
-    if (!@step_n % !..accumulation_steps) == 0 then (
-      sgd_update ~learning_rate loss;
-      loss.zero_grads)]
-```
-
 ### Key Insights
 
 1. **No magic**: `Train` functions are just tensor operations packaged conveniently
@@ -670,7 +656,7 @@ The `Train` module is meant to be read, understood, and extended by users - it's
 
 OCANNL's random initialization has some important nuances:
 
-1. **Default initialization is configurable** - There is a global reference that defaults to the `uniform` operation but can be changed to any nullary operation.
+1. **Default initialization is configurable** - There is a global reference that defaults to the `uniform1` operation but can be changed to any nullary operation.
 
 2. **Divisibility requirements** - Functions like `uniform` require the total number of elements to be divisible by certain values (they work with `uint4x32` for efficiency):
    - `uniform()` - requires specific size divisibility for efficient bit usage

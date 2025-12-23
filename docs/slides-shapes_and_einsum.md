@@ -20,7 +20,7 @@ Lukstafi's work on OCANNL is sponsored by **[a]{style="color:orange"}[hrefs]{sty
 > * **Expressivity gains**: The axis kind split doesn't enforce semantics but offers better expressivity
 > * **Broadcasting magic**: Tensors with dimension-1 axes broadcast automatically
 > * **Less commitment**: Use row variables `..d..` where axis count doesn't matter
-> * **Type safety**: Shape mismatches caught at compile time, not runtime
+> * **Type safety**: Shape mismatches caught at model compile time, not runtime
 
 {pause up=why-shapes #numpy-differences}
 ## From NumPy to OCANNL: Key Differences
