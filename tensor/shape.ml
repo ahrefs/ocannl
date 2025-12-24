@@ -82,6 +82,7 @@ type logic =
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
   | Terminal of { is_param : bool; logic : terminal_type }
+  | Block of { spec : string; delayed_vars : delayed_var_ref list; rhses : t list }
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -90,7 +91,8 @@ let logic_to_spec = function
   | Broadcast_tern (Pointwise_tern, _, _, _) ->
       "."
   | Broadcast (Compose, _, _) | Broadcast_tern (Compose_accumulate, _, _, _) -> "@"
-  | Broadcast (Einsum (spec, _), _, _) | Transpose (Permute (spec, _), _) -> spec
+  | Broadcast (Einsum (spec, _), _, _) | Transpose (Permute (spec, _), _) | Block { spec; _ } ->
+      spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
@@ -283,6 +285,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
   let open Row in
+  let defaults ineqs = (dim_map_empty, dim_var_set_empty, ineqs) in
   let get_origin lhs_kind sh rhs_kind operation =
     Row.
       {
@@ -301,11 +304,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
     ]
   in
   match logic with
-  | Terminal { is_param; logic = Fetch Range_over_offsets } ->
-      (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch (Constant _) } -> (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch (Constant_bits _) } ->
-      (Row.dim_map_empty, mark_terminal ~is_param)
+  | Terminal { is_param; logic = Fetch Range_over_offsets } -> defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch (Constant _) } -> defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch (Constant_bits _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
         Rows_constr
@@ -425,217 +426,214 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  };
              ])
           @ mark_terminal ~is_param )
-      else (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch (Embed_symbol _) } ->
-      (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch (Embed_dim _) } ->
-      (Row.dim_map_empty, mark_terminal ~is_param)
-  | Terminal { is_param; logic = Fetch Embed_self_id } ->
-      (Row.dim_map_empty, mark_terminal ~is_param)
+      else defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch (Embed_symbol _) } -> defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch (Embed_dim _) } -> defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch Embed_self_id } -> defaults @@ mark_terminal ~is_param
   | Transpose (Transpose, sh) ->
       Hash_set.remove unused_shapes sh.id;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              cur = cur_sh.batch;
-              subr = sh.batch;
-              origin = [ get_origin `Batch sh `Batch "transpose" ];
-            };
-          Row_ineq
-            {
-              cur = cur_sh.input;
-              subr = sh.output;
-              origin = [ get_origin `Input sh `Output "transpose" ];
-            };
-          Row_ineq
-            {
-              cur = cur_sh.output;
-              subr = sh.input;
-              origin = [ get_origin `Output sh `Input "transpose" ];
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               cur = cur_sh.batch;
+               subr = sh.batch;
+               origin = [ get_origin `Batch sh `Batch "transpose" ];
+             };
+           Row_ineq
+             {
+               cur = cur_sh.input;
+               subr = sh.output;
+               origin = [ get_origin `Input sh `Output "transpose" ];
+             };
+           Row_ineq
+             {
+               cur = cur_sh.output;
+               subr = sh.input;
+               origin = [ get_origin `Output sh `Input "transpose" ];
+             };
+         ]
   | Transpose (Pointwise_un, sh) ->
       Hash_set.remove unused_shapes sh.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh.input.bcast;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              cur = cur_sh.batch;
-              subr = sh.batch;
-              origin = [ get_origin `Batch sh `Batch "pointwise_unary" ];
-            };
-          Row_ineq
-            {
-              cur = cur_sh.input;
-              subr = sh.input;
-              origin = [ get_origin `Input sh `Input "pointwise_unary" ];
-            };
-          Row_ineq
-            {
-              cur = cur_sh.output;
-              subr = sh.output;
-              origin = [ get_origin `Output sh `Output "pointwise_unary" ];
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               cur = cur_sh.batch;
+               subr = sh.batch;
+               origin = [ get_origin `Batch sh `Batch "pointwise_unary" ];
+             };
+           Row_ineq
+             {
+               cur = cur_sh.input;
+               subr = sh.input;
+               origin = [ get_origin `Input sh `Input "pointwise_unary" ];
+             };
+           Row_ineq
+             {
+               cur = cur_sh.output;
+               subr = sh.output;
+               origin = [ get_origin `Output sh `Output "pointwise_unary" ];
+             };
+         ]
   | Broadcast (Compose, sh1, sh2) ->
       Hash_set.remove unused_shapes sh1.id;
       Hash_set.remove unused_shapes sh2.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              origin =
-                [
-                  {
-                    lhs_name = sh1.debug_name;
-                    lhs_kind = `Input;
-                    rhs_name = sh2.debug_name;
-                    rhs_kind = `Output;
-                    operation = Some "compose";
-                  };
-                ];
-              cur = sh1.input;
-              subr = sh2.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh1 `Batch "compose" ];
-              cur = cur_sh.batch;
-              subr = sh1.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh2 `Batch "compose" ];
-              cur = cur_sh.batch;
-              subr = sh2.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh2 `Input "compose" ];
-              cur = cur_sh.input;
-              subr = sh2.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh1 `Output "compose" ];
-              cur = cur_sh.output;
-              subr = sh1.output;
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               origin =
+                 [
+                   {
+                     lhs_name = sh1.debug_name;
+                     lhs_kind = `Input;
+                     rhs_name = sh2.debug_name;
+                     rhs_kind = `Output;
+                     operation = Some "compose";
+                   };
+                 ];
+               cur = sh1.input;
+               subr = sh2.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh1 `Batch "compose" ];
+               cur = cur_sh.batch;
+               subr = sh1.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh2 `Batch "compose" ];
+               cur = cur_sh.batch;
+               subr = sh2.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh2 `Input "compose" ];
+               cur = cur_sh.input;
+               subr = sh2.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh1 `Output "compose" ];
+               cur = cur_sh.output;
+               subr = sh1.output;
+             };
+         ]
   | Broadcast (Pointwise_bin, sh1, sh2) ->
       Hash_set.remove unused_shapes sh1.id;
       Hash_set.remove unused_shapes sh2.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh1 `Batch "pointwise_binary" ];
-              cur = cur_sh.batch;
-              subr = sh1.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh2 `Batch "pointwise_binary" ];
-              cur = cur_sh.batch;
-              subr = sh2.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh1 `Input "pointwise_binary" ];
-              cur = cur_sh.input;
-              subr = sh1.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh2 `Input "pointwise_binary" ];
-              cur = cur_sh.input;
-              subr = sh2.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh1 `Output "pointwise_binary" ];
-              cur = cur_sh.output;
-              subr = sh1.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh2 `Output "pointwise_binary" ];
-              cur = cur_sh.output;
-              subr = sh2.output;
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh1 `Batch "pointwise_binary" ];
+               cur = cur_sh.batch;
+               subr = sh1.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh2 `Batch "pointwise_binary" ];
+               cur = cur_sh.batch;
+               subr = sh2.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh1 `Input "pointwise_binary" ];
+               cur = cur_sh.input;
+               subr = sh1.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh2 `Input "pointwise_binary" ];
+               cur = cur_sh.input;
+               subr = sh2.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh1 `Output "pointwise_binary" ];
+               cur = cur_sh.output;
+               subr = sh1.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh2 `Output "pointwise_binary" ];
+               cur = cur_sh.output;
+               subr = sh2.output;
+             };
+         ]
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
       Hash_set.remove unused_shapes sh1.id;
       Hash_set.remove unused_shapes sh2.id;
       Hash_set.remove unused_shapes sh3.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              origin =
-                [
-                  {
-                    lhs_name = sh1.debug_name;
-                    lhs_kind = `Input;
-                    rhs_name = sh2.debug_name;
-                    rhs_kind = `Output;
-                    operation = Some "compose_accumulate";
-                  };
-                ];
-              cur = sh1.input;
-              subr = sh2.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh1 `Batch "compose_accumulate" ];
-              cur = cur_sh.batch;
-              subr = sh1.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh2 `Batch "compose_accumulate" ];
-              cur = cur_sh.batch;
-              subr = sh2.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh2 `Input "compose_accumulate" ];
-              cur = cur_sh.input;
-              subr = sh2.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh1 `Output "compose_accumulate" ];
-              cur = cur_sh.output;
-              subr = sh1.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh3 `Batch "compose_accumulate" ];
-              cur = cur_sh.batch;
-              subr = sh3.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh3 `Input "compose_accumulate" ];
-              cur = cur_sh.input;
-              subr = sh3.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh3 `Output "compose_accumulate" ];
-              cur = cur_sh.output;
-              subr = sh3.output;
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               origin =
+                 [
+                   {
+                     lhs_name = sh1.debug_name;
+                     lhs_kind = `Input;
+                     rhs_name = sh2.debug_name;
+                     rhs_kind = `Output;
+                     operation = Some "compose_accumulate";
+                   };
+                 ];
+               cur = sh1.input;
+               subr = sh2.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh1 `Batch "compose_accumulate" ];
+               cur = cur_sh.batch;
+               subr = sh1.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh2 `Batch "compose_accumulate" ];
+               cur = cur_sh.batch;
+               subr = sh2.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh2 `Input "compose_accumulate" ];
+               cur = cur_sh.input;
+               subr = sh2.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh1 `Output "compose_accumulate" ];
+               cur = cur_sh.output;
+               subr = sh1.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh3 `Batch "compose_accumulate" ];
+               cur = cur_sh.batch;
+               subr = sh3.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh3 `Input "compose_accumulate" ];
+               cur = cur_sh.input;
+               subr = sh3.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh3 `Output "compose_accumulate" ];
+               cur = cur_sh.output;
+               subr = sh3.output;
+             };
+         ]
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
       Hash_set.remove unused_shapes sh1.id;
       Hash_set.remove unused_shapes sh2.id;
@@ -644,67 +642,67 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
       add_var_used_in_pointwise sh3.input.bcast;
-      ( Row.dim_map_empty,
-        [
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh1 `Batch "pointwise_ternary" ];
-              cur = cur_sh.batch;
-              subr = sh1.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh2 `Batch "pointwise_ternary" ];
-              cur = cur_sh.batch;
-              subr = sh2.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Batch sh3 `Batch "pointwise_ternary" ];
-              cur = cur_sh.batch;
-              subr = sh3.batch;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh1 `Input "pointwise_ternary" ];
-              cur = cur_sh.input;
-              subr = sh1.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh2 `Input "pointwise_ternary" ];
-              cur = cur_sh.input;
-              subr = sh2.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Input sh3 `Input "pointwise_ternary" ];
-              cur = cur_sh.input;
-              subr = sh3.input;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh1 `Output "pointwise_ternary" ];
-              cur = cur_sh.output;
-              subr = sh1.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh2 `Output "pointwise_ternary" ];
-              cur = cur_sh.output;
-              subr = sh2.output;
-            };
-          Row_ineq
-            {
-              origin = [ get_origin `Output sh3 `Output "pointwise_ternary" ];
-              cur = cur_sh.output;
-              subr = sh3.output;
-            };
-        ] )
+      defaults
+      @@ [
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh1 `Batch "pointwise_ternary" ];
+               cur = cur_sh.batch;
+               subr = sh1.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh2 `Batch "pointwise_ternary" ];
+               cur = cur_sh.batch;
+               subr = sh2.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Batch sh3 `Batch "pointwise_ternary" ];
+               cur = cur_sh.batch;
+               subr = sh3.batch;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh1 `Input "pointwise_ternary" ];
+               cur = cur_sh.input;
+               subr = sh1.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh2 `Input "pointwise_ternary" ];
+               cur = cur_sh.input;
+               subr = sh2.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Input sh3 `Input "pointwise_ternary" ];
+               cur = cur_sh.input;
+               subr = sh3.input;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh1 `Output "pointwise_ternary" ];
+               cur = cur_sh.output;
+               subr = sh1.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh2 `Output "pointwise_ternary" ];
+               cur = cur_sh.output;
+               subr = sh2.output;
+             };
+           Row_ineq
+             {
+               origin = [ get_origin `Output sh3 `Output "pointwise_ternary" ];
+               cur = cur_sh.output;
+               subr = sh3.output;
+             };
+         ]
   | Broadcast (Defined_by_cd_logic, _, _)
   | Transpose (Defined_by_cd_logic, _)
   | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
-      (Row.dim_map_empty, [])
+      defaults @@ []
   | Transpose (Batch_slice { static_range; static_symbol }, sh) ->
       Hash_set.remove unused_shapes sh.id;
       let slice_v = get_var () in
@@ -946,41 +944,41 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         Utils.safe_lazy [%string "Uint4x32 %{sh.id#Int} to_prec_of %{cur_sh.id#Int}"] (fun () ->
             16 / Ir.Ops.prec_in_bytes (Lazy.force target_prec))
       in
-      ( Row.dim_map_empty,
-        [
-          Rows_constr
-            {
-              r = [ sh.batch; sh.output; sh.input ];
-              constr = Row.Exact [ Var var ];
-              origin =
-                [
-                  {
-                    lhs_name = sh.debug_name;
-                    lhs_kind = `Batch;
-                    rhs_name = cur_sh.debug_name;
-                    rhs_kind = `Batch;
-                    operation = Some "Uint4x32_to_prec ARGUMENT axes exact";
-                  };
-                ];
-            };
-          Rows_constr
-            {
-              r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
-              constr =
-                Total_elems
-                  { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
-              origin =
-                [
-                  {
-                    lhs_name = cur_sh.debug_name;
-                    lhs_kind = `Batch;
-                    rhs_name = sh.debug_name;
-                    rhs_kind = `Output;
-                    operation = Some "Uint4x32_to_prec RESULT total elements";
-                  };
-                ];
-            };
-        ] )
+      defaults
+      @@ [
+           Rows_constr
+             {
+               r = [ sh.batch; sh.output; sh.input ];
+               constr = Row.Exact [ Var var ];
+               origin =
+                 [
+                   {
+                     lhs_name = sh.debug_name;
+                     lhs_kind = `Batch;
+                     rhs_name = cur_sh.debug_name;
+                     rhs_kind = `Batch;
+                     operation = Some "Uint4x32_to_prec ARGUMENT axes exact";
+                   };
+                 ];
+             };
+           Rows_constr
+             {
+               r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
+               constr =
+                 Total_elems
+                   { numerator = Row.Strided_var { coeff; var; denom = 1 }; divided_by = [] };
+               origin =
+                 [
+                   {
+                     lhs_name = cur_sh.debug_name;
+                     lhs_kind = `Batch;
+                     rhs_name = sh.debug_name;
+                     rhs_kind = `Output;
+                     operation = Some "Uint4x32_to_prec RESULT total elements";
+                   };
+                 ];
+             };
+         ]
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
       Hash_set.remove unused_shapes sh1.id;
       Hash_set.remove unused_shapes sh2.id;
@@ -1531,14 +1529,17 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, ineqs) : proj_axis_env * Row.constraint_ list =
+  let (proj_axis_env, invalid_vars, ineqs) :
+      Row.proj_axis_env * Row.dim_var_set * Row.constraint_ list =
     get_inequalities ~for_projections:true update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be
      substituted-out at this point, the global state is already an empty env, but in principle we
      want to only find a local solution to not contaminate projections across operations. *)
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env in
+  let unsolved, local_env =
+    Row.solve_inequalities ~stage:Stage1 ~invalid_vars ineqs Row.empty_env
+  in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
@@ -1743,10 +1744,10 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
   iter_shapes update_step ~f:(apply_env_t !state);
-  let _, ineqs = get_inequalities update_step in
+  let _, invalid_vars, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
   active_constraints := ineqs @ !active_constraints;
-  let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ineqs !state in
+  let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~invalid_vars ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
   apply_env_step env update_step;
   state := env

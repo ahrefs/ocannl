@@ -270,10 +270,13 @@ let sexp_of_row_env env = Utils.Tree_map.sexp_of_t sexp_of_row_var sexp_of_row_e
 let find_row env var = Utils.Tree_map.find ~compare:compare_row_var ~key:var env
 let add_row env ~key ~data = Utils.Tree_map.add ~compare:compare_row_var ~key ~data env
 
-type environment = { dim_env : dim_env; row_env : row_env } [@@deriving sexp_of]
+type environment = { dim_env : dim_env; row_env : row_env; invalid_vars : dim_var_set }
+[@@deriving sexp_of]
 (** The environment is only in resolved wrt. variables that are solved: [v -> Solved ...] do not
     appear elsewhere in the environment. In particular, per-dim and per-row constraints might not
-    have been applied. *)
+    have been applied.
+
+    [invalid_vars] are here for convenience -- see {!get_inequalities}. *)
 
 let get_dim_val env var =
   match find_dim env.dim_env var with Some (Solved_dim (Dim { d; _ })) -> Some d | _ -> None
@@ -3302,8 +3305,9 @@ let update_row_is_param r is_p env =
         | _ -> env)
     | _ -> env
 
-let%debug4_sexp solve_inequalities ~(stage : stage) (ineqs : constraint_ list) env :
-    constraint_ list * _ =
+let%debug4_sexp solve_inequalities ~(stage : stage) ~(invalid_vars : dim_var_set)
+    (ineqs : constraint_ list) env : constraint_ list * _ =
+  let env = { env with invalid_vars = Set.union invalid_vars env.invalid_vars } in
   let rec solve ineqs (env : environment) : constraint_ list * _ =
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
