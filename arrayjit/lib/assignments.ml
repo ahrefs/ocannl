@@ -268,24 +268,32 @@ let%track4_sexp to_low_level code =
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
-    let basecase rev_iters =
+    let all_prod_iters =
+      Array.to_list projections.product_iterators
+      |> List.concat
+      |> Set.of_list (module Indexing.Symbol)
+    in
+    let basecase block_iters rev_iters =
       (* Create a substitution from product iterators to loop iterators. Fresh loop symbols are
          needed because product_iterators may be shared across different operations/tensors, but
          each lowered operation needs private loop symbols to avoid conflicts in low_level.ml's
          symbol-to-tensor tracking. *)
+      let exception Empty_block in
+      let block_iters = Array.of_list_rev block_iters in
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
-        let flattened_prod_iters =
-          Array.concat_map projections.product_iterators ~f:Array.of_list
-        in
-        Array.mapi flattened_prod_iters ~f:(fun i prod_iter ->
-            (prod_iter, Indexing.Iterator loop_iters.(i)))
+        Array.map2_exn block_iters loop_iters ~f:(fun block_iter loop_iter ->
+            (block_iter, Indexing.Iterator loop_iter))
         |> Array.to_list
         |> Map.of_alist_exn (module Indexing.Symbol)
       in
       (* Substitute in projections - including inside Affine indices *)
       let subst_index = function
         | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
+        | Iterator s
+          when Set.mem all_prod_iters s
+               && not (Array.mem ~equal:Indexing.equal_symbol block_iters s) ->
+            raise Empty_block
         | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
         | Indexing.Affine { symbols; offset } ->
             let symbols =
@@ -310,31 +318,50 @@ let%track4_sexp to_low_level code =
             in
             Indexing.Concat syms'
       in
-      let lhs_idcs : Indexing.axis_index array = Array.map projections.project_lhs ~f:subst_index in
-      let rhses_idcs : Indexing.axis_index array array =
-        Array.map projections.project_rhs ~f:(Array.map ~f:subst_index)
-      in
-      let open Low_level in
-      let lhs_ll = get (Node lhs) lhs_idcs in
-      let rhses_ll = Array.mapi rhses_idcs ~f:(fun i rhs_idcs -> get rhses.(i) rhs_idcs) in
-      let rhs2 = apply_op op rhses_ll in
-      if initialize_neutral && can_skip_accumulation ~projections then set lhs lhs_idcs rhs2
-      else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
+      try
+        let lhs_idcs : Indexing.axis_index array =
+          Array.map projections.project_lhs ~f:subst_index
+        in
+        let open Low_level in
+        let lhs_ll = get (Node lhs) lhs_idcs in
+        let rhses_ll =
+          Array.filter_mapi projections.project_rhs ~f:(fun i rhs_idcs ->
+              try
+                let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
+                Some (get rhses.(i) rhs_idcs)
+              with Empty_block -> None)
+        in
+        if Array.is_empty rhses_ll then raise Empty_block;
+        let rhs2 =
+          try apply_op op rhses_ll
+          with Invalid_argument _ ->
+            raise
+            @@ Utils.User_error
+                 "Ambiguous indices in concatenation: multiple blocks viable for same position"
+        in
+        if initialize_neutral && can_skip_accumulation ~projections then set lhs lhs_idcs rhs2
+        else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
+      with Empty_block -> Low_level.Noop
     in
-    let rec for_loop rev_iters = function
-      | [] -> basecase rev_iters
-      | d :: product ->
+    let rec for_loop block_iters rev_iters = function
+      | [] -> basecase block_iters rev_iters
+      | (ds, its) :: product ->
           let index = Indexing.get_symbol () in
-          Low_level.For_loop
-            {
-              index;
-              from_ = 0;
-              to_ = d - 1;
-              body = for_loop (index :: rev_iters) product;
-              trace_it = true;
-            }
+          Low_level.unflat_lines
+          @@ List.map2_exn ds its ~f:(fun d iter ->
+              Low_level.For_loop
+                {
+                  index;
+                  from_ = 0;
+                  to_ = d - 1;
+                  body = for_loop (iter :: block_iters) (index :: rev_iters) product;
+                  trace_it = true;
+                })
     in
-    let for_loops = for_loop [] (Array.to_list projections.product_space) in
+    let for_loops =
+      for_loop [] []
+        (Array.to_list @@ Array.zip_exn projections.product_space projections.product_iterators)
+    in
     (* Need initialization if: initialize_neutral is true AND (not surjective OR not injective)
 
        Not surjective: some positions never written (need init to avoid garbage)
@@ -387,15 +414,22 @@ let%track4_sexp to_low_level code =
         let basecase rev_iters =
           let subst_map =
             let loop_iters = Array.of_list_rev rev_iters in
-            Array.mapi projections.product_iterators ~f:(fun i prod_iter ->
-                (prod_iter, Indexing.Iterator loop_iters.(i)))
+            Array.map2_exn loop_iters projections.product_iterators ~f:(fun loop_iter prod_iter ->
+                let prod_iter =
+                  match prod_iter with
+                  | [ prod_iter ] -> prod_iter
+                  | _ -> raise @@ Utils.User_error "Concat indexing not supported in Set_vec_unop"
+                in
+                (prod_iter, Indexing.Iterator loop_iter))
             |> Array.to_list
             |> Map.of_alist_exn (module Indexing.Symbol)
           in
           let subst_index = function
-            | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
-            | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
-            | Indexing.Affine { symbols; offset } ->
+            | Indexing.Concat _ ->
+                raise @@ Utils.User_error "Concat indexing not supported in Set_vec_unop"
+            | (Fixed_idx _ | Sub_axis) as idx -> idx
+            | Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
+            | Affine { symbols; offset } ->
                 (* Substitute symbols in affine index *)
                 let subst_symbols =
                   List.map symbols ~f:(fun (coeff, s) ->
@@ -435,7 +469,7 @@ let%track4_sexp to_low_level code =
         in
         let rec for_loop rev_iters = function
           | [] -> basecase rev_iters
-          | d :: product ->
+          | [ d ] :: product ->
               let index = Indexing.get_symbol () in
               Low_level.For_loop
                 {
@@ -445,6 +479,7 @@ let%track4_sexp to_low_level code =
                   body = for_loop (index :: rev_iters) product;
                   trace_it = true;
                 }
+          | _ -> raise @@ Utils.User_error "Concat indexing not supported in Set_vec_unop"
         in
         for_loop [] (Array.to_list projections.product_space)
     | Noop -> Low_level.Noop
