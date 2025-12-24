@@ -767,7 +767,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
         match einsum_of_spec spec with
-        | ls_rhs, None, ls_lhs -> (ls_rhs, ls_lhs)
+        | [ ls_rhs ], ls_lhs -> (ls_rhs, ls_lhs)
         | _ ->
             raise
             @@ Shape_error
@@ -987,11 +987,11 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       add_var_used_in_spec_or_compose sh2.input.bcast;
       let ls_rhs1, ls_rhs2, ls_lhs =
         match einsum_of_spec spec with
-        | ls_rhs1, Some ls_rhs2, ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
-        | _, None, _ ->
+        | [ ls_rhs1; ls_rhs2 ], ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
+        | _ ->
             raise
             @@ Shape_error
-                 ( "Invalid permutation spec (expected one argument): " ^ spec,
+                 ( "Invalid einsum spec (expected two arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
       let row_var_env = Hashtbl.create (module String) in

@@ -18,11 +18,13 @@ let test_single_char () =
 
   (* Test 3: Einsum spec *)
   let spec3 = "ij;jk=>ik" in
-  let l1, l2_opt, l3 = Einsum_parser.einsum_of_spec spec3 in
-  let l2 = Option.value_exn l2_opt in
-  printf "  'ij;jk=>ik' -> (%d,%d);(%d,%d)=>(%d,%d)\n" (List.length l1.given_input)
-    (List.length l1.given_output) (List.length l2.given_input) (List.length l2.given_output)
-    (List.length l3.given_input) (List.length l3.given_output);
+  let rhs_list, l3 = Einsum_parser.einsum_of_spec spec3 in
+  (match rhs_list with
+  | [ l1; l2 ] ->
+      printf "  'ij;jk=>ik' -> (%d,%d);(%d,%d)=>(%d,%d)\n" (List.length l1.given_input)
+        (List.length l1.given_output) (List.length l2.given_input) (List.length l2.given_output)
+        (List.length l3.given_input) (List.length l3.given_output)
+  | _ -> printf "  'ij;jk=>ik' -> unexpected number of RHSes: %d\n" (List.length rhs_list));
 
   printf "\n"
 

@@ -236,15 +236,15 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
   in
   (* Try to parse as einsum spec *)
   try
-    let labels1, labels2_opt, labels_r = einsum_of_spec str_input in
-    let segments1 = parsed_to_segments labels1 in
-    let segments2 =
-      match labels2_opt with
-      | None -> []
-      | Some labels2 -> [ estring ~loc "; " ] @ parsed_to_segments labels2
+    let rhs_labels, labels_r = einsum_of_spec str_input in
+    let rhs_segments =
+      List.mapi rhs_labels ~f:(fun i labels ->
+          let segs = parsed_to_segments labels in
+          if i = 0 then segs else [ estring ~loc "; " ] @ segs)
+      |> List.concat
     in
     let segments_r = [ estring ~loc " => " ] @ parsed_to_segments labels_r in
-    let all_segments = segments1 @ segments2 @ segments_r in
+    let all_segments = rhs_segments @ segments_r in
     (* Optimize: if all segments are string literals, concatenate at compile time *)
     let all_literals =
       List.for_all all_segments ~f:(fun e ->

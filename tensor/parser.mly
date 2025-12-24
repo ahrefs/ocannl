@@ -86,7 +86,7 @@ let make_parsed_labels batch_opt input_opt output =
 
 /* Start symbols */
 %start <parsed_axis_labels> axis_labels_spec
-%start <parsed_axis_labels * parsed_axis_labels option * parsed_axis_labels> einsum_spec
+%start <parsed_axis_labels list * parsed_axis_labels> einsum_spec
 
 %%
 
@@ -253,43 +253,24 @@ axis_labels_spec:
       let output_res = make_row_spec ~kind:"output" `Output output in
       make_parsed_labels batch_res input_res output_res }
 
-/* Einsum specification: spec1[; spec2] => result */
+/* Helper to convert a shape_spec to parsed_axis_labels */
+%inline make_labels(spec):
+  | spec = shape_spec
+    { let batch, input, output = spec in
+      make_parsed_labels
+        (Option.map batch ~f:(make_row_spec ~kind:"batch" `Batch))
+        (Option.map input ~f:(make_row_spec ~kind:"input" `Input))
+        (make_row_spec ~kind:"output" `Output output) }
+
+/* List of RHS specs separated by semicolons */
+rhs_specs:
+  | spec = make_labels(shape_spec) { [spec] }
+  | spec = make_labels(shape_spec); SEMICOLON; rest = rhs_specs { spec :: rest }
+
+/* Einsum specification: spec1[; spec2; ...] => result */
 einsum_spec:
-  /* spec1; spec2 => result */
-  | spec1 = shape_spec; SEMICOLON; spec2 = shape_spec; DOUBLE_ARROW; result = shape_spec; EOF
-    { let batch1, input1, output1 = spec1 in
-      let batch2, input2, output2 = spec2 in
-      let batch_r, input_r, output_r = result in
-      let labels1 = make_parsed_labels
-        (Option.map batch1 ~f:(make_row_spec ~kind:"batch" `Batch))
-        (Option.map input1 ~f:(make_row_spec ~kind:"input" `Input))
-        (make_row_spec ~kind:"output" `Output output1)
-      in
-      let labels2 = make_parsed_labels
-        (Option.map batch2 ~f:(make_row_spec ~kind:"batch" `Batch))
-        (Option.map input2 ~f:(make_row_spec ~kind:"input" `Input))
-        (make_row_spec ~kind:"output" `Output output2)
-      in
-      let labels_r = make_parsed_labels
-        (Option.map batch_r ~f:(make_row_spec ~kind:"batch" `Batch))
-        (Option.map input_r ~f:(make_row_spec ~kind:"input" `Input))
-        (make_row_spec ~kind:"output" `Output output_r)
-      in
-      (labels1, Some labels2, labels_r) }
-  /* spec1 => result (permute) */
-  | spec1 = shape_spec; DOUBLE_ARROW; result = shape_spec; EOF
-    { let batch1, input1, output1 = spec1 in
-      let batch_r, input_r, output_r = result in
-      let labels1 = make_parsed_labels
-        (Option.map batch1 ~f:(make_row_spec ~kind:"batch" `Batch))
-        (Option.map input1 ~f:(make_row_spec ~kind:"input" `Input))
-        (make_row_spec ~kind:"output" `Output output1)
-      in
-      let labels_r = make_parsed_labels
-        (Option.map batch_r ~f:(make_row_spec ~kind:"batch" `Batch))
-        (Option.map input_r ~f:(make_row_spec ~kind:"input" `Input))
-        (make_row_spec ~kind:"output" `Output output_r)
-      in
-      (labels1, None, labels_r) }
+  /* specs => result */
+  | specs = rhs_specs; DOUBLE_ARROW; result = make_labels(shape_spec); EOF
+    { (specs, result) }
 
 %%

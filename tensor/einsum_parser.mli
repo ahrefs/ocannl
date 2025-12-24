@@ -24,10 +24,11 @@ val axis_labels_of_spec : string -> parsed_axis_labels
     - "batch|input->output"
     - "...a..b" *)
 
-val einsum_of_spec : string -> parsed_axis_labels * parsed_axis_labels option * parsed_axis_labels
-(** Parse an einsum specification.
+val einsum_of_spec : string -> parsed_axis_labels list * parsed_axis_labels
+(** Parse an einsum specification. Returns a list of RHS specs and the LHS (result) spec.
 
     Examples:
-    - "ij;jk=>ik" (matrix multiplication)
-    - "ij=>ji" (transpose/permute)
-    - "i,j->2*i+j" (convolution) *)
+    - "ij;jk=>ik" (matrix multiplication, 2 RHSes)
+    - "ij=>ji" (transpose/permute, 1 RHS)
+    - "a;b;c=>d" (3 RHSes for block tensors/concatenation)
+    - "i,j=>2*i+j" (convolution) *)
