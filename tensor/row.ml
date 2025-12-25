@@ -149,6 +149,9 @@ let rec dim_to_string style = function
             if dilation = 1 then kernel_str else Int.to_string dilation ^ "*" ^ kernel_str
           in
           [%string "conv(%{offset_str}+%{kernel_str})"])
+  | Concat dims ->
+      let dims_str = List.map dims ~f:(dim_to_string style) |> String.concat ~sep:"^" in
+      [%string "(%{dims_str})"]
 
 module Row_var = struct
   type t = Row_var of int [@@deriving equal, hash, compare, sexp]
@@ -369,10 +372,11 @@ let merge_origins o1 o2 =
   (* Take at most n items *)
   List.take deduplicated n
 
-let dim_to_int_exn = function
+let rec dim_to_int_exn = function
   | Dim { d; _ } -> d
   | Var _ -> invalid_arg "dim_to_int: dim still unknown"
   | Affine _ -> invalid_arg "dim_to_int: affine dimension cannot be converted to single int"
+  | Concat dims -> List.sum (module Int) dims ~f:dim_to_int_exn
 
 let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
   match in_ with
@@ -415,6 +419,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
           Dim { d = s.d * stride; label = s.label; proj_id = None }
       | res -> res)
+  | Concat dims -> Concat (List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d))
   | Dim _ | Var _ -> in_
 
 (* Helper functions for total_elems operations *)
@@ -846,6 +851,11 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
             (* If source is [Cur], then [constr] (target) is [Subr]. *)
             | Cur, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
             | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
+    | Concat _dims, At_least_dim _d_min ->
+        (* FIXME: reconsider if we can make progress *)
+        (* For concatenation, the constraint applies to the sum of component dimensions. We don't
+           propagate constraints to components here; they'll be resolved during unification. *)
+        ([], constr)
     | _, Unconstrained_dim -> ([], constr)
   in
   (extras, constr)
@@ -932,7 +942,8 @@ let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims
         List.partition_map (beg_dims @ dims) ~f:(function
           | Dim { d; _ } -> Either.First d
           | Var v -> Either.Second v
-          | Affine _ -> failwith "NOT IMPLEMENTED YET")
+          | Affine _ -> failwith "NOT IMPLEMENTED YET"
+          | Concat _ -> failwith "NOT IMPLEMENTED YET")
       in
       (* Check if all vars are in divided_by - for multiset, need to count occurrences *)
       let remove_all vars from_list =
@@ -1133,6 +1144,9 @@ let subst_row_constraint_impl ~subst_in_dim ~get_dim_val stage constr =
       | Var v' -> Total_elems { numerator = Strided_var { coeff; var = v'; denom }; divided_by }
       | Affine _ ->
           (* FIXME: NOT IMPLEMENTED YET *)
+          failwith "NOT IMPLEMENTED YET"
+      | Concat _ ->
+          (* FIXME: NOT IMPLEMENTED YET *)
           failwith "NOT IMPLEMENTED YET")
   | Total_elems { numerator; divided_by } -> subst_total_elems_divided_by numerator divided_by
   | Exact dims ->
@@ -1173,6 +1187,7 @@ let rec vars_of_dim = function
   | Affine { over; conv = None; _ } -> vars_of_dim over
   | Affine { over; conv = Some { kernel; _ }; _ } ->
       Set.union (vars_of_dim over) (vars_of_dim kernel)
+  | Concat dims -> Set.union_list (module Dim_var) (List.map dims ~f:vars_of_dim)
 
 let subst_dim ?(keep_affine = false) env dim =
   let vars = vars_of_dim dim in
@@ -1562,6 +1577,7 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
   | Affine { over; conv = None; _ } -> dim_var_occurs_in_dim v over
   | Affine { over; conv = Some { kernel; _ }; _ } ->
       dim_var_occurs_in_dim v over || dim_var_occurs_in_dim v kernel
+  | Concat dims -> List.exists dims ~f:(dim_var_occurs_in_dim v)
 
 let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
@@ -1815,6 +1831,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               dim_env = add_dim dim_env ~key:v ~data:(Solved_dim dim2);
               row_env =
                 Utils.Tree_map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
+              invalid_vars = env.invalid_vars;
             }
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { is_in_param = _; cur; subr; lub; constr; origin = origin1; _ } as in_)
@@ -1838,6 +1855,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               dim_env = add_dim dim_env ~key:v ~data:(Solved_dim dim2);
               row_env =
                 Utils.Tree_map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
+              invalid_vars = env.invalid_vars;
             }
       in
       ineqs := !ineqs_from_reapply_rows_constr @ !ineqs;
@@ -2052,6 +2070,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
         | None | Some (Solved_dim (Dim _)) -> false
         | Some (Solved_dim (Var v)) -> equal_dim_var subr_v v
         | Some (Solved_dim (Affine _)) -> false (* Affine dimensions can't be cyclic *)
+        | Some (Solved_dim (Concat _)) -> false (* Concat dimensions can't be cyclic *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
   match (cur, subr) with
@@ -2325,8 +2344,8 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
           let lub, lub_forcing =
             match (cur, lub2) with
             | Dim { d = d1; label = l1; _ }, Dim { d = d2; label = l2; _ }
-              when d1 = d2 && Option.equal String.equal l1 l2 ->
-                (cur, [])
+              when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
+                ((if Option.is_some l1 then cur else lub2), [])
             | Dim _, Dim _ (* when d1 <> d2 or l1 <> l2 *) ->
                 let lub = get_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
@@ -2334,6 +2353,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
             | Affine _, _ | _, Affine _ -> assert false
+            | Concat _, _ | _, Concat _ ->
+                (* FIXME: if any of these have more than one non-invalid component, and they are not
+                   equal, this should become dim-1. *)
+                (cur, [])
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
@@ -2386,6 +2409,13 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                        });
             } ))
   | Var _, Dim _ (* when d2 > 1 or labeled *) -> ([ Dim_eq { d1 = cur; d2 = subr; origin } ], env)
+  | Concat dims1, Concat dims2 when List.length dims1 = List.length dims2 ->
+      (* Element-wise unification of concatenated dimensions *)
+      let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) in
+      (eqs, env)
+  | Concat _, _ | _, Concat _ ->
+      (* Defer to dimension equality for concat with non-concat *)
+      ([ Dim_eq { d1 = cur; d2 = subr; origin } ], env)
   | Dim _, Dim _ ->
       raise
       @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ cur; subr ] ])
@@ -2867,7 +2897,7 @@ let can_guess_dim_to_one env has_uniq_constr_unless =
           | Some (Bounds_dim { has_uniq_constr_unless = Some _; _ }) -> true
           | _ -> false)
 
-let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : dim) :
+let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (dim : dim) :
     constraint_ list =
   match dim with
   | Dim _ -> []
@@ -2894,6 +2924,9 @@ let%debug5_sexp close_dim_terminal ~(stage : stage) ~is_param origin env (dim : 
       (* The input dimension itself cannot be dim-1, and the over dimension doesn't become
          transitively terminal. *)
       []
+  | Concat dims ->
+      (* For concatenation, close each component dimension as terminal *)
+      List.concat_map dims ~f:(close_dim_terminal ~stage ~is_param origin env)
 
 let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | _ -> false
 
@@ -3186,6 +3219,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
     | Affine { over; conv = None; _ } -> finalize_upper_lower_bound over
     | Affine { over; conv = Some { kernel; _ }; _ } ->
         finalize_upper_lower_bound over @ finalize_upper_lower_bound kernel
+    | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
     | Var v -> (
         match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
@@ -3206,6 +3240,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
     | Dim _ -> false
     | Affine { over; conv = None; _ } -> has_dim_var over
     | Affine { over; conv = Some { kernel; _ }; _ } -> has_dim_var over || has_dim_var kernel
+    | Concat dims -> List.exists dims ~f:has_dim_var
     | Var _ -> true
   in
   let process_dims dims = List.concat_map dims ~f:finalize_upper_lower_bound in
@@ -3246,7 +3281,12 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
           (Row_eq { r1; r2 = { dims = []; bcast = Broadcastable; prov }; origin } :: dim_eqs, env)
       | _ -> (Shape_row (r, origin) :: dim_eqs, env))
 
-let empty_env = { dim_env = Utils.Tree_map.empty; row_env = Utils.Tree_map.empty }
+let empty_env =
+  {
+    dim_env = Utils.Tree_map.empty;
+    row_env = Utils.Tree_map.empty;
+    invalid_vars = dim_var_set_empty;
+  }
 
 let update_dim_is_param d is_p env =
   if not is_p then env
@@ -3305,8 +3345,9 @@ let update_row_is_param r is_p env =
         | _ -> env)
     | _ -> env
 
-let%debug4_sexp solve_inequalities ~(stage : stage) ~(invalid_vars : dim_var_set)
-    (ineqs : constraint_ list) env : constraint_ list * _ =
+let%debug4_sexp solve_inequalities ~(stage : stage)
+    ?(invalid_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
+    constraint_ list * _ =
   let env = { env with invalid_vars = Set.union invalid_vars env.invalid_vars } in
   let rec solve ineqs (env : environment) : constraint_ list * _ =
     (* Process a single constraint and return new constraints + updated env *)
@@ -3332,7 +3373,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage) ~(invalid_vars : dim_var_set
           let extras, constr = apply_dim_constraint ~source:Direct ~stage d constr env in
           let env =
             match (constr, d) with
-            | Unconstrained_dim, _ | _, Dim _ | _, Affine _ -> env
+            | Unconstrained_dim, _ | _, Dim _ | _, Affine _ | _, Concat _ -> env
             | _, Var v ->
                 let data =
                   match find_dim env.dim_env v with
@@ -3408,6 +3449,7 @@ let rec row_to_labels env =
         | None | Some (Bounds_dim _) -> Option.value v.name ~default:""
         | Some (Solved_dim dim) -> f dim)
     | Affine _ -> ""
+    | Concat dims -> List.map dims ~f |> String.concat ~sep:"^"
   in
   function
   | { dims; bcast = Row_var { v; beg_dims }; prov } -> (
@@ -3436,6 +3478,7 @@ let fresh_row_proj r =
               { dilation; kernel = fresh_dim kernel; use_padding })
         in
         Affine { stride; over = fresh_dim over; conv; stride_offset }
+    | Concat dims -> Concat (List.map dims ~f:fresh_dim)
   in
   let bcast =
     match r.bcast with
@@ -3454,6 +3497,7 @@ let populate_dim_proj_in_solved env =
               { dilation; kernel = fresh_dim kernel; use_padding })
         in
         Affine { stride; over = fresh_dim over; conv; stride_offset }
+    | Concat dims -> Concat (List.map dims ~f:fresh_dim)
   in
   let fresh_row ({ dims; bcast; prov } : row) : row =
     let dims = List.map dims ~f:fresh_dim in
@@ -3469,6 +3513,7 @@ let populate_dim_proj_in_solved env =
   {
     dim_env = Utils.Tree_map.map env.dim_env ~f:f_dim;
     row_env = Utils.Tree_map.map env.row_env ~f:f_row;
+    invalid_vars = env.invalid_vars;
   }
 
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes
@@ -3489,7 +3534,7 @@ and proj =
       stride_offset : int;
       mutable target_id : proj_id option;
     }
-  | Concat of (proj_id * solved_dim) list5
+  | Concat of (proj_id * solved_dim) list
 [@@deriving compare, equal, sexp]
 
 type error_trace += Projection_mismatch of proj list
@@ -3549,6 +3594,11 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
               raise
               @@ Shape_error
                    ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ dim ] ])
+          | Concat _ as dim ->
+              raise
+              @@ Shape_error
+                   ( "projection_of_solved_dims: concat not supported as kernel",
+                     [ Dim_mismatch [ dim ] ] )
         in
         Conv_input
           {
@@ -3574,7 +3624,21 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
                    [] )
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
         | Var v -> Var v
-        | Affine _ as affine -> to_proj affine)
+        | Affine _ as affine -> to_proj affine
+        | Concat dims ->
+            let proj_dims =
+              List.map dims ~f:(fun d ->
+                  match subst_dim ~keep_affine:true env d with
+                  | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> (proj_id, solved_dim)
+                  | Dim { d; label; proj_id = None } ->
+                      let proj_id = Proj_id.fresh () in
+                      (proj_id, { d; label; proj_id = Some proj_id })
+                  | _ ->
+                      raise
+                      @@ Shape_error
+                           ("to_proj: concat component not fully solved", [ Dim_mismatch [ d ] ]))
+            in
+            Concat proj_dims)
   in
   let rec expand_dims = function
     | { dims; bcast = Row_var { v; beg_dims }; _ }
@@ -3687,7 +3751,8 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
         | Idx.Affine { symbols = over_syms; offset = over_offset } ->
             symbols := List.map over_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
-            offset := !offset + (stride * over_offset));
+            offset := !offset + (stride * over_offset)
+        | Idx.Concat syms -> symbols := List.map syms ~f:(fun s -> (stride, s)) @ !symbols);
 
         (* Combine and simplify symbols *)
         let symbols =
@@ -3726,7 +3791,8 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | Idx.Iterator s -> symbols := (stride, s) :: !symbols
         | Idx.Affine { symbols = over_syms; offset = over_offset } ->
             symbols := List.map over_syms ~f:(fun (c, s) -> (stride * c, s)) @ !symbols;
-            offset := !offset + (stride * over_offset));
+            offset := !offset + (stride * over_offset)
+        | Idx.Concat syms -> symbols := List.map syms ~f:(fun s -> (stride, s)) @ !symbols);
 
         (match kernel_idx with
         | Idx.Fixed_idx i -> offset := !offset + (dilation * i)
@@ -3734,7 +3800,8 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | Idx.Iterator s -> symbols := (dilation, s) :: !symbols
         | Idx.Affine { symbols = kernel_syms; offset = kernel_offset } ->
             symbols := List.map kernel_syms ~f:(fun (c, s) -> (dilation * c, s)) @ !symbols;
-            offset := !offset + (dilation * kernel_offset));
+            offset := !offset + (dilation * kernel_offset)
+        | Idx.Concat syms -> symbols := List.map syms ~f:(fun s -> (dilation, s)) @ !symbols);
 
         (* Subtract padding if use_padding is true *)
         let offset =
@@ -3812,6 +3879,23 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
              ( "projection_of_solved_dims: still not fully inferred for variable "
                ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
                [ Projection_mismatch [ proj ] ] )
+    | Concat proj_dims ->
+        (* For concatenation, collect all component iterators *)
+        let syms =
+          List.concat_map proj_dims ~f:(fun (proj_id, { d; _ }) ->
+              let repr, _ =
+                Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
+              in
+              match (d, Map.find proj_env.proj_to_index repr) with
+              | _, Some (Idx.Iterator s) -> [ s ]
+              | (0 | 1), _ -> []
+              | _, Some (Idx.Fixed_idx _) -> []
+              | _, Some (Idx.Affine { symbols; _ }) -> List.map symbols ~f:snd
+              | _, Some (Idx.Concat syms) -> syms
+              | _, Some Idx.Sub_axis -> []
+              | _, None -> [])
+        in
+        if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms
   in
   loop proj
 
@@ -3833,6 +3917,17 @@ let rec dim_to_proj _proj_env : dim -> proj = function
           stride_offset;
           target_id = None;
         }
+  | Concat dims ->
+      let proj_dims =
+        List.map dims ~f:(fun d ->
+            match d with
+            | Dim ({ proj_id = Some proj_id; _ } as solved_dim) -> (proj_id, solved_dim)
+            | Dim { d; label; proj_id = None } ->
+                let proj_id = Proj_id.fresh () in
+                (proj_id, { d; label; proj_id = Some proj_id })
+            | _ -> failwith "dim_to_proj: Concat component not a solved dim")
+      in
+      Concat proj_dims
 
 let get_dim_index proj_env =
   let loop = function
@@ -3855,6 +3950,7 @@ let get_dim_index proj_env =
         | (0 | 1), None -> Fixed_idx 0
         | _ -> unknown_projection proj_id d)
     | Affine _ as dim -> get_proj_index proj_env (dim_to_proj proj_env dim)
+    | Concat _ as dim -> get_proj_index proj_env (dim_to_proj proj_env dim)
   in
   loop
 
@@ -3929,6 +4025,22 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
             (* Defer: record that v needs iteration, will resolve after all equations processed *)
             iterated_vars := v :: !iterated_vars
         | Some proj -> loop @@ Iterated proj)
+    | Iterated (Concat proj_dims) ->
+        (* Each component of a concat needs iteration *)
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
+    | Proj_eq (Concat proj_dims1, Concat proj_dims2)
+      when List.length proj_dims1 = List.length proj_dims2 ->
+        (* Element-wise unification of concat components *)
+        List.iter2_exn proj_dims1 proj_dims2 ~f:(fun (p1, s1) (p2, s2) ->
+            loop (Proj_eq (Proj (p1, s1), Proj (p2, s2))))
+    | Proj_eq (Concat proj_dims, other) | Proj_eq (other, Concat proj_dims) -> (
+        (* For now, just record dimensions and unify with a single projection if possible *)
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
+        match other with
+        | Proj (p, _) ->
+            List.iter proj_dims ~f:(fun (pid, _) ->
+                proj_classes := Utils.union_add ~equal:Proj_id.equal !proj_classes p pid)
+        | _ -> ())
   in
   let no_proj_assigned v =
     raise
@@ -4071,6 +4183,7 @@ let get_product_proj proj_env dim =
              ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
              [ Dim_mismatch [ dim ] ] )
   | Affine _ -> None
+  | Concat _ -> None
 
 let%debug6_sexp get_dim_padding (proj_env : proj_env) (dim : dim) : axis_padding option =
   match dim with

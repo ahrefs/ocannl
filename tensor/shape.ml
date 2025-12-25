@@ -265,6 +265,13 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
               { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
         in
         Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
+    | Concat_spec labels ->
+        let dims =
+          List.map labels ~f:(fun label ->
+              Row.Var
+                (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())))
+        in
+        Row.Concat dims
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -280,7 +287,8 @@ let add_var_used_in_pointwise row =
 let unused_shapes = Hash_set.create (module Int)
 
 let%debug4_sexp get_inequalities ?(for_projections = false)
-    ({ shape = cur_sh; logic; _ } as _upd : update_step) : proj_axis_env * Row.constraint_ list =
+    ({ shape = cur_sh; logic; _ } as _upd : update_step) :
+    proj_axis_env * Row.dim_var_set * Row.constraint_ list =
   Hash_set.remove unused_shapes cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
@@ -309,6 +317,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Fetch (Constant_bits _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,
+        dim_var_set_empty,
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
@@ -333,6 +342,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Data (Keep_shape_no_padding nd) } ->
       (* FIXME: constrain padding to "not padded". *)
       ( dim_map_empty,
+        dim_var_set_empty,
         (if for_projections then []
          else
            [
@@ -359,6 +369,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       (* FIXME: constrain padding. *)
       ignore (padding, padded_value);
       ( dim_map_empty,
+        dim_var_set_empty,
         (if for_projections then []
          else
            [
@@ -384,6 +395,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Fetch (Constant_fill values) } ->
       let len = Array.length values in
       ( dim_map_empty,
+        dim_var_set_empty,
         Rows_constr
           {
             r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
@@ -403,6 +415,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Fetch (Slice { sliced = tn; batch_idx = _ }) } ->
       if Lazy.is_val tn.dims then
         ( dim_map_empty,
+          dim_var_set_empty,
           (if for_projections then []
            else
              [
@@ -739,6 +752,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         ]
       in
       ( proj_axis_env,
+        dim_var_set_empty,
         (Option.to_list (if for_projections then None else static_range)
         |> List.map ~f:(fun range ->
             Dim_eq
@@ -845,6 +859,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         Map.merge_skewed ~combine proj_env_rhs proj_env_lhs
       in
       ( proj_env,
+        dim_var_set_empty,
         extras_dim_refs @ extras_rhs @ extras_lhs
         @ [
             Row_eq
@@ -1071,6 +1086,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
       ( proj_env,
+        dim_var_set_empty,
         extras_dim_refs @ extras_rhs1 @ extras_rhs2 @ extras_lhs
         @ [
             Row_eq
@@ -1205,6 +1221,196 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                       rhs_name = sh2.debug_name;
                       rhs_kind = `Output;
                       operation = Some "Broadcast ARGUMENT 2";
+                    };
+                  ];
+              };
+          ] )
+  | Block { spec; delayed_vars; rhses } ->
+      List.iter rhses ~f:(fun sh -> Hash_set.remove unused_shapes sh.id);
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      List.iter rhses ~f:(fun sh -> add_var_used_in_spec_or_compose sh.input.bcast);
+      let ls_rhses, ls_lhs =
+        match einsum_of_spec spec with
+        | ls_rhses, ls_lhs when List.length ls_rhses = List.length rhses -> (ls_rhses, ls_lhs)
+        | _ ->
+            raise
+            @@ Shape_error
+                 ( Printf.sprintf "Invalid block spec (expected %d arguments): %s"
+                     (List.length rhses) spec,
+                   [ Shape_mismatch (cur_sh :: rhses) ] )
+      in
+      let row_var_env = Hashtbl.create (module String) in
+      let dim_var_env = Hashtbl.create (module String) in
+      (* Process all RHS shapes *)
+      let rhs_results =
+        List.mapi (List.zip_exn ls_rhses rhses) ~f:(fun i (ls_rhs, sh) ->
+            let extras, proj_env, (b, inp, o) =
+              einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
+                ls_rhs
+            in
+            (i, sh, extras, proj_env, b, inp, o))
+      in
+      let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
+        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
+          ls_lhs
+      in
+      (* Bind delayed_var_refs to the variables after they are created *)
+      let extras_dim_refs =
+        List.filter_map delayed_vars ~f:(fun delayed_ref ->
+            let label = delayed_ref.var_ref.ref_label in
+            match Hashtbl.find dim_var_env label with
+            | Some var ->
+                delayed_ref.var <- `Dim var;
+                Option.map
+                  ~f:(fun solved_dim ->
+                    Dim_eq
+                      {
+                        d1 = Row.Var var;
+                        d2 = Row.get_dim ~d:solved_dim ();
+                        origin =
+                          [
+                            {
+                              lhs_name = label;
+                              lhs_kind = `Output;
+                              rhs_name = delayed_ref.var_ref.ref_label;
+                              rhs_kind = `Output;
+                              operation = Some "set_dim";
+                            };
+                          ];
+                      })
+                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
+            | None -> (
+                match Hashtbl.find row_var_env label with
+                | Some var ->
+                    delayed_ref.var <- `Row var;
+                    Option.map
+                      ~f:(fun solved_dim ->
+                        Rows_constr
+                          {
+                            r = [ Row.get_row_for_var Row.empty_provenance var ];
+                            constr = Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            origin =
+                              [
+                                {
+                                  lhs_name = label;
+                                  lhs_kind = `Output;
+                                  rhs_name = delayed_ref.var_ref.ref_label;
+                                  rhs_kind = `Output;
+                                  operation = Some "set_dim";
+                                };
+                              ];
+                          })
+                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
+                | None ->
+                    raise
+                    @@ Row.Shape_error
+                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                           [ Shape_mismatch (cur_sh :: rhses) ] )))
+      in
+      let proj_env =
+        let combine ~key:_ _ _ = assert false in
+        List.fold rhs_results ~init:proj_env_lhs ~f:(fun acc (_, _, _, proj_env_rhs, _, _, _) ->
+            Map.merge_skewed ~combine acc proj_env_rhs)
+      in
+      (* Generate constraints for each RHS shape *)
+      let rhs_constraints =
+        List.concat_map rhs_results ~f:(fun (i, sh, extras, _, b_rhs, i_rhs, o_rhs) ->
+            let arg_name = Printf.sprintf "Block ARGUMENT %d" (i + 1) in
+            extras
+            @ [
+                Row_eq
+                  {
+                    r1 = b_rhs;
+                    r2 = sh.batch;
+                    origin =
+                      [
+                        {
+                          lhs_name = spec;
+                          lhs_kind = `Batch;
+                          rhs_name = sh.debug_name;
+                          rhs_kind = `Batch;
+                          operation = Some arg_name;
+                        };
+                      ];
+                  };
+                Row_eq
+                  {
+                    r1 = i_rhs;
+                    r2 = sh.input;
+                    origin =
+                      [
+                        {
+                          lhs_name = spec;
+                          lhs_kind = `Input;
+                          rhs_name = sh.debug_name;
+                          rhs_kind = `Input;
+                          operation = Some arg_name;
+                        };
+                      ];
+                  };
+                Row_eq
+                  {
+                    r1 = o_rhs;
+                    r2 = sh.output;
+                    origin =
+                      [
+                        {
+                          lhs_name = spec;
+                          lhs_kind = `Output;
+                          rhs_name = sh.debug_name;
+                          rhs_kind = `Output;
+                          operation = Some arg_name;
+                        };
+                      ];
+                  };
+              ])
+      in
+      ( proj_env,
+        dim_var_set_empty,
+        extras_dim_refs @ extras_lhs @ rhs_constraints
+        @ [
+            Row_eq
+              {
+                r1 = cur_sh.batch;
+                r2 = b_lhs;
+                origin =
+                  [
+                    {
+                      lhs_name = cur_sh.debug_name;
+                      lhs_kind = `Batch;
+                      rhs_name = spec;
+                      rhs_kind = `Batch;
+                      operation = Some "Block RESULT";
+                    };
+                  ];
+              };
+            Row_eq
+              {
+                r1 = cur_sh.input;
+                r2 = i_lhs;
+                origin =
+                  [
+                    {
+                      lhs_name = cur_sh.debug_name;
+                      lhs_kind = `Input;
+                      rhs_name = spec;
+                      rhs_kind = `Input;
+                      operation = Some "Block RESULT";
+                    };
+                  ];
+              };
+            Row_eq
+              {
+                r1 = cur_sh.output;
+                r2 = o_lhs;
+                origin =
+                  [
+                    {
+                      lhs_name = cur_sh.debug_name;
+                      lhs_kind = `Output;
+                      rhs_name = spec;
+                      rhs_kind = `Output;
+                      operation = Some "Block RESULT";
                     };
                   ];
               };
@@ -1420,6 +1626,7 @@ let iter_shapes update_step ~f =
       f sh1;
       f sh2;
       f sh3
+  | Block { rhses; _ } -> List.iter rhses ~f
 
 let all_rows_w_origin update_step =
   let get_origin sh kind =
@@ -1446,6 +1653,7 @@ let all_rows_w_origin update_step =
   | Transpose (_, sh1) -> rows_sh sh1
   | Broadcast (_, sh1, sh2) -> rows_sh sh1 @ rows_sh sh2
   | Broadcast_tern (_, sh1, sh2, sh3) -> rows_sh sh1 @ rows_sh sh2 @ rows_sh sh3
+  | Block { rhses; _ } -> List.concat_map rhses ~f:rows_sh
 
 (** {3 Projection inference} *)
 
@@ -1485,12 +1693,13 @@ let fresh_proj_ids update =
   | Broadcast_tern (_, sh1, sh2, sh3) ->
       fresh_shape sh1;
       fresh_shape sh2;
-      fresh_shape sh3);
+      fresh_shape sh3
+  | Block { rhses; _ } -> List.iter rhses ~f:fresh_shape);
   (!resolved_padding, !inferred_padding)
 
 let%debug4_sexp row_to_dims (row : Row.t) : int array =
   let open Row in
-  let f = function
+  let rec f = function
     | Dim { d; _ } -> d
     | Var v ->
         raise
@@ -1504,6 +1713,7 @@ let%debug4_sexp row_to_dims (row : Row.t) : int array =
         @@ Row.Shape_error
              ( "Not enough shape information: affine dimension cannot be converted to single int",
                [ Row_mismatch [ row ] ] )
+    | Concat dims -> List.sum (module Int) dims ~f
   in
   match row with
   | { bcast = Row_var { v; _ }; _ } ->
@@ -1530,7 +1740,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
   let (proj_axis_env, invalid_vars, ineqs) :
-      Row.proj_axis_env * Row.dim_var_set * Row.constraint_ list =
+      proj_axis_env * Row.dim_var_set * Row.constraint_ list =
     get_inequalities ~for_projections:true update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
@@ -1558,6 +1768,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     | Transpose (_, sh) -> ([ sh ], false)
     | Broadcast (_, sh1, sh2) -> ([ sh1; sh2 ], false)
     | Broadcast_tern (_, sh1, sh2, sh3) -> ([ sh1; sh2; sh3 ], false)
+    | Block { rhses; _ } -> (rhses, false)
   in
   let terminal_rows_for_inputs =
     List.concat_map rhs ~f:(fun sh ->
@@ -1599,9 +1810,11 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
       all_product_projs_with_iters
   in
-  let product_space : int array = Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> d) in
-  let product_iterators : Idx.symbol array =
-    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> s)
+  let product_space : int list array =
+    Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> [ d ])
+  in
+  let product_iterators : Idx.symbol list array =
+    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> [ s ])
   in
   let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(Row.get_dim_index proj_env)
@@ -1697,6 +1910,16 @@ let rec compute_row_product env (row : Row.t) : int option =
         | Row.Dim { d; _ } -> Some d
         | Row.Var v -> Row.get_dim_val env v
         | Row.Affine _ -> None (* TODO: handle affine/convolution input dimensions *)
+        | Row.Concat dims ->
+            (* For Concat, recursively compute the sum of all component dimensions *)
+            List.fold dims ~init:(Some 0) ~f:(fun acc d ->
+                match acc with
+                | None -> None
+                | Some sum -> (
+                    match d with
+                    | Row.Dim { d; _ } -> Some (sum + d)
+                    | Row.Var v -> Option.map (Row.get_dim_val env v) ~f:(fun d -> sum + d)
+                    | _ -> None))
       in
       match (dim_val, compute_row_product env { row with dims = rest }) with
       | Some d, Some rest_product -> Some (d * rest_product)
@@ -1983,6 +2206,14 @@ let shape_spec_to_dims_bio labels =
               { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
         in
         Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
+    | Concat_spec labels ->
+        (* Convert each label in the concatenation to a dimension and wrap in Concat *)
+        let dims =
+          List.map labels ~f:(fun label ->
+              Row.Var
+                (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())))
+        in
+        Row.Concat dims
   in
   let row_var_env = Hashtbl.create (module String) in
   axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels
@@ -2118,6 +2349,7 @@ let parse_n5_layout priorities =
     | Fixed_index i -> i
     | Label _ -> invalid_arg "parse_n5_layout requires integer-only labels"
     | Affine_spec _ -> invalid_arg "parse_n5_layout does not support affine expressions"
+    | Concat_spec _ -> invalid_arg "parse_n5_layout does not support concatenation expressions"
   in
   let p_labels = Einsum_parser.(axis_labels @@ axis_labels_of_spec priorities) in
   axis_map_to_dims_index p_labels |> Array.map ~f

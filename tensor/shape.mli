@@ -224,6 +224,9 @@ type logic =
   | Terminal of { is_param : bool; logic : terminal_type }
       (** Extracts any available shape information from the initialization. The [is_param] field
           indicates if this is a parameter tensor that requires gradients. *)
+  | Block of { spec : string; delayed_vars : delayed_var_ref list; rhses : t list }
+      (** Block tensor / concatenation operation. Takes an n-ary einsum specification where
+          concatenated axes use the [a^b^c] syntax, e.g., ["x;y;z => x^y^z"]. *)
 [@@deriving equal, sexp_of]
 
 type update_id [@@deriving equal, compare, hash, sexp]
