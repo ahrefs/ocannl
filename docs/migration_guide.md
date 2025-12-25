@@ -36,6 +36,11 @@ This is why pooling needs a dummy constant kernel - to carry shape info between 
 | `x.mean(dim=[1,2])` | `x ++ "... \| h, w, c => ... \| 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
 | `x.sum(dim=-1, keepdim=True)` | `x ++ "... \| ... d => ... \| ... 0"` | Reduce by summing |
 | `x.sum(dim=-1, keepdim=False)` | `x ++ "... \| ... d => ... \| ..."` | Reduce by summing |
+| `torch.cat([a, b], dim=0)` | `a +* "x; y => x^y" b` | Concatenate tensors |
+| `torch.stack([a, b], dim=0)` | `[a; b]` | Stack with new axis (block tensor syntax) |
+| `x[:n]` (prefix slice) | `x ++ "a^b => a"` | Extract prefix (size inferred) |
+| `x[n:]` (suffix slice) | `x ++ "a^b => b"` | Extract suffix (size inferred) |
+| `x[:-3]` (all but last 3) | `x ++ "a^3 => a"` | Drop last 3 elements |
 
 ## Tensor Creation Patterns
 
@@ -199,13 +204,11 @@ let%op network () =
 
 ### Flattening for Linear Layers
 
-⚠️ **Important:** OCANNL doesn't support flattening/reshaping operations.
-
-In the future, OCANNL may support structured flattening / unflattening, where particular axes are selected for joining / splitting.
+⚠️ **Important:** OCANNL doesn't support arbitrary flattening/reshaping operations.
 
 ```ocaml
 (* This performs REDUCTION (sum), not flattening: *)
-x ++ "... | ..spatial.. => ... | 0"  
+x ++ "... | ..spatial.. => ... | 0"
 
 (* OCANNL's approach: Let FC layers work with multiple axes!
    Instead of flattening [batch, h, w, c] to [batch, h*w*c],
@@ -217,6 +220,33 @@ let%op fc_after_conv () x =
   (* x might have shape [batch, height, width, channels] *)
   { w } * x + { b }  (* w will adapt to match x's shape *)
 ```
+
+### Tensor Concatenation and Block Tensors
+
+OCANNL supports concatenation of tensors along an axis using the `^` operator in einsum notation. This is different from flattening—concatenation preserves the axis structure.
+
+```ocaml
+(* Concatenate two vectors *)
+let%op concat_vectors a b = a +* "x; y => x^y" b
+
+(* Concatenate along a specific axis (output axis here) *)
+let%op concat_matrices a b =
+  a +* "...|m, n; ...|p, n => ...|m^p, n" b
+
+(* Extract prefix/suffix of a tensor *)
+let%op get_prefix x = x ++ "a^b => a"  (* size of 'a' inferred from context *)
+let%op get_suffix x = x ++ "a^b => b"  (* size of 'b' inferred from context *)
+
+(* Block tensor construction (upcoming syntax) *)
+let%op block_matrix () =
+  [[a; b]; [c; d]]  (* Creates 2x2 block matrix from components *)
+```
+
+The `^` operator is fundamentally an indexing-level operation—it creates an axis that iterates over its components in sequence. This enables:
+- **Tensor concatenation**: `a; b => a^b`
+- **Axis slicing**: `a^b => a` (prefix) or `a^b => b` (suffix)
+- **Block tensor construction**: Compose structured tensors from smaller parts
+- **Partial updates**: `a => a^b` assigns to prefix, leaving suffix unchanged
 
 ## Training Loop Patterns
 

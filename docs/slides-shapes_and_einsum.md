@@ -191,6 +191,60 @@ let%op conv2d ?(stride=1) ?(kernel_size=3) () x =
 
 {pause up=conv-example}
 
+## Axis Concatenation
+
+{#concat-syntax .definition title="The ^ Operator"}
+> The `^` operator creates a concatenated axis from multiple components:
+>
+> ```
+> a^b    (* Iterate over 'a' then over 'b' *)
+> a^b^c  (* Three-part concatenation *)
+> ```
+>
+> This enables tensor concatenation, block tensors, and axis slicing.
+
+{pause}
+
+{#concat-example .example title="Concatenation Patterns"}
+```ocaml
+(* Concatenate two vectors *)
+let%op concat a b = a +* "x; y => x^y" b
+
+(* Extract prefix/suffix *)
+let%op prefix x = x ++ "a^b => a"
+let%op suffix x = x ++ "a^b => b"
+
+(* Assign to part of a tensor *)
+let%cd update_prefix ~target ~source =
+  target =: source ~logic:"a => a^b"
+
+(* Integer constants specify fixed sizes *)
+let%op skip_first_3 x = x ++ "3^rest => rest"
+```
+
+{pause up=concat-example}
+
+{#block-tensors .block title="Block Tensor Construction (upcoming)"}
+> The tensor literal syntax generalizes to block tensors:
+>
+> | Syntax | Axis | Example |
+> |--------|------|---------|
+> | `[ ; ]` | Output | `[a; b]` - concat on output axis |
+> | `( , )` | Input | `(a, b)` - concat on input axis |
+> | `[| ; |]` | Batch | `[|a; b|]` - concat on batch axis |
+>
+> ```ocaml
+> (* 2x2 block matrix *)
+> let%op block = [[a; b]; [c; d]]
+> ```
+
+{pause}
+
+{#concat-syntax-note .remark}
+In `%op`, the `++` and `+*` operators detect `^` in the spec to produce `Block` assignments. For `%cd`, single-argument concatenation uses `~logic:"..."` as shown above. Multi-argument syntax (for tensor concatenation) is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor syntax.
+
+{pause up}
+
 ## Capturing Dimensions
 
 {#capture-dims .block title="Dimension Variables"}
@@ -410,6 +464,18 @@ let spec = "i j => j i" in (x ++ spec [ "j" ]) /. dim j
 "a, b, c"    (* 3 axes: a, b, c (multi-char mode) *)
 ```
 
+**Concatenation vs reduction:**
+```ocaml
+(* Concatenation - preserves elements: *)
+a +* "x; y => x^y" b  (* Result has size(x) + size(y) *)
+
+(* Reduction - combines elements: *)
+x ++ "a => 0"         (* Sums all elements to scalar *)
+```
+
+**Concatenation is not flattening:**
+The `^` operator preserves the axis count—it concatenates *along* an axis, not *across* axes. Use multi-axis tensor operations instead of reshape when possible.
+
 {pause up}
 ## Building Your First Model
 
@@ -459,10 +525,11 @@ Check [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.
 
 {#summary .definition title="Key Takeaways"}
 > You've learned to:
-> 
+>
 > * **Navigate** OCANNL's three-axis shape system
-> * **Write** concise einsum specifications  
+> * **Write** concise einsum specifications
 > * **Leverage** row variables for flexibility
+> * **Concatenate** tensors and slice axes with `^`
 > * **Build** complex operations from primitives
 > * **Trust** shape inference to handle the details
 

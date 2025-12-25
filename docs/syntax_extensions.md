@@ -11,6 +11,8 @@
   - [Inline declarations](#inline-declarations)
   - [Using OCANNL's generalized einsum notation](#using-ocannls-generalized-einsum-notation)
     - [Syntax of the generalized einsum notation](#syntax-of-the-generalized-einsum-notation)
+    - [Axis concatenation with the ^ operator](#axis-concatenation-with-the--operator)
+    - [Block tensor syntax (upcoming)](#block-tensor-syntax-upcoming)
   - [Further features of the syntax extension %cd](#further-features-of-the-syntax-extension-cd)
     - [Referencing arrays: tensor value, tensor gradient, merge buffer of a tensor node](#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node)
     - [Block comments](#block-comments)
@@ -497,6 +499,69 @@ With `stride=2`, `kernel_size=3`, `dilation=1`:
 - 2D convolution with stride 1: `input +* "...|oh<+wh, ow<+ww, ..ic..; wh, ww, ic => ...|oh, ow, ..oc.." kernel`
   - Sum-reduces over kernel height, kernel width, and input channels
   - Output channels come from the output shape (typically inferred for the kernel)
+
+### Axis concatenation with the `^` operator
+
+The `^` operator in einsum specifications creates a concatenated axis from multiple components. This enables:
+
+- **Tensor concatenation**: Combine tensors along an axis
+- **Block tensor construction**: Build structured tensors from components
+- **Axis slicing**: Extract or assign to parts of an axis
+
+The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first iterates over component `a`, then over component `b`, etc. The components are axis labels (identifiers in multi-char mode, single characters in single-char mode).
+
+**Examples of concatenation patterns** (using vector notation for simplicity):
+
+| Pattern | Description |
+|---------|-------------|
+| `a; b => a^b` | Concatenate vectors: result contains all of `a` then all of `b` |
+| `a^b => a` | Extract prefix: take the first part of a vector |
+| `a^b => b` | Extract suffix: take the last part of a vector |
+| `a => a^b` | Replace prefix: assign to first part, leaving suffix unchanged |
+| `b => a^b` | Replace suffix: assign to last part, leaving prefix unchanged |
+| `a^b^c => b` | Extract middle: requires knowing sizes of `a` and `c` |
+| `b => a^b^c` | Replace middle: requires knowing sizes of `a` and `c` |
+
+**Shape inference behavior**: When the argument and result shapes are both known, prefix and suffix operations (`a^b => a`, `a^b => b`, `a => a^b`, `b => a^b`) don't need additional dimension information. Middle operations (`a^b^c => b`, `b => a^b^c`) require providing dimension constraints for the unmatched components.
+
+**Integer constants in concatenation**: When used with `^`, an integer specifies the size of that axis component rather than indexing into a fixed dimension. For example:
+- `3^a => a`: Skip 3 elements at the beginning of the input
+- `a => a^3`: Assign to all but the last 3 elements of the result
+- `3^a^5 => a`: Extract middle portion, skipping 3 at start and 5 at end
+
+These integer-sized components become fresh internal symbols during projection derivation, causing those components to be skipped.
+
+**N-ary einsum for multiple tensors**: The einsum parser supports any number of RHS tensors separated by semicolons. This enables operations like:
+```ocaml
+(* Concatenate 3 output-axes-only tensors along the first axis *)
+a +* "x, ...; y, ...; z, ... => x^y^z, ..." b c
+```
+
+**Syntax for `%op` vs `%cd`**: In the `%op` extension, the existing `++` and `+*` operators are reused—when the einsum spec contains a `^` character, the operation produces a `Block` assignment rather than a `Unop`/`Binop`. For `%cd`, single-argument concatenation (slicing, partial updates) works with the existing `~logic:"..."` syntax:
+
+```ocaml
+(* Assign to prefix of target, leaving suffix unchanged *)
+let%cd update_prefix ~target ~source =
+  target =: source ~logic:"a => a^b"
+```
+
+Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the planned block tensor syntax.
+
+### Block tensor syntax (upcoming)
+
+The tensor literal syntax will be generalized to support block tensor construction, where tensor literals become a special case with scalar components. The syntax extensions recursively compose argument tensors by introducing and concatenating along a new leading axis:
+
+| Syntax | Axis kind | Example |
+|--------|-----------|---------|
+| `( , )` | Input | `(ta, tb)` concatenates along a new input axis |
+| `[ ; ]` | Output | `[ta; tb]` concatenates along a new output axis |
+| `[| ; |]` | Batch | `[|ta; tb|]` concatenates along a new batch axis |
+
+For example, `[ta; tb]` translates to:
+1. Introduce a new output axis for each component: `...|...->... => ...|...->0, ...` for `ta` and `tb`
+2. Concatenate along that axis: `...|...->a,... ; ...|...->b,... => ...|...->a^b,...`
+
+This allows constructing block matrices, block tensors, and other structured tensors from smaller components.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 
