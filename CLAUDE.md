@@ -201,6 +201,16 @@ opam install cudajit  # for CUDA backend
 - Capture dimensions: `+* "spec" ["var1"; "var2"]` binds dimension variables
 - Use `Shape.set_dim var value` to constrain captured dimensions
 - Special operators -- binary: `+*` (`einsum`, add-reduce with multiply), `@^+` (`tropical`, max-reduce with add), `+++` (`outer_sum`, add-reduce with add); unary: `++` (`einsum1`, add-reduce), `@^^` (`einmax1`, max-reduce)
+- Concatenation: `a^b` in specs creates concatenated axis (for slicing, block tensors)
+
+**Common gotchas and idioms**:
+- `*` is tensor/matrix multiply, `*.` is pointwise multiply (no `/`, use `/.` for pointwise division)
+- `0.5 + 0.5` creates a shape-inferred constant 1 (both operands broadcast); `1.0` alone is a fixed scalar
+- Einsum spec must be a literal string when capturing dimensions: `x ++ "a,b" ["a"]` works, `let s = "a,b" in x ++ s ["a"]` fails
+- Single-char vs multi-char mode: `"abc"` = 3 axes; `"abc,"` = 1 axis named `abc` (comma triggers multi-char)
+- `{ param }` in `%op` creates learnable parameters; same syntax in `%cd` creates non-differentiable tensors
+- Sub-modules with `()` must be bound before input: `let layer = make_layer () in fun x -> layer x`
+- No reshape/flatten—use multi-axis operations or row variables instead
 
 ## Common Development Tasks
 
