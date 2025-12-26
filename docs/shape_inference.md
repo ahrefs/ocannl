@@ -92,6 +92,22 @@ Shape inference does not maintain padding for axes of individual tensor nodes—
 
 The `Concat` constructor represents an axis arising from concatenating of the component dimensions. While for uniformity we use `dim list` here, currently we don't support the components themselves being affine. During shape inference, once the components are known, `Concat` resolves to the sum of the dimensions of the components. When not called from projections inference, also do simplifications that are valid arithmetically but don't make sense as projections: e.g. converting a `Concat` that repeats the same `dim` value (e.g. a variable), into a stride-only `Affine`.
 
+#### Invalid variables in Block specs
+
+For Block operations (which use `Concat` dimensions), some dimension variables are "invalid" — they are allowed to resolve to dimension 0, which is normally an invalid dimension size. These variables represent parts of concatenated dimensions that are "projected away" and don't participate in actual array indexing.
+
+A variable `v` is in `invalid_vars` if:
+1. `v` appears in a component of a `Concat` dimension on one side (RHS or LHS of the spec)
+2. The "complement" of that component (union of variables from other components of the same `Concat`) has non-empty intersection with ALL components of at least one axis on the other side
+
+Examples:
+- `a^b => a`: `b` is invalid because the complement `{a}` intersects with `{a}` (the single component of the LHS axis)
+- `a^b => b`: `a` is invalid because the complement `{b}` intersects with `{b}`
+- `a^b => a^b`: neither is invalid (each complement only covers one component of the other side's axis, not all)
+- `b^c => a`: no invalid vars because complements `{c}` and `{b}` don't intersect with `{a}`
+
+When guessing dimension variables to minimal values (at Stage 5 and Stage 7), variables in `invalid_vars` are guessed to 0 instead of 1. This allows Block specs to express partial assignments and extractions where some concatenation components may be empty.
+
 ### Preventing Premature Guessing with Total_elems Constraints
 
 A critical aspect of shape inference is avoiding premature "guessing" of dimension variables to minimal values (dimension-1-no-label or no-further-axes for rows) when such guessing would make pending constraints unsatisfiable. This is particularly important for `Total_elems` constraints of the form:
@@ -145,7 +161,7 @@ type row_entry =
 type dim_env = dim_entry Map.M(Dim_var).t
 type row_env = row_entry Map.M(Row_var).t
 
-type environment = { dim_env : dim_env; row_env : row_env }
+type environment = { dim_env : dim_env; row_env : row_env; invalid_vars : dim_var_set }
 
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim }
@@ -256,9 +272,9 @@ Simplification of an inequality, and constraint propagation, can generate more c
 | **2** | On demand | Force precision coefficients | — |
 | **3** | On demand | — | Terminal → LUB; one axis if constrained |
 | **4** | On demand | Terminal → LUB; propagate `Total_elems` | Terminal → no-further-axes |
-| **5** | On demand | Terminal → guess 1 | `Total_elems`/`Exact` → resolve |
+| **5** | On demand | Terminal → guess 1 (or 0 if invalid) | `Total_elems`/`Exact` → resolve |
 | **6** | On demand | — | All remaining → no-further-axes |
-| **7** | On demand | All remaining → LB or 1 | — |
+| **7** | On demand | All remaining → LB or 1 (or 0 if invalid) | — |
 
 ### Stage details
 
@@ -266,9 +282,9 @@ Simplification of an inequality, and constraint propagation, can generate more c
 * **Stage 2** forces coefficients coming from precision byte sizes.
 * **Stage 3**, when solving the constraints, sets yet-unknown row variables in terminal shapes to their least upper bounds LUB (if any), but only if they don't have a `Total_elems 1` constraint. It substitutes row variables in terminal shapes that do not have a LUB by one axis if that's required to satisfy the variable's constraint. In `Total_elems` constraints with multiple row variables, it substitutes row variables originating from axes of non-output kind, and which do not have a LUB, by no-further-axes — otherwise these constraints can be too hard to unlock.
 * **Stage 4** sets yet-unknown dimensions with >1 lower bounds from direct accesses, or terminal ones, to their LUBs if they have any. It substitutes row variables in terminal shapes that do not have a LUB by no-further-axes. (This is generalized at Stage 6 to all variables.) At this stage, we inject `Shape_row` constraints into the inequalities, so that we can re-process the variables of interest without traversing the whole environment. After row variables are resolved to concrete axes, `Total_elems` constraints with `Num_elems` numerators become simple equations that can be solved deductively — e.g., a row variable resolved to one axis with `Total_elems { numerator = Num_elems n }` yields `dim = n` for that axis.
-* **Stage 5** guesses terminal dimension variables without a LUB to dim 1, **except** when the variable has `has_uniq_constr_unless` set (indicating it's in the numerator of a `Total_elems` constraint) and none of the denominator variables are also prevented from guessing — this prevents premature guessing that would make `Total_elems` constraints unsatisfiable. It also addresses `Total_elems` and `Exact` constraints with yet-unknown row variables heuristically. For `Total_elems` and a single row variable: if the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension. For multiple row variables, if one is of the Output kind, sets the other variables to no-further-axes, and retries. **Importantly**, when resolving `Total_elems` constraints with `Strided_var` numerators, Stage 5 now looks up the LUB from the row environment even for non-terminal shapes (if the LUB wasn't provided from context). This is critical for cases where shape information flows through intermediate operations (like `pointmul` broadcasting) — the LUB computed from `Row_ineq` constraints becomes available for constraint resolution. When a `Strided_var { coeff; var; denom }` constraint is resolved using a LUB with known total elements `n`, both the row variable and the dimension variable `var` are set: `var = n * denom / coeff`.
+* **Stage 5** guesses terminal dimension variables without a LUB to dim 1 (or dim 0 if the variable is in `invalid_vars`), **except** when the variable has `has_uniq_constr_unless` set (indicating it's in the numerator of a `Total_elems` constraint) and none of the denominator variables are also prevented from guessing — this prevents premature guessing that would make `Total_elems` constraints unsatisfiable. It also addresses `Total_elems` and `Exact` constraints with yet-unknown row variables heuristically. For `Total_elems` and a single row variable: if the constraint can be satisfied by assuming the row variable is no-further-axes, it sets the row variable to `Broadcastable`, otherwise it sets it to one axis of the required dimension. For multiple row variables, if one is of the Output kind, sets the other variables to no-further-axes, and retries. **Importantly**, when resolving `Total_elems` constraints with `Strided_var` numerators, Stage 5 now looks up the LUB from the row environment even for non-terminal shapes (if the LUB wasn't provided from context). This is critical for cases where shape information flows through intermediate operations (like `pointmul` broadcasting) — the LUB computed from `Row_ineq` constraints becomes available for constraint resolution. When a `Strided_var { coeff; var; denom }` constraint is resolved using a LUB with known total elements `n`, both the row variable and the dimension variable `var` are set: `var = n * denom / coeff`.
 * **Stage 6** sets row variables in the remaining inequalities and updated shapes to no-further-axes values; it also extends LUB processing to non-terminal shapes. This can unlock further between-axis inequalities because of row variables sandwiched between leftmost axes from their side of the inequality and rightmost axes from the other side of the inequality. In row constraints, this also unlocks inference for the embedded dim variables.
-* **Stage 7** sets all dim variables remaining in updated shapes to the lower bound if they have any, otherwise to dimension-1.
+* **Stage 7** sets all dim variables remaining in updated shapes to the lower bound if they have any, otherwise to dimension-1 (or dimension-0 if the variable is in `invalid_vars`).
 
 Let's explain the shape inference functions.
 
