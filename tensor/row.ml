@@ -419,7 +419,20 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
           Dim { d = s.d * stride; label = s.label; proj_id = None }
       | res -> res)
-  | Concat dims -> Concat (List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d))
+  | Concat dims -> (
+      let dims = List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d) in
+      (* Filter out zero-dimension components *)
+      let dims = List.filter dims ~f:(function Dim { d = 0; _ } -> false | _ -> true) in
+      match dims with
+      | [] -> Dim { d = 0; label = None; proj_id = None }
+      | [ single ] -> single
+      | _ ->
+          if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
+            let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
+            let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
+            let label = List.find_map solved_dims ~f:(fun s -> s.label) in
+            Dim { d = total_d; label; proj_id = None }
+          else Concat dims)
   | Dim _ | Var _ -> in_
 
 (* Helper functions for total_elems operations *)
@@ -2353,10 +2366,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
                    Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
             | Affine _, _ | _, Affine _ -> assert false
-            | Concat _, _ | _, Concat _ ->
-                (* FIXME: if any of these have more than one non-invalid component, and they are not
-                   equal, this should become dim-1. *)
-                (cur, [])
+            | Concat _, _ | _, Concat _ -> assert false
           in
           let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage cur constr2 env in
           ( from_constr @ lub_forcing,
@@ -2413,6 +2423,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       (* Element-wise unification of concatenated dimensions *)
       let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) in
       (eqs, env)
+  | _, Concat dims when List.count dims ~f:(function Var v -> Set.mem env.invalid_vars v | _ -> false) >= List.length dims - 1 ->
+      (* Concat in subr position with all-but-one (or all) components being invalid vars:
+         preserve inequality so the solver can infer the variables *)
+      ([ Dim_ineq { cur; subr; from_ = Sexp.List []; origin } ], env)
   | Concat _, _ | _, Concat _ ->
       (* Defer to dimension equality for concat with non-concat *)
       ([ Dim_eq { d1 = cur; d2 = subr; origin } ], env)
@@ -2910,14 +2924,16 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
           (Bounds_dim
              { is_in_param; has_uniq_constr_unless; lub = None; constr = Unconstrained_dim; _ })
         when is_stage5_up stage ->
-          (* Check if we can guess this variable to 1 *)
+          (* Check if we can guess this variable to 1 (or 0 for invalid_vars) *)
           if not (can_guess_dim_to_one env has_uniq_constr_unless) then
             [ Terminal_dim (is_param, dim, origin) ]
           else if is_param || is_in_param then
             raise
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
-          else [ Dim_eq { d1 = dim; d2 = get_dim ~d:1 ~proj_id:53 (); origin } ]
+          else
+            let guess_d = if Set.mem env.invalid_vars v then 0 else 1 in
+            [ Dim_eq { d1 = dim; d2 = get_dim ~d:guess_d ~proj_id:53 (); origin } ]
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Affine _ ->
@@ -2925,8 +2941,12 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
          transitively terminal. *)
       []
   | Concat dims ->
-      (* For concatenation, close each component dimension as terminal *)
-      List.concat_map dims ~f:(close_dim_terminal ~stage ~is_param origin env)
+      (* For concatenation, filter out dimension-0 components and if one remains, close it.
+         TODO: Consider guessing invalid_vars components to 0 at stage 6, but wait until needed. *)
+      let non_zero_dims = List.filter dims ~f:(function Dim { d = 0; _ } -> false | _ -> true) in
+      (match non_zero_dims with
+       | [ single ] -> close_dim_terminal ~stage ~is_param origin env single
+       | _ -> [])
 
 let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | _ -> false
 
@@ -3191,7 +3211,11 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
           [%log6 "terminal row: keeping", (_r : row), "as", (r1 : row)];
           Terminal_row (is_param, r1, origin) :: term_dims ())
 
-let%debug5_sexp eliminate_dim_entry stage origin v ~lub constr =
+let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
+  let guess_dim () =
+    if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:56 ()
+    else get_dim ~d:1 ~proj_id:59 ()
+  in
   match (lub, constr) with
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
       raise
@@ -3208,7 +3232,7 @@ let%debug5_sexp eliminate_dim_entry stage origin v ~lub constr =
   | None, At_least_dim d when is_stage7 stage ->
       Some (Dim_eq { d1 = Var v; d2 = get_dim ~d ~proj_id:58 (); origin })
   | None, _ when is_stage7 stage ->
-      Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:59 (); origin })
+      Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | _ -> None
 
 let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; prov } as r : row) :
@@ -3220,20 +3244,24 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
     | Affine { over; conv = Some { kernel; _ }; _ } ->
         finalize_upper_lower_bound over @ finalize_upper_lower_bound kernel
     | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
-    | Var v -> (
-        match find_dim env.dim_env v with
+    | Var v ->
+        let guess_dim () =
+          if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:61 ()
+          else get_dim ~d:1 ~proj_id:62 ()
+        in
+        (match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
             raise
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
         | Some (Bounds_dim { lub; constr; has_uniq_constr_unless; _ })
           when is_stage4_up stage && can_guess_dim_to_one env has_uniq_constr_unless ->
-            Option.to_list @@ eliminate_dim_entry stage origin v ~lub constr
+            Option.to_list @@ eliminate_dim_entry stage origin env v ~lub constr
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { has_uniq_constr_unless; _ })
           when final && can_guess_dim_to_one env has_uniq_constr_unless ->
-            [ Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:62 (); origin } ]
-        | None when final -> [ Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:60 (); origin } ]
+            [ Dim_eq { d1 = Var v; d2 = guess_dim (); origin } ]
+        | None when final -> [ Dim_eq { d1 = Var v; d2 = guess_dim (); origin } ]
         | _ -> [])
   in
   let rec has_dim_var = function
