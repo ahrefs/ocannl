@@ -42,6 +42,7 @@ and dim =
 
 val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
 val dim_to_int_exn : dim -> int
+val vars_of_dim : dim -> dim_var_set
 
 type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
 [@@deriving equal, compare, sexp]

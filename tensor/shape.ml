@@ -284,6 +284,53 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
 
+(* For Block specs, compute invalid_vars: variables that are allowed to be 0.
+   A variable v is invalid if:
+   1. v appears in a component of a Concat dimension on one side
+   2. The "complement" of that component (union of vars from other components of same Concat)
+      has non-empty intersection with ALL components of at least one axis on the other side *)
+let compute_block_invalid_vars ~(this_side_rows : Row.t list) ~(other_side_rows : Row.t list) :
+    Row.dim_var_set =
+  (* Extract all dims from rows (including beg_dims from bcast) *)
+  let dims_of_rows rows =
+    List.concat_map rows ~f:(fun (row : Row.t) ->
+        let dims_from_bcast =
+          match row.bcast with Row.Row_var { beg_dims; _ } -> beg_dims | Row.Broadcastable -> []
+        in
+        row.dims @ dims_from_bcast)
+  in
+  (* Get component var sets for each axis on the other side.
+     For non-Concat dims, there's one component with all vars of that dim.
+     For Concat dims, each element is a separate component. *)
+  let axis_components_of_dim (dim : Row.dim) : Row.dim_var_set list =
+    match dim with
+    | Row.Concat dims -> List.map dims ~f:Row.vars_of_dim
+    | _ -> [ Row.vars_of_dim dim ]
+  in
+  let other_side_axes : Row.dim_var_set list list =
+    List.map (dims_of_rows other_side_rows) ~f:axis_components_of_dim
+  in
+  (* For each Concat on this side, find invalid vars.
+     Non-Concat dims cannot contribute invalid vars since their complement is empty. *)
+  let this_side_dims = dims_of_rows this_side_rows in
+  List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
+      match dim with
+      | Row.Concat components ->
+          let component_var_sets = List.map components ~f:Row.vars_of_dim in
+          let all_concat_vars =
+            List.fold component_var_sets ~init:Row.dim_var_set_empty ~f:Set.union
+          in
+          List.fold component_var_sets ~init:acc ~f:(fun acc2 component_vars ->
+              let complement = Set.diff all_concat_vars component_vars in
+              (* Check if complement intersects with all components of at least one other-side axis *)
+              let complement_covers_some_axis =
+                List.exists other_side_axes ~f:(fun axis_components ->
+                    List.for_all axis_components ~f:(fun axis_comp_vars ->
+                        not (Set.is_empty (Set.inter complement axis_comp_vars))))
+              in
+              if complement_covers_some_axis then Set.union acc2 component_vars else acc2)
+      | _ -> acc)
+
 let unused_shapes = Hash_set.create (module Int)
 
 let%debug4_sexp get_inequalities ?(for_projections = false)
@@ -1365,8 +1412,19 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                   };
               ])
       in
+      (* Compute invalid_vars: variables that are allowed to be 0 (dimension 0 is invalid).
+         A variable is invalid if it's in a Concat component whose complement covers an axis
+         on the other side. We check both directions: RHS->LHS and LHS->RHS. *)
+      let rhs_rows =
+        List.concat_map rhs_results ~f:(fun (_, _, _, _, b_rhs, i_rhs, o_rhs) ->
+            [ b_rhs; i_rhs; o_rhs ])
+      in
+      let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
+      let invalid_from_rhs = compute_block_invalid_vars ~this_side_rows:rhs_rows ~other_side_rows:lhs_rows in
+      let invalid_from_lhs = compute_block_invalid_vars ~this_side_rows:lhs_rows ~other_side_rows:rhs_rows in
+      let invalid_vars = Set.union invalid_from_rhs invalid_from_lhs in
       ( proj_env,
-        dim_var_set_empty,
+        invalid_vars,
         extras_dim_refs @ extras_lhs @ rhs_constraints
         @ [
             Row_eq
