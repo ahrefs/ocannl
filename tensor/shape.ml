@@ -1877,11 +1877,66 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
       all_product_projs_with_iters
   in
+  (* Build connected components from Concat indices.
+     Symbols that appear together in a Concat must be iterated together.
+     We use union-find to group symbols into connected components.
+     Only look at product dimensions (ones we iterate over). *)
+  let product_indices : Idx.axis_index list =
+    List.filter_map all_dims ~f:(fun dim ->
+        match Row.get_product_proj proj_env dim with
+        | Some _ -> Some (Row.get_dim_index proj_env dim)
+        | None -> None)
+  in
+  let concat_groups : Idx.symbol list list =
+    List.filter_map product_indices ~f:(function Idx.Concat syms -> Some syms | _ -> None)
+  in
+  (* Union-find to group symbols that appear in the same Concat *)
+  let symbol_classes : (Idx.symbol, Idx.symbol) Hashtbl.t = Hashtbl.create (module Idx.Symbol) in
+  let find_repr sym =
+    let rec loop s =
+      match Hashtbl.find symbol_classes s with
+      | None -> s
+      | Some parent when Idx.equal_symbol parent s -> s
+      | Some parent ->
+          let repr = loop parent in
+          Hashtbl.set symbol_classes ~key:s ~data:repr;
+          repr
+    in
+    loop sym
+  in
+  let union sym1 sym2 =
+    let r1 = find_repr sym1 and r2 = find_repr sym2 in
+    if not (Idx.equal_symbol r1 r2) then Hashtbl.set symbol_classes ~key:r1 ~data:r2
+  in
+  (* Union all symbols within each Concat group *)
+  List.iter concat_groups ~f:(fun syms ->
+      match syms with
+      | [] -> ()
+      | first :: rest -> List.iter rest ~f:(fun s -> union first s));
+  (* Group unique_by_iterator entries by their representative symbol *)
+  let components : (Idx.symbol, (Row.proj_id * int * Idx.symbol) list) Hashtbl.t =
+    Hashtbl.create (module Idx.Symbol)
+  in
+  List.iter unique_by_iterator ~f:(fun ((_, _, sym) as entry) ->
+      let repr = find_repr sym in
+      Hashtbl.update components repr ~f:(function None -> [ entry ] | Some l -> entry :: l));
+  (* Convert to arrays, preserving order by first occurrence *)
+  let seen_reprs = Hash_set.create (module Idx.Symbol) in
+  let ordered_components =
+    List.filter_map unique_by_iterator ~f:(fun (_, _, sym) ->
+        let repr = find_repr sym in
+        if Hash_set.mem seen_reprs repr then None
+        else (
+          Hash_set.add seen_reprs repr;
+          Hashtbl.find components repr))
+  in
   let product_space : int list array =
-    Array.of_list_map unique_by_iterator ~f:(fun (_, d, _) -> [ d ])
+    Array.of_list_map ordered_components ~f:(fun entries ->
+        List.map entries ~f:(fun (_, d, _) -> d))
   in
   let product_iterators : Idx.symbol list array =
-    Array.of_list_map unique_by_iterator ~f:(fun (_, _, s) -> [ s ])
+    Array.of_list_map ordered_components ~f:(fun entries ->
+        List.map entries ~f:(fun (_, _, s) -> s))
   in
   let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(Row.get_dim_index proj_env)
