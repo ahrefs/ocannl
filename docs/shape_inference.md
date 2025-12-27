@@ -98,13 +98,17 @@ For Block operations (which use `Concat` dimensions), some dimension variables a
 
 A variable `v` is in `invalid_vars` if:
 1. `v` appears in a component of a `Concat` dimension on one side (RHS or LHS of the spec)
-2. The "complement" of that component (union of variables from other components of the same `Concat`) has non-empty intersection with ALL components of at least one axis on the other side
+2. For ALL shapes on the other side, there EXISTS an axis such that for ALL components of that axis, the "complement" of `v`'s component (union of variables from other components of the same `Concat`) has non-empty intersection with that component
+
+This is a four-quantifier condition: ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅
 
 Examples:
 - `a^b => a`: `b` is invalid because the complement `{a}` intersects with `{a}` (the single component of the LHS axis)
 - `a^b => b`: `a` is invalid because the complement `{b}` intersects with `{b}`
 - `a^b => a^b`: neither is invalid (each complement only covers one component of the other side's axis, not all)
 - `b^c => a`: no invalid vars because complements `{c}` and `{b}` don't intersect with `{a}`
+- `a; b => a^b`: neither is invalid (two RHS shapes; complement `{a}` covers first shape but not second since `{a} ∩ {b} = ∅`)
+- `a; b => a^c`: `c` is NOT invalid because complement `{a}` doesn't cover the second RHS shape (axis `b`)
 
 When guessing dimension variables to minimal values (at Stage 5 and Stage 7), variables in `invalid_vars` are guessed to 0 instead of 1. This allows Block specs to express partial assignments and extractions where some concatenation components may be empty.
 
