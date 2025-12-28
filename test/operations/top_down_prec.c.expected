@@ -92,6 +92,7 @@ uint16_t single_to_bfloat16(float f)
 
   /* Main logic. */
   /* d fwd */
+  d[0] = single_to_bfloat16((float)0);
   d[0] =
       single_to_bfloat16((bfloat16_to_single(single_to_bfloat16((bfloat16_to_single(single_to_bfloat16(HALF_TO_FLOAT(a[0]))) +
         bfloat16_to_single(single_to_bfloat16(HALF_TO_FLOAT(b[0])))))) *

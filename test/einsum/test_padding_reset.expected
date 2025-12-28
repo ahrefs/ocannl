@@ -27,7 +27,7 @@ HERE: test/einsum/test_padding_reset.ml:70:21
 
 Conv - sum of 3x3 windows of INPUT (padding should be 0 for sum):
 HERE: test/einsum/test_padding_reset.ml:73:21
-[12]: ;=>_conv_out shape 0:4,1:4  [
+[12]: *._conv_out shape 0:4,1:4  [
   [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
   ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
   ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]
@@ -47,7 +47,7 @@ HERE: test/einsum/test_padding_reset.ml:80:21
 
 Conv after second pass:
 HERE: test/einsum/test_padding_reset.ml:83:21
-[12]: ;=>_conv_out shape 0:4,1:4  [
+[12]: *._conv_out shape 0:4,1:4  [
   [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
   ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
   ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]

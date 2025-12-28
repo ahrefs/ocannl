@@ -22,15 +22,15 @@ let%expect_test "Graph drawing recompile" =
                                   6.00e+1
                                  #16 grad_+_f_nd Virt/30
                                  <void>
-                             #13 - Virt/152                             │#2 5 Virt/40
+                             #13 - Virt/151                             │#2 5 Virt/40
                              <void>                                     │<void>
                              #14 grad_- Virt/30                         │
                              <void>                                     │
-                  #11 *. Virt/152                   │#4 *. Virt/152     │
+                  #11 *. Virt/151                   │#4 *. Virt/151     │
                   <void>                            │<void>             │
                   #12 grad_*. Virt/30               │#5 grad_*. Virt/30 │
                   <void>                            │<void>             │
-    #10 3 Virt/40│       #7 **. Virt/152            │#3 4 Virt/40│[#0 x]│
+    #10 3 Virt/40│       #7 **. Virt/151            │#3 4 Virt/40│[#0 x]│
     <void>       │       <void>                     │<void>      │      │
                  │       #8 grad_**. Virt/30        │            │      │
                  │       <void>                     │            │      │
@@ -358,7 +358,7 @@ let%expect_test "Simple gradients virtual" =
              <void>                       │ -2.00
              #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 4.00
-      #4 *._e Virt/152       │#6 c non-emb│
+      #4 *._e Virt/151       │#6 c non-emb│
       <void>                 │ 1.00e+1    │
       #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.00      │
@@ -384,7 +384,7 @@ let%expect_test "Simple gradients virtual" =
              <void>                       │ -2.40
              #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 4.00
-      #4 *._e Virt/152       │#6 c non-emb│
+      #4 *._e Virt/151       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
       #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.00      │
@@ -407,7 +407,7 @@ let%expect_test "Simple gradients virtual" =
              <void>                       │ -2.40
              #9 grad_+_d Virt/40          │#11 grad_f
              <void>                       │ 6.56
-      #4 *._e Virt/152       │#6 c non-emb│
+      #4 *._e Virt/151       │#6 c non-emb│
       <void>                 │ 1.02e+1    │
       #5 grad_*._e Virt/40   │#7 grad_c   │
       <void>                 │ -2.40      │

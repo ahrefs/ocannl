@@ -1,5 +1,7 @@
 
 d_fwd (): /* d fwd */
+  zero_out n6<half>;
   n6<half>[0] := (a<half>[0] + b<half>[0]);
+  zero_out d<bfloat16>;
   d<bfloat16>[0] := (n6<half>[0] * c<bfloat16>[0]);
   /* end */

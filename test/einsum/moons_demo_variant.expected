@@ -32,12 +32,12 @@ n31 relu as relu: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
 n32 grad_relu as relu.grad: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
 n33 *_mlp_@|_moons_input as mlp_moons_input: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
 n34 grad_*_mlp_@|_moons_input as mlp_moons_input.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
-n35 *. as n35: Virt/15; single prec 10x1; mem in bytes: <not-in-yet>
+n35 *. as n35: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
 n36 grad_*. as n35.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
 n37 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n38 - as n38: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
 n39 grad_- as n38.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
-n40 relu_margin_loss as relu_margin_loss: Virt/15; single prec 10x1; mem in bytes: <not-in-yet>
+n40 relu_margin_loss as relu_margin_loss: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
 n41 grad_relu_margin_loss as relu_margin_loss.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
 n42 10 as _10: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n43 => as n43: Local/1046; single prec 1; mem in bytes: <not-in-yet>
@@ -50,14 +50,14 @@ n49 !@ as n49: Virt/152; single prec 1; mem in bytes: <not-in-yet>
 n50 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n51 2 as _2: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n52 *. as n52: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n53 - as n53: Virt/152; single prec 1; mem in bytes: <not-in-yet>
+n53 - as n53: Virt/151; single prec 1; mem in bytes: <not-in-yet>
 n54 0.1 as n54: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n55 *. as n55: Virt/152; single prec 1; mem in bytes: <not-in-yet>
+n55 *. as n55: Virt/151; single prec 1; mem in bytes: <not-in-yet>
 n56 /._learning_rate as learning_rate: Host&stream/412410; single prec 1; mem in bytes: <not-in-yet>
 n57 sgd_delta_w2 as sgd_delta_w2: Virt/15; single prec 1x16; mem in bytes: <not-in-yet>
 n58 sgd_momentum_w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 n59 0.0001 as n59: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n60 *. as n60: Virt/15; single prec 1x16; mem in bytes: <not-in-yet>
+n60 *. as n60: Virt/151; single prec 1x16; mem in bytes: <not-in-yet>
 n61 sgd_delta_b1 as sgd_delta_b1: Virt/15; single prec 16; mem in bytes: <not-in-yet>
 n62 sgd_momentum_b1 as sgd_momentum_b1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 n63 0.0001 as n63: Virt/40; single prec 1; mem in bytes: <not-in-yet>
@@ -75,7 +75,7 @@ Tnode: Finished printing headers.
                                                                                                                                             <void>                                                                                                                                                         │<void>
                                                                                                                                             #44 grad_=> Virt/40                                                                                                                                            │
                                                                                                                                             <void>                                                                                                                                                         │
-                                                                                                                                   #40 relu_margin_loss Virt/15                                                                                                                                            │
+                                                                                                                                   #40 relu_margin_loss Virt/151                                                                                                                                           │
                                                                                                                                    <void>                                                                                                                                                                  │
                                                                                                                                    #41 grad_relu_margin_loss Local/1046                                                                                                                                    │
                                                                                                                                    <void>                                                                                                                                                                  │
@@ -83,7 +83,7 @@ Tnode: Finished printing headers.
                                                                                                                                            <void>                                                                                                                                                          │
                                                                                                                                            #39 grad_- Local/1046                                                                                                                                           │
                                                                                                                                            <void>                                                                                                                                                          │
-#37 1 Virt/40│                                                                                                                                   #35 *. Virt/15                                                                                                                                            │
+#37 1 Virt/40│                                                                                                                                   #35 *. Virt/151                                                                                                                                           │
 <void>       │                                                                                                                                   <void>                                                                                                                                                    │
              │                                                                                                                                   #36 grad_*. Local/1046                                                                                                                                    │
              │                                                                                                                                   <void>                                                                                                                                                    │
