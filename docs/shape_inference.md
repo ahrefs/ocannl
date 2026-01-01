@@ -94,7 +94,7 @@ The `Concat` constructor represents an axis arising from concatenating of the co
 
 #### Invalid variables in Block specs
 
-For Block operations (which use `Concat` dimensions), some dimension variables are "invalid" — they are allowed to resolve to dimension 0, which is normally an invalid dimension size. These variables represent parts of concatenated dimensions that are "projected away" and don't participate in actual array indexing.
+For Block/Rev_sides operations (which use `Concat` dimensions), some dimension variables are "invalid" — they are allowed to resolve to dimension 0, which is normally an invalid dimension size. These variables represent parts of concatenated dimensions that are "projected away" and don't participate in actual array indexing.
 
 A variable `v` is in `invalid_vars` if:
 1. `v` appears in a component of a `Concat` dimension on one side (RHS or LHS of the spec)

@@ -54,7 +54,7 @@ type axis_index =
 
 `Affine` indices are crucial for convolutions: `symbols = [(stride, i1); (dilation, i2)]` with `offset = -padding`.
 
-`Concat` indices are used in operations like tensor concatenation or block tensor construction. Currently, we only intend to support `Concat` for assignments of the `Block` variety (variant of the `Assignments.accum_rhs` type).
+`Concat` indices are used in operations like tensor concatenation or block tensor construction. Currently, we only intend to support `Concat` for assignments of the `Block` or `Rev_sides` variety (variants of the `Assignments.accum_rhs` type).
 
 ## Translation from Assignments
 

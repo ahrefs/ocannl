@@ -45,7 +45,8 @@ type accum_rhs =
   | Binop of { op : Ops.binop; rhs1 : buffer; rhs2 : buffer }
   | Unop of { op : Ops.unop; rhs : buffer }
   | Block of { op : Ops.unop; rhses : buffer array }
-      (** [Block] is the only assignment type that allows [Concat] axes in projections.
+      (** [Block] and [Rev_sides] are the only assignment types that allow [Concat] axes in
+          projections.
 
           Similar to [Unop] except it's a projection of potentially multiple tensors, e.g.
           concatenation or block tensor; or with just a single RHS, it can be a slice taking part of
@@ -53,6 +54,10 @@ type accum_rhs =
           use [Concat] in such a way that every choice of [Concat] components uses at most one of
           the [rhses] (note: none is allowed). Note: it is also allowed that there is no LHS (i.e.
           no valid LHS projection) for some choices of the [Concat] components. *)
+  | Rev_sides of { op : Ops.unop; lhses : buffer array }
+      (** Causes the [Accum_op] to completely reverse its semantics: left-hand side and right-hand
+          side are swapped. [lhs] becomes the read-from tensor and [rhs], i.e. [lhses] above, become
+          the written-to tensors. This is needed in particular for gradients of concatenation. *)
 [@@deriving sexp_of, equal]
 
 type t =
@@ -117,6 +122,7 @@ let%debug3_sexp context_nodes ~(use_host_memory : 'a option) (asgns : t) : Tn.t_
           | Binop { rhs1; rhs2; _ } -> [ of_node rhs1; of_node rhs2 ]
           | Ternop { rhs1; rhs2; rhs3; _ } -> [ of_node rhs1; of_node rhs2; of_node rhs3 ]
           | Block { rhses; _ } -> Array.to_list rhses |> List.map ~f:of_node
+          | Rev_sides { lhses; _ } -> Array.to_list lhses |> List.map ~f:of_node
         in
         Set.union_list (module Tn) (one lhs :: rhses)
     | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
@@ -139,14 +145,17 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
         (i1 + i2, o1 + o2 - (i1 + i2))
     | Block_comment (_, t) -> loop t
     | Accum_op { lhs; rhs; _ } ->
-        let inputs =
+        let inputs, outputs =
           match rhs with
-          | Unop { rhs; _ } -> of_node rhs
-          | Binop { rhs1; rhs2; _ } -> of_node rhs1 + of_node rhs2
-          | Ternop { rhs1; rhs2; rhs3; _ } -> of_node rhs1 + of_node rhs2 + of_node rhs3
-          | Block { rhses; _ } -> Array.fold rhses ~init:empty ~f:(fun acc buf -> acc + of_node buf)
+          | Unop { rhs; _ } -> (of_node rhs, one lhs)
+          | Binop { rhs1; rhs2; _ } -> (of_node rhs1 + of_node rhs2, one lhs)
+          | Ternop { rhs1; rhs2; rhs3; _ } -> (of_node rhs1 + of_node rhs2 + of_node rhs3, one lhs)
+          | Block { rhses; _ } ->
+              (Array.fold rhses ~init:empty ~f:(fun acc buf -> acc + of_node buf), one lhs)
+          | Rev_sides { lhses; _ } ->
+              (one lhs, Array.fold lhses ~init:empty ~f:(fun acc buf -> acc + of_node buf))
         in
-        (inputs, one lhs)
+        (inputs, outputs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
     | Fetch { array; _ } -> (empty, one array)
   in
@@ -397,6 +406,141 @@ let%track4_sexp to_low_level code =
       let fetch_op = Constant neutral_value in
       Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops_with_resets)
     else for_loops_with_resets
+  and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections :
+      Low_level.t =
+    let projections : Indexing.projections = Lazy.force projections in
+    let all_prod_iters =
+      Array.to_list projections.product_iterators
+      |> List.concat
+      |> Set.of_list (module Indexing.Symbol)
+    in
+    let target_projections =
+      Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
+          { projections with lhs_dims = projections.rhs_dims.(i); project_lhs })
+    in
+    let target_can_skip =
+      Array.map target_projections ~f:(fun proj -> can_skip_accumulation ~projections:proj)
+    in
+    let target_needs_init =
+      Array.map target_projections ~f:(fun proj ->
+          initialize_neutral
+          && not (Indexing.is_surjective proj && Indexing.is_injective proj))
+    in
+    let basecase block_iters rev_iters =
+      let exception Empty_block in
+      let block_iters = Array.of_list_rev block_iters in
+      let subst_map =
+        let loop_iters = Array.of_list_rev rev_iters in
+        Array.map2_exn block_iters loop_iters ~f:(fun block_iter loop_iter ->
+            (block_iter, Indexing.Iterator loop_iter))
+        |> Array.to_list
+        |> Map.of_alist_exn (module Indexing.Symbol)
+      in
+      let subst_index = function
+        | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
+        | Iterator s
+          when Set.mem all_prod_iters s
+               && not (Array.mem ~equal:Indexing.equal_symbol block_iters s) ->
+            raise Empty_block
+        | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
+        | Indexing.Affine { symbols; offset } ->
+            let symbols =
+              List.map symbols ~f:(fun (coeff, s) ->
+                  match Map.find subst_map s with
+                  | Some (Indexing.Iterator s') -> (coeff, s')
+                  | Some (Indexing.Affine _) ->
+                      failwith "Affine substitution in Affine index not supported"
+                  | Some (Indexing.Concat _) ->
+                      failwith "Concat substitution in Affine index not supported"
+                  | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
+            in
+            Indexing.Affine { symbols; offset }
+        | Indexing.Concat syms ->
+            let syms' =
+              List.map syms ~f:(fun s ->
+                  match Map.find subst_map s with
+                  | Some (Indexing.Iterator s') -> s'
+                  | Some _ -> failwith "Only Iterator substitution supported in Concat"
+                  | None -> s)
+            in
+            Indexing.Concat syms'
+      in
+      let target_tn_exn = function
+        | Node tn -> tn
+        | Merge_buffer _ ->
+            raise @@ Utils.User_error "Rev_sides cannot write to merge buffers"
+      in
+      try
+        let rhs_idcs : Indexing.axis_index array =
+          Array.map projections.project_lhs ~f:subst_index
+        in
+        let open Low_level in
+        let rhs_ll = get (Node lhs) rhs_idcs in
+        let targets =
+          Array.filter_mapi projections.project_rhs ~f:(fun i lhs_idcs ->
+              try
+                let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
+                Some (i, lhses.(i), lhs_idcs)
+              with Empty_block -> None)
+        in
+        if Array.is_empty targets then raise Empty_block;
+        if Array.length targets > 1 then
+          raise
+          @@ Utils.User_error
+               "Ambiguous indices in concatenation: multiple blocks viable for same position";
+        let i, target_buf, lhs_idcs = targets.(0) in
+        let rhs2 = apply_op op [| rhs_ll |] in
+        let target_tn = target_tn_exn target_buf in
+        if initialize_neutral && target_can_skip.(i) then set target_tn lhs_idcs rhs2
+        else set target_tn lhs_idcs @@ apply_op (Ops.Binop accum) [| get target_buf lhs_idcs; rhs2 |]
+      with Empty_block -> Low_level.Noop
+    in
+    let rec for_loop block_iters rev_iters = function
+      | [] -> basecase block_iters rev_iters
+      | (ds, its) :: product ->
+          let index = Indexing.get_symbol () in
+          Low_level.unflat_lines
+          @@ List.map2_exn ds its ~f:(fun d iter ->
+              Low_level.For_loop
+                {
+                  index;
+                  from_ = 0;
+                  to_ = d - 1;
+                  body = for_loop (iter :: block_iters) (index :: rev_iters) product;
+                  trace_it = true;
+                })
+    in
+    let for_loops =
+      for_loop [] []
+        (Array.to_list @@ Array.zip_exn projections.product_space projections.product_iterators)
+    in
+    let neutral_value = Ops.neutral_elem accum in
+    let padding_resets =
+      match Lazy.force lhs.padding with
+      | Some (_, None) -> reset_padding_regions lhs neutral_value
+      | Some (_, Some v) when Float.( <> ) v neutral_value ->
+          reset_padding_regions lhs neutral_value
+      | _ -> []
+    in
+    let for_loops_with_resets =
+      if List.is_empty padding_resets then for_loops
+      else Low_level.unflat_lines (padding_resets @ [ for_loops ])
+    in
+    let init_ops =
+      Array.filter_mapi lhses ~f:(fun i buf ->
+          if not target_needs_init.(i) then None
+          else
+            let array =
+              match buf with
+              | Node tn -> tn
+              | Merge_buffer _ ->
+                  raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
+            in
+            Some (Fetch { array; fetch_op = Constant neutral_value; dims = lazy projections.rhs_dims.(i) }))
+      |> Array.to_list
+    in
+    if List.is_empty init_ops then for_loops_with_resets
+    else Low_level.unflat_lines (List.map init_ops ~f:loop @ [ for_loops_with_resets ])
   and loop (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } ->
@@ -406,8 +550,11 @@ let%track4_sexp to_low_level code =
           | Binop { op; rhs1; rhs2 } -> (Ops.Binop op, [| rhs1; rhs2 |])
           | Ternop { op; rhs1; rhs2; rhs3 } -> (Ops.Ternop op, [| rhs1; rhs2; rhs3 |])
           | Block { op; rhses } -> (Ops.Unop op, rhses)
+          | Rev_sides { op; lhses } -> (Ops.Unop op, lhses)
         in
-        loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections
+        (match rhs with
+        | Rev_sides _ -> loop_accum_rev ~initialize_neutral ~accum ~op ~lhs ~lhses:rhses projections
+        | _ -> loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections)
     | Set_vec_unop { op; lhs; rhs; projections; _ } ->
         (* Handle vector unary operations *)
         let projections = Lazy.force projections in
@@ -578,6 +725,7 @@ let get_ident_within_code ?no_dots c =
           | Binop { rhs1; rhs2; _ } -> [ tn rhs1; tn rhs2 ]
           | Ternop { rhs1; rhs2; rhs3; _ } -> [ tn rhs1; tn rhs2; tn rhs3 ]
           | Block { rhses; _ } -> Array.to_list rhses |> List.map ~f:tn
+          | Rev_sides { lhses; _ } -> Array.to_list lhses |> List.map ~f:tn
         in
         List.iter ~f:visit (lhs :: rhses)
     | Set_vec_unop { op = _; lhs; rhs; projections = _; projections_debug = _ } ->
@@ -681,6 +829,19 @@ let to_doc ?name ?static_indices () c =
             ^^ brackets
                  (separate (semi ^^ space)
                     (Array.to_list (Array.map rhses ~f:(Fn.compose string buffer_ident))))
+            ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
+                else empty)
+            ^^ string ";" ^^ break 1
+        | Rev_sides { op; lhses } ->
+            brackets
+              (separate (semi ^^ space)
+                 (Array.to_list (Array.map lhses ~f:(Fn.compose string buffer_ident))))
+            ^^ space
+            ^^ string (Ops.assign_op_cd_syntax ~initialize_neutral accum)
+            ^^ space
+            ^^ (if not @@ Ops.equal_unop op Ops.Identity then string (Ops.unop_cd_syntax op ^ " ")
+                else empty)
+            ^^ string (ident lhs)
             ^^ (if not (String.equal proj_spec ".") then string (" ~logic:\"" ^ proj_spec ^ "\"")
                 else empty)
             ^^ string ";" ^^ break 1)
