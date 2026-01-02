@@ -1,3 +1,33 @@
+## [Unreleased]
+
+### Added
+
+- Axis concatenation/block tensor support in einsum notation (`a^b` syntax)
+  - Tensor concatenation (`a; b => a^b`)
+  - Axis slicing to extract prefix/suffix (`a^b => a`, `a^b => b`)
+  - Block tensor construction with n-ary einsum specs
+  - `invalid_vars` tracking for determining which dimension variables can be 0 in Block specs
+- Pointwise operations now optionally accept einsum/permute specs via `?spec` and `?capture_dims` parameters
+  - Binary ops: `add`, `sub`, `pointmul`, `pointpow`, `pointdiv`, `lt`, `eq`, `ne`
+  - Unary ops: `relu`, `sat01`, `exp`, `log`, `exp2`, `log2`, `sin`, `cos`, `sqrt`, `recip`, `recip_sqrt`, `tanh`, `neg`, `not`, `stop_gradient`
+- Common gotchas and idioms section in CLAUDE.md documentation
+- `Rev_sides` support in lowering for reverse-direction Block operations
+
+### Changed
+
+- Parser updated to allow n-ary einsum specs (e.g., `a;b;c;d=>result`)
+- Concat symbols are now grouped into connected components for iteration using union-find
+- Product space and product iterators now use list arrays to handle concatenated dimensions
+
+### Fixed
+
+- Missing on-device margin initialization for `Fetch` cases
+- `invalid_vars` computation now uses correct four-quantifier logic
+- Zero-dimension components filtered out in `s_dim_one` substitution
+- Single remaining Concat component properly closed in `close_dim_terminal`
+- Inequality constraints preserved for Concat with `invalid_vars`
+- Dimension 0 (instead of 1) guessed for `invalid_vars` in all guessing locations
+
 ## [0.6.3] -- 2025-12-19
 
 ### Added
