@@ -1,5 +1,4 @@
 open Base
-open Ocannl
 open Ocannl.Operation.DSL_modules
 
 (* Concatenation runtime smoke tests using %op syntax. *)
