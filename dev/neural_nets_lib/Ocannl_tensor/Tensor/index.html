@@ -75,7 +75,15 @@
   <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="#type-op_fun">op_fun</a></span></code></div><div class="spec-doc"><p>See <a href="#val-binop"><code>binop</code></a> -- same comments apply.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-term"><a href="#val-term" class="anchor"></a><code><span><span class="keyword">val</span> term : 
+  <a href="#type-op_fun">op_fun</a></span></code></div><div class="spec-doc"><p>See <a href="#val-binop"><code>binop</code></a> -- same comments apply.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-blockop"><a href="#val-blockop" class="anchor"></a><code><span><span class="keyword">val</span> blockop : 
+  <span><span class="optlabel">?op_label</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">delayed_vars</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">op_asn</span>:<span>(<span><span class="label">t</span>:<a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span class="label">projections</span>:<a href="#type-projections">projections</a> <span class="arrow">&#45;&gt;</span></span> <a href="#type-comp">comp</a>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">grad_asn</span>:<span>(<span><span class="label">t</span>:<a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> <span><span class="label">g</span>:<a href="#type-tn">tn</a> <span class="arrow">&#45;&gt;</span></span> <span><span class="label">projections</span>:<a href="#type-projections">projections</a> <span class="arrow">&#45;&gt;</span></span> <a href="#type-comp">comp</a>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<a href="#type-grad_spec">grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span><a href="#type-t">t</a> <span class="xref-unresolved">Base</span>.array</span> <span class="arrow">&#45;&gt;</span></span>
+  <a href="#type-op_fun">op_fun</a></span></code></div><div class="spec-doc"><p>Like <a href="#val-binop"><code>binop</code></a>, but uses block/concatenation shape logic over an array of RHS tensors.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-term"><a href="#val-term" class="anchor"></a><code><span><span class="keyword">val</span> term : 
   <span><span class="optlabel">?init_data</span>:<a href="../../../arrayjit/Ir/Assignments/index.html#type-init_data">Ir.Assignments.init_data</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?fetch_op</span>:<a href="#type-fetch_op">fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?grad_spec</span>:<a href="#type-grad_spec">grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
