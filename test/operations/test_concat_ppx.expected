@@ -1,0 +1,10 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Test: concat via %op syntax ===
+concat2 id: 3
+concat3 id: 4
+concat_capture id: 5
+concat backprop failed (expected for now): (lib/shape.ml.Shape_error
+ "to_proj (subst): Dim without proj_id (d=5, label=None)" ())
+concat gradients present: true
+concat %op smoke tests done
