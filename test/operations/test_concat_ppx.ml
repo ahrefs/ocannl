@@ -33,7 +33,7 @@ let () =
   in
   let loss = sum_all (concat2 p1 p2) in
   let ctx = Ocannl.Context.auto () in
-  Ocannl.Train.run ctx (Ocannl.Train.grad_update loss);
+  ignore (Ocannl.Train.update_once ctx loss);
   Stdio.printf "concat gradients present: %b\n"
     (Option.is_some p1.Tensor.diff && Option.is_some p2.Tensor.diff);
 
