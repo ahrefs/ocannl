@@ -12,22 +12,40 @@ float *b &[1] = 0xNNNN
 float *b_grad &[1] = 0xNNNN
 float *g &[1] = 0xNNNN
 COMMENT: g forward and gradient update
+# n4_c := 0
+n4_c[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n4_c[0] := (a[0] + b[0]);
 n4_c[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (a[0]{=-4000e-3} + b[0]{=2000e-3})
+# n19_c := 0
+n19_c[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n19_c[0] := ((n4_c[0] + n4_c[0]) + 1);
 n19_c[0]{=MAYBE UNINITIALIZED} = -3000e-3 = ((n4_c[0]{=-2000e-3} + n4_c[0]{=-2000e-3}) + (float)(1))
+# n42 := 0
+n42[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n42[0] := (b[0] - a[0]);
 n42[0]{=MAYBE UNINITIALIZED} = 6000e-3 = (b[0]{=2000e-3} - a[0]{=-4000e-3})
+# n31 := 0
+n31[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n31[0] := (b[0] + a[0]);
 n31[0]{=MAYBE UNINITIALIZED} = -2000e-3 = (b[0]{=2000e-3} + a[0]{=-4000e-3})
+# n14_d := 0
+n14_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n14_d[0] := fma(a[0], b[0], (b[0] * (b[0] * b[0])));
 n14_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = fmaf(a[0]{=-4000e-3}, b[0]{=2000e-3}, (b[0]{=2000e-3} * (b[0]{=2000e-3} * b[0]{=2000e-3})))
+# n40_d := 0
+n40_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # n40_d[0] := (fma(n14_d[0], 2, n14_d[0]) + relu(n31[0]));
 n40_d[0]{=MAYBE UNINITIALIZED} = 0e-3 = (fmaf(n14_d[0]{=0e-3}, (float)(2), n14_d[0]{=0e-3}) + fmaxf(0.0, n31[0]{=-2000e-3}))
+# e := 0
+e[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # e[0] := (fma(-1, a[0], ((n19_c[0] + 1) + n19_c[0])) - (fma(3, n40_d[0], n40_d[0]) + relu(n42[0])));
 e[0]{=MAYBE UNINITIALIZED} = -7000e-3 = (fmaf((float)(-1), a[0]{=-4000e-3}, ((n19_c[0]{=-3000e-3} + (float)(1)) + n19_c[0]{=-3000e-3})) - (fmaf((float)(3), n40_d[0]{=0e-3}, n40_d[0]{=0e-3}) + fmaxf(0.0, n42[0]{=6000e-3})))
+# f := 0
+f[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # f[0] := (e[0] * e[0]);
 f[0]{=MAYBE UNINITIALIZED} = 49000e-3 = (e[0]{=-7000e-3} * e[0]{=-7000e-3})
+# g := 0
+g[0]{=MAYBE UNINITIALIZED} = 0e-3 = (float)(0)
 # g[0] := ((f[0] / 2) + (10 / f[0]));
 g[0]{=MAYBE UNINITIALIZED} = 24704e-3 = ((f[0]{=49000e-3} / (float)(2)) + ((float)(10) / f[0]{=49000e-3}))
 COMMENT: g zero grads and backprop
