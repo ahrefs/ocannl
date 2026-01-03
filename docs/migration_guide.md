@@ -36,11 +36,11 @@ This is why pooling needs a dummy constant kernel - to carry shape info between 
 | `x.mean(dim=[1,2])` | `x ++ "... \| h, w, c => ... \| 0, 0, c" ["h"; "w"] /. (dim h *. dim w)` | Sum then divide |
 | `x.sum(dim=-1, keepdim=True)` | `x ++ "... \| ... d => ... \| ... 0"` | Reduce by summing |
 | `x.sum(dim=-1, keepdim=False)` | `x ++ "... \| ... d => ... \| ..."` | Reduce by summing |
-| `torch.cat([a, b], dim=0)` | `a +* "x; y => x^y" b` | Concatenate tensors |
+| `torch.cat([a, b], dim=0)` | `(a, b) ++^ "x; y => x^y"` | Concatenate tensors |
 | `torch.stack([a, b], dim=0)` | `[a; b]` | Stack with new axis (block tensor syntax) |
-| `x[:n]` (prefix slice) | `x ++ "a^b => a"` | Extract prefix (size inferred) |
-| `x[n:]` (suffix slice) | `x ++ "a^b => b"` | Extract suffix (size inferred) |
-| `x[:-3]` (all but last 3) | `x ++ "a^3 => a"` | Drop last 3 elements |
+| `x[:n]` (prefix slice) | `x ++^ "a^b => a"` | Extract prefix (size inferred) |
+| `x[n:]` (suffix slice) | `x ++^ "a^b => b"` | Extract suffix (size inferred) |
+| `x[:-3]` (all but last 3) | `x ++^ "a^3 => a"` | Drop last 3 elements |
 
 ## Tensor Creation Patterns
 
@@ -227,15 +227,15 @@ OCANNL supports concatenation of tensors along an axis using the `^` operator in
 
 ```ocaml
 (* Concatenate two vectors *)
-let%op concat_vectors a b = a +* "x; y => x^y" b
+let%op concat_vectors a b = (a, b) ++^ "x; y => x^y"
 
 (* Concatenate along a specific axis (output axis here) *)
 let%op concat_matrices a b =
-  a +* "...|m, n; ...|p, n => ...|m^p, n" b
+  (a, b) ++^ "...|m, n; ...|p, n => ...|m^p, n"
 
 (* Extract prefix/suffix of a tensor *)
-let%op get_prefix x = x ++ "a^b => a"  (* size of 'a' inferred from context *)
-let%op get_suffix x = x ++ "a^b => b"  (* size of 'b' inferred from context *)
+let%op get_prefix x = x ++^ "a^b => a"  (* size of 'a' inferred from context *)
+let%op get_suffix x = x ++^ "a^b => b"  (* size of 'b' inferred from context *)
 
 (* Block tensor construction (upcoming syntax) *)
 let%op block_matrix () =

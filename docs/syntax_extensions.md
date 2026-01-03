@@ -534,10 +534,12 @@ These integer-sized components become fresh internal symbols during projection d
 **N-ary einsum for multiple tensors**: The einsum parser supports any number of RHS tensors separated by semicolons. This enables operations like:
 ```ocaml
 (* Concatenate 3 output-axes-only tensors along the first axis *)
-a +* "x, ...; y, ...; z, ... => x^y^z, ..." b c
+(a, b, c) ++^ "x, ...; y, ...; z, ... => x^y^z, ..."
 ```
 
-**Syntax for `%op` vs `%cd`**: In the `%op` extension, the existing `++` and `+*` operators are reused—when the einsum spec contains a `^` character, the operation produces a `Block` assignment rather than a `Unop`/`Binop`. For `%cd`, single-argument concatenation (slicing, partial updates) works with the existing `~logic:"..."` syntax:
+**Syntax for `%op` vs `%cd`**: In the `%op` extension, use the `++^` operator for concatenation
+and block specs. For `%cd`, single-argument concatenation (slicing, partial updates) works with the
+existing `~logic:"..."` syntax:
 
 ```ocaml
 (* Assign to prefix of target, leaving suffix unchanged *)
@@ -565,7 +567,15 @@ This allows constructing block matrices, block tensors, and other structured ten
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 
-The syntaxes `+*` and `++` accept an optional list of strings argument after the specification string. When passed, the strings should be some of the identifiers used in the specification. Both dimension variable and row variable labels are supported. This will introduce bindings for `Indexing.variable_ref` objects at the same point as the inline parameter definition bindings, and will pass these objects with the `~capture_dims` argument to `einsum` resp. `einsum1`. The bound objects can later be used with `Operation.embed_dim` or its alias `Operation.TDSL.O.dim` to embed the solved dimension of the corresponding variable (as a number) into a tensor expression. For a row variable, the number will be the product of the dimensions it resolved into.
+The syntaxes `+*`, `++`, and `++^` accept an optional list of strings argument after the
+specification string. When passed, the strings should be some of the identifiers used in the
+specification. Both dimension variable and row variable labels are supported. This will introduce
+bindings for `Indexing.variable_ref` objects at the same point as the inline parameter definition
+bindings, and will pass these objects with the `~capture_dims` argument to `einsum`, `einsum1`,
+resp. `concat`. The bound objects can later be used with `Operation.embed_dim` or its alias
+`Operation.TDSL.O.dim` to embed the solved dimension of the corresponding variable (as a number)
+into a tensor expression. For a row variable, the number will be the product of the dimensions it
+resolved into.
 
 ## Further features of the syntax extension %cd
 
