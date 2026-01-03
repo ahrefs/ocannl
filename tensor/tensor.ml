@@ -523,6 +523,160 @@ let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(l
        ())
     [ t1 ]
 
+let%track7_sexp blockop ~(label : string list) ~spec ~(delayed_vars : Shape.delayed_var_ref list)
+    ~op_asn ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) (orig_ts : t array) : t =
+  let orig_ts_list = Array.to_list orig_ts in
+  List.iter orig_ts_list ~f:(fun t ->
+      if t.id >= session_state.next_id then
+        raise
+        @@ Session_error
+             ( [%string
+                 "Tensor #%{t.id#Int} %{Tn.debug_name t.value} has an id greater than the last id \
+                  #%{session_state.next_id - 1#Int} -- check your uses of \
+                  Tensor.unsafe_reinitialize, if all your uses are valid, report this as a bug."],
+               Some t ));
+  let ordered_ts =
+    List.dedup_and_sort orig_ts_list ~compare:(fun t1 t2 -> Int.ascending t1.id t2.id)
+  in
+  let id : int = session_state.next_id in
+  session_state.next_id <- session_state.next_id + 1;
+  let _session_state_next_id : int = session_state.next_id in
+  let rhses = List.map orig_ts_list ~f:(fun t -> t.shape) in
+  let shape =
+    Shape.make () ~debug_name:(Tn.get_debug_name ~id ~label ()) ~id
+  in
+  let top_down_ts = List.filter ordered_ts ~f:(fun t -> t.top_down_prec) in
+  let delayed_prec_for default get =
+    if top_down_prec then Tn.Default default
+    else
+      let lazy_v_precs =
+        List.filter_map ordered_ts ~f:(fun ti ->
+            Option.map (get ti) ~f:(fun v ->
+                if ti.top_down_prec then lazy (Tn.get_specified_prec v)
+                else lazy (Some (Lazy.force v.prec))))
+      in
+      Tn.Inferred
+        (lazy
+          (List.filter_map lazy_v_precs ~f:Lazy.force
+          |> List.reduce ~f:Ir.Ops.promote_prec
+          |> Option.value ~default))
+  in
+  let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
+  let unpadded_dims = lazy_to_dims shape in
+  let padding = lazy (Shape.to_padding shape) in
+  let v = Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding () in
+  List.iter top_down_ts ~f:(fun ti ->
+      if not (Lazy.is_val ti.value.Tn.dims) then Tn.update_infer_prec ti.value v.Tn.prec);
+  let shape_logic = Shape.Block { spec; delayed_vars; rhses } in
+  let embedded_nodes = ref @@ Set.singleton (module Tn) v in
+  let children =
+    List.folding_map orig_ts_list
+      ~init:(Set.empty (module Int))
+      ~f:(fun used ti ->
+        let embedded = is_fwd_root ti && not (Set.mem used ti.id) in
+        if embedded then
+          embedded_nodes := Set.add (Set.union !embedded_nodes ti.forward.embedded_nodes) ti.value;
+        (Set.add used ti.id, { subtensor = ti; embedded }))
+  in
+  let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
+  let preliminary_shape_update =
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem = None }
+  in
+  Shape.propagate_shapes preliminary_shape_update;
+  let projections_debug = Shape.logic_to_spec preliminary_shape_update.logic in
+  let projections =
+    { projections_debug; projections = lazy (Shape.get_projections preliminary_shape_update) }
+  in
+  let t =
+    {
+      params;
+      forward = Asgns.empty_comp;
+      diff = None;
+      id;
+      value = v;
+      top_down_prec;
+      shape;
+      children;
+    }
+  in
+  let fwds =
+    List.filter_map ordered_ts ~f:(fun ti -> if is_fwd_root ti then Some ti.forward else None)
+  in
+  let this_op_asn = op_asn ~t ~ts:orig_ts ~projections in
+  let forward = Asgns.sequence @@ fwds @ [ this_op_asn ] in
+  let neutral_elem = Asgns.collect_neutral_elem this_op_asn.asgns in
+  preliminary_shape_update.neutral_elem <- neutral_elem;
+  let forward =
+    Asgns.
+      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
+  in
+  List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+  let t = { t with forward } in
+  if
+    is_prohibit_grad grad_spec
+    || Fn.non is_require_grad grad_spec
+       && List.for_all orig_ts_list ~f:(fun ti -> Option.is_none ti.diff)
+  then (
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    t)
+  else
+    let get ti = Option.map ti.diff ~f:(fun d -> d.grad) in
+    let delayed_prec = delayed_prec_for !default_grad_prec get in
+    let grad_id = session_state.next_id in
+    session_state.next_id <- session_state.next_id + 1;
+    let g =
+      Tn.create delayed_prec ~id:grad_id ~label:("grad" :: label) ~unpadded_dims
+        ~padding:(lazy (Shape.to_padding shape))
+        ()
+    in
+    List.iter top_down_ts ~f:(fun ti ->
+        Option.iter ti.diff ~f:(fun d ->
+            if not (Lazy.is_val d.grad.Tn.dims) then Tn.update_infer_prec d.grad g.Tn.prec));
+    let is_bck_root ti = Map.mem session_state.backprop_roots ti.id in
+    let zero_grads =
+      let zero_g ti =
+        Option.value_map ti.diff ~default:Asgns.Noop ~f:(fun diff -> diff.zero_grads)
+      in
+      let zeros =
+        List.map ordered_ts ~f:(fun ti -> if is_bck_root ti then zero_g ti else Asgns.Noop)
+      in
+      Asgns.sequential @@ zeros @ [ fetch_zeros g shape ]
+    in
+    let embedded_nodes = ref @@ Set.singleton (module Tn) g in
+    let ordered_ts = List.rev ordered_ts in
+    let bprop ti =
+      Option.map ti.diff ~f:(fun diff ->
+          embedded_nodes :=
+            Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
+          diff.backprop)
+    in
+    let bcks =
+      List.filter_map ordered_ts ~f:(fun ti ->
+          if is_bck_root ti then
+            if Set.mem t.params ti then (
+              Option.iter ti.diff ~f:(fun diff ->
+                  embedded_nodes := Set.add !embedded_nodes diff.grad);
+              None)
+            else bprop ti
+          else None)
+    in
+    let diff = Some { grad = g; zero_grads; backprop = Asgns.empty_comp } in
+    let t = { t with diff } in
+    let backprop = Asgns.sequence @@ (grad_asn ~t ~g ~ts:orig_ts ~projections :: bcks) in
+    let backprop =
+      {
+        Asgns.asgns = backprop.asgns;
+        embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
+      }
+    in
+    List.iter ordered_ts ~f:(fun ti ->
+        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.id);
+    let diff = Some { grad = g; zero_grads; backprop } in
+    let t = { t with diff } in
+    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    session_state.backprop_roots <- Map.add_exn session_state.backprop_roots ~key:id ~data:t;
+    t
+
 let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_prec = true)
     ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let terminal_op =

@@ -465,6 +465,57 @@ let einmax1 ?(capture_dims = []) spec =
   in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
 
+(** Generalized concatenation operation using block tensor semantics.
+
+    The [spec] is an n-ary einsum specification using [a^b^c] syntax for concatenated axes.
+    For example, ["a;b;c => a^b^c"] concatenates three 1D tensors along their only axis.
+
+    When [negated] is true, the operation uses [Neg] instead of [Identity], which negates
+    values during both forward and backward passes.
+
+    Unlike other operations, this directly uses [Block] and [Rev_sides] assignment types
+    which are designed for concatenation-style operations with Concat indexing. *)
+let concat ?(capture_dims = []) ?(negated = false) spec =
+  let delayed_vars = List.map capture_dims ~f:Shape.get_variable_ref in
+  let op = if negated then Ir.Ops.Neg else Ir.Ops.Identity in
+  let op_asn ~t ~ts ~projections =
+    let rhses = Array.map ts ~f:(fun ti -> Asgns.Node ti.Tensor.value) in
+    Asgns.to_comp
+    @@ Asgns.Accum_op
+         {
+           initialize_neutral = true;
+           accum = Ir.Ops.Add;
+           lhs = t.Tensor.value;
+           rhs = Asgns.Block { op; rhses };
+           projections = projections.Tensor.projections;
+           projections_debug = projections.Tensor.projections_debug;
+         }
+  in
+  let grad_asn ~t:_ ~g ~ts ~projections =
+    (* Rev_sides reverses the semantics: lhs becomes read-from, lhses become written-to.
+       So here the output gradient (g) is the source, and we write to each input's gradient. *)
+    let lhses =
+      Array.filter_map ts ~f:(fun ti ->
+          Option.map ti.Tensor.diff ~f:(fun diff -> Asgns.Node diff.Tensor.grad))
+    in
+    if Array.length lhses = 0 then Asgns.empty_comp
+    else
+      Asgns.to_comp
+      @@ Asgns.Accum_op
+           {
+             initialize_neutral = false;
+             accum = Ir.Ops.Add;
+             lhs = g;
+             rhs = Asgns.Rev_sides { op; lhses };
+             projections = projections.Tensor.projections;
+             projections_debug = projections.Tensor.projections_debug;
+           }
+  in
+  fun ?grad_spec ts ?label () ->
+    Tensor.blockop
+      ~label:(Option.to_list label @ [ "++^" ])
+      ~spec ~delayed_vars ~op_asn ~grad_asn ?grad_spec ts
+
 (** This generalizes the tropical matrix multiplication to arbitrary indices combinations.
 
     LIMITATION: Backpropagation is only correct when the RHS1 (t1) index space includes the RHS2
@@ -685,6 +736,7 @@ struct
   let einsum1 = einsum1 ~grad_spec
   let einmax1 = einmax1 ~grad_spec
   let tropical = tropical ~grad_spec
+  let concat ?capture_dims ?negated spec = concat ?capture_dims ?negated spec ~grad_spec
   let offsets = offsets ~grad_spec
   let range = range ~grad_spec
   let range_of_shape = range_of_shape ~grad_spec
@@ -782,6 +834,7 @@ struct
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
     let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims spec t1 ()
     let tropical ?label ?capture_dims spec t1 t2 = tropical ?label ?capture_dims spec t1 t2 ()
+    let concat ?label ?capture_dims ?negated spec ts = concat ?capture_dims ?negated spec ts ?label ()
     let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()

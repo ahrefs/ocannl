@@ -1,0 +1,17 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Test: Verifying concat operation compiles ===
+concat with 2 tensors: created successfully
+  Result tensor id: 2
+concat with 3 tensors: created successfully
+  Result tensor id: 6
+negated concat: created successfully
+  Result tensor id: 9
+concat via O module: created successfully
+  Result tensor id: 10
+concat with gradient tracking (PDSL): created successfully
+  Result tensor id: 15
+  Has gradient: true
+
+All concat operation creation tests passed!
+Note: Runtime execution requires fixing Block shape projection derivation.

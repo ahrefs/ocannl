@@ -389,6 +389,17 @@
   (pps ppx_here ppx_ocannl ppx_expect)))
 
 (test
+ (name test_concat)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_concat)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name zero2hero_1of7_exec)
  (package neural_nets_lib)
  (deps

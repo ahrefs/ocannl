@@ -179,6 +179,20 @@ val ternop :
   op_fun
 (** See {!binop} -- same comments apply. *)
 
+val blockop :
+  label:string list ->
+  spec:string ->
+  delayed_vars:Shape.delayed_var_ref list ->
+  op_asn:(t:t -> ts:t array -> projections:projections -> comp) ->
+  grad_asn:(t:t -> g:tn -> ts:t array -> projections:projections -> comp) ->
+  ?grad_spec:grad_spec ->
+  ?top_down_prec:bool ->
+  t array ->
+  t
+(** An n-ary operation using Block shape logic (for concatenation and similar operations).
+    The [spec] is an einsum specification with concatenated axes using the [a^b^c] syntax.
+    The [delayed_vars] are variable references that will be bound during shape inference. *)
+
 val term :
   ?init_data:Ir.Assignments.init_data -> ?fetch_op:fetch_op -> ?grad_spec:grad_spec -> op_fun
 (** A terminal: a constant, a parameter, an input of the model. The semantics of shape specification
