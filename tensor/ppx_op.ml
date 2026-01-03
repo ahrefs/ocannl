@@ -169,6 +169,45 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
           [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
             ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]] )
   | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident "++^"; _ }; _ }]
+        [%e? expr1]
+        [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
+    when String.contains spec_str '>' ->
+      let vbs1, rhses_expr =
+        match expr1.pexp_desc with
+        | Pexp_tuple elems ->
+            let vbss, elems = List.unzip (List.map elems ~f:loop) in
+            (reduce_vbss vbss, Ast_builder.Default.pexp_array ~loc elems)
+        | _ ->
+            let vbs, e = loop expr1 in
+            (vbs, Ast_builder.Default.pexp_array ~loc [ e ])
+      in
+      let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
+      ( vbs1,
+        [%expr concat ?label:[%e opt_expr ~loc label] [%e spec] [%e rhses_expr]] )
+  | [%expr
+      [%e? { pexp_desc = Pexp_ident { txt = Lident "++^"; _ }; _ }]
+        [%e? expr1]
+        ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]
+           ([%e? { pexp_desc = Pexp_constant (Pconst_string _); _ } as head] :: [%e? rest]))]
+    when String.contains spec_str '>' ->
+      let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
+      let vbs1, rhses_expr =
+        match expr1.pexp_desc with
+        | Pexp_tuple elems ->
+            let vbss, elems = List.unzip (List.map elems ~f:loop) in
+            (reduce_vbss vbss, Ast_builder.Default.pexp_array ~loc elems)
+        | _ ->
+            let vbs, e = loop expr1 in
+            (vbs, Ast_builder.Default.pexp_array ~loc [ e ])
+      in
+      let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
+      let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in
+      ( combined_vbs,
+        [%expr
+          concat ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
+            [%e rhses_expr]] )
+  | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
         ([%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]

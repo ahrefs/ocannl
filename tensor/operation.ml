@@ -445,6 +445,36 @@ let einsum1 ?(capture_dims = []) spec =
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
 
+let concat ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
+  let op = if negated then Ir.Ops.Neg else Ir.Ops.Identity in
+  let op_asn ~t ~projections =
+    let rhses = Array.map rhses ~f:(fun rhs -> Asgns.Node rhs.Tensor.value) in
+    Asgns.to_comp
+    @@ Asgns.Accum_op
+         {
+           initialize_neutral = false;
+           accum = Ir.Ops.Arg2;
+           lhs = t.Tensor.value;
+           rhs = Asgns.Block { op; rhses };
+           projections = projections.Tensor.projections;
+           projections_debug = projections.Tensor.projections_debug;
+         }
+  in
+  let grad_asn ~t:_ ~g ~projections =
+    let lhses = Array.map rhses ~f:(fun rhs -> Asgns.Node (grad rhs)) in
+    Asgns.to_comp
+    @@ Asgns.Accum_op
+         {
+           initialize_neutral = false;
+           accum = Ir.Ops.Add;
+           lhs = g;
+           rhs = Asgns.Rev_sides { op; lhses };
+           projections = projections.Tensor.projections;
+           projections_debug = projections.Tensor.projections_debug;
+         }
+  in
+  Tensor.blockop ~op_label:"++^" ~spec ~delayed_vars:capture_dims ~op_asn ~grad_asn ?grad_spec rhses
+
 module NDO_before_einmax1 = struct
   let ( + ) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
   let where ?label t1 t2 t3 = where ?label ~grad_spec:Prohibit_grad t1 t2 t3 ()
@@ -685,6 +715,7 @@ struct
   let einsum1 = einsum1 ~grad_spec
   let einmax1 = einmax1 ~grad_spec
   let tropical = tropical ~grad_spec
+  let concat ?capture_dims ?negated spec = concat ?capture_dims ?negated spec ~grad_spec
   let offsets = offsets ~grad_spec
   let range = range ~grad_spec
   let range_of_shape = range_of_shape ~grad_spec
@@ -782,6 +813,8 @@ struct
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
     let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims spec t1 ()
     let tropical ?label ?capture_dims spec t1 t2 = tropical ?label ?capture_dims spec t1 t2 ()
+    let concat ?label ?capture_dims ?negated spec rhses =
+      concat ?label ?capture_dims ?negated spec rhses ()
     let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()

@@ -270,8 +270,9 @@ let raw_unop ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~op ~(t1 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
-    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op ~op_asn
-    ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape (orig_ts : t list) : t =
+    ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
+    ?shape_logic ~op_asn ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape
+    (orig_ts : t list) : t =
   List.iter orig_ts ~f:(fun t ->
       if t.id >= session_state.next_id then
         raise
@@ -343,14 +344,18 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     | Uint4x32_to_prec _ -> Shape.Uint4x32_to_prec v.Tn.prec
     | _ -> transpose_op
   in
-  let shape_logics = function
-    | [] -> [ terminal_logic () ]
-    | [ t1 ] -> [ Shape.Transpose (transpose_op, t1.shape) ]
-    | [ t1; t2 ] -> [ Shape.Broadcast (compose_op, t1.shape, t2.shape) ]
-    | [ t1; t2; t3 ] -> [ Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape) ]
-    | _ ->
-        (* Let's implement what we need when we need it. *)
-        assert false
+  let shape_logic =
+    match shape_logic with
+    | Some logic -> logic
+    | None -> (
+        match orig_ts with
+        | [] -> terminal_logic ()
+        | [ t1 ] -> Shape.Transpose (transpose_op, t1.shape)
+        | [ t1; t2 ] -> Shape.Broadcast (compose_op, t1.shape, t2.shape)
+        | [ t1; t2; t3 ] -> Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape)
+        | _ ->
+            (* Let's implement what we need when we need it. *)
+            assert false )
   in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
@@ -365,8 +370,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
   (* Create a preliminary shape_update to get projections_debug and projections for op_asn. *)
   let preliminary_shape_update =
-    let logic = List.hd_exn @@ shape_logics orig_ts in
-    Shape.{ shape; logic; id = get_update_id (); unsafe_projections = None; neutral_elem = None }
+    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem = None }
   in
   Shape.propagate_shapes preliminary_shape_update;
   let projections_debug = Shape.logic_to_spec preliminary_shape_update.logic in
@@ -511,6 +515,18 @@ let%track7_sexp ternop ?op_label ?ternary_op ~op_asn ~grad_asn ?grad_spec t1 t2 
        ())
     [ t1; t2; t3 ]
 
+let%track7_sexp blockop ?op_label ~spec ~delayed_vars ~op_asn ~grad_asn ?grad_spec rhses
+    ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes
+    ?output_axes ?deduced () : t =
+  let rhses_list = Array.to_list rhses in
+  let rhs_shapes = List.map rhses_list ~f:(fun rhs -> rhs.shape) in
+  let shape_logic = Shape.Block { spec; delayed_vars; rhses = rhs_shapes } in
+  op
+    ~label:(Option.to_list op_label @ label)
+    ~shape_logic ~op_asn ~grad_asn ?grad_spec ?top_down_prec
+    (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
+       ())
+    rhses_list
 let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =
