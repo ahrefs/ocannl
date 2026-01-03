@@ -115,8 +115,27 @@ let z3 =
          "a";
          ", ";
          "c"]) hey9 hey10
+let concat_single =
+  let hey11 =
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey11") () in
+  let open! TDSL.O in
+    concat ?label:(Some ["concat_single"]) "i => i" [|hey11|]
+let concat_pair =
+  let hey12 =
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey12") () in
+  let hey13 =
+    (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+       "hey13") () in
+  let j = Shape.get_variable_ref "j" in
+  let i = Shape.get_variable_ref "i" in
+  let open! TDSL.O in
+    concat ?label:(Some ["concat_pair"]) ~capture_dims:[j; i] "i; j => i ^ j"
+      [|hey12;hey13|]
 let () = ignore (y0, y1, y2, a, b, y)
 let () = ignore (z, z2, z3)
+let () = ignore (concat_single, concat_pair)
 let mlp_layer =
   let open! TDSL.O in
     fun ~label ~hid_dim () ->

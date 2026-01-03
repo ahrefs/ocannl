@@ -31,6 +31,8 @@ Key reference files:
 - Build: `dune build` (runs cram-style tests) or `dune build @check` (compile only).
 - Run an example: `dune exec bin/hello_world.exe`.
 - Run tests: `OCANNL_BACKEND=sync_cc dune runtest` (recommended default backend).
+- Workflow note: individual tests can be run via `dune exec <test path>.exe`, or using Dune aliases
+  like `dune build @runtest-<test name>` when available.
 - Format: `dune fmt` (uses .ocamlformat, margin 100).
 
 Testing notes:

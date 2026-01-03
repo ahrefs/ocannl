@@ -208,18 +208,18 @@ let%op conv2d ?(stride=1) ?(kernel_size=3) () x =
 {#concat-example .example title="Concatenation Patterns"}
 ```ocaml
 (* Concatenate two vectors *)
-let%op concat a b = a +* "x; y => x^y" b
+let%op concat a b = (a, b) ++^ "x; y => x^y"
 
 (* Extract prefix/suffix *)
-let%op prefix x = x ++ "a^b => a"
-let%op suffix x = x ++ "a^b => b"
+let%op prefix x = x ++^ "a^b => a"
+let%op suffix x = x ++^ "a^b => b"
 
 (* Assign to part of a tensor *)
 let%cd update_prefix ~target ~source =
   target =: source ~logic:"a => a^b"
 
 (* Integer constants specify fixed sizes *)
-let%op skip_first_3 x = x ++ "3^rest => rest"
+let%op skip_first_3 x = x ++^ "3^rest => rest"
 ```
 
 {pause up=concat-example}
@@ -241,7 +241,9 @@ let%op skip_first_3 x = x ++ "3^rest => rest"
 {pause}
 
 {#concat-syntax-note .remark}
-In `%op`, the `++` and `+*` operators detect `^` in the spec to produce `Block` assignments. For `%cd`, single-argument concatenation uses `~logic:"..."` as shown above. Multi-argument syntax (for tensor concatenation) is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor syntax.
+In `%op`, use the `++^` operator for concatenation and block specs. For `%cd`, single-argument
+concatenation uses `~logic:"..."` as shown above. Multi-argument syntax (for tensor concatenation)
+is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor syntax.
 
 {pause up}
 
@@ -467,7 +469,7 @@ let spec = "i j => j i" in (x ++ spec [ "j" ]) /. dim j
 **Concatenation vs reduction:**
 ```ocaml
 (* Concatenation - preserves elements: *)
-a +* "x; y => x^y" b  (* Result has size(x) + size(y) *)
+(a, b) ++^ "x; y => x^y"  (* Result has size(x) + size(y) *)
 
 (* Reduction - combines elements: *)
 x ++ "a => 0"         (* Sums all elements to scalar *)
