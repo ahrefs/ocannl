@@ -1303,14 +1303,12 @@ projection derivation, causing those components to be skipped.</p>
 supports any number of RHS tensors separated by semicolons. This enables
 operations like:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Concatenate 3 output-axes-only tensors along the first axis *)</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>a +* <span class="st">&quot;x, ...; y, ...; z, ... =&gt; x^y^z, ...&quot;</span> b c</span></code></pre></div>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>(a, b, c) ++^ <span class="st">&quot;x, ...; y, ...; z, ... =&gt; x^y^z, ...&quot;</span></span></code></pre></div>
 <p><strong>Syntax for <code>%op</code> vs <code>%cd</code></strong>: In
-the <code>%op</code> extension, the existing <code>++</code> and
-<code>+*</code> operators are reused—when the einsum spec contains a
-<code>^</code> character, the operation produces a <code>Block</code>
-assignment rather than a <code>Unop</code>/<code>Binop</code>. For
-<code>%cd</code>, single-argument concatenation (slicing, partial
-updates) works with the existing <code>~logic:&quot;...&quot;</code> syntax:</p>
+the <code>%op</code> extension, use the <code>++^</code> operator for
+concatenation and block specs. For <code>%cd</code>, single-argument
+concatenation (slicing, partial updates) works with the existing
+<code>~logic:&quot;...&quot;</code> syntax:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Assign to prefix of target, leaving suffix unchanged *)</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd update_prefix ~target ~source =</span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  target =: source ~logic:<span class="st">&quot;a =&gt; a^b&quot;</span></span></code></pre></div>
@@ -1360,14 +1358,15 @@ structured tensors from smaller components.</p>
 <h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
 constraints</h3>
-<p>The syntaxes <code>+*</code> and <code>++</code> accept an optional
-list of strings argument after the specification string. When passed,
-the strings should be some of the identifiers used in the specification.
-Both dimension variable and row variable labels are supported. This will
-introduce bindings for <code>Indexing.variable_ref</code> objects at the
-same point as the inline parameter definition bindings, and will pass
-these objects with the <code>~capture_dims</code> argument to
-<code>einsum</code> resp. <code>einsum1</code>. The bound objects can
+<p>The syntaxes <code>+*</code>, <code>++</code>, and <code>++^</code>
+accept an optional list of strings argument after the specification
+string. When passed, the strings should be some of the identifiers used
+in the specification. Both dimension variable and row variable labels
+are supported. This will introduce bindings for
+<code>Indexing.variable_ref</code> objects at the same point as the
+inline parameter definition bindings, and will pass these objects with
+the <code>~capture_dims</code> argument to <code>einsum</code>,
+<code>einsum1</code>, resp. <code>concat</code>. The bound objects can
 later be used with <code>Operation.embed_dim</code> or its alias
 <code>Operation.TDSL.O.dim</code> to embed the solved dimension of the
 corresponding variable (as a number) into a tensor expression. For a row

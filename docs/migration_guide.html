@@ -290,7 +290,7 @@ info between phases.</p>
 </tr>
 <tr>
 <td><code>torch.cat([a, b], dim=0)</code></td>
-<td><code>a +* &quot;x; y =&gt; x^y&quot; b</code></td>
+<td><code>(a, b) ++^ &quot;x; y =&gt; x^y&quot;</code></td>
 <td>Concatenate tensors</td>
 </tr>
 <tr>
@@ -300,17 +300,17 @@ info between phases.</p>
 </tr>
 <tr>
 <td><code>x[:n]</code> (prefix slice)</td>
-<td><code>x ++ &quot;a^b =&gt; a&quot;</code></td>
+<td><code>x ++^ &quot;a^b =&gt; a&quot;</code></td>
 <td>Extract prefix (size inferred)</td>
 </tr>
 <tr>
 <td><code>x[n:]</code> (suffix slice)</td>
-<td><code>x ++ &quot;a^b =&gt; b&quot;</code></td>
+<td><code>x ++^ &quot;a^b =&gt; b&quot;</code></td>
 <td>Extract suffix (size inferred)</td>
 </tr>
 <tr>
 <td><code>x[:-3]</code> (all but last 3)</td>
-<td><code>x ++ &quot;a^3 =&gt; a&quot;</code></td>
+<td><code>x ++^ &quot;a^3 =&gt; a&quot;</code></td>
 <td>Drop last 3 elements</td>
 </tr>
 </tbody>
@@ -557,15 +557,15 @@ Block Tensors</h3>
 <code>^</code> operator in einsum notation. This is different from
 flattening—concatenation preserves the axis structure.</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Concatenate two vectors *)</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op concat_vectors a b = a +* <span class="st">&quot;x; y =&gt; x^y&quot;</span> b</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op concat_vectors a b = (a, b) ++^ <span class="st">&quot;x; y =&gt; x^y&quot;</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Concatenate along a specific axis (output axis here) *)</span></span>
 <span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op concat_matrices a b =</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  a +* <span class="st">&quot;...|m, n; ...|p, n =&gt; ...|m^p, n&quot;</span> b</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  (a, b) ++^ <span class="st">&quot;...|m, n; ...|p, n =&gt; ...|m^p, n&quot;</span></span>
 <span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co">(* Extract prefix/suffix of a tensor *)</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_prefix x = x ++ <span class="st">&quot;a^b =&gt; a&quot;</span>  <span class="co">(* size of &#39;a&#39; inferred from context *)</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_suffix x = x ++ <span class="st">&quot;a^b =&gt; b&quot;</span>  <span class="co">(* size of &#39;b&#39; inferred from context *)</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_prefix x = x ++^ <span class="st">&quot;a^b =&gt; a&quot;</span>  <span class="co">(* size of &#39;a&#39; inferred from context *)</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_suffix x = x ++^ <span class="st">&quot;a^b =&gt; b&quot;</span>  <span class="co">(* size of &#39;b&#39; inferred from context *)</span></span>
 <span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Block tensor construction (upcoming syntax) *)</span></span>
 <span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op block_matrix () =</span>
