@@ -34,12 +34,6 @@ let () =
   in
   let loss = sum_all (concat2 p1 p2) in
   let ctx = Context.auto () in
-  (match Or_error.try_with (fun () -> ignore (Train.update_once ctx loss)) with
-  | Ok () -> Stdio.print_endline "concat backprop ran"
-  | Error err ->
-      Stdio.printf "concat backprop failed (expected for now): %s\n"
-        (Error.to_string_hum err));
-  Stdio.printf "concat gradients present: %b\n"
-    (Option.is_some p1.Tensor.diff && Option.is_some p2.Tensor.diff);
+  ignore (Train.update_once ctx loss);
 
   Stdio.print_endline "concat %op smoke tests done"

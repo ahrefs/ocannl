@@ -426,6 +426,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       match dims with
       | [] -> Dim { d = 0; label = None; proj_id = None }
       | [ single ] -> single
+      | res when keep_affine -> Concat res
       | _ ->
           if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
             let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
@@ -4016,8 +4017,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | None -> c.target_id <- Some p);
         (* We will substitute variables in conv_input later *)
         p_conv_input := (p, conv_input) :: !p_conv_input
-    | Proj_eq (Solved idx, (Conv_input _ as conv_input))
-    | Proj_eq ((Conv_input _ as conv_input), Solved idx) ->
+    | Proj_eq (Solved idx, (Conv_input _ | Concat _ as conv_input))
+    | Proj_eq ((Conv_input _  | Concat _ as conv_input), Solved idx) ->
         verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
     | Proj_eq
         ( (Conv_input { stride = stride1; over = over1; _ } as conv_input1),
@@ -4026,7 +4027,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         loop (Proj_eq (over1, over2));
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
-    | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ as conv_input2)) ->
+    | Proj_eq ((Conv_input _ | Concat _ as conv_input1), (Conv_input _ | Concat _ as conv_input2)) ->
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
     | Proj_eq (Solved idx1, Solved idx2) when Idx.equal_axis_index idx1 idx2 -> ()
@@ -4056,19 +4057,10 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
     | Iterated (Concat proj_dims) ->
         (* Each component of a concat needs iteration *)
         List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
-    | Proj_eq (Concat proj_dims1, Concat proj_dims2)
-      when List.length proj_dims1 = List.length proj_dims2 ->
-        (* Element-wise unification of concat components *)
-        List.iter2_exn proj_dims1 proj_dims2 ~f:(fun (p1, s1) (p2, s2) ->
-            loop (Proj_eq (Proj (p1, s1), Proj (p2, s2))))
-    | Proj_eq (Concat proj_dims, other) | Proj_eq (other, Concat proj_dims) -> (
+    | Proj_eq (Concat proj_dims, _other) | Proj_eq (_other, Concat proj_dims) ->
+        (* FIXME: NOT IMPLEMENTED YET *)
         (* For now, just record dimensions and unify with a single projection if possible *)
-        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
-        match other with
-        | Proj (p, _) ->
-            List.iter proj_dims ~f:(fun (pid, _) ->
-                proj_classes := Utils.union_add ~equal:Proj_id.equal !proj_classes p pid)
-        | _ -> ())
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
   in
   let no_proj_assigned v =
     raise
