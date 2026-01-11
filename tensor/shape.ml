@@ -1887,13 +1887,20 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     List.filter_map all_dims ~f:(fun dim ->
         match dim with
         | Row.Concat _ -> Some (Row.get_dim_index proj_env dim)
+        | Dim { proj_id = Some _; _ } -> (
+            match Row.get_product_proj proj_env dim with
+            | Some _ -> Some (Row.get_dim_index proj_env dim)
+            | None -> (
+                (* Also check if dim's projection maps to Idx.Concat *)
+                try
+                  match Row.get_dim_index proj_env dim with
+                  | Idx.Concat _ as idx -> Some idx
+                  | _ -> None
+                with _ -> None))
         | _ -> (
             match Row.get_product_proj proj_env dim with
             | Some _ -> Some (Row.get_dim_index proj_env dim)
-            | None ->
-                (* Also check if dim has a proj_id that maps to Idx.Concat *)
-                let idx = Row.get_dim_index proj_env dim in
-                (match idx with Idx.Concat _ -> Some idx | _ -> None)))
+            | None -> None))
   in
   let concat_groups : Idx.symbol list list =
     List.filter_map product_indices ~f:(function Idx.Concat syms -> Some syms | _ -> None)
