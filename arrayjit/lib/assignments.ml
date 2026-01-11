@@ -350,14 +350,9 @@ let%track4_sexp to_low_level code =
             | Some (s', 0) -> Indexing.Iterator s'
             | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
             | None ->
-                (* No active component - this shouldn't happen in Block lowering *)
-                let syms' =
-                  List.map syms ~f:(fun s ->
-                      match Map.find subst_map s with
-                      | Some (Indexing.Iterator s') -> s'
-                      | _ -> s)
-                in
-                Indexing.Concat syms')
+                raise
+                @@ Utils.User_error
+                     "Concat index could not be resolved to an active component during Block lowering")
       in
       try
         let lhs_idcs : Indexing.axis_index array =
@@ -519,13 +514,9 @@ let%track4_sexp to_low_level code =
             | Some (s', 0) -> Indexing.Iterator s'
             | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
             | None ->
-                let syms' =
-                  List.map syms ~f:(fun s ->
-                      match Map.find subst_map s with
-                      | Some (Indexing.Iterator s') -> s'
-                      | _ -> s)
-                in
-                Indexing.Concat syms')
+                raise
+                @@ Utils.User_error
+                     "Concat index could not be resolved to an active component during Rev_sides lowering")
       in
       let target_tn_exn = function
         | Node tn -> tn
