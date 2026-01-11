@@ -1880,7 +1880,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* Build connected components from Concat indices.
      Symbols that appear together in a Concat must be iterated together.
      We use union-find to group symbols into connected components.
-     Include both product dimensions and Concat dimensions. *)
+     Include both product dimensions and Concat dimensions.
+     Note: Concat can appear either as Row.Concat dim or as a regular Dim whose
+     proj_id maps to Idx.Concat. *)
   let product_indices : Idx.axis_index list =
     List.filter_map all_dims ~f:(fun dim ->
         match dim with
@@ -1888,12 +1890,21 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
         | _ -> (
             match Row.get_product_proj proj_env dim with
             | Some _ -> Some (Row.get_dim_index proj_env dim)
-            | None -> None))
+            | None ->
+                (* Also check if dim has a proj_id that maps to Idx.Concat *)
+                let idx = Row.get_dim_index proj_env dim in
+                (match idx with Idx.Concat _ -> Some idx | _ -> None)))
   in
   let concat_groups : Idx.symbol list list =
     List.filter_map product_indices ~f:(function Idx.Concat syms -> Some syms | _ -> None)
   in
-  (* Union-find to group symbols that appear in the same Concat *)
+  (* Union-find to group symbols that appear in the same Concat.
+     Symbols within the same Concat must be in the same iteration group so that
+     they are iterated SEQUENTIALLY (via unflat_lines), not NESTED.
+     For (a, b) ++^ "a; b => a^b", i2 and i3 should be in the same group:
+     - First iterate i2 (RHS[0] active)
+     - Then iterate i3 (RHS[1] active)
+     This is achieved by making them part of the same product_iterators entry. *)
   let symbol_classes : (Idx.symbol, Idx.symbol) Hashtbl.t = Hashtbl.create (module Idx.Symbol) in
   let find_repr sym =
     let rec loop s =
@@ -1911,7 +1922,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     let r1 = find_repr sym1 and r2 = find_repr sym2 in
     if not (Idx.equal_symbol r1 r2) then Hashtbl.set symbol_classes ~key:r1 ~data:r2
   in
-  (* Union all symbols within each Concat group *)
+  (* Union all symbols within each Concat group to make them iterate sequentially *)
   List.iter concat_groups ~f:(fun syms ->
       match syms with
       | [] -> ()

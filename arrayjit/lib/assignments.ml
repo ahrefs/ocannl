@@ -282,11 +282,12 @@ let%track4_sexp to_low_level code =
       |> List.concat
       |> Set.of_list (module Indexing.Symbol)
     in
-    let basecase block_iters rev_iters =
+    let basecase block_iters rev_iters concat_offsets =
       (* Create a substitution from product iterators to loop iterators. Fresh loop symbols are
          needed because product_iterators may be shared across different operations/tensors, but
          each lowered operation needs private loop symbols to avoid conflicts in low_level.ml's
-         symbol-to-tensor tracking. *)
+         symbol-to-tensor tracking.
+         concat_offsets: maps iterator symbol to its cumulative offset within a Concat group. *)
       let exception Empty_block in
       let block_iters = Array.of_list_rev block_iters in
       let subst_map =
@@ -317,15 +318,30 @@ let%track4_sexp to_low_level code =
             in
             Indexing.Affine { symbols; offset }
         | Indexing.Concat syms ->
-            (* Substitute each symbol in the concat list *)
-            let syms' =
-              List.map syms ~f:(fun s ->
-                  match Map.find subst_map s with
-                  | Some (Indexing.Iterator s') -> s'
-                  | Some _ -> failwith "Only Iterator substitution supported in Concat"
-                  | None -> s)
+            (* For Block lowering: find the active component (in block_iters) and resolve to it
+               with the appropriate offset from concat_offsets. *)
+            let active =
+              List.find_mapi syms ~f:(fun _i s ->
+                  if Array.mem ~equal:Indexing.equal_symbol block_iters s then
+                    match Map.find subst_map s with
+                    | Some (Indexing.Iterator s') ->
+                        let offset = Map.find concat_offsets s |> Option.value ~default:0 in
+                        Some (s', offset)
+                    | _ -> None
+                  else None)
             in
-            Indexing.Concat syms'
+            (match active with
+            | Some (s', 0) -> Indexing.Iterator s'
+            | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
+            | None ->
+                (* No active component - this shouldn't happen in Block lowering *)
+                let syms' =
+                  List.map syms ~f:(fun s ->
+                      match Map.find subst_map s with
+                      | Some (Indexing.Iterator s') -> s'
+                      | _ -> s)
+                in
+                Indexing.Concat syms')
       in
       try
         let lhs_idcs : Indexing.axis_index array =
@@ -352,10 +368,19 @@ let%track4_sexp to_low_level code =
         else set lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
       with Empty_block -> Low_level.Noop
     in
-    let rec for_loop block_iters rev_iters = function
-      | [] -> basecase block_iters rev_iters
+    let rec for_loop block_iters rev_iters concat_offsets = function
+      | [] -> basecase block_iters rev_iters concat_offsets
       | (ds, its) :: product ->
           let index = Indexing.get_symbol () in
+          (* Build cumulative offsets for this group (for Concat resolution) *)
+          let _, offsets_for_group =
+            List.fold2_exn ds its ~init:(0, []) ~f:(fun (cumul, acc) d iter ->
+                (cumul + d, (iter, cumul) :: acc))
+          in
+          let concat_offsets' =
+            List.fold offsets_for_group ~init:concat_offsets ~f:(fun m (iter, offset) ->
+                Map.set m ~key:iter ~data:offset)
+          in
           Low_level.unflat_lines
           @@ List.map2_exn ds its ~f:(fun d iter ->
               Low_level.For_loop
@@ -363,12 +388,13 @@ let%track4_sexp to_low_level code =
                   index;
                   from_ = 0;
                   to_ = d - 1;
-                  body = for_loop (iter :: block_iters) (index :: rev_iters) product;
+                  body =
+                    for_loop (iter :: block_iters) (index :: rev_iters) concat_offsets' product;
                   trace_it = true;
                 })
     in
     let for_loops =
-      for_loop [] []
+      for_loop [] [] (Map.empty (module Indexing.Symbol))
         (Array.to_list @@ Array.zip_exn projections.product_space projections.product_iterators)
     in
     (* Need initialization if: initialize_neutral is true AND (not surjective OR not injective)
@@ -426,7 +452,7 @@ let%track4_sexp to_low_level code =
           initialize_neutral
           && not (Indexing.is_surjective proj && Indexing.is_injective proj))
     in
-    let basecase block_iters rev_iters =
+    let basecase block_iters rev_iters concat_offsets =
       let exception Empty_block in
       let block_iters = Array.of_list_rev block_iters in
       let subst_map =
@@ -456,14 +482,28 @@ let%track4_sexp to_low_level code =
             in
             Indexing.Affine { symbols; offset }
         | Indexing.Concat syms ->
-            let syms' =
-              List.map syms ~f:(fun s ->
-                  match Map.find subst_map s with
-                  | Some (Indexing.Iterator s') -> s'
-                  | Some _ -> failwith "Only Iterator substitution supported in Concat"
-                  | None -> s)
+            (* For Rev_sides lowering: find the active component and resolve with offset *)
+            let active =
+              List.find_mapi syms ~f:(fun _i s ->
+                  if Array.mem ~equal:Indexing.equal_symbol block_iters s then
+                    match Map.find subst_map s with
+                    | Some (Indexing.Iterator s') ->
+                        let offset = Map.find concat_offsets s |> Option.value ~default:0 in
+                        Some (s', offset)
+                    | _ -> None
+                  else None)
             in
-            Indexing.Concat syms'
+            (match active with
+            | Some (s', 0) -> Indexing.Iterator s'
+            | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
+            | None ->
+                let syms' =
+                  List.map syms ~f:(fun s ->
+                      match Map.find subst_map s with
+                      | Some (Indexing.Iterator s') -> s'
+                      | _ -> s)
+                in
+                Indexing.Concat syms')
       in
       let target_tn_exn = function
         | Node tn -> tn
@@ -495,10 +535,19 @@ let%track4_sexp to_low_level code =
         else set target_tn lhs_idcs @@ apply_op (Ops.Binop accum) [| get target_buf lhs_idcs; rhs2 |]
       with Empty_block -> Low_level.Noop
     in
-    let rec for_loop block_iters rev_iters = function
-      | [] -> basecase block_iters rev_iters
+    let rec for_loop block_iters rev_iters concat_offsets = function
+      | [] -> basecase block_iters rev_iters concat_offsets
       | (ds, its) :: product ->
           let index = Indexing.get_symbol () in
+          (* Build cumulative offsets for this group (for Concat resolution) *)
+          let _, offsets_for_group =
+            List.fold2_exn ds its ~init:(0, []) ~f:(fun (cumul, acc) d iter ->
+                (cumul + d, (iter, cumul) :: acc))
+          in
+          let concat_offsets' =
+            List.fold offsets_for_group ~init:concat_offsets ~f:(fun m (iter, offset) ->
+                Map.set m ~key:iter ~data:offset)
+          in
           Low_level.unflat_lines
           @@ List.map2_exn ds its ~f:(fun d iter ->
               Low_level.For_loop
@@ -506,12 +555,13 @@ let%track4_sexp to_low_level code =
                   index;
                   from_ = 0;
                   to_ = d - 1;
-                  body = for_loop (iter :: block_iters) (index :: rev_iters) product;
+                  body =
+                    for_loop (iter :: block_iters) (index :: rev_iters) concat_offsets' product;
                   trace_it = true;
                 })
     in
     let for_loops =
-      for_loop [] []
+      for_loop [] [] (Map.empty (module Indexing.Symbol))
         (Array.to_list @@ Array.zip_exn projections.product_space projections.product_iterators)
     in
     let neutral_value = Ops.neutral_elem accum in

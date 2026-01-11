@@ -308,21 +308,25 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
+        (* Track which tensor uses which symbol. When multiple tensors share a symbol
+           (e.g., in Block/concat lowering), mark both as complex to disable virtualization.
+           See TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
+        let track_symbol s =
+          match Hashtbl.find reverse_node_map s with
+          | None -> Hashtbl.set reverse_node_map ~key:s ~data:tn
+          | Some old_tn when Tn.equal old_tn tn -> ()
+          | Some old_tn ->
+              (* Multiple tensors share this symbol - mark both as complex to prevent inlining *)
+              let old_traced = get_node traced_store old_tn in
+              old_traced.is_complex <- true;
+              traced.is_complex <- true
+        in
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
           | Sub_axis -> ()
-          | Iterator s ->
-              let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-              (* TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
-              assert (Tn.equal old_tn tn)
-          | Indexing.Affine { symbols; _ } ->
-              List.iter symbols ~f:(fun (_, s) ->
-                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-                  assert (Tn.equal old_tn tn))
-          | Indexing.Concat syms ->
-              List.iter syms ~f:(fun s ->
-                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-                  assert (Tn.equal old_tn tn)))
+          | Iterator s -> track_symbol s
+          | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> track_symbol s)
+          | Indexing.Concat syms -> List.iter syms ~f:track_symbol)
     | Set_from_vec { tn; idcs; length; vec_unop = _; arg = arg, _; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) arg;
         let traced : traced_array = get_node traced_store tn in
@@ -357,20 +361,22 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               done);
           Hash_set.add traced.assignments (lookup env pos_idcs)
         done;
+        let track_symbol s =
+          match Hashtbl.find reverse_node_map s with
+          | None -> Hashtbl.set reverse_node_map ~key:s ~data:tn
+          | Some old_tn when Tn.equal old_tn tn -> ()
+          | Some old_tn ->
+              (* Multiple tensors share this symbol - mark both as complex to prevent inlining *)
+              let old_traced = get_node traced_store old_tn in
+              old_traced.is_complex <- true;
+              traced.is_complex <- true
+        in
         Array.iter idcs ~f:(function
           | Fixed_idx _ -> ()
           | Sub_axis -> ()
-          | Iterator s ->
-              let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-              assert (Tn.equal old_tn tn)
-          | Indexing.Affine { symbols; _ } ->
-              List.iter symbols ~f:(fun (_, s) ->
-                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-                  assert (Tn.equal old_tn tn))
-          | Indexing.Concat syms ->
-              List.iter syms ~f:(fun s ->
-                  let old_tn = Hashtbl.find_or_add reverse_node_map s ~default:(fun () -> tn) in
-                  assert (Tn.equal old_tn tn)))
+          | Iterator s -> track_symbol s
+          | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> track_symbol s)
+          | Indexing.Concat syms -> List.iter syms ~f:track_symbol)
     | Set_local (_, llsc) -> loop_scalar env None llsc
     | Comment _ -> ()
     | Staged_compilation _ -> ()
