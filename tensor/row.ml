@@ -3994,6 +3994,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let p_dims = ref [] in
   let iterated_vars = ref [] in
   let p_concat_targets = ref [] in (* (target_pid, component proj_dims) for deferred Concat handling *)
+  let p_concat_components = ref @@ Set.empty (module Proj_id) in (* proj_ids that are Concat components *)
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
@@ -4058,21 +4059,31 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
             iterated_vars := v :: !iterated_vars
         | Some proj -> loop @@ Iterated proj)
     | Iterated (Concat proj_dims) ->
-        (* Each component of a concat needs iteration *)
-        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
+        (* Each component of a concat needs iteration, including d=1 *)
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) ->
+            p_dims := (pid, d) :: !p_dims;
+            p_concat_components := Set.add !p_concat_components pid)
     | Proj_eq (Concat proj_dims1, Concat proj_dims2)
       when List.length proj_dims1 = List.length proj_dims2 ->
         (* Pairwise unification - projections must match structurally *)
         List.iter2_exn proj_dims1 proj_dims2 ~f:(fun (p1, s1) (p2, s2) ->
+            p_concat_components := Set.add !p_concat_components p1;
+            p_concat_components := Set.add !p_concat_components p2;
             loop (Proj_eq (Proj (p1, s1), Proj (p2, s2))))
     | Proj_eq (Concat proj_dims1, Concat proj_dims2) ->
         (* Mismatched Concat lengths - record all components for iteration *)
-        List.iter proj_dims1 ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
-        List.iter proj_dims2 ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
+        List.iter proj_dims1 ~f:(fun (pid, { d; _ }) ->
+            p_dims := (pid, d) :: !p_dims;
+            p_concat_components := Set.add !p_concat_components pid);
+        List.iter proj_dims2 ~f:(fun (pid, { d; _ }) ->
+            p_dims := (pid, d) :: !p_dims;
+            p_concat_components := Set.add !p_concat_components pid)
     | Proj_eq (Concat proj_dims, Proj (target_pid, _))
     | Proj_eq (Proj (target_pid, _), Concat proj_dims) ->
-        (* Record components for iteration *)
-        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
+        (* Record components for iteration, including d=1 *)
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) ->
+            p_dims := (pid, d) :: !p_dims;
+            p_concat_components := Set.add !p_concat_components pid);
         (* Defer: target will get Concat index after components have iterators *)
         p_concat_targets := (target_pid, proj_dims) :: !p_concat_targets
   in
@@ -4112,7 +4123,9 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      if Idx.iterated d && (not @@ Map.mem !projs repr) then
+      (* Include d=1 if it's a concat component - they need iterators for proper Concat indexing *)
+      let needs_iterator = Idx.iterated d || (d = 1 && Set.mem !p_concat_components p) in
+      if needs_iterator && (not @@ Map.mem !projs repr) then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
             (* TODO: consider updating padding *)
             if d <> d2 then
@@ -4202,12 +4215,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
               in
               match Map.find !projs repr with
               | Some (Idx.Iterator s) -> Some s
-              | Some (Idx.Fixed_idx 0) when d <= 1 -> None
-              (* FIXME: d=1 participating in Concat should not become Fixed_idx 0;
-                 needs special handling elsewhere to preserve Concat structure.
-                 For now, we skip d=0 and d=1 components. *)
+              | Some (Idx.Fixed_idx 0) when d = 0 -> None (* d=0 is invalid dimension, skip *)
               | _ when d = 0 -> None
-              | _ when d = 1 -> None
               | _ ->
                   raise
                   @@ Shape_error
