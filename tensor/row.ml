@@ -3993,6 +3993,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let iterated_vars = ref [] in
+  let p_concat_targets = ref [] in (* (target_pid, component proj_dims) for deferred Concat handling *)
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
@@ -4027,7 +4028,9 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         loop (Proj_eq (over1, over2));
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
-    | Proj_eq ((Conv_input _ | Concat _ as conv_input1), (Conv_input _ | Concat _ as conv_input2)) ->
+    | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ | Concat _ as conv_input2))
+    | Proj_eq ((Concat _ as conv_input1), (Conv_input _ as conv_input2)) ->
+        (* Conv_input vs Conv_input/Concat - defer verification *)
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
     | Proj_eq (Solved idx1, Solved idx2) when Idx.equal_axis_index idx1 idx2 -> ()
@@ -4057,10 +4060,21 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
     | Iterated (Concat proj_dims) ->
         (* Each component of a concat needs iteration *)
         List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
-    | Proj_eq (Concat proj_dims, _other) | Proj_eq (_other, Concat proj_dims) ->
-        (* FIXME: NOT IMPLEMENTED YET *)
-        (* For now, just record dimensions and unify with a single projection if possible *)
-        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
+    | Proj_eq (Concat proj_dims1, Concat proj_dims2)
+      when List.length proj_dims1 = List.length proj_dims2 ->
+        (* Pairwise unification - projections must match structurally *)
+        List.iter2_exn proj_dims1 proj_dims2 ~f:(fun (p1, s1) (p2, s2) ->
+            loop (Proj_eq (Proj (p1, s1), Proj (p2, s2))))
+    | Proj_eq (Concat proj_dims1, Concat proj_dims2) ->
+        (* Mismatched Concat lengths - record all components for iteration *)
+        List.iter proj_dims1 ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
+        List.iter proj_dims2 ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims)
+    | Proj_eq (Concat proj_dims, Proj (target_pid, _))
+    | Proj_eq (Proj (target_pid, _), Concat proj_dims) ->
+        (* Record components for iteration *)
+        List.iter proj_dims ~f:(fun (pid, { d; _ }) -> p_dims := (pid, d) :: !p_dims);
+        (* Defer: target will get Concat index after components have iterators *)
+        p_concat_targets := (target_pid, proj_dims) :: !p_concat_targets
   in
   let no_proj_assigned v =
     raise
@@ -4174,6 +4188,36 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
+
+  (* Process deferred concat targets: build Concat indices from component iterators *)
+  List.iter !p_concat_targets ~f:(fun (target_pid, proj_dims) ->
+      let target_repr, _ =
+        Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:target_pid ~rank:0
+      in
+      if not (Map.mem !projs target_repr) then (
+        let syms =
+          List.filter_map proj_dims ~f:(fun (pid, { d; _ }) ->
+              let repr, _ =
+                Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0
+              in
+              match Map.find !projs repr with
+              | Some (Idx.Iterator s) -> Some s
+              | Some (Idx.Fixed_idx 0) when d <= 1 -> None
+              (* FIXME: d=1 participating in Concat should not become Fixed_idx 0;
+                 needs special handling elsewhere to preserve Concat structure.
+                 For now, we skip d=0 and d=1 components. *)
+              | _ when d = 0 -> None
+              | _ when d = 1 -> None
+              | _ ->
+                  raise
+                  @@ Shape_error
+                       ( [%string
+                           "Concat component projection %{pid#Proj_id} (d=%{d#Int}) has no iterator"],
+                         [] ))
+        in
+        projs :=
+          Map.set !projs ~key:target_repr
+            ~data:(if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms)));
 
   {
     v_env;

@@ -1880,12 +1880,15 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* Build connected components from Concat indices.
      Symbols that appear together in a Concat must be iterated together.
      We use union-find to group symbols into connected components.
-     Only look at product dimensions (ones we iterate over). *)
+     Include both product dimensions and Concat dimensions. *)
   let product_indices : Idx.axis_index list =
     List.filter_map all_dims ~f:(fun dim ->
-        match Row.get_product_proj proj_env dim with
-        | Some _ -> Some (Row.get_dim_index proj_env dim)
-        | None -> None)
+        match dim with
+        | Row.Concat _ -> Some (Row.get_dim_index proj_env dim)
+        | _ -> (
+            match Row.get_product_proj proj_env dim with
+            | Some _ -> Some (Row.get_dim_index proj_env dim)
+            | None -> None))
   in
   let concat_groups : Idx.symbol list list =
     List.filter_map product_indices ~f:(function Idx.Concat syms -> Some syms | _ -> None)
