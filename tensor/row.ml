@@ -4207,26 +4207,41 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
       let target_repr, _ =
         Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:target_pid ~rank:0
       in
-      if not (Map.mem !projs target_repr) then (
-        let syms =
-          List.filter_map proj_dims ~f:(fun (pid, { d; _ }) ->
-              let repr, _ =
-                Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0
-              in
-              match Map.find !projs repr with
-              | Some (Idx.Iterator s) -> Some s
-              | Some (Idx.Fixed_idx 0) when d = 0 -> None (* d=0 is invalid dimension, skip *)
-              | _ when d = 0 -> None
-              | _ ->
-                  raise
-                  @@ Shape_error
-                       ( [%string
-                           "Concat component projection %{pid#Proj_id} (d=%{d#Int}) has no iterator"],
-                         [] ))
-        in
-        projs :=
-          Map.set !projs ~key:target_repr
-            ~data:(if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms)));
+      let syms =
+        List.filter_map proj_dims ~f:(fun (pid, { d; _ }) ->
+            let repr, _ =
+              Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0
+            in
+            match Map.find !projs repr with
+            | Some (Idx.Iterator s) -> Some s
+            | Some (Idx.Fixed_idx 0) when d = 0 -> None (* d=0 is invalid dimension, skip *)
+            | _ when d = 0 -> None
+            | _ ->
+                raise
+                @@ Shape_error
+                     ( [%string
+                         "Concat component projection %{pid#Proj_id} (d=%{d#Int}) has no iterator"],
+                       [] ))
+      in
+      let expected_idx =
+        if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms
+      in
+      match Map.find !projs target_repr with
+      | None -> projs := Map.set !projs ~key:target_repr ~data:expected_idx
+      | Some existing_idx ->
+          let ok =
+            Idx.equal_axis_index existing_idx expected_idx
+            ||
+            match (existing_idx, expected_idx) with
+            | Idx.Iterator s, Idx.Concat [ s' ] when Idx.equal_symbol s s' -> true
+            | _ -> false
+          in
+          if not ok then
+            raise
+            @@ Shape_error
+                 ( [%string
+                     "Concat target projection %{target_pid#Proj_id} conflicts with existing index"],
+                   [ Index_mismatch [ existing_idx; expected_idx ] ] ));
 
   {
     v_env;
