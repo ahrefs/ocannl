@@ -1877,6 +1877,12 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
       all_product_projs_with_iters
   in
+  (* Ensure concat component iterators are present even when their dim is 1. *)
+  let symbol_to_proj =
+    Map.of_alist_exn
+      (module Idx.Symbol)
+      (Row.product_dim_iterators proj_env |> List.map ~f:(fun (p, d, s) -> (s, (p, d))))
+  in
   (* Build connected components from Concat indices.
      Symbols that appear together in a Concat must be iterated together.
      We use union-find to group symbols into connected components.
@@ -1904,6 +1910,22 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   in
   let concat_groups : Idx.symbol list list =
     List.filter_map product_indices ~f:(function Idx.Concat syms -> Some syms | _ -> None)
+  in
+  let unique_by_iterator =
+    let seen =
+      Set.of_list
+        (module Idx.Symbol)
+        (List.map unique_by_iterator ~f:(fun (_, _, s) -> s))
+    in
+    let missing_symbols =
+      concat_groups |> List.concat |> Utils.unique_keep_first ~equal:Idx.equal_symbol
+      |> List.filter ~f:(fun s -> not (Set.mem seen s))
+    in
+    let missing_entries =
+      List.filter_map missing_symbols ~f:(fun s ->
+          Map.find symbol_to_proj s |> Option.map ~f:(fun (p, d) -> (p, d, s)))
+    in
+    unique_by_iterator @ missing_entries
   in
   (* Union-find to group symbols that appear in the same Concat.
      Symbols within the same Concat must be in the same iteration group so that

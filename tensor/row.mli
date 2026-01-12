@@ -238,3 +238,6 @@ val proj_to_iterator_exn : proj_env -> proj_id -> Ir.Indexing.symbol
 (** [proj_to_iterator_exn proj_env p] returns the iterator for [p] in [proj_env]. Raises
     [Invalid_argument] if [p] is not an iterator. Note that symbols go through substitution when
     lowering, so these iterators are not the same as the ones in the generated code. *)
+
+val product_dim_iterators : proj_env -> (proj_id * int * Ir.Indexing.symbol) list
+(** Iterated projections, including concat components with dim 1. *)
