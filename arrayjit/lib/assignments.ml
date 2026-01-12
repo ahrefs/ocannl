@@ -306,6 +306,15 @@ let%track4_sexp to_low_level code =
          Concat offsets are computed per Concat index using symbol order. *)
       let exception Empty_block in
       let block_iters = Array.of_list_rev block_iters in
+      let concat_syms_opt =
+        match
+          Array.filter_map projections.project_lhs ~f:(function
+            | Indexing.Concat syms -> Some syms
+            | _ -> None)
+        with
+        | [| syms |] when List.length syms = Array.length rhses -> Some (Array.of_list syms)
+        | _ -> None
+      in
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
         Array.map2_exn block_iters loop_iters ~f:(fun block_iter loop_iter ->
@@ -363,8 +372,15 @@ let%track4_sexp to_low_level code =
         let rhses_ll =
           Array.filter_mapi projections.project_rhs ~f:(fun i rhs_idcs ->
               try
-                let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
-                Some (get rhses.(i) rhs_idcs)
+                let allow_by_concat =
+                  match concat_syms_opt with
+                  | None -> true
+                  | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
+                in
+                if not allow_by_concat then None
+                else
+                  let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
+                  Some (get rhses.(i) rhs_idcs)
               with Empty_block -> None)
         in
         if Array.is_empty rhses_ll then raise Empty_block;
@@ -472,6 +488,15 @@ let%track4_sexp to_low_level code =
     let basecase block_iters rev_iters =
       let exception Empty_block in
       let block_iters = Array.of_list_rev block_iters in
+      let concat_syms_opt =
+        match
+          Array.filter_map projections.project_lhs ~f:(function
+            | Indexing.Concat syms -> Some syms
+            | _ -> None)
+        with
+        | [| syms |] when List.length syms = Array.length lhses -> Some (Array.of_list syms)
+        | _ -> None
+      in
       let subst_map =
         let loop_iters = Array.of_list_rev rev_iters in
         Array.map2_exn block_iters loop_iters ~f:(fun block_iter loop_iter ->
@@ -532,8 +557,15 @@ let%track4_sexp to_low_level code =
         let targets =
           Array.filter_mapi projections.project_rhs ~f:(fun i lhs_idcs ->
               try
-                let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
-                Some (i, lhses.(i), lhs_idcs)
+                let allow_by_concat =
+                  match concat_syms_opt with
+                  | None -> true
+                  | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
+                in
+                if not allow_by_concat then None
+                else
+                  let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
+                  Some (i, lhses.(i), lhs_idcs)
               with Empty_block -> None)
         in
         if Array.is_empty targets then raise Empty_block;

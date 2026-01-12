@@ -4105,14 +4105,27 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   (* Any variables added during the above iteration have no valid projection chain *)
   List.iter !iterated_vars ~f:no_proj_assigned;
   let projs = ref @@ Map.empty (module Proj_id) in
+  let concat_reprs =
+    Set.of_list
+      (module Proj_id)
+      (Set.to_list !p_concat_components
+      |> List.map ~f:(fun p ->
+             fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0))
+  in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
-          if not @@ Idx.equal_axis_index idx idx2 then
-            raise
-            @@ Shape_error
-                 ("Multiple constraints on the same projection", [ Index_mismatch [ idx; idx2 ] ])));
+      if Idx.equal_axis_index idx (Idx.Fixed_idx 0) && Set.mem concat_reprs repr then ()
+      else
+        Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
+            if not @@ Idx.equal_axis_index idx idx2 then
+              raise
+              @@ Shape_error
+                   ("Multiple constraints on the same projection", [ Index_mismatch [ idx; idx2 ] ])));
   let product_dim = ref @@ Map.empty (module Proj_id) in
+  let concat_dims =
+    List.filter_map !p_dims ~f:(fun (p, d) ->
+        if Set.mem !p_concat_components p then Some (p, d) else None)
+  in
   (* Collect projection IDs that will get their index from Conv_input (target_id projections). These
      should NOT get fresh iterators from product_dim processing. *)
   let conv_input_targets =
@@ -4135,12 +4148,22 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
                        "Conflicting dimensions for the same projection: %{p#Proj_id} %{d#Int} \
                         %{d2#Int}"],
                      [] )));
+  List.iter concat_dims ~f:(fun (p, d) ->
+      let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
+      if not @@ Map.mem !product_dim repr then
+        product_dim := Map.set !product_dim ~key:repr ~data:d);
   (* Create fresh iterators for product dimensions, EXCEPT for those that will get their index from
      Conv_input (they will be processed later). *)
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       if not (Set.mem conv_input_targets repr) then
         Utils.mref_add_missing projs repr ~f:(fun () -> Idx.(Iterator (get_symbol ()))));
+  Set.iter concat_reprs ~f:(fun repr ->
+      if Set.mem conv_input_targets repr then ()
+      else
+        match Map.find !projs repr with
+        | Some (Idx.Iterator _) -> ()
+        | _ -> projs := Map.set !projs ~key:repr ~data:Idx.(Iterator (get_symbol ())));
 
   (* Process p_conv_input to populate projs and compute padding *)
   let resolved_padding =
@@ -4257,12 +4280,13 @@ let proj_repr proj_env p =
 
 let get_product_proj proj_env dim =
   match dim with
-  | Dim { d; _ } when not @@ Idx.iterated d -> None
   | Dim { proj_id = Some proj_id; d; _ } -> (
       let repr = proj_repr proj_env proj_id in
-      match Map.find proj_env.proj_to_index repr with
-      | Some (Iterator _) -> Some (repr, d)
-      | _ -> None)
+      if not (Map.mem proj_env.product_dim repr) then None
+      else
+        match Map.find proj_env.proj_to_index repr with
+        | Some (Iterator _) -> Some (repr, d)
+        | _ -> None)
   | Dim { proj_id = None; _ } -> None
   | Var v ->
       raise
@@ -4284,3 +4308,10 @@ let proj_to_iterator_exn proj_env p =
   match Map.find_exn proj_env.proj_to_index (proj_repr proj_env p) with
   | Iterator s -> s
   | _ -> invalid_arg "proj_to_iterator_exn"
+
+let product_dim_iterators proj_env =
+  Map.to_alist proj_env.product_dim
+  |> List.filter_map ~f:(fun (p, d) ->
+         match Map.find proj_env.proj_to_index p with
+         | Some (Idx.Iterator s) -> Some (p, d, s)
+         | _ -> None)
