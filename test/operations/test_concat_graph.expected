@@ -69,3 +69,9 @@ HERE: test/operations/test_concat_graph.ml:52:21
 └────────────────────────────┘
 
 === Concatenation Graph Test Complete ===
+
+=== Three-way Concatenation Test (Known Limitation) ===
+
+ERROR: ("Utils.User_error(\"Ambiguous indices in concatenation: multiple blocks viable for same position\")")
+
+=== Three-way Concatenation Test Complete ===
