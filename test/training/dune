@@ -8,7 +8,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl datasets)
+ (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -17,10 +17,9 @@
  (package neural_nets_lib)
  (modules bigram)
  (deps
-  ../../datasets/names.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl datasets)
+ (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -29,10 +28,9 @@
  (package neural_nets_lib)
  (modules bigram_mlp)
  (deps
-  ../../datasets/names.txt
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl datasets)
+ (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -43,6 +41,6 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries ocannl datasets)
+ (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))

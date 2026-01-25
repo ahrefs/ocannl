@@ -15,9 +15,9 @@ let () =
   let len = 200 in
   let batch_size = 10 in
   let n_batches = 2 * len / batch_size in
-  let moons_config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some 5 } in
+  let moons_config = Dataprep.Half_moons.Config.{ noise_range = 0.1; seed = Some 5 } in
   let moons_coordinates, moons_labels =
-    Datasets.Half_moons.generate_single_prec ~config:moons_config ~len ()
+    Dataprep.Half_moons.generate_single_prec ~config:moons_config ~len ()
   in
   let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates in
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_labels in

@@ -15,7 +15,7 @@ let tensor_of_int_list lst =
   let arr = lst |> Array.of_list in
   (* Metal backend doesn't support double precision. *)
   let genarray =
-    Genarray.create Bigarray.Float32 Bigarray.c_layout [| len; Datasets.Names.dict_size |]
+    Genarray.create Bigarray.Float32 Bigarray.c_layout [| len; Dataprep.Names.dict_size |]
   in
   (* convert to one-hot vectors *)
   for i = 0 to len - 1 do
@@ -27,7 +27,7 @@ let () =
   Utils.settings.fixed_state_for_init <- Some 3;
   Tensor.unsafe_reinitialize ();
 
-  let bigrams = Datasets.Names.get_all_bigrams () |> Datasets.Names.bigrams_to_indices in
+  let bigrams = Dataprep.Names.get_all_bigrams () |> Dataprep.Names.bigrams_to_indices in
   Stdio.printf "bigrams: %d\n%!" (List.length bigrams);
   let batch_size = 1000 in
   let round_up_by = batch_size - (List.length bigrams % batch_size) in
@@ -104,19 +104,19 @@ let () =
   counter_ref := 0;
 
   let infer c =
-    let c_one_hot = Datasets.Names.char_to_one_hot c in
+    let c_one_hot = Dataprep.Names.char_to_one_hot c in
     Tn.set_values cha.value c_one_hot;
     Int.incr counter_ref;
     Train.run ctx infer_step;
     let dice_value = dice.@[0] in
 
-    let max_i = List.length Datasets.Names.letters_with_dot - 1 in
+    let max_i = List.length Dataprep.Names.letters_with_dot - 1 in
     let rec aux i sum =
       if i >= max_i then '.'
       else
         let prob = infer_probs.@{[| i |]} in
         let new_sum = sum +. prob in
-        if Float.compare new_sum dice_value > 0 then List.nth_exn Datasets.Names.letters_with_dot i
+        if Float.compare new_sum dice_value > 0 then List.nth_exn Dataprep.Names.letters_with_dot i
         else aux (i + 1) new_sum
     in
 

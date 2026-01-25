@@ -18,6 +18,7 @@ depends: [
   "dune-site"
   "base" {>= "v0.17.0"}
   "arrayjit" {= version}
+  "dataprep" {>= "0.1.0"}
   "printbox" {>= "0.12"}
   "printbox-text" {>= "0.12"}
   "printbox-ext-plot" {>= "0.12"}
@@ -26,10 +27,7 @@ depends: [
   "stdio"
   "sexplib"
   "num"
-  "csv"
-  "curl"
   "time_now"
-  "camlzip"
   "ppxlib" {>= "0.36.0"}
   "ppx_compare"
   "ppx_fields_conv"

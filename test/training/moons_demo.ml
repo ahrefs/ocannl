@@ -20,8 +20,8 @@ let main () =
   let n_batches = 2 * len / batch_size in
   let epochs = 80 in
   let steps = epochs * 2 * len / batch_size in
-  let config = Datasets.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
-  let moons_coordinates, moons_labels = Datasets.Half_moons.generate_single_prec ~config ~len () in
+  let config = Dataprep.Half_moons.Config.{ noise_range = 0.1; seed = Some seed } in
+  let moons_coordinates, moons_labels = Dataprep.Half_moons.generate_single_prec ~config ~len () in
   let moons_flat_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_coordinates in
   let moons_classes_ndarray = Ir.Ndarray.as_array Ir.Ops.Single moons_labels in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in

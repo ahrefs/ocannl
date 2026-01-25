@@ -41,7 +41,7 @@ let () =
   let num_classes = max_circles in
   (* Classes: 1, 2, 3 circles -> indices 0, 1, 2 *)
   let config =
-    Datasets.Circles.Config.
+    Dataprep.Circles.Config.
       { image_size; max_radius = 4; min_radius = 2; max_circles; seed = Some seed }
   in
 
@@ -52,7 +52,7 @@ let () =
 
   printf "Generating %d circle counting images (%d classes)...\n%!" total_samples num_classes;
   let images_data, labels_data =
-    Datasets.Circles.generate_single_prec ~config ~len:total_samples ()
+    Dataprep.Circles.generate_single_prec ~config ~len:total_samples ()
   in
   printf "Dataset generated: images shape [%d; %d; %d; 1], labels shape [%d; 1]\n%!" total_samples
     image_size image_size total_samples;

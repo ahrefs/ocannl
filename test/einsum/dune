@@ -8,7 +8,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules moons_demo_variant)
- (libraries ocannl datasets)
+ (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

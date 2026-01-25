@@ -91,8 +91,6 @@
   "A from-scratch Deep Learning framework with an optimizing compiler, shape inference, concise syntax")
  (description
   "OCaml Compiles Algorithms for Neural Networks Learning is a compiled Deep Learning framework that puts emphasis on low-level backends (like tinygrad), shape inference, concise notation (ab)using PPX.")
- (sites
-  (share data))
  (depends
   (ocaml
    (>= 5.3.0))
@@ -106,6 +104,8 @@
   ;  :with-dev-setup)
   (arrayjit
    (= :version))
+  (dataprep
+   (>= 0.1.0))
   (printbox
    (>= 0.12))
   ; FIXME: Depend on printbox-text > 0.12.0 when it is released.
@@ -120,10 +120,7 @@
   stdio
   sexplib
   num
-  csv
-  curl
   time_now
-  camlzip
   (ppxlib
    (>= 0.36.0))
   ppx_compare
