@@ -7,6 +7,8 @@
   - Axis slicing to extract prefix/suffix (`a^b => a`, `a^b => b`)
   - Block tensor construction with n-ary einsum specs
   - `invalid_vars` tracking for determining which dimension variables can be 0 in Block specs
+  - New `++^` operator for concatenation in DSL
+  - Concat projection unification in shape inference (`solve_proj_equations`)
 - Pointwise operations now optionally accept einsum/permute specs via `?spec` and `?capture_dims` parameters
   - Binary ops: `add`, `sub`, `pointmul`, `pointpow`, `pointdiv`, `lt`, `eq`, `ne`
   - Unary ops: `relu`, `sat01`, `exp`, `log`, `exp2`, `log2`, `sin`, `cos`, `sqrt`, `recip`, `recip_sqrt`, `tanh`, `neg`, `not`, `stop_gradient`
@@ -18,6 +20,7 @@
 - Parser updated to allow n-ary einsum specs (e.g., `a;b;c;d=>result`)
 - Concat symbols are now grouped into connected components for iteration using union-find
 - Product space and product iterators now use list arrays to handle concatenated dimensions
+- Moved `datasets/` to separate `dataprep` package
 
 ### Fixed
 
@@ -27,6 +30,10 @@
 - Single remaining Concat component properly closed in `close_dim_terminal`
 - Inequality constraints preserved for Concat with `invalid_vars`
 - Dimension 0 (instead of 1) guessed for `invalid_vars` in all guessing locations
+- Concat lowering for unit dims
+- Concat index probing guarded against unknown projections
+- Concat lowering resolves indices with cumulative offsets correctly
+- `d=1` handling in Concat projection components
 
 ## [0.6.3] -- 2025-12-19
 
