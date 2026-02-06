@@ -59,38 +59,38 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 (August 24, 2026)**.
 
 * **0.6.4 (End Dec 2025): Shape concatenation and position embeddings.**
-  * Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
-    * Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
-  * Sokoban RL policy gradient example with a CNN.
-  * RoPE embeddings.
-  * Transformer for the Names dataset.
-* **0.7.0 (End Jan 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
-  * Cleanup of deprecated streams functionality.
-  * Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
-  * Tensor saving, loading, and restoring.
+  - [x] Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
+    - [x] Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
+  - [x] Sokoban CNN building block.
+  - [ ] RoPE embeddings.
+  - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
+* **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
+  - [ ] Cleanup of deprecated streams functionality.
+  - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
+  - [ ] Tensor saving, loading, and restoring.
 * **0.7.1 (Mid-Mar 2026): Real world examples.**
-  * Add convnet examples: MNIST and CIFAR.
-  * Bindings to a tokenizer (e.g. _llama.cpp_).
-  * Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
+  - [ ] Add convnet examples: MNIST and CIFAR.
+  - [ ] Tokenizers are being developed in the spin-off project [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) (opam package `dataprep`, currently unreleased).
+  - [ ] Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
 * **0.7.2 (Mid-Apr 2026): Compiler optimizations.**
-  * Optimizations: loop invariant lifting and common subexpression elimination.
-  * Universal Pool Allocator.
+  - [ ] Optimizations: loop invariant lifting and common subexpression elimination.
+  - [ ] Universal Pool Allocator.
 * **0.8 (Mid-Jun 2026): GPU-style performance -- low hanging fruit.**
-  * First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
-  * Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
-  * Finally from [llm.c](https://github.com/karpathy/llm.c).
-  * These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
+  - [ ] First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
+  - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
+  - [ ] Finally from [llm.c](https://github.com/karpathy/llm.c).
+  - [ ] These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
 * **0.9 (Aug 24, 2026 — ICFP): Optimize performance: program search.**
-  * Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
-  * We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
-  * Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
+  - [ ] Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
+  - [ ] We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
+  - [ ] Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
 * **1.0 (End Oct 2026): Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
-  * Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
-  * Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
-  * Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
+  - [ ] Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
+  - [ ] Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
+  - [ ] Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
 * **1.1: shape inference and safety enhancements.**
-  * Consider introducing axis labels (as opposed to dimension units).
-  * Consider introducing shape schemes for tensor functions.
+  - [ ] Consider introducing axis labels (as opposed to dimension units).
+  - [ ] Consider introducing shape schemes for tensor functions.
 
 ### Releases
 
