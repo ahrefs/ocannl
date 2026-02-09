@@ -1,8 +1,8 @@
 # OCANNL Roadmap to v1.0
 
-**Target: ICFP 2026 (August 24, 2026)**
+**Target: ICFP 2026 week (August 24, 2026)**
 
-This roadmap outlines the development plan for OCANNL from the current state to version 1.0, incorporating an academic paper milestone for ICFP 2026. Dates indicate **end of period** targets.
+This roadmap outlines the development plan for OCANNL from the current state to version 1.0, incorporating academic paper milestones for workshops collocated with ICFP 2026 (OCaml Workshop, FProPer). Dates indicate **end of period** targets.
 
 ---
 
@@ -36,7 +36,7 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 
 ---
 
-## Q1 2026: Frontend Maturity and ICFP Paper
+## Q1 2026: Frontend Maturity and Workshop Paper
 
 ### v0.6.4 — End of December 2025
 **Theme: Shape concatenation and position embeddings**
@@ -58,8 +58,8 @@ This roadmap outlines the development plan for OCANNL from the current state to 
   - Fully working decoder-only autoregressive transformer
   - Names dataset language model
 
-### v0.7.0 — End of January 2026
-**Theme: Frontend finalization (before ICFP deadline)**
+### v0.7.0 — End of February 2026
+**Theme: Frontend finalization (paper-ready for workshop submissions)**
 
 This is the "paper-ready" release with mature frontend API.
 
@@ -80,9 +80,7 @@ This is the "paper-ready" release with mature frontend API.
 - **Documentation**
   - Context API slides (README item 3)
 
-**⚠️ ICFP 2026 Deadline: February 19, 2026**
-
-Paper should use v0.7.0 examples demonstrating the mature frontend.
+Paper should use v0.7.0 examples demonstrating the mature frontend. Target venues: OCaml Workshop and FProPer (if it happens), both collocated with ICFP 2026. Workshop submission deadlines are typically May–June.
 
 ---
 
@@ -203,18 +201,18 @@ This is a research-heavy milestone requiring ~2.5 months.
 | v0.6.3  | Mid-Dec 2025 | 2.5 weeks | Padding inference |
 | v0.6.4  | End Dec 2025 | 2 weeks | Shape concatenation |
 | v0.6.5  | Mid-Jan 2026 | 2 weeks | RoPE, transformer toy example |
-| v0.7.0  | End Jan 2026 | 2 weeks | **Frontend finalization (ICFP: Feb 19)** |
+| v0.7.0  | End Feb 2026 | 2 weeks | **Frontend finalization (workshop paper-ready)** |
 | v0.7.1  | Mid-Mar 2026 | 6 weeks | Real-world examples, backend polish |
 | v0.7.2  | Mid-Apr 2026 | 4 weeks | Compiler optimizations, pool allocator |
 | v0.8    | Mid-Jun 2026 | 2 months | GPU tiling, megakernels |
-| v0.9    | Aug 24, 2026 | 2.5 months | Program search **(ICFP conference)** |
+| v0.9    | Aug 24, 2026 | 2.5 months | Program search **(ICFP week)** |
 | v1.0    | End Oct 2026 | 2 months | Documentation, completeness, safety |
 
 ---
 
-## ICFP 2026 Paper Plan
+## Workshop Paper Plan (OCaml Workshop / FProPer at ICFP 2026)
 
-**Deadline: February 19, 2026**
+**Target deadline: May–June 2026** (exact dates TBD per workshop CFP)
 
 ### Proposed Title
 *"Generalized Einsum with Row Variables: Shape Inference for Deep Learning in OCaml"*
@@ -235,10 +233,10 @@ This is a research-heavy milestone requiring ~2.5 months.
 ### Development Timeline
 - **Nov 2025**: Release v0.6.2
 - **Dec 2025**: Finish v0.6.3; outline paper, literature review
-- **Jan 2026**: Finish v0.6.4–0.6.5 (concatenation, RoPE, transformer); first draft
-- **Early Feb 2026**: Finish v0.7.0 (frontend finalization); update paper examples
-- **Feb 1-18, 2026**: Paper revision with v0.7.0 examples
-- **Feb 19, 2026**: **Submission deadline**
+- **Jan–Feb 2026**: Finish v0.6.4–0.6.5 (concatenation, RoPE, transformer)
+- **Feb–Mar 2026**: Finish v0.7.0 (frontend finalization); first draft with v0.7.0 examples
+- **Apr–May 2026**: Paper revision and polish
+- **May–June 2026**: **Workshop submission deadline** (OCaml Workshop / FProPer)
 
 ### Why v0.7.0 Before Paper
 The paper needs working examples with OCANNL's mature frontend:

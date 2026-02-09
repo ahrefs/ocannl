@@ -56,7 +56,7 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 ## Upcoming milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 (August 24, 2026)**.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 week (August 24, 2026)**.
 
 * **0.6.4 (End Dec 2025): Shape concatenation and position embeddings.**
   - [x] Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
@@ -64,7 +64,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [x] Sokoban CNN building block.
   - [ ] RoPE embeddings.
   - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
-* **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release before ICFP deadline (Feb 19).
+* **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
   - [ ] Cleanup of deprecated streams functionality.
   - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   - [ ] Tensor saving, loading, and restoring.
@@ -80,7 +80,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   - [ ] Finally from [llm.c](https://github.com/karpathy/llm.c).
   - [ ] These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
-* **0.9 (Aug 24, 2026 — ICFP): Optimize performance: program search.**
+* **0.9 (Aug 24, 2026 — ICFP week): Optimize performance: program search.**
   - [ ] Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   - [ ] We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
   - [ ] Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
