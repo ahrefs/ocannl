@@ -17,6 +17,9 @@ let name = "cc"
 let optimization_level () =
   Int.of_string @@ Utils.get_global_arg ~default:"3" ~arg_name:"cc_backend_optimization_level"
 
+let arch_flags () = Utils.get_global_arg ~default:"-march=native" ~arg_name:"cc_backend_arch_flags"
+let fast_math_enabled () = Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_math"
+
 let compiler_command =
   let default =
     (* TODO: there's a direct way to get the compiler command from the OCaml compiler. *)
@@ -81,9 +84,20 @@ let%track7_sexp c_compile_and_load ~f_path =
     | _ -> "-shared -fPIC"
   in
   let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
+  let compiler_flags =
+    let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
+    let arch_flag = String.strip (arch_flags ()) in
+    let fast_math_flag = if fast_math_enabled () then Some "-ffast-math" else None in
+    [
+      Some optimization_flag;
+      Option.some_if (not (String.is_empty arch_flag)) arch_flag;
+      fast_math_flag;
+    ]
+    |> List.filter_opt |> String.concat ~sep:" "
+  in
   let cmdline : string =
-    Printf.sprintf "%s %s -O%d -o %s %s > %s 2>&1" (compiler_command ()) f_path
-      (optimization_level ()) libname kernel_link_flags temp_log
+    Printf.sprintf "%s %s %s -o %s %s > %s 2>&1" (compiler_command ()) f_path compiler_flags libname
+      kernel_link_flags temp_log
   in
   (* Debug: log the command if debugging is enabled *)
   [%log3 "command", cmdline];
