@@ -11,6 +11,13 @@ Repository docs suggest `dune exec bin/hello_world.exe`, but this worktree curre
 
 <!-- End entry -->
 
+<!-- Entry: gh-ocannl-49-coder | 2026-03-02T12:20:00-0500 -->
+### Pair Session Branch Naming Assumption
+
+The pair preflight helper currently assumes a `main` branch for change-footprint reporting and warns on repositories that use `master`. Treat that warning as tooling noise unless other checks fail; use `origin/HEAD` or the actual default branch when validating branch diffs.
+
+<!-- End entry -->
+
 <!-- Entry: gh-ocannl-49-coder | 2026-03-02T12:17:00-0500 -->
 ### Stale Expected Output Can Mask Fixed Behavior
 
