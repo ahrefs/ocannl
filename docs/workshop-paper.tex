@@ -1,0 +1,702 @@
+% Generalized Einsum with Row Variables:
+% Shape Inference for Deep Learning in OCaml
+%
+% Workshop paper targeting OCaml Workshop 2026 (ICFP)
+
+\documentclass[acmsmall,nonacm,review]{acmart}
+
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+
+% OCaml listing style
+\lstdefinelanguage{ocaml}{
+  morekeywords={let,in,fun,match,with,type,val,module,struct,sig,end,
+    open,if,then,else,rec,and,or,not,true,false,of,Some,None,
+    mutable,begin,end},
+  morekeywords=[2]{Shape,Tensor,TDSL,NTDSL,PDSL,Ir},
+  sensitive=true,
+  morecomment=[s]{(*}{*)},
+  morestring=[b]",
+}
+
+\lstset{
+  language=ocaml,
+  basicstyle=\small\ttfamily,
+  keywordstyle=\bfseries\color{blue!70!black},
+  keywordstyle=[2]\color{purple!70!black},
+  commentstyle=\itshape\color{green!50!black},
+  stringstyle=\color{red!70!black},
+  columns=flexible,
+  breaklines=true,
+  showstringspaces=false,
+  xleftmargin=1em,
+  frame=single,
+  framerule=0.4pt,
+  numbers=none,
+  escapeinside={(@}{@)},
+  aboveskip=0.5\baselineskip,
+  belowskip=0.5\baselineskip,
+}
+
+% Inline code
+\newcommand{\code}[1]{\lstinline[basicstyle=\normalsize\ttfamily]{#1}}
+\newcommand{\spec}[1]{\texttt{\small #1}}
+
+\begin{document}
+
+\title{Generalized Einsum with Row Variables:\\Shape Inference for Deep Learning in OCaml}
+
+\author{Lukasz Stafiniak}
+\affiliation{%
+  \institution{ahrefs}
+  \country{Poland}
+}
+\email{lukstafi@gmail.com}
+
+\begin{abstract}
+Tensor shape mismatches are among the most common bugs in deep learning code.
+We present the shape inference system of OCANNL, an OCaml deep learning
+framework that combines \emph{generalized einsum notation} with \emph{row
+variables} and \emph{constraint-based inference}. Our einsum notation extends
+the standard contraction syntax with strided iteration (for convolutions),
+axis concatenation (for block tensors), and row variables (for flexible axis
+counts). Shapes are organized into three axis kinds---batch, input, and
+output---reflecting deep learning semantics. A multi-stage constraint solver
+resolves dimension and row variables, producing informative error messages via
+provenance tracking. We integrate this system into OCaml through PPX syntax
+extensions, providing an ergonomic DSL that leverages OCaml's type and module
+systems. We illustrate the approach with multi-head attention, convolutions,
+and transformer blocks drawn from working OCANNL code.
+\end{abstract}
+
+\maketitle
+
+%% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+Deep learning frameworks must reconcile two competing demands: concise
+notation for tensor operations, and early detection of shape errors.
+Existing approaches each sacrifice one for the other:
+
+\begin{itemize}
+\item \textbf{Standard einsum} (NumPy, PyTorch) provides compact contraction
+  notation but is limited to summation over shared indices. Convolutions,
+  strided access, and concatenation require separate APIs. Shapes are checked
+  at runtime.
+\item \textbf{Named tensors} (PyTorch named tensors~\cite{chiang2021named},
+  torchdim~\cite{ansel2024pytorch2}) attach semantic labels to axes, but
+  labels are verbose in einsum-style notation and create inference ambiguity
+  when multiple axes share the same semantic unit.
+\item \textbf{Dependent types} (Dex~\cite{paszke2021getting},
+  Futhark~\cite{henriksen2017futhark}) offer compile-time guarantees but
+  demand heavy type annotations.
+\item \textbf{einops}~\cite{rogozhnikov2022einops} provides readable
+  reshaping syntax but operates at the level of shape transformations rather
+  than computations.
+\end{itemize}
+
+OCANNL\footnote{\url{https://github.com/ahrefs/ocannl}} takes a different
+approach. Its shape system combines three ideas:
+\begin{enumerate}
+\item A \emph{generalized einsum notation} that unifies contraction, strided
+  iteration, convolution, and concatenation in a single syntax.
+\item \emph{Row variables}, borrowed from row polymorphism in type theory,
+  that allow specifications without committing to exact axis counts.
+\item \emph{Constraint-based inference} with a multi-stage solver that
+  resolves shapes at model construction time, before any data flows through
+  the network.
+\end{enumerate}
+
+These are integrated into OCaml via PPX syntax extensions (\code{\%op} and
+\code{\%cd}), yielding an embedded DSL that feels native while providing
+shape safety. This paper describes the design, the inference algorithm, and
+its application to standard deep learning patterns.
+
+%% ============================================================
+\section{The Shape System}
+\label{sec:shapes}
+
+\subsection{Three Axis Kinds}
+\label{sec:axis-kinds}
+
+Every tensor shape in OCANNL is partitioned into three rows of axes:
+\[
+  \underbrace{\text{batch}}_{\text{data samples}} \;\big|\;
+  \underbrace{\text{input}}_{\text{consumed}} \to
+  \underbrace{\text{output}}_{\text{produced}}
+\]
+
+This partition reflects deep learning semantics:
+\begin{itemize}
+\item \textbf{Batch axes} index independent data samples and are preserved
+  across all operations.
+\item \textbf{Output axes} represent produced values (leftmost in
+  conventional matrix notation).
+\item \textbf{Input axes} represent consumed values (rightmost), analogous to
+  function arguments.
+\end{itemize}
+
+The input--output distinction gives tensor multiplication (\code{*}) the
+semantics of function composition: for tensors with shapes $|i \to o_1$ and
+$|i' \to o_2$, multiplication contracts $i$ against $o_2$, producing
+$|i' \to o_1$---matching matrix multiplication when each row has a single
+axis. This convention extends naturally to higher-order tensors without
+requiring explicit einsum specs for common operations.
+
+Each row is independently broadcastable: a dimension-1 axis broadcasts to
+match any dimension, and a row with fewer axes is extended with dimension-1
+axes. Unlike NumPy, which pads from the left, OCANNL broadcasts ``in the
+middle''---preserving both specified leading and trailing axes of a row.
+
+\subsection{Generalized Einsum Notation}
+\label{sec:einsum}
+
+OCANNL's einsum notation extends the standard contraction syntax in several
+directions. The general form for binary operations is:
+
+\begin{center}
+\spec{rhs1\_spec ; rhs2\_spec => lhs\_spec}
+\end{center}
+
+\noindent where each spec describes the batch, input, and output axes of the
+corresponding tensor using the \spec{batch | input -> output} convention.
+Unary operations use \spec{rhs\_spec => lhs\_spec}. Within each spec, axes
+are identified positionally by single-character or multi-character
+labels.\footnote{Multi-character mode is triggered by the presence of a comma:
+\spec{"abc"} denotes three axes \spec{a}, \spec{b}, \spec{c}, while
+\spec{"abc,"} denotes a single axis named \spec{abc}.}
+
+\paragraph{Standard contraction.}
+Matrix multiplication is written as:
+\begin{lstlisting}
+a +* "m n; n p => m p" b
+\end{lstlisting}
+The \code{+*} operator performs addition-reduction with multiplication (the
+standard einsum semantics). Labels appearing in both operand specs but not in
+the result spec are contracted.
+
+\paragraph{Strided iteration and convolutions.}
+Affine index expressions in specs support strided access:
+\begin{lstlisting}
+x +* "... | stride*oh+kh, stride*ow+kw, ic;
+      kh, kw, ic -> oc
+      => ... | oh, ow, oc" ["kh"; "kw"] { kernel }
+\end{lstlisting}
+The expression \spec{stride*oh+kh} means the input index is
+$\mathit{stride} \times \mathit{oh} + \mathit{kh}$, where \spec{oh} is the
+output position and \spec{kh} is the kernel position. Adding a dilation
+factor gives the standard convolution formula:
+$\mathit{stride} \times o + \mathit{dilation} \times k$. The shape inference
+system automatically derives the output dimensions from the input dimensions,
+stride, dilation, and kernel size via the relationship:
+\[
+  d_{\text{in}} = \mathit{stride} \times (d_{\text{out}} - 1) +
+  1 + (\mathit{d_{\text{kernel}}} - 1) \times \mathit{dilation}
+\]
+
+\paragraph{Concatenation.}
+The \spec{\^{}} operator creates a concatenated axis:
+\begin{lstlisting}
+(* Concatenate two vectors *)
+(a, b) ++^ "x; y => x^y"
+(* Extract a prefix *)
+x ++^ "a^b => a"
+\end{lstlisting}
+A concatenated axis \spec{a\^{}b} has dimension $d_a + d_b$ and iterates first
+over the range of \spec{a}, then over the range of \spec{b}. This enables
+block tensor construction and axis slicing within the same notation.
+
+\paragraph{Dimension capture.}
+Einsum specs can capture dimension variables for use in subsequent
+computations:
+\begin{lstlisting}
+let scores =
+  q +* "... s | h d; ... t | h d
+        => ... s | t -> h" ["h"; "d"] k
+in
+Shape.set_dim h num_heads;
+scores /. sqrt (dim d)
+\end{lstlisting}
+The list \code{["h"; "d"]} binds OCaml variables \code{h} and \code{d} to
+the inferred dimensions of the corresponding axes. These can be used to set
+dimension constraints (\code{Shape.set\_dim}) or to compute scaling factors
+(\code{dim d} retrieves the integer dimension value).
+
+\paragraph{Additional operators.}
+Beyond the standard addition-multiply einsum (\code{+*}), OCANNL provides:
+\texttt{@\^{}+} for tropical semiring operations (max-reduce with addition),
+\code{++} for unary add-reduction, and \texttt{@\^{}\^{}} for unary
+max-reduction. These share the same spec syntax, differing only in the
+accumulation and combination operations.
+
+\subsection{Row Variables}
+\label{sec:row-vars}
+
+Row variables are the key mechanism for writing shape-polymorphic
+specifications. Borrowed from row polymorphism in type
+theory~\cite{remy1993type}, they represent an unknown sequence of axes.
+
+\begin{itemize}
+\item \spec{...} is a context-dependent ellipsis that introduces an anonymous
+  row variable for the enclosing axis kind.
+\item \spec{..name..} (or \spec{..n..} in single-character mode) is a named
+  row variable. Occurrences of the same name within a spec denote the same
+  row variable and must unify to the same sequence of axes.
+\end{itemize}
+
+Row variables implement the ``principle of least commitment'': a
+specification should constrain only the axes it cares about. For example,
+the softmax spec:
+\begin{lstlisting}
+x ++ " ... | t -> ... => ... | 0 -> ..."
+\end{lstlisting}
+reduces over the output axis named \spec{t} while preserving all batch axes,
+all other output axes, and all input axes---regardless of how many there are.
+Without row variables, this would require separate implementations for each
+possible axis count.
+
+Row variables in OCANNL interact with broadcasting: a row variable can unify
+with zero or more axes, and dim-1 axes introduced by broadcasting count as
+legitimate axes. The inference system resolves row variables progressively:
+first unifying what is determined by constraints, then closing remaining
+variables to their least upper bounds or to ``no further axes'' at later
+stages.
+
+\subsection{Dimension Units}
+\label{sec:units}
+
+Axes have optional semantic annotations called \emph{dimension units}
+(termed ``basis'' in the codebase). Unlike named tensors, where axes are
+identified by their names, OCANNL axes are identified \emph{positionally}
+and may optionally carry a unit that constrains matching: axes with different
+units cannot be unified.
+
+This design avoids two problems with named axes:
+\begin{enumerate}
+\item \textbf{Verbosity}: named axes require explicit labels on every axis of
+  every tensor. Positional identification builds on mathematical tradition
+  (linear algebra, Einstein notation) where position carries meaning.
+\item \textbf{Inference ambiguity}: when multiple axes share the same
+  semantic unit (e.g., two spatial dimensions both representing ``position''),
+  named-axis systems cannot determine which name goes where. Positional
+  identification with optional units avoids this entirely.
+\end{enumerate}
+
+For example, a unit \spec{"rgb"} attached to a dimension of size~3 denotes
+that an axis represents color channels. Shape inference ensures that axes
+unified with this one also have unit \spec{"rgb"} and size~3, providing
+semantic safety. But the axis is still identified by its position in the
+batch/input/output partition, not by its name.
+
+%% ============================================================
+\section{Constraint-Based Shape Inference}
+\label{sec:inference}
+
+\subsection{Representing Constraints}
+\label{sec:constraints}
+
+Shape inference maintains a global environment mapping dimension variables
+and row variables to their current knowledge:
+
+\begin{lstlisting}[language={},basicstyle=\small\ttfamily]
+dim_var (@$\mapsto$@) Solved(dim) | Bounds(lub, constraints, ordering)
+row_var (@$\mapsto$@) Solved(row) | Bounds(lub, constraints, ordering)
+\end{lstlisting}
+
+\noindent The constraint language includes:
+\begin{itemize}
+\item \textbf{Equations}: $d_1 = d_2$ (dimension equality), $r_1 = r_2$ (row
+  equality).
+\item \textbf{Inequalities}: $d_c \geq d_s$ (where $d_c$ is from a
+  super-tensor and $d_s$ from a sub-tensor, reflecting broadcasting),
+  $r_c \geq r_s$ (row inequality).
+\item \textbf{Dimension constraints}: minimum dimension, total element count.
+\item \textbf{Row constraints}: total element count (possibly involving
+  strided dimension variables), exact axis lists.
+\end{itemize}
+
+For ground dimensions, $n \geq m$ means either $n = m$ or $m = 1$
+(broadcasting). For ground rows, $q \geq r$ means $q$ has at least as many
+axes as $r$, and for each corresponding pair of dimensions, $q$'s dimension
+is $\geq$ $r$'s. This combines row polymorphism with nominal subtyping: the
+subtyping relation states that dimension-1 (no unit) is smaller than all
+dimensions.
+
+Einsum operations generate \emph{equations} (not inequalities), so they do
+not permit broadcasting---they require exact shape matching. Pointwise and
+compose operations generate inequalities, allowing broadcasting.
+
+\subsection{The Multi-Stage Solver}
+\label{sec:stages}
+
+Constraints are solved in stages, progressing from conservative (online,
+as tensors are composed) to aggressive (on demand, when dimensions or
+projections are needed):
+
+\begin{enumerate}
+\item \textbf{Stage~1 (online)}: Unification and constraint propagation as
+  tensor expressions are constructed. This resolves what can be determined
+  immediately.
+\item \textbf{Stage~2}: Force precision-related coefficients (byte sizes of
+  numeric types).
+\item \textbf{Stage~3}: Close row variables in \emph{terminal} (leaf) shapes
+  to their least upper bounds (LUBs). Terminal shapes are closed first
+  because their shapes can only be determined by downstream constraints (they
+  can always be broadcast), unlike composite shapes which are forced ``from
+  below'' by their components.
+\item \textbf{Stage~4}: Close terminal dimension variables with multiple
+  lower bounds to their LUBs. Resolve \code{Total\_elems} constraints where
+  row variables have been eliminated.
+\item \textbf{Stage~5}: Guess remaining terminal dimension variables to~1
+  (the broadcasting identity), unless prevented by \code{Total\_elems}
+  constraints. Resolve remaining row constraints heuristically.
+\item \textbf{Stage~6}: Extend LUB processing to non-terminal shapes. Set
+  remaining row variables to ``no further axes.''
+\item \textbf{Stage~7}: Close all remaining dimension variables to their
+  lower bounds or to~1.
+\end{enumerate}
+
+The terminal-first strategy (Stages 3--5 before 6--7) reflects an asymmetry:
+leaf tensors acquire shape information only from downstream constraints and
+broadcasting, so they must be resolved first. Composite tensors then get
+their shapes forced by their already-resolved components.
+
+\paragraph{Preventing premature guessing.}
+A subtle issue arises with strided dimensions (convolutions): if a dimension
+variable appears in the numerator of a \code{Total\_elems} constraint (e.g.,
+$\text{total} = \text{coeff} \times d / \text{denom}$), guessing $d = 1$
+prematurely can make the constraint unsatisfiable. The solver tracks these
+dependencies via a \code{has\_uniq\_constr\_unless} field: a numerator
+variable cannot be guessed to~1 unless at least one denominator variable is
+also prevented from guessing (breaking potential cycles).
+
+\subsection{Error Provenance}
+\label{sec:provenance}
+
+Each row carries a \emph{provenance} record tracking which einsum spec, tensor
+expression, or operation produced it. When unification fails---e.g., two axes
+have incompatible dimensions or units---the error message includes the
+provenance chain, allowing the user to trace the conflict back to the
+source-level einsum specification.
+
+%% ============================================================
+\section{OCaml Integration}
+\label{sec:ocaml}
+
+OCANNL integrates with OCaml via two PPX syntax extensions:
+\begin{itemize}
+\item \code{\%op}: for tensor expressions with automatic differentiation.
+  Records like \code{\{ w \}} declare learnable parameters.
+\item \code{\%cd}: for assignment computations (code generation without
+  gradient tracking).
+\end{itemize}
+
+Both extensions transform OCaml expressions, reinterpreting arithmetic
+operators as tensor operations and record syntax as tensor declarations. A
+unit parameter \code{()} separates configuration arguments (processed as
+plain OCaml) from tensor arguments (transformed by the extension):
+
+\begin{lstlisting}
+let%op mlp_layer ~label ~hid_dim () x =
+  relu (({ w } * x) + { b = 0.; o = [hid_dim] })
+\end{lstlisting}
+
+The record \code{\{ w \}} declares a parameter with default initialization;
+\code{\{ b = 0.; o = [hid\_dim] \}} declares a bias initialized to zero with
+explicit output dimensions. The \code{[hid\_dim]} syntax specifies a
+one-dimensional output of size \code{hid\_dim}. The \code{\%oc} anti-quotation
+escapes back to plain OCaml when needed inside a transformed expression.
+
+This design leverages OCaml's module system: the extensions require specific
+DSL modules in scope (\code{TDSL} for \code{\%op}, \code{NTDSL} for
+\code{\%cd}), which determine gradient tracking behavior. The modules are
+brought into scope uniformly via \code{open Ocannl.Operation.DSL\_modules}.
+
+%% ============================================================
+\section{Examples}
+\label{sec:examples}
+
+\subsection{Multi-Head Attention}
+\label{sec:attention}
+
+The multi-head attention mechanism illustrates several features working
+together. In OCANNL:
+
+\begin{lstlisting}
+let%op multi_head_attention ~label ~num_heads
+    ~d_k ~d_v ?temperature
+    ?(dropout_rate = 0.0) ()
+    ~train_step ?mask x =
+  let q = { w_q } * x in
+  let k = { w_k } * x in
+  let v = { w_v } * x in
+  let scores =
+    (q +* k " ... s | h d; ... t | h d
+             => ... s | t -> h" ["h"; "d"])
+    /. sqrt (dim d)
+  in
+  Shape.set_dim h num_heads;
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
+  let attn_weights =
+    softmax ~spec:" ... | t -> ..." ?temperature ()
+      (match mask with
+       | None -> scores
+       | Some mask -> where mask scores !.(-1e9))
+  in
+  let attn_weights =
+    dropout ~rate:dropout_rate ()
+      ~train_step attn_weights
+  in
+  { w_o } *
+    (attn_weights +* v
+       " ... s | t -> h; ... t | h e
+         => ... s | h e" ["e"])
+\end{lstlisting}
+
+Key observations:
+\begin{itemize}
+\item \textbf{Row variables} (\spec{...}): the batch dimensions are handled
+  polymorphically---the same code works for any number of batch axes.
+\item \textbf{Input--output split}: in the score computation,
+  \spec{... s | t -> h} makes \spec{t} (time/key positions) an output axis
+  and \spec{h} (heads) an input axis. This means the softmax reduces over
+  \spec{t} while keeping \spec{h} independent---exactly the attention
+  semantics.
+\item \textbf{Dimension capture}: \code{["h"; "d"]} captures the head and
+  key dimensions for scaling (\code{sqrt (dim d)}) and constraint setting
+  (\code{Shape.set\_dim h num\_heads}).
+\item \textbf{Implicit shapes}: the projection matrices \code{\{w\_q\}},
+  \code{\{w\_k\}}, \code{\{w\_v\}}, \code{\{w\_o\}} have their shapes
+  entirely inferred from context---no dimension annotations needed.
+\end{itemize}
+
+\subsection{Convolution}
+\label{sec:conv}
+
+A 2D convolution with configurable stride and kernel size:
+
+\begin{lstlisting}
+let%op conv2d ?(stride=1) ?(kernel_size=3) () x =
+  Shape.set_dim kh kernel_size;
+  Shape.set_dim kw kernel_size;
+  x +* "... | stride*oh+kh, stride*ow+kw, ic;
+        kh, kw, ic -> oc
+        => ... | oh, ow, oc" ["kh"; "kw"] { kernel }
+  + { bias = 0. }
+\end{lstlisting}
+
+The spec \spec{stride*oh+kh} expresses that input position =
+$\mathit{stride} \times \mathit{oh} + \mathit{kh}$. The inference system
+derives the output spatial dimensions from the input dimensions, stride, and
+kernel size. Row variables (\spec{...}) handle arbitrary batch dimensions.
+
+\subsection{Layer Normalization}
+\label{sec:layernorm}
+
+Layer normalization demonstrates dimension capture and reduction:
+
+\begin{lstlisting}
+let%op layer_norm ~label ?(epsilon = 1e-5) () x =
+  let mean =
+    x ++ " ... | ..d..  => ... | 0 " ["d"] in
+  let centered = (x - mean) /. dim d in
+  let variance =
+    (centered *. centered)
+      ++ " ... | ... => ... | 0 " in
+  let std_dev = sqrt (variance + !.epsilon) in
+  let normalized = centered /. std_dev in
+  ({ gamma = 1. } *. normalized) + { beta = 0. }
+\end{lstlisting}
+
+The spec \spec{... | ..d.. => ... | 0} reduces \emph{all} output axes to a
+scalar (0 denotes a removed axis), while the row variable \spec{..d..}
+captures the total output dimensionality for normalization. The named row
+variable means that however many output axes there are, they are all reduced
+and the product of their sizes is accessible via \code{dim d}.
+
+\subsection{Comparison with Other Frameworks}
+\label{sec:comparison}
+
+Table~\ref{tab:comparison} compares how a dot-product attention score
+computation is expressed across frameworks.
+
+\begin{table}[t]
+\caption{Attention score computation across frameworks.}
+\label{tab:comparison}
+\small
+\begin{tabular}{@{}lp{5.5cm}@{}}
+\toprule
+\textbf{Framework} & \textbf{Expression} \\
+\midrule
+NumPy &
+\texttt{np.einsum("bhsd,bhtd->bhst",\linebreak q, k) / sqrt(d\_k)} \\[3pt]
+PyTorch &
+\texttt{torch.matmul(q, k.transpose(-2,-1))\linebreak / math.sqrt(d\_k)} \\[3pt]
+einops &
+(no native einsum; reshape +\linebreak\texttt{torch.matmul}) \\[3pt]
+OCANNL &
+\texttt{(q +* k "...s|hd; ...t|hd\linebreak => ...s|t->h" ["h";"d"])\linebreak /. sqrt (dim d)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key differences:
+\begin{itemize}
+\item NumPy einsum requires the user to commit to exact axis counts
+  (\spec{bhsd})---adding a batch dimension requires changing the spec.
+  OCANNL's \spec{...} handles this polymorphically.
+\item PyTorch uses index-based transposition, obscuring the operation's intent.
+  OCANNL's spec makes the contraction pattern explicit.
+\item The OCANNL version captures \code{d} for scaling and \code{h} for
+  setting the number of heads, avoiding separate bookkeeping.
+\item The input/output distinction (\spec{t -> h} in the result) carries
+  semantic meaning: \spec{t} is an output axis (produced by the operation),
+  while \spec{h} is an input axis (preserved for the subsequent
+  value-weighting step).
+\end{itemize}
+
+%% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Einsum extensions.}
+The original einsum notation dates to NumPy~\cite{harris2020array} and has
+been adopted by TensorFlow and PyTorch. \texttt{opt\_einsum}~\cite{smith2018opt}
+optimizes contraction order but does not extend the notation.
+einops~\cite{rogozhnikov2022einops} extends einsum with reshape and repeat
+operations but does not support convolutions or constraint-based inference.
+OCANNL's generalized einsum subsumes standard contraction and adds strided
+iteration, convolution, and concatenation.
+
+\paragraph{Named tensors and axis labels.}
+PyTorch named tensors~\cite{chiang2021named} and
+torchdim/DumPy~\cite{ansel2024pytorch2} associate names with axes.
+Named axes improve readability but introduce inference challenges: when
+axes share semantic units, the mapping from names to positions becomes
+ambiguous. OCANNL's positional axes with optional units avoid this while
+providing semantic constraints.
+
+\paragraph{Dependent types for arrays.}
+Dex~\cite{paszke2021getting} uses dependent types with index sets to
+ensure shape safety. Futhark~\cite{henriksen2017futhark} uses size types.
+Both provide strong static guarantees but require explicit type annotations
+that OCANNL's inference makes unnecessary. OCANNL's approach is closer in
+spirit to Hindley-Milner inference: shapes are inferred from usage rather
+than declared.
+
+\paragraph{Row polymorphism.}
+Row polymorphism was introduced by R{\'e}my~\cite{remy1993type} for record
+types. It has been applied to effect systems~\cite{leijen2014koka} and
+extensible records. To our knowledge, OCANNL is the first system to apply
+row polymorphism to tensor shape inference, using row variables to represent
+unknown sequences of axes.
+
+%% ============================================================
+\section{Discussion and Future Work}
+\label{sec:discussion}
+
+\paragraph{Limitations.}
+OCANNL's shape system is currently monomorphic: variables are interpreted
+existentially, not universally. A tensor-producing function that is called
+twice shares shape variables between calls, which can over-constrain shapes.
+The workaround is the unit-parameter pattern (\code{let layer = make () in
+...}), which creates fresh variables per call. True shape polymorphism would
+require abstracting over fresh variables when forming tensor functions and
+freshening them at application sites---essentially an abstract interpretation
+mechanism. This is planned for a future version.
+
+\paragraph{Shape schemes.}
+A natural extension would be \emph{shape schemes}: universally quantified
+shape specifications that are freshened at each use site, analogous to
+type schemes in Hindley-Milner. This would eliminate the need for
+unit-parameter workarounds and enable shape-polymorphic libraries.
+
+\paragraph{Formal guarantees.}
+The current system relies on testing rather than formal proofs for
+correctness. Formalizing the constraint language and proving soundness of
+the multi-stage solver would strengthen confidence, particularly around the
+interaction of row variables with broadcasting and strided dimensions.
+
+%% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented OCANNL's shape inference system, which combines generalized
+einsum notation, row variables, and constraint-based inference to provide
+shape safety for deep learning code. The three axis kinds
+(batch/input/output) capture deep learning semantics naturally. Row variables
+enable the ``principle of least commitment''---specifications constrain only
+the axes that matter. The multi-stage solver resolves shapes before execution,
+with provenance-tracked error messages. Integration via OCaml PPX extensions
+provides an ergonomic surface syntax. Our examples demonstrate that this
+approach handles standard deep learning patterns (attention, convolutions,
+normalization) concisely and safely.
+
+OCANNL is open source and available at
+\url{https://github.com/ahrefs/ocannl}.
+
+%% ============================================================
+\bibliographystyle{ACM-Reference-Format}
+
+\begin{thebibliography}{10}
+
+\bibitem{chiang2021named}
+David Chiang, Alexander M.\ Rush, and Sasha Rush.
+\newblock Named tensor notation.
+\newblock In \emph{NeurIPS}, 2021.
+
+\bibitem{ansel2024pytorch2}
+Jason Ansel et al.
+\newblock {PyTorch 2}: Faster machine learning through dynamic {Python}
+  bytecode transformation and graph compilation.
+\newblock In \emph{ASPLOS}, 2024.
+
+\bibitem{paszke2021getting}
+Adam Paszke, Daniel~D.\ Johnson, David Duvenaud, Dimitrios Vytiniotis,
+  Alexey Radul, Matthew~J.\ Johnson, Jonathan Ragan-Kelley, and Dougal
+  Maclaurin.
+\newblock Getting to the point: Index sets and parallelism-preserving
+  autodiff for pointful array computation.
+\newblock \emph{Proc. ACM Program. Lang.}, 5(ICFP), 2021.
+
+\bibitem{henriksen2017futhark}
+Troels Henriksen, Niels G.~W.\ Serup, Martin Elsman, Fritz Henglein, and
+  Cosmin~E.\ Oancea.
+\newblock Futhark: Purely functional {GPU}-programming with nested
+  parallelism and in-place array updates.
+\newblock In \emph{PLDI}, 2017.
+
+\bibitem{rogozhnikov2022einops}
+Alex Rogozhnikov.
+\newblock Einops: Clear and reliable tensor manipulations with
+  Einstein-like notation.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem{remy1993type}
+Didier R{\'e}my.
+\newblock Type inference for records in a natural extension of {ML}.
+\newblock In Carl~A.\ Gunter and John~C.\ Mitchell, editors, \emph{Theoretical
+  Aspects of Object-Oriented Programming}, pages 67--95. MIT Press, 1993.
+
+\bibitem{harris2020array}
+Charles~R.\ Harris et al.
+\newblock Array programming with {NumPy}.
+\newblock \emph{Nature}, 585(7825):357--362, 2020.
+
+\bibitem{smith2018opt}
+Daniel G.~A.\ Smith and Johnnie Gray.
+\newblock opt\_einsum: A {Python} package for optimizing contraction order
+  for einsum-like expressions.
+\newblock \emph{JOSS}, 3(26):753, 2018.
+
+\bibitem{leijen2014koka}
+Daan Leijen.
+\newblock Koka: Programming with row polymorphic effect types.
+\newblock \emph{MSFP}, 153:100--126, 2014.
+
+\end{thebibliography}
+
+\end{document}
