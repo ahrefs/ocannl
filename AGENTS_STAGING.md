@@ -20,3 +20,17 @@ When a proposal describes a bug, check git history for prior fix commits before 
 As of commit e6ed2f21, `test/einsum/test_max_pool2d.ml` fails with `Map.of_alist_exn: duplicate key (Symbol 42)` in `shape.ml:derive_projections`. This is unrelated to concat work and should not block other PRs.
 
 <!-- End entry -->
+<!-- Entry: workshop-paper-coder | 2026-03-03T08:59:53+0100 -->
+### LaTeX compilation for workshop papers
+
+- The ACM `acmart` class requires `\country{}` in `\affiliation{}` or it errors. Use `[acmsmall,nonacm,review]` options for workshop drafts.
+- The `lstlisting` `escapeinside` option (e.g., `(@}{@)`) conflicts with `@` characters in OCaml operator names like `@^+`. Use `\texttt{}` instead of `\lstinline` for inline code containing `@`.
+- The `acmart` class already loads `amsmath`/`amssymb`; adding them again causes a `\Bbbk already defined` error.
+
+### Key source files for OCANNL shape system documentation
+
+- The actual multi-head attention implementation is at `lib/nn_blocks.ml:115-134` — this is the canonical example for papers/talks.
+- Shape inference documentation is split across three files: `docs/shape_inference.md` (internals, 357 lines), `docs/syntax_extensions.md` (user-facing syntax, 752 lines), `docs/slides-shapes_and_einsum.md` (presentation, 565 lines). All three are needed for a complete picture.
+- The inference pipeline is described as 7 stages in `shape_inference.md` but the stage table shows stages 1-7 (the doc mentions 8 stages in prose due to a fractional stage split).
+
+<!-- End entry -->
