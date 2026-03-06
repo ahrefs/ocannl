@@ -48,6 +48,7 @@ A possible route to learning OCANNL:
    1. The various tests.
    2. Shape inference details [docs/shape_inference.md](docs/shape_inference.md).
    3. Backend-independent optimizations [docs/lowering_and_inlining.md](docs/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
+   4. Precision inference [docs/precision_inference.md](docs/precision_inference.md).
 
 ### Using the tracing debugger with CUDA computations
 
