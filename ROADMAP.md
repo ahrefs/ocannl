@@ -238,8 +238,8 @@ This is a research-heavy milestone requiring ~2.5 months.
 ### Development Timeline
 - **Nov 2025**: Release v0.6.2
 - **Dec 2025**: Finish v0.6.3; outline paper, literature review
-- **Jan–Feb 2026**: Finish v0.6.4–0.6.5 (concatenation, RoPE, transformer)
-- **Feb–Mar 2026**: Finish v0.7.0 (frontend finalization); first draft with v0.7.0 examples
+- **Jan–Feb 2026**: Finish v0.6.4 (concatenation); RoPE and transformer delayed to v0.7.0
+- **Mar 2026+**: Finish v0.7.0 (frontend finalization, RoPE, transformer); first draft with v0.7.0 examples
 - **Apr–May 2026**: Paper revision and polish
 - **May–June 2026**: **Workshop submission deadline** (OCaml Workshop / FProPer)
 

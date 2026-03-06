@@ -178,9 +178,9 @@ The dependency on `cudajit` is optional so you have to install it first to enabl
 opam switch create . 5.3.0
 eval "$(opam env)"
 opam install . --deps-only
-dune build          # compiles and runs cram-style tests
-dune build @check   # compile-only (no test execution)
-dune runtest        # run the full test suite
+dune build @check                      # compile-only (no test execution)
+dune build                             # compiles and runs cram-style tests
+OCANNL_BACKEND=sync_cc dune runtest    # run the full test suite
 ```
 
 ### Code Organization
