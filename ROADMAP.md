@@ -41,7 +41,7 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 ### v0.6.4 — End of December 2025
 **Theme: Shape concatenation and position embeddings**
 
-- **Axis concatenation in einsum** (#49)
+- **Axis concatenation in einsum** (#49) ✓
   - Implement `^` syntax for tensor stacking/concatenation
   - Handle shifting as special case: `1^i=>i` for left shift
   - Handle padding as special case: `i=>1^i` for left padding
@@ -50,15 +50,13 @@ This roadmap outlines the development plan for OCANNL from the current state to 
   - Clarify design decisions
   - Document rationale
 
-- **RoPE and position embeddings** (#398)
-  - Rotary Position Embeddings implementation
-  - Other non-learned position embedding variants
+- **Sokoban CNN building block** ✓
+  - CNN building block for grid environments in `nn_blocks.ml`
 
-- **Transformer toy example** (#57)
-  - Fully working decoder-only autoregressive transformer
-  - Names dataset language model
+- ~~**RoPE and position embeddings** (#398)~~ — moved to v0.7.0
+- ~~**Transformer toy example** (#57)~~ — moved to v0.7.0
 
-### v0.7.0 — End of February 2026
+### v0.7.0 — In progress (was: End of February 2026)
 **Theme: Frontend finalization (paper-ready for workshop submissions)**
 
 This is the "paper-ready" release with mature frontend API.
@@ -77,8 +75,16 @@ This is the "paper-ready" release with mature frontend API.
 - **Tensor persistence** (#373)
   - Tensor saving, loading, and restoring
 
+- **RoPE and position embeddings** (#398) — moved from v0.6.4
+  - Rotary Position Embeddings implementation
+  - Other non-learned position embedding variants
+
+- **Transformer toy example** (#57) — moved from v0.6.4
+  - Fully working decoder-only autoregressive transformer
+  - Names dataset language model
+
 - **Documentation**
-  - Context API slides (README item 3)
+  - Context API documentation (`docs/tensors_and_contexts.md`) ✓
 
 Paper should use v0.7.0 examples demonstrating the mature frontend. Target venues: OCaml Workshop and FProPer (if it happens), both collocated with ICFP 2026. Workshop submission deadlines are typically May–June.
 
@@ -195,18 +201,17 @@ This is a research-heavy milestone requiring ~2.5 months.
 
 ## Key Milestones Summary
 
-| Version | Target | Duration | Key Deliverables |
-|---------|--------|----------|------------------|
-| v0.6.2  | End Nov 2025 | now | Menhir parser fixes, hidden dimension errors |
-| v0.6.3  | Mid-Dec 2025 | 2.5 weeks | Padding inference |
-| v0.6.4  | End Dec 2025 | 2 weeks | Shape concatenation |
-| v0.6.5  | Mid-Jan 2026 | 2 weeks | RoPE, transformer toy example |
-| v0.7.0  | End Feb 2026 | 2 weeks | **Frontend finalization (workshop paper-ready)** |
-| v0.7.1  | Mid-Mar 2026 | 6 weeks | Real-world examples, backend polish |
-| v0.7.2  | Mid-Apr 2026 | 4 weeks | Compiler optimizations, pool allocator |
-| v0.8    | Mid-Jun 2026 | 2 months | GPU tiling, megakernels |
-| v0.9    | Aug 24, 2026 | 2.5 months | Program search **(ICFP week)** |
-| v1.0    | End Oct 2026 | 2 months | Documentation, completeness, safety |
+| Version | Target | Status | Key Deliverables |
+|---------|--------|--------|------------------|
+| v0.6.2  | End Nov 2025 | done | Menhir parser fixes, hidden dimension errors |
+| v0.6.3  | Mid-Dec 2025 | done | Padding inference |
+| v0.6.4  | End Dec 2025 | done | Shape concatenation, Sokoban CNN |
+| v0.7.0  | In progress | ongoing | **Frontend finalization**, RoPE, transformer, persistence |
+| v0.7.1  | Mid-Mar 2026 | planned | Real-world examples, backend polish |
+| v0.7.2  | Mid-Apr 2026 | planned | Compiler optimizations, pool allocator |
+| v0.8    | Mid-Jun 2026 | planned | GPU tiling, megakernels |
+| v0.9    | Aug 24, 2026 | planned | Program search **(ICFP week)** |
+| v1.0    | End Oct 2026 | planned | Documentation, completeness, safety |
 
 ---
 
@@ -233,8 +238,8 @@ This is a research-heavy milestone requiring ~2.5 months.
 ### Development Timeline
 - **Nov 2025**: Release v0.6.2
 - **Dec 2025**: Finish v0.6.3; outline paper, literature review
-- **Jan–Feb 2026**: Finish v0.6.4–0.6.5 (concatenation, RoPE, transformer)
-- **Feb–Mar 2026**: Finish v0.7.0 (frontend finalization); first draft with v0.7.0 examples
+- **Jan–Feb 2026**: Finish v0.6.4 work (concatenation, Sokoban CNN); continue RoPE and transformer work under v0.7.0
+- **Feb–Mar 2026**: Continue v0.7.0 (frontend finalization, RoPE, transformer); first draft with v0.7.0 examples
 - **Apr–May 2026**: Paper revision and polish
 - **May–June 2026**: **Workshop submission deadline** (OCaml Workshop / FProPer)
 

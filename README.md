@@ -64,12 +64,14 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [x] Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
     - [x] Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
   - [x] Sokoban CNN building block.
-  - [ ] RoPE embeddings.
-  - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
-* **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
+  - [ ] RoPE embeddings. Moved to `0.7.0`.
+  - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer). Moved to `0.7.0`.
+* **0.7.0 (In progress; was End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
   - [ ] Cleanup of deprecated streams functionality.
   - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   - [ ] Tensor saving, loading, and restoring.
+  - [ ] RoPE embeddings.
+  - [ ] Transformer for the Names dataset.
 * **0.7.1 (Mid-Mar 2026): Real world examples.**
   - [ ] Add convnet examples: MNIST and CIFAR.
   - [ ] Tokenizers are being developed in the spin-off project [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) (opam package `dataprep`, currently unreleased).
@@ -188,7 +190,7 @@ Useful follow-up commands:
 
 ```bash
 # Run a small standalone example/test
-dune exec test/einsum/einsum_trivia_exec.exe
+dune exec test/operations/hello_world_dim1x1.exe
 
 # Run the test suite with the recommended backend
 OCANNL_BACKEND=sync_cc dune runtest
