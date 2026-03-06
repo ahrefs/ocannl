@@ -66,7 +66,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [x] Sokoban CNN building block.
   - [ ] RoPE embeddings. Moved to `0.7.0`.
   - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer). Moved to `0.7.0`.
-* **0.7.0 (In progress; was End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
+* **0.7.0 (in progress; was End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
   - [ ] Cleanup of deprecated streams functionality.
   - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   - [ ] Tensor saving, loading, and restoring.

@@ -56,7 +56,7 @@ This roadmap outlines the development plan for OCANNL from the current state to 
 - ~~**RoPE and position embeddings** (#398)~~ — moved to v0.7.0
 - ~~**Transformer toy example** (#57)~~ — moved to v0.7.0
 
-### v0.7.0 — In progress (was: End of February 2026)
+### v0.7.0 — in progress (was: End of February 2026)
 **Theme: Frontend finalization (paper-ready for workshop submissions)**
 
 This is the "paper-ready" release with mature frontend API.
@@ -206,7 +206,7 @@ This is a research-heavy milestone requiring ~2.5 months.
 | v0.6.2  | End Nov 2025 | done | Menhir parser fixes, hidden dimension errors |
 | v0.6.3  | Mid-Dec 2025 | done | Padding inference |
 | v0.6.4  | End Dec 2025 | done | Shape concatenation, Sokoban CNN |
-| v0.7.0  | In progress | ongoing | **Frontend finalization**, RoPE, transformer, persistence |
+| v0.7.0  | in progress | ongoing | **Frontend finalization**, RoPE, transformer, persistence |
 | v0.7.1  | Mid-Mar 2026 | planned | Real-world examples, backend polish |
 | v0.7.2  | Mid-Apr 2026 | planned | Compiler optimizations, pool allocator |
 | v0.8    | Mid-Jun 2026 | planned | GPU tiling, megakernels |
