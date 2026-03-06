@@ -34,3 +34,13 @@ As of commit e6ed2f21, `test/einsum/test_max_pool2d.ml` fails with `Map.of_alist
 - The inference pipeline is described as 7 stages in `shape_inference.md` but the stage table shows stages 1-7 (the doc mentions 8 stages in prose due to a fractional stage split).
 
 <!-- End entry -->
+<!-- Entry: gh-ocannl-299-followup-coder | 2026-03-03T17:02:37+0100 -->
+### Concat tests: unit-dim tensors may show `<not-hosted>` for values
+
+When a concat component has dim 1, its value tensor may be virtualized (inlined), causing `Train.printf` to show `<not-hosted>` for the value even after `Train.set_hosted`. The gradient tensor still prints fine. This is expected behavior from `virtualize_max_visits` optimization, not a bug.
+
+### Refactoring across `let rec ... and ...` mutual definitions
+
+In `assignments.ml`, `loop_accum` and `loop_accum_rev` are mutually recursive (`let rec ... and ...`). Shared helpers must be defined *before* the `let rec` block — they cannot be placed between `rec` and `and` definitions. The `is_allowed_by_concat` helper was placed just before the `let rec loop_accum` definition to be visible to both functions.
+
+<!-- End entry -->

@@ -274,6 +274,11 @@ let%track4_sexp to_low_level code =
     in
     Low_level.unflat_lines @@ padding_loops @ [ llc ]
   in
+  let is_allowed_by_concat ~concat_syms_opt ~block_iters i =
+    match concat_syms_opt with
+    | None -> true
+    | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
+  in
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
@@ -372,12 +377,7 @@ let%track4_sexp to_low_level code =
         let rhses_ll =
           Array.filter_mapi projections.project_rhs ~f:(fun i rhs_idcs ->
               try
-                let allow_by_concat =
-                  match concat_syms_opt with
-                  | None -> true
-                  | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
-                in
-                if not allow_by_concat then None
+                if not (is_allowed_by_concat ~concat_syms_opt ~block_iters i) then None
                 else
                   let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
                   Some (get rhses.(i) rhs_idcs)
@@ -557,12 +557,7 @@ let%track4_sexp to_low_level code =
         let targets =
           Array.filter_mapi projections.project_rhs ~f:(fun i lhs_idcs ->
               try
-                let allow_by_concat =
-                  match concat_syms_opt with
-                  | None -> true
-                  | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
-                in
-                if not allow_by_concat then None
+                if not (is_allowed_by_concat ~concat_syms_opt ~block_iters i) then None
                 else
                   let lhs_idcs = Array.map ~f:subst_index lhs_idcs in
                   Some (i, lhses.(i), lhs_idcs)
