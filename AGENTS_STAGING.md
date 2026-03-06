@@ -10,6 +10,14 @@ Repository docs suggest `dune exec bin/hello_world.exe`, but this worktree curre
 `OCANNL_BACKEND=sync_cc dune runtest` may fail due to unrelated existing test breakages in this branch state. For scoped changes, rely on `dune build @check` plus targeted runtime tests for the touched area.
 
 <!-- End entry -->
+<!-- Entry: watch-ocannl-README-md-b61f3434-codex | 2026-03-06T23:17:07+0100 -->
+### README commands should be validated against actual dune targets
+
+The repo-level README can drift away from runnable targets. In this worktree, `dune exec bin/hello_world.exe` is stale because `bin/` only exposes `compilation_speed`; a lightweight validated example is `dune exec test/operations/hello_world_dim1x1.exe`.
+
+For test guidance, prefer `OCANNL_BACKEND=sync_cc dune runtest` over plain `dune runtest`, and use `dune build @check` for a compile-only verification pass.
+
+<!-- End entry -->
 <!-- Entry: gh-ocannl-299-coder | 2026-03-02T12:40:17+0100 -->
 ### Pre-existing fixes may only need expected-file updates
 
