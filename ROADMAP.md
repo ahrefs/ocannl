@@ -206,12 +206,12 @@ This is a research-heavy milestone requiring ~2.5 months.
 | v0.6.2  | End Nov 2025 | done | Menhir parser fixes, hidden dimension errors |
 | v0.6.3  | Mid-Dec 2025 | done | Padding inference |
 | v0.6.4  | End Dec 2025 | done | Shape concatenation, Sokoban CNN |
-| v0.7.0  | in progress | — | **Frontend finalization**, RoPE, transformer, persistence |
-| v0.7.1  | TBD | — | Real-world examples, backend polish |
-| v0.7.2  | ~Mid-Apr 2026 | — | Compiler optimizations, pool allocator |
-| v0.8    | Mid-Jun 2026 | — | GPU tiling, megakernels |
-| v0.9    | Aug 24, 2026 | — | Program search **(ICFP week)** |
-| v1.0    | End Oct 2026 | — | Documentation, completeness, safety |
+| v0.7.0  | in progress | ongoing | **Frontend finalization**, RoPE, transformer, persistence |
+| v0.7.1  | TBD | planned | Real-world examples, backend polish |
+| v0.7.2  | ~Mid-Apr 2026 | planned | Compiler optimizations, pool allocator |
+| v0.8    | Mid-Jun 2026 | planned | GPU tiling, megakernels |
+| v0.9    | Aug 24, 2026 | planned | Program search **(ICFP week)** |
+| v1.0    | End Oct 2026 | planned | Documentation, completeness, safety |
 
 ---
 
