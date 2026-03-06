@@ -44,3 +44,21 @@ When a concat component has dim 1, its value tensor may be virtualized (inlined)
 In `assignments.ml`, `loop_accum` and `loop_accum_rev` are mutually recursive (`let rec ... and ...`). Shared helpers must be defined *before* the `let rec` block — they cannot be placed between `rec` and `and` definitions. The `is_allowed_by_concat` helper was placed just before the `let rec loop_accum` definition to be visible to both functions.
 
 <!-- End entry -->
+<!-- Entry: watch-ocannl-README-md-b61f3434-claude | 2026-03-06 -->
+### README/ROADMAP consistency
+
+When updating milestone dates or status in `README.md`, always update `ROADMAP.md` in the same change. The README explicitly points readers to `ROADMAP.md` for details, so inconsistencies between them are immediately visible and confusing.
+
+### Broken link: lowering_and_inlining.md
+
+The README referenced `arrayjit/lib/lowering_and_inlining.md` but the file lives at `docs/lowering_and_inlining.md`. When adding doc links, verify the target exists with `ls` before committing.
+
+### OCaml minimum version
+
+The project requires OCaml >= 5.3.0 (confirmed in both `arrayjit.opam` and `neural_nets_lib.opam`). This was not stated in the README prior to this task.
+
+### Recommended test backend
+
+Always use `OCANNL_BACKEND=sync_cc dune runtest` for local test verification. Plain `dune runtest` may use a different default backend with less stable test expectations.
+
+<!-- End entry -->
