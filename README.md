@@ -168,9 +168,20 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
 
 ## Installation
 
-Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
+OCANNL requires **OCaml >= 5.3.0**. Although the project is called `ocannl`, the main package is called `neural_nets_lib`, to avoid the (opam linter's) complaint that the name can be confused with other packages. This also clarifies that `ocannl` is composed of `arrayjit` and `neural_nets_lib`.
 
-The dependency on `cudajit` is optional so you have to install it first to enable the CUDA backend. The dependency on `metal` is MacOS-specific but automatic.
+The dependency on `cudajit` is optional so you have to install it first to enable the CUDA backend. The dependency on `metal` is macOS-specific but automatic.
+
+### Quickstart
+
+```bash
+opam switch create . 5.3.0
+eval "$(opam env)"
+opam install . --deps-only
+dune build          # compiles and runs cram-style tests
+dune build @check   # compile-only (no test execution)
+dune runtest        # run the full test suite
+```
 
 ### Code Organization
 
