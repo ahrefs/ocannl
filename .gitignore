@@ -42,6 +42,11 @@ ocannl_config-*
 log_files/
 build_files/
 
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+
 # AI interaction files
 .specstory/
 .qodo
