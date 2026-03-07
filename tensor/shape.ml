@@ -278,6 +278,15 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
 
+let check_dim_row_var_name_clash ~spec ~error_trace dim_var_env row_var_env =
+  Hashtbl.iter_keys dim_var_env ~f:(fun name ->
+      if Hashtbl.mem row_var_env name then
+        raise
+        @@ Row.Shape_error
+             ( "Name '" ^ name
+               ^ "' is used as both a dimension variable and a row variable in spec: " ^ spec,
+               error_trace ))
+
 let add_var_used_in_spec_or_compose row =
   match row with Row.Row_var { v; _ } -> Row.add_used_in_spec_or_compose v | _ -> ()
 
@@ -850,6 +859,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
           ls_lhs
       in
+      check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ] dim_var_env
+        row_var_env;
       (* Bind delayed_var_refs to the variables after they are created *)
       let extras_dim_refs =
         List.filter_map dim_refs ~f:(fun delayed_ref ->
@@ -1074,6 +1085,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
           ls_lhs
       in
+      check_dim_row_var_name_clash ~spec
+        ~error_trace:[ Shape_mismatch [ cur_sh; sh1; sh2 ] ]
+        dim_var_env row_var_env;
       (* Bind delayed_var_refs to the variables after they are created *)
       (* TODO: refactor to avoid duplication with the one for unary einsum *)
       let extras_dim_refs =
@@ -1305,6 +1319,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
           ls_lhs
       in
+      check_dim_row_var_name_clash ~spec
+        ~error_trace:[ Shape_mismatch (cur_sh :: rhses) ]
+        dim_var_env row_var_env;
       (* Bind delayed_var_refs to the variables after they are created *)
       let extras_dim_refs =
         List.filter_map delayed_vars ~f:(fun delayed_ref ->
@@ -2323,7 +2340,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
         raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
   result
 
-let shape_spec_to_dims_bio labels =
+let shape_spec_to_dims_bio ~spec ~sh_id labels =
   let dim_var_env = Hashtbl.create (module String) in
   let f _kind = function
     | Label s when String.contains s '=' -> (
@@ -2381,10 +2398,14 @@ let shape_spec_to_dims_bio labels =
         Row.Concat dims
   in
   let row_var_env = Hashtbl.create (module String) in
-  axes_spec_to_dims_bio ~row_var_env ~dim_var_env ~f labels
+  let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
+  check_dim_row_var_name_clash ~spec ~error_trace:[] dim_var_env row_var_env;
+  result
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
-  let batch, input, output = shape_spec_to_dims_bio ~sh_id:id @@ axis_labels_of_spec spec in
+  let batch, input, output =
+    shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec
+  in
   let result =
     {
       input;

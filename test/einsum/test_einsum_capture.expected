@@ -92,3 +92,10 @@ Test 4 - Complex interdependent constraints:
   Constraint resolution: p=4, q=5, r=6, s=5, t=4
   Expected: p=4, q=5, r=6, s=5, t=4 (with q=s and p=t constraints satisfied)
 === Pure shape inference tests completed ===
+
+=== Testing dim/row variable name clash detection ===
+Test 1 - PASS: Caught name clash for 'd': Name 'd' is used as both a dimension variable and a row variable in spec: ..d.., d; d, e => ..d.., e
+Test 2 - PASS: Caught name clash for 'v': Name 'v' is used as both a dimension variable and a row variable in spec: ..v.., v => v, ..v..
+Test 3 - PASS: No clash when dim and row var names differ
+Test 4 - PASS: Caught name clash in of_spec: Name 'x' is used as both a dimension variable and a row variable in spec: ..x.., x
+=== Dim/row variable name clash tests completed ===

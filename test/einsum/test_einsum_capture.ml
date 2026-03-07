@@ -398,8 +398,79 @@ let capture_for_shape_inference () =
 
   Stdio.printf "=== Pure shape inference tests completed ===\n"
 
+let test_dim_row_var_name_clash () =
+  let open Nn_blocks.DSL_modules in
+  Stdio.printf "\n=== Testing dim/row variable name clash detection ===\n";
+
+  (* Test 1: Binary einsum with name clash should raise Shape_error.
+     'd' appears as both a row variable (..d..) and a dim variable (bare d). *)
+  Tensor.unsafe_reinitialize ();
+  Shape.unsafe_reinitialize ();
+  (try
+     let%op x1 = { x1 = uniform1 (); o = [ 2; 3 ] } in
+     let%op y1 = { y1 = uniform1 (); o = [ 3; 4 ] } in
+     let%op _z1 = x1 +* "..d.., d; d, e => ..d.., e" y1 in
+     let ctx = Context.auto () in
+     let _ctx = Train.forward_once ctx _z1 in
+     Stdio.printf "Test 1 - FAIL: Should have raised Shape_error for name clash\n"
+   with
+  | Row.Shape_error (msg, _) when String.is_substring msg ~substring:"dimension variable" ->
+      Stdio.printf "Test 1 - PASS: Caught name clash for 'd': %s\n" msg
+  | Row.Shape_error (msg, _) ->
+      Stdio.printf "Test 1 - FAIL: Got Shape_error but wrong message: %s\n" msg
+  | exn ->
+      Stdio.printf "Test 1 - FAIL: Got unexpected exception: %s\n" (Exn.to_string exn));
+
+  (* Test 2: Unary einsum (permute) with name clash should raise Shape_error *)
+  Tensor.unsafe_reinitialize ();
+  Shape.unsafe_reinitialize ();
+  (try
+     let%op x2 = { x2 = uniform1 (); o = [ 2; 3; 4 ] } in
+     (* 'v' used as both row variable (..v..) and dim variable (v) *)
+     let%op _y2 = x2 ++ "..v.., v => v, ..v.." in
+     let ctx = Context.auto () in
+     let _ctx = Train.forward_once ctx _y2 in
+     Stdio.printf "Test 2 - FAIL: Should have raised Shape_error for name clash\n"
+   with
+  | Row.Shape_error (msg, _) when String.is_substring msg ~substring:"dimension variable" ->
+      Stdio.printf "Test 2 - PASS: Caught name clash for 'v': %s\n" msg
+  | Row.Shape_error (msg, _) ->
+      Stdio.printf "Test 2 - FAIL: Got Shape_error but wrong message: %s\n" msg
+  | exn ->
+      Stdio.printf "Test 2 - FAIL: Got unexpected exception: %s\n" (Exn.to_string exn));
+
+  (* Test 3: No clash - different names for dim and row vars should work *)
+  Tensor.unsafe_reinitialize ();
+  Shape.unsafe_reinitialize ();
+  (try
+     let%op x3 = { x3 = uniform1 (); o = [ 2; 3; 4 ] } in
+     let%op y3 = { y3 = uniform1 (); o = [ 3; 4; 5 ] } in
+     (* 'r' is row variable, 'a'/'b'/'c' are dim variables -- no clash *)
+     let%op _z3 = x3 +* "a, ..r..; ..r.., b => a, b" y3 in
+     let ctx = Context.auto () in
+     let _ctx = Train.forward_once ctx _z3 in
+     Stdio.printf "Test 3 - PASS: No clash when dim and row var names differ\n"
+   with exn ->
+     Stdio.printf "Test 3 - FAIL: Unexpected exception: %s\n" (Exn.to_string exn));
+
+  (* Test 4: of_spec with name clash should also raise Shape_error *)
+  Tensor.unsafe_reinitialize ();
+  Shape.unsafe_reinitialize ();
+  (try
+     (* 'x' used as both dim var and row var in a label spec *)
+     let _sh = Shape.of_spec ~debug_name:"clash_test" ~id:(-1) "..x.., x" in
+     Stdio.printf "Test 4 - FAIL: Should have raised Shape_error for of_spec name clash\n"
+   with
+  | Row.Shape_error (msg, _) when String.is_substring msg ~substring:"dimension variable" ->
+      Stdio.printf "Test 4 - PASS: Caught name clash in of_spec: %s\n" msg
+  | exn ->
+      Stdio.printf "Test 4 - FAIL: Got unexpected exception: %s\n" (Exn.to_string exn));
+
+  Stdio.printf "=== Dim/row variable name clash tests completed ===\n"
+
 let () =
   capture_for_computation ();
   test_set_dim_and_set_equal ();
   capture_for_shape_validation ();
-  capture_for_shape_inference ()
+  capture_for_shape_inference ();
+  test_dim_row_var_name_clash ()
