@@ -1,0 +1,12 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+HERE: test/einsum/test_cse.ml:24:21
+┌──────────────────────────────┐
+│[3]: *._cse_d shape 0:3       │
+│┌┬───────────────────────────┐│
+│││axis 0                     ││
+│├┼───────────────────────────┤│
+│││ 1.96e+2  1.44e+3  3.84e+3 ││
+│└┴───────────────────────────┘│
+└──────────────────────────────┘
+

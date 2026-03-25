@@ -131,8 +131,7 @@ let virtualize_settings =
     Utils.get_global_flag ~default:true ~arg_name:"inline_simple_computations"
   in
   let inline_complex_computations =
-    (* TODO(#351): change to true once CSE is implemented *)
-    Utils.get_global_flag ~default:false ~arg_name:"inline_complex_computations"
+    Utils.get_global_flag ~default:true ~arg_name:"inline_complex_computations"
   in
   {
     enable_device_only;
@@ -1214,6 +1213,157 @@ let simplify_llc llc =
   if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
   result
 
+(** Alpha-equivalence comparison for CSE: compare two [scalar_t] trees ignoring concrete
+    [scope_id] integers and fresh iterator symbols, but verifying cross-reference consistency
+    via renaming maps. *)
+let cse_equal_scalar s1 s2 =
+  let scope_renaming = Hashtbl.create (module Int) in
+  let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
+  let ids_equal (id1 : scope_id) (id2 : scope_id) =
+    Tn.equal id1.tn id2.tn
+    &&
+    match Hashtbl.find scope_renaming id1.scope_id with
+    | Some mapped -> Int.equal mapped id2.scope_id
+    | None ->
+        Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
+        true
+  in
+  let sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
+    match Hashtbl.find sym_renaming s1 with
+    | Some mapped -> Indexing.equal_symbol mapped s2
+    | None ->
+        Hashtbl.set sym_renaming ~key:s1 ~data:s2;
+        true
+  in
+  let idx_equal (i1 : Indexing.axis_index) (i2 : Indexing.axis_index) =
+    match (i1, i2) with
+    | Iterator s1, Iterator s2 -> sym_equal s1 s2
+    | Fixed_idx n1, Fixed_idx n2 -> Int.equal n1 n2
+    | Sub_axis, Sub_axis -> true
+    | Affine { symbols = syms1; offset = o1 }, Affine { symbols = syms2; offset = o2 } ->
+        Int.equal o1 o2
+        && List.equal
+             (fun (c1, s1) (c2, s2) -> Int.equal c1 c2 && sym_equal s1 s2)
+             syms1 syms2
+    | Concat ss1, Concat ss2 -> List.equal sym_equal ss1 ss2
+    | _ -> false
+  in
+  let rec equal_t (a : t) (b : t) : bool =
+    match (a, b) with
+    | Noop, Noop -> true
+    | Comment s1, Comment s2 -> String.equal s1 s2
+    | Seq (a1, a2), Seq (b1, b2) -> equal_t a1 b1 && equal_t a2 b2
+    | ( For_loop { index = i1; from_ = f1; to_ = t1; body = bd1; trace_it = tr1 },
+        For_loop { index = i2; from_ = f2; to_ = t2; body = bd2; trace_it = tr2 } ) ->
+        Int.equal f1 f2 && Int.equal t1 t2 && Bool.equal tr1 tr2
+        && sym_equal i1 i2
+        && equal_t bd1 bd2
+    | Zero_out tn1, Zero_out tn2 -> Tn.equal tn1 tn2
+    | Set { tn = tn1; idcs = i1; llsc = s1; _ }, Set { tn = tn2; idcs = i2; llsc = s2; _ } ->
+        Tn.equal tn1 tn2
+        && Array.equal idx_equal i1 i2
+        && equal_scalar s1 s2
+    | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
+    | _ -> false
+  and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
+    match (a, b) with
+    | Local_scope { id = id1; body = b1; orig_indices = oi1 },
+      Local_scope { id = id2; body = b2; orig_indices = oi2 } ->
+        Tn.equal id1.tn id2.tn
+        && Array.equal idx_equal oi1 oi2
+        && (Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
+            equal_t b1 b2)
+    | Get_local id1, Get_local id2 -> ids_equal id1 id2
+    | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
+    | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
+        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
+    | Ternop (op1, a1, a2, a3), Ternop (op2, b1, b2, b3) ->
+        Ops.equal_ternop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2 && equal_arg a3 b3
+    | Binop (op1, a1, a2), Binop (op2, b1, b2) ->
+        Ops.equal_binop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2
+    | Unop (op1, a1), Unop (op2, b1) -> Ops.equal_unop op1 op2 && equal_arg a1 b1
+    | Constant c1, Constant c2 -> Float.equal c1 c2
+    | Constant_bits i1, Constant_bits i2 -> Int64.equal i1 i2
+    | Embed_index idx1, Embed_index idx2 -> idx_equal idx1 idx2
+    | _ -> false
+  and equal_arg ((s1, p1) : scalar_arg) ((s2, p2) : scalar_arg) : bool =
+    Ops.equal_prec p1 p2 && equal_scalar s1 s2
+  in
+  equal_scalar s1 s2
+
+(** Eliminates common subexpressions within each statement's scalar expression tree.
+    Replaces duplicate [Local_scope] nodes (structurally identical modulo [scope_id])
+    with [Get_local] references to the first occurrence. *)
+let eliminate_common_subexpressions llc =
+  (* CSE operates within a single scalar expression tree per statement. *)
+  let cse_scalar llsc =
+    (* Association list: (representative Local_scope scalar, its scope_id) *)
+    let seen : (scalar_t * scope_id) list ref = ref [] in
+    let rec loop_scalar (llsc : scalar_t) : scalar_t =
+      match llsc with
+      | Local_scope { id; body; orig_indices } ->
+          (* Save seen list: inner definitions must not leak to sibling subtrees *)
+          let saved_seen = !seen in
+          (* First CSE within the body (bottom-up: inner scopes first) *)
+          let body = loop_proc body in
+          (* Restore: discard inner definitions, keep only those visible at this level *)
+          seen := saved_seen;
+          let result = Local_scope { id; body; orig_indices } in
+          (* Search for an alpha-equivalent Local_scope already seen at this level *)
+          let found =
+            List.find_map !seen ~f:(fun (prev_scalar, prev_id) ->
+                if cse_equal_scalar prev_scalar result then Some prev_id else None)
+          in
+          (match found with
+          | Some existing_id -> Get_local existing_id
+          | None ->
+              seen := (result, id) :: !seen;
+              result)
+      | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+          llsc
+      | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
+          Ternop (op, (loop_scalar s1, p1), (loop_scalar s2, p2), (loop_scalar s3, p3))
+      | Binop (op, (s1, p1), (s2, p2)) -> Binop (op, (loop_scalar s1, p1), (loop_scalar s2, p2))
+      | Unop (op, (s1, p1)) -> Unop (op, (loop_scalar s1, p1))
+    and loop_proc (llc : t) : t =
+      match llc with
+      | Noop -> Noop
+      | Comment _ | Staged_compilation _ | Zero_out _ -> llc
+      | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
+      | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+      | Set { tn; idcs; llsc; debug } ->
+          (* Each statement gets its own scope: codegen wraps in { } when local defs exist,
+             so sibling statements can't reference each other's Local_scope declarations. *)
+          let saved = !seen in
+          let llsc = loop_scalar llsc in
+          seen := saved;
+          Set { tn; idcs; llsc; debug }
+      | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
+          let saved = !seen in
+          let arg_scalar = loop_scalar arg_scalar in
+          seen := saved;
+          Set_from_vec { tn; idcs; length; vec_unop; arg = (arg_scalar, arg_prec); debug }
+      | Set_local (id, llsc) ->
+          let saved = !seen in
+          let llsc = loop_scalar llsc in
+          seen := saved;
+          Set_local (id, llsc)
+    in
+    loop_scalar llsc
+  in
+  let rec loop_proc (llc : t) : t =
+    match llc with
+    | Noop -> Noop
+    | Comment _ | Staged_compilation _ | Zero_out _ -> llc
+    | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
+    | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+    | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = cse_scalar llsc; debug }
+    | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
+        Set_from_vec { tn; idcs; length; vec_unop; arg = (cse_scalar arg_scalar, arg_prec); debug }
+    | Set_local (id, llsc) -> Set_local (id, cse_scalar llsc)
+  in
+  loop_proc llc
+
 let input_and_output_nodes optimized =
   ( Hashtbl.fold optimized.traced_store
       ~init:(Set.empty (module Tn), Set.empty (module Tn))
@@ -1248,7 +1398,9 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
     virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc
   in
   let llc =
-    simplify_llc @@ cleanup_virtual_llc reverse_node_map ~static_indices @@ virtual_llc_result
+    eliminate_common_subexpressions @@ simplify_llc
+    @@ cleanup_virtual_llc reverse_node_map ~static_indices
+    @@ virtual_llc_result
   in
   let merge_node =
     Option.map !merge_node_id ~f:(fun id -> Option.value_exn ~here:[%here] @@ Tnode.find ~id)
