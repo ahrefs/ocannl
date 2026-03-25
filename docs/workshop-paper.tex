@@ -282,6 +282,15 @@ This design avoids two problems with named axes:
   semantic unit (e.g., two spatial dimensions both representing ``position''),
   named-axis systems cannot determine which name goes where. Positional
   identification with optional units avoids this entirely.
+\item \textbf{Row variable compatibility}: row variables represent
+  unknown numbers of axes. Named-axis systems cannot express ``some
+  unknown axes with unknown names'' without reverting to positional
+  structure. OCANNL's positional axes compose naturally with row
+  variables.
+\item \textbf{Conciseness}: the same matrix multiplication is
+  \spec{"i,j;j,k=>i,k"} in OCANNL versus
+  \texttt{(A[i,k]*B[k,j]).sum(k).order(i,j)} in torchdim---positional
+  einsum is more compact for contraction-heavy patterns.
 \end{enumerate}
 
 For example, a unit \spec{"rgb"} attached to a dimension of size~3 denotes
@@ -572,12 +581,29 @@ OCANNL's generalized einsum subsumes standard contraction and adds strided
 iteration, convolution, and concatenation.
 
 \paragraph{Named tensors and axis labels.}
-PyTorch named tensors~\cite{chiang2021named} and
-torchdim/DumPy~\cite{ansel2024pytorch2} associate names with axes.
-Named axes improve readability but introduce inference challenges: when
-axes share semantic units, the mapping from names to positions becomes
-ambiguous. OCANNL's positional axes with optional units avoid this while
-providing semantic constraints.
+Three approaches to named dimensions have been explored.
+Named tensor notation~\cite{chiang2021named} formalizes attaching
+permanent string labels to axes, enabling type-like checking of
+dimension alignment.
+DumPy~\cite{dynomight2025dumpy} applies temporary string labels at
+operation sites and compiles to \texttt{jax.vmap}, achieving
+near-loop clarity without implicit broadcasting---external labels
+are discarded after each operation, validating OCANNL's approach of
+using temporary pseudo-labels in einsum specifications.
+Torchdim~\cite{devito2024torchdim} introduces first-class dimension
+objects with three rules~\cite{devito2024torchdim}: implicit batching
+over the union of dimensions, dimensions as dimension specifiers, and
+dimensions as index-range tensors. The third rule enables
+index-component operations (e.g., upper-triangular masks) that are
+complementary to einsum-based computation and could be adopted
+orthogonally. Torchdim has been upstreamed into PyTorch as
+\texttt{functorch.dim}~\cite{ansel2024pytorch2}.
+
+All three named-axis approaches face inference ambiguity when
+multiple axes share the same semantic unit.
+OCANNL's positional identification with optional units avoids this
+while row variables provide the flexibility that named approaches
+achieve through batching rules.
 
 \paragraph{Dependent types for arrays.}
 Dex~\cite{paszke2021getting} uses dependent types with index sets to
@@ -696,6 +722,17 @@ Daniel G.~A.\ Smith and Johnnie Gray.
 Daan Leijen.
 \newblock Koka: Programming with row polymorphic effect types.
 \newblock \emph{MSFP}, 153:100--126, 2014.
+
+\bibitem{dynomight2025dumpy}
+Dynomight.
+\newblock {DumPy}: {NumPy} except it's {OK} if you're dum.
+\newblock \url{https://dynomight.net/dumpy/}, 2025.
+
+\bibitem{devito2024torchdim}
+Zachary DeVito.
+\newblock Torchdim: First-class dimensions for {PyTorch}.
+\newblock \url{https://github.com/facebookresearch/torchdim}, 2024.
+\newblock Archived; upstreamed into PyTorch as \texttt{functorch.dim}.
 
 \end{thebibliography}
 
