@@ -1,0 +1,11 @@
+
+cse_d_fwd (): /* cse_d fwd */
+  for i7 = 0 to 2 { for i8 = 0 to 3 { r3x4_a[i7, i8] := 4*i7+i8; } }
+  for i9 = 0 to 3 { r4_b[i9] := i9; }
+  for i12 = 0 to 2 {
+    cse_d[i12] := (v1_c * v1_c {
+      v1_c := 0;
+      for i13 = 0 to 3 { v1_c := fma(r3x4_a[i12, i13], r4_b[i13], v1_c); }
+    });
+  }
+  /* end */

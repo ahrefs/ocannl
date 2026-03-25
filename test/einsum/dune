@@ -113,6 +113,40 @@
    "inline_permuted_view-c_fwd.ll.actual")))
 
 (test
+ (name test_cse)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_cse)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (target test_cse-cse_d_fwd.ll.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:test_cse.exe}
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/cse_d_fwd.ll %{target})))))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "test_cse-cse_d_fwd.ll.expected"
+   "test_cse-cse_d_fwd.ll.actual")))
+
+(test
  (name test_einsum_capture)
  (package neural_nets_lib)
  (deps
