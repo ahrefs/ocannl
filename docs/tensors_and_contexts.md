@@ -16,6 +16,7 @@ This document describes how to work with tensors and execution contexts in OCANN
   - [Context Creation](#context-creation)
   - [Compilation and Execution](#compilation-and-execution)
   - [Node Initialization Tracking](#node-initialization-tracking)
+  - [Execution Dependency Tracking](#execution-dependency-tracking)
 - [The Train Module](#the-train-module)
   - [Parameter Initialization](#parameter-initialization)
   - [Forward and Backward Passes](#forward-and-backward-passes)
@@ -293,6 +294,79 @@ let ctx = Context.init_from_host_deprecated ctx tensor.value
 
 (* Copy between contexts *)
 Context.copy ~src:ctx1 ~dst:ctx2 tensor.value
+```
+
+### Execution Dependency Tracking
+
+When multiple routines are compiled from the same context lineage, OCANNL tracks **execution dependencies** — a compile-time DAG that records which routines must execute before others based on tensor-node read/write hazards.
+
+#### Data Hazards
+
+Three classic data hazards are tracked between routines in the same compilation lineage:
+
+| Hazard | Rule | Example |
+|--------|------|---------|
+| **RAW** (Read After Write) | Routine reads a node last written by an earlier routine | `grad_routine` writes gradients, `sgd_routine` reads them |
+| **WAR** (Write After Read) | Routine writes a node last read by an earlier routine | `forward_routine` reads params, `sgd_routine` writes params |
+| **WAW** (Write After Write) | Routine writes a node last written by an earlier routine | Two routines both updating the same accumulator |
+
+#### Dependency Scope Mirrors Compilation Lineage
+
+Execution dependencies are scoped to compilation lineage, not to the root context. Compiling two routines from the *same* `Context.t` produces **independent siblings** — even if both routines write the same tensor node. Only routines compiled from the *returned* (child) context of a prior compilation see that prior routine in their frontier and can depend on it.
+
+```ocaml
+(* Sequential: b sees a in its frontier, may depend on a *)
+let ctx1, routine_a = Context.compile ctx0 comp_a bindings in
+let ctx2, routine_b = Context.compile ctx1 comp_b bindings in
+
+(* Sibling: b does NOT see a — independent even on shared nodes *)
+let ctx1, routine_a = Context.compile ctx0 comp_a bindings in
+let ctx2, routine_b = Context.compile ctx0 comp_b bindings in
+
+(* Via Train.to_routine: chains through Context.context *)
+let routine_a = Train.to_routine ctx comp_a bindings in
+let routine_b = Train.to_routine (Context.context routine_a) comp_b bindings in
+(* routine_b depends on routine_a — sequential via stored child context *)
+```
+
+#### API
+
+```ocaml
+(* Unique integer identifying the routine *)
+val routine_id : routine -> int
+
+(* Name of the routine, from backend compilation *)
+val routine_name : routine -> string
+
+(* Routine IDs that must execute before this routine *)
+val execution_deps : routine -> int list
+
+(* Whether all execution dependencies have been satisfied *)
+val can_run : t -> routine -> bool
+```
+
+#### Enforcement
+
+`Context.run` checks execution dependencies before running a routine. If any prerequisite routine has not been executed, it raises `Failure` with the missing dependency names. After successful execution, the routine is marked as executed in the shared ledger.
+
+Re-running a routine that has already executed is allowed — its dependencies remain satisfied.
+
+```ocaml
+(* Typical pattern: grad_update then sgd_update *)
+let grad_routine = Train.to_routine ctx bindings grad_comp in
+let sgd_routine = Train.to_routine (Context.context grad_routine) bindings sgd_comp in
+
+(* grad has no deps (first in lineage), sgd depends on grad *)
+assert (Context.can_run ctx grad_routine);
+assert (not (Context.can_run ctx sgd_routine));
+
+let ctx = Context.run ctx grad_routine in
+assert (Context.can_run ctx sgd_routine);
+let ctx = Context.run ctx sgd_routine in
+
+(* Re-execution works — deps are still satisfied *)
+let ctx = Context.run ctx grad_routine in
+let _ctx = Context.run ctx sgd_routine in
 ```
 
 ## The Train Module
