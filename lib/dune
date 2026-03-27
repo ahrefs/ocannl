@@ -21,6 +21,6 @@
    ppx_string
    ppx_ocannl
    ppx_minidebug))
- (modules train nn_blocks ocannl persistence)
+ (modules train nn_blocks ocannl)
  (modes best)
  (c_library_flags -lpthread))

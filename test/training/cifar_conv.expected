@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Loading CIFAR-10 dataset...
+CIFAR-10 loading failed (Dataprep.Cifar10 may need updating).
+
+Training complete! (skipped)
