@@ -23,26 +23,59 @@ type backend_wrapper =
     }
       -> backend_wrapper
 
+(** Immutable compile-time frontier for execution dependency tracking.
+    Each context carries its own frontier; only the context returned by [compile]
+    receives the updated frontier. The original context is unchanged.
+    This ensures that sibling compiles (from the same context) produce independent routines. *)
+type compile_frontier = {
+  last_writer : int Map.M(Tn).t;
+      (** For each tnode, the routine_id of the most recent routine that writes it. *)
+  last_readers : Set.M(Int).t Map.M(Tn).t;
+      (** For each tnode, the set of routine_ids that read it since the last write. *)
+}
+
+(** Shared mutable state for execution tracking, allocated once per root context.
+    Shared by reference across all contexts derived from the same root. *)
+type execution_ledger = {
+  mutable next_id : int;
+  routine_names : string Hashtbl.M(Int).t;
+  mutable executed : Set.M(Int).t;
+}
+
+let empty_frontier =
+  { last_writer = Map.empty (module Tn); last_readers = Map.empty (module Tn) }
+
+let create_ledger () =
+  { next_id = 0; routine_names = Hashtbl.create (module Int); executed = Set.empty (module Int) }
+
 type t = {
   backend_wrapper : (backend_wrapper[@sexp.opaque]);
   device_id : int;
   backend_name : string;
-  initialized_nodes : Set.M(Tn).t; (* Track which nodes have been initialized *)
+  initialized_nodes : Set.M(Tn).t;
+  frontier : (compile_frontier[@sexp.opaque]);
+  ledger : (execution_ledger[@sexp.opaque]);
 }
 [@@deriving sexp_of]
 
 type routine = {
-  (* TODO: Remove commented out fields if they prove to be unnecessary *)
   context : t;
   task : Ir.Task.t;
   bindings : Idx.lowered_bindings;
-  (* name : string; *)
-  inputs : Set.M(Tn).t; (* Nodes that need to be initialized before running *)
-  outputs : Set.M(Tn).t; (* Nodes that will be initialized after running *)
+  name : string;
+  inputs : Set.M(Tn).t;
+  outputs : Set.M(Tn).t;
+  routine_id : int;
+  execution_deps : Set.M(Int).t;
 }
 
 let bindings r = r.bindings
 let context r = r.context
+let routine_id r = r.routine_id
+let routine_name r = r.name
+let execution_deps r = Set.to_list r.execution_deps
+
+let can_run ctx routine = Set.is_subset routine.execution_deps ~of_:ctx.ledger.executed
 
 (** Create a context from a backend name *)
 let create_from_backend_name ~device_id backend_name =
@@ -56,7 +89,14 @@ let create_from_backend_name ~device_id backend_name =
     Wrapper { backend = (module Backend); device; device_id; stream; context }
   in
 
-  { backend_wrapper; device_id = 0; backend_name; initialized_nodes = Set.empty (module Tn) }
+  {
+    backend_wrapper;
+    device_id = 0;
+    backend_name;
+    initialized_nodes = Set.empty (module Tn);
+    frontier = empty_frontier;
+    ledger = create_ledger ();
+  }
 
 let cuda ?device_id () =
   let device_id = Option.value device_id ~default:0 in
@@ -96,8 +136,60 @@ let compile ctx comp bindings =
   let code = Backend.compile wrapper.context.optimize_ctx bindings comp in
   let backend_routine = Backend.link wrapper.context code in
 
-  (* Calculate required inputs: context nodes minus embedded nodes *)
-  (* Following backends.ml line 445 *)
+  (* Allocate unique ID from shared ledger *)
+  let id = ctx.ledger.next_id in
+  ctx.ledger.next_id <- id + 1;
+
+  (* Use backend routine's precise access sets for dependency tracking.
+     backend_routine.inputs = materialized read-only and read-before-write nodes.
+     backend_routine.outputs = all materialized written-to nodes. *)
+  let backend_inputs = backend_routine.inputs in
+  let backend_outputs = backend_routine.outputs in
+  let frontier = ctx.frontier in
+  let empty_int_set = Set.empty (module Int) in
+
+  (* RAW: for each backend input, depend on its last writer *)
+  let deps =
+    Set.fold backend_inputs ~init:empty_int_set ~f:(fun deps tn ->
+        match Map.find frontier.last_writer tn with
+        | Some writer_id -> Set.add deps writer_id
+        | None -> deps)
+  in
+
+  (* WAW + WAR: for each backend output, depend on last writer and all last readers *)
+  let deps =
+    Set.fold backend_outputs ~init:deps ~f:(fun deps tn ->
+        let deps =
+          match Map.find frontier.last_writer tn with
+          | Some writer_id -> Set.add deps writer_id
+          | None -> deps
+        in
+        match Map.find frontier.last_readers tn with
+        | Some readers -> Set.union deps readers
+        | None -> deps)
+  in
+
+  (* Build updated frontier (immutable — only in returned context) *)
+  let new_last_writer =
+    Set.fold backend_outputs ~init:frontier.last_writer ~f:(fun lw tn ->
+        Map.set lw ~key:tn ~data:id)
+  in
+  let new_last_readers =
+    Set.fold backend_outputs ~init:frontier.last_readers ~f:(fun lr tn -> Map.remove lr tn)
+  in
+  let pure_inputs = Set.diff backend_inputs backend_outputs in
+  let new_last_readers =
+    Set.fold pure_inputs ~init:new_last_readers ~f:(fun lr tn ->
+        let existing = Option.value (Map.find lr tn) ~default:empty_int_set in
+        Map.set lr ~key:tn ~data:(Set.add existing id))
+  in
+  let new_frontier = { last_writer = new_last_writer; last_readers = new_last_readers } in
+
+  (* Register in shared ledger *)
+  let name = backend_routine.name in
+  Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
+
+  (* Keep existing inputs computation for initialized_nodes check *)
   let context_nodes = Asgns.context_nodes ~use_host_memory:None comp.Asgns.asgns in
   let inputs = Set.diff context_nodes comp.Asgns.embedded_nodes in
 
@@ -105,17 +197,18 @@ let compile ctx comp bindings =
   let outputs = backend_routine.outputs in
 
   let updated_wrapper = Wrapper { wrapper with context = backend_routine.context } in
-
-  let updated_ctx = { ctx with backend_wrapper = updated_wrapper } in
+  let updated_ctx = { ctx with backend_wrapper = updated_wrapper; frontier = new_frontier } in
 
   let routine =
     {
       context = updated_ctx;
       task = backend_routine.schedule;
       bindings = backend_routine.bindings;
-      (* name = backend_routine.name; *)
+      name;
       inputs;
       outputs;
+      routine_id = id;
+      execution_deps = deps;
     }
   in
 
@@ -130,8 +223,25 @@ let run ctx routine =
      in
      failwith (Printf.sprintf "Context.run: required input nodes not initialized: %s" missing_names));
 
+  (* Check execution dependencies *)
+  let missing_deps = Set.diff routine.execution_deps ctx.ledger.executed in
+  (if not (Set.is_empty missing_deps) then
+     let dep_names =
+       Set.to_list missing_deps
+       |> List.filter_map ~f:(fun dep_id ->
+              Option.map (Hashtbl.find ctx.ledger.routine_names dep_id) ~f:(fun n ->
+                  Printf.sprintf "%s (id=%d)" n dep_id))
+       |> String.concat ~sep:", "
+     in
+     failwith
+       (Printf.sprintf "Context.run: routine %s (id=%d) has unexecuted dependencies: %s"
+          routine.name routine.routine_id dep_names));
+
   (* Run the routine's task/schedule *)
   Ir.Task.run routine.task;
+
+  (* Mark executed in shared ledger *)
+  ctx.ledger.executed <- Set.add ctx.ledger.executed routine.routine_id;
 
   (* Mark outputs as initialized and return updated context *)
   let initialized_nodes = Set.union ctx.initialized_nodes routine.outputs in

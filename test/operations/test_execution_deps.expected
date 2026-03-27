@@ -1,0 +1,24 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Test 1: RAW dependency ===
+sgd depends on grad: true
+sgd has deps: true
+Correct order (grad then sgd): OK
+
+=== Test 2: Disjoint routines ===
+x depends on y: false
+y depends on x: false
+can_run x: true
+can_run y: true
+Reverse order (y then x): OK
+
+=== Test 3: can_run ===
+can_run grad (before execution): true
+can_run sgd (before grad): false
+can_run sgd (after grad): true
+
+=== Test 4: Wrong order raises ===
+Wrong order raises Failure from Context.run: true
+
+=== Test 5: Re-execution (grad -> sgd -> grad) ===
+grad -> sgd -> grad: OK
