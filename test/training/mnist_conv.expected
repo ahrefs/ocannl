@@ -1,0 +1,24 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Loading MNIST dataset...
+Training on 2000 samples, testing on 1000 samples, batch_size=50
+
+Starting training for 100 epochs (4000 steps)...
+Epoch 10: avg loss = 2.20
+Epoch 20: avg loss = 2.10
+Epoch 30: avg loss = 2.04
+Epoch 40: avg loss = 1.98
+Epoch 50: avg loss = 1.94
+Epoch 60: avg loss = 1.91
+Epoch 70: avg loss = 1.88
+Epoch 80: avg loss = 1.86
+Epoch 90: avg loss = 1.84
+Epoch 100: avg loss = 1.83
+
+Evaluating on 1000 test samples...
+Test loss = 1.84
+Test accuracy = 27.9% (279/1000)
+Test loss below 2.0 = true
+Test accuracy above 25% = true
+
+Training complete!
