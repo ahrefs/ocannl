@@ -46,7 +46,15 @@ type shape = Shape.t = {
 
 The actual implementation is split into the `Row` module, which handles multi-row inference, and the `Shape` module which deals with the specific axis kinds (batch, input, output), _einsum_ specifications, and the shape-relevant semantics of operations expressed via the `Shape.logic` variant type. Since broadcasting extends leading axes (preserves trailing axes), substituting a `row_var` means prepending to the `dims` of the row that has the row variable as its `bcast` field.
 
-Labels are a part of OCANNL, but it's a topic that needs more exploration and future work. Currently, OCANNL has labeled dimensions, but not labeled axes. This means that when two axes need to agree on the number of dimensions, they also need to agree on the labels. If the dimensions of both axes have labels, the labels need to be the same, and if one doesn't have a label initially, it's inferred to have the label from the other axis. Intuitively, the label is a specification of the semantics of an axis that is more fine-grained than, but of similar nature as, the number of dimensions. Currently, there is no global check to prevent the same label be used with different numbers of dimensions (on unrelated axes). Example: a label `"rgb"` attached to dimensions size 3 to denote that an axis represents three channels "red", "green" and "blue".
+### Three kinds of labels
+
+OCANNL uses three distinct label-like mechanisms in its shape system. It is important to understand which is which:
+
+1. **Dimension labels (units/basis)**: stored as `label : string option` on `solved_dim`. These are semantic annotations on dimension *values* -- e.g., `"rgb"` on a dimension of size 3 means "this axis represents three RGB channels." Two dimensions that must agree in size must also agree on label (if both are labeled). Labels need not be unique within a row and are inferred during shape inference. They do not name the axis itself. See `Row.solved_dim` in `tensor/row.ml`.
+
+2. **Einsum pseudo-labels**: the single- or multi-character identifiers used in einsum notation (e.g., `i`, `j`, `k` in `"ij;jk=>ik"`). These are local to the notation -- they identify which axes correspond to each other within a single einsum spec but do not persist on the resulting tensor. See `Einsum_types.axis_spec` in `tensor/einsum_types.ml`.
+
+3. **Axis labels (planned, v1.1+)**: persistent names for axis *positions* within a row, stored as `axis_labels : string option list` on `Row.t`. Unlike dimension labels which annotate what a dimension measures (its unit), axis labels name the role the axis plays (e.g., `"seq_len"`, `"hidden"`). Axis labels are unique within a row, propagated during row unification, and checked for conflicts. They are strictly optional and do not change inference outcomes. See the design proposal in `docs/proposals/axis-labels.md`.
 
 ### Affine indexing and convolutions
 
