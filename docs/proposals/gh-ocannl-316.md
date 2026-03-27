@@ -1,101 +1,210 @@
-# DumPy and Torchdim Deep Dive: Named Dimensions vs OCANNL's Positional Design
+# DumPy and Torchdim Deep Dive: Dimension Naming Strategies Compared with OCANNL
 
 **Issue:** [ahrefs/ocannl#316](https://github.com/ahrefs/ocannl/issues/316)
 **Status:** Draft proposal
 **Date:** 2026-03-25
 
-## Sources Examined
+## Sources
 
 - **DumPy**: Blog article at [dynomight.net/dumpy](https://dynomight.net/dumpy/) (accessed 2026-03-25). PyPI package `dumpy-numpy`. ~700-line proof-of-concept built on JAX. The author explicitly states: "please do not attempt to use it for 'real work'."
-- **Torchdim**: GitHub repository at [facebookresearch/torchdim](https://github.com/facebookresearch/torchdim) (archived 2024-08-01, accessed 2026-03-25). Upstreamed into PyTorch as `functorch.dim`. The recommended import for modern PyTorch is `from functorch.dim import dims`. By Zachary DeVito (Meta AI).
+- **Torchdim**: GitHub repository at [facebookresearch/torchdim](https://github.com/facebookresearch/torchdim) (archived 2024-08-01, accessed 2026-03-25). Upstreamed into PyTorch as `functorch.dim`. By Zachary DeVito (Meta AI).
 - **PyTorch 2 paper**: Ansel et al., "PyTorch 2: Faster machine learning through dynamic Python bytecode transformation and graph compilation," ASPLOS 2024. Covers the `functorch.dim` integration.
 - **OCANNL**: Local codebase, primarily `tensor/row.ml`, `tensor/shape.ml`, `tensor/einsum_types.ml`, and `docs/shape_inference.md`.
 
 Terminology note: throughout this document, "torchdim" refers to the concept and library (including its upstream form `functorch.dim`). The archived GitHub repo and the PyTorch 2 paper describe the same system.
 
-## OCANNL's Current Design
+## Motivation
 
-OCANNL uses **positional axes grouped by kind** with **optional semantic annotations** on dimensions. This section restates the design from local sources.
+OCANNL uses positional axes with optional semantic labels ("dimension units" / "basis"), while DumPy and torchdim represent two distinct approaches to named dimensions. Understanding these alternatives is directly relevant to:
 
-### Axis identification: kind + position
+- **Workshop paper** (OCaml Workshop / FProPer, deadline May--June 2026): Section 5 "Dimension Units vs Axis Labels" and Section 8 "Related Work" need a rigorous comparison.
+- **The `label` to `basis` rename** (#298): the terminology must be grounded in a clear design argument distinguishing OCANNL's approach from named-axis systems.
+- **Missing primitives** (#308 Tensor Puzzles): torchdim's "dims as tensors" exposes a gap in OCANNL's expressiveness.
 
-Every tensor shape is organized as `batch | input -> output`. Axes are identified by their kind (batch, input, or output) and their position within that kind's row. There are no axis names.
+## Background: The Three Systems
 
-### Dimension labels (dimension units / basis)
+### DumPy — External Named Indices via `jax.vmap`
 
-From `tensor/row.ml` line 63:
-```ocaml
-type solved_dim = { d : int; label : string option; proj_id : proj_id option }
-```
+[DumPy](https://dynomight.net/dumpy/) is a ~700-line proof-of-concept built on JAX. Its design philosophy is: "loops were better" for readability, so provide loop-like syntax that compiles to vectorized GPU code.
 
-Labels are optional semantic annotations on individual dimensions, not axis identifiers. From `docs/shape_inference.md` (line 49):
+**Core mechanism:** Indexing an array with string labels creates a "mapped" array that appears to have fewer dimensions. When mapped arrays enter a function, JAX's `vmap` vectorizes over the mapped dimensions automatically.
 
-> "OCANNL has labeled dimensions, but not labeled axes. [...] the label is a specification of the semantics of an axis that is more fine-grained than, but of similar nature as, the number of dimensions."
-
-**Label checking** (`tensor/row.ml` lines 1599-1602): When `unify_dim` encounters two solved dimensions that both have labels, the labels must be identical or a `Shape_error` is raised. If only one has a label, the label propagates to the other.
-
-**Label propagation** (`tensor/row.ml` lines 408, 418, 434): Uses `Option.first_some` to merge labels during dimension construction (affine, concat operations).
-
-The codebase currently uses the term "label"; the workshop paper uses "dimension units"; issue #298 proposes renaming to "basis". All three refer to the same concept.
-
-### Einsum pseudo-labels
-
-From `tensor/einsum_types.ml` lines 17-30:
-```ocaml
-type axis_spec =
-  | Label of string
-  | Fixed_index of int
-  | Affine_spec of { stride : string; over_label : string; conv : conv_spec option; stride_offset : int }
-  | Concat_spec of string list
-```
-
-The `Label` variant in einsum specs represents local pseudo-labels used to align axes within a single specification. A spec like `"i,j;j,k=>i,k"` uses `i`, `j`, `k` as local variables — they are not stored on tensors and have no meaning outside the spec. Each einsum spec has its own `dim_var_env` (`tensor/shape.ml` lines 256-276).
-
-### Row variables
-
-From `tensor/row.ml` line 175:
-```ocaml
-type bcast = Row_var of { v : row_var; beg_dims : dim list } | Broadcastable
-```
-
-Row variables represent unknown numbers of axes, enabling the "principle of least commitment." A spec like `"... s | h d; ... t | h d => ... s | t -> h"` works regardless of how many batch dimensions precede the named axes.
-
-## DumPy Analysis
-
-### Core idea
-
-DumPy replaces NumPy's implicit broadcasting with explicit named-index notation that compiles to `jax.vmap`. Its three principles:
-
-1. Bring back explicit loop syntax and indices — make intent readable
-2. Don't actually execute loops — compile to vectorized operations
-3. Remove confusing features (broadcasting, fancy indexing, axis parameters)
-
-### Syntax
-
-**Named index notation:**
 ```python
-# Matrix multiply with explicit indices
+# Matrix multiply with explicit named indices
 Z['i','j'] = Y['j',:] @ dp.linalg.solve(A['i','j',:,:], X['i',:])
 
-# Broadcasting made explicit
-C['i','j','k'] = A['i','j'] * B['j','k']
+# Context manager variant
+with dp.Range(N) as i:
+    with dp.Range(M) as j:
+        Z[i,j] = A[i,:] @ B[:,j]
 ```
 
-**Range context manager** (loop-like syntax):
+**Key design decisions:**
+1. **No implicit broadcasting.** `A * B` only works if shapes are identical or one is scalar. Broadcasting must be spelled out via named indices.
+2. **External dimensions.** Labels are temporary (applied per operation, not stored on tensors). This avoids the ambiguity of permanent names in linear algebra (e.g., what dimensions should `A^T A` have?).
+3. **Functions restricted to 2D inputs.** Batching is handled entirely by the mapping layer, not by functions themselves.
+
+**Limitations:** Prototype quality ("please do not attempt to use it for 'real work'"); no partial indexing; no multi-array fancy indexing; functions limited to 2D.
+
+### Torchdim — First-Class Dimension Objects
+
+[Torchdim](https://github.com/facebookresearch/torchdim) by Zachary DeVito (Meta AI) extends PyTorch with dimension objects as first-class Python values. Now archived; upstreamed as `functorch.dim`.
+
+**Three fundamental rules:**
+
+1. **Implicit batching:** Operations batch over the union of first-class dimensions in their inputs.
+2. **Dims as dimension specifiers:** Wherever an integer specifies a dimension, a `Dim` object works too.
+3. **Dims are tensors:** A dim `d` acts as `[0, 1, ..., d.size-1]`, enabling index arithmetic.
+
 ```python
-Z = dp.Slot()
-with dp.Range(X.shape[0]) as i:
-    with dp.Range(Y.shape[0]) as j:
-        Z[i,j] = Y[j,:] @ dp.linalg.solve(A[i,j,:,:], X[i,:])
+# Binding positional to named
+batch, channel = dims(2)
+input_fc = input_positional[batch, channel]
+bias_fc = bias_positional[channel]
+result = input_fc + bias_fc  # Rule 1: batches over {batch, channel}
+
+# Einsum as multiply-then-sum (pattern-matched to matmul)
+i, j, k = dims(3)
+r = (A[i, k] * B[k, j]).sum(k)  # matrix multiply
+
+# Rule 3: dims as tensors
+i, j = dims(sizes=[4, 4])
+upper_tri = where(i <= j, 1, 0).order(i, j)
+
+# Reshape via tuples
+a = A[(i, j), k]          # split dim 0 into i and j
+r = a.order(i, (j, k))    # flatten j and k
 ```
 
-### Compilation to `jax.vmap`
+**Key advantages over string names:** No naming conflicts (object identity, not string equality); dims carry `.size` metadata; dims act as tensors (Rule 3 impossible with strings); reuses existing operators.
 
-Behind the scenes, DumPy maps array dimensions to string labels via `map_axes()`, automatically vectorizes operations matching labeled dimensions, and unmaps results back to concrete positions. The equivalent JAX code would require nested `vmap` calls with explicit `in_axes` — DumPy abstracts this away.
+**Performance:** ~2 microseconds overhead per operation on top of PyTorch's ~8 microseconds. Not a compiler -- an ergonomic layer on top of PyTorch's eager execution.
 
-### Usability evidence
+### OCANNL — Positional Axes with Optional Semantic Labels
 
-The author scores six problems on a "thinking required" scale (10 = trivial, 1 = painful):
+OCANNL identifies axes by **kind** (`Batch` / `Input` / `Output`) and **position** within that kind's row. Dimension labels are optional semantic annotations, not axis identifiers.
+
+```ocaml
+type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+(* row.ml:63 *)
+```
+
+From `shape_inference.md`: "OCANNL has labeled dimensions, but not labeled axes... The label is a specification of the semantics of an axis."
+
+Einsum notation uses **local pseudo-labels** that match axes by position within their kind:
+
+```
+"m,n ; n,k => m,k"
+```
+
+The labels `m`, `n`, `k` are local to this einsum specification. Row variables (`...`) represent unknown numbers of axes, enabling the "principle of least commitment."
+
+**Label checking** (`row.ml:1599`): Two solved dims with different labels raise `Shape_error`. One labeled + one unlabeled: label propagates. No global enforcement that the same label implies the same size.
+
+## Three-Way Comparison
+
+| Aspect | OCANNL | DumPy | Torchdim |
+|---|---|---|---|
+| **Axis identification** | Kind (B/I/O) + position | External string labels | First-class `Dim` objects |
+| **Label scope** | Local to einsum spec | Local to expression (temporary) | Object identity (scope of variable) |
+| **Permanence** | Labels on dims, not axes | Temporary (applied per op) | Semi-permanent (until `.order()`) |
+| **Broadcasting** | Implicit via kind matching + row vars | Forbidden implicitly; explicit only | Implicit over union of dims |
+| **Einsum** | String spec: `"i,j;j,k=>i,k"` | Standard `@` + named indices | Multiply + sum (pattern-matched) |
+| **Index arithmetic** | Affine indices: `stride*i+k` | Loop variables as values | Dims as tensors (Rule 3) |
+| **Reshape/split** | Concat spec: `a^b` in einsum | Not directly supported | Tuple indexing: `A[(i,j), k]` |
+| **Unknown axes** | Row variables (`...`) | Not supported | Not directly (dims have fixed size) |
+| **Semantic checking** | Label mismatch raises error | Type checking at operation site | Identity-based (objects, not strings) |
+| **Conflict avoidance** | N/A (positional) | Generated strings via `Range` | Object identity (no name collisions) |
+| **GPU execution** | C/CUDA/Metal code gen | `jax.vmap` | PyTorch eager |
+| **Compilation** | Ahead-of-time (JIT to C) | `jax.jit` | None (eager with pattern matching) |
+
+## The Core Design Argument
+
+**OCANNL's thesis:** Positional axes with optional semantic labels ("dimension units" / "basis") are superior to named axes for an einsum-based system with constraint-based shape inference.
+
+### Arguments for OCANNL's approach
+
+1. **Einsum notation is inherently positional.** Einstein summation notation uses positional index variables: `A_{ij} B_{jk} = C_{ik}` doesn't name the axes of A, B, C. OCANNL's einsum specs (`"i,j;j,k=>i,k"`) mirror this directly. Both DumPy and torchdim reintroduce the positional-to-named binding step that einsum notation was designed to avoid.
+
+2. **Row variables need positional structure.** OCANNL's row variables (`...` in einsum specs) represent unknown numbers of axes with unknown semantics. Named axes cannot easily express "some unknown number of axes with unknown names." This enables OCANNL's "principle of least commitment" in shape inference -- a tensor can be defined without knowing its full rank, and shape inference will deduce it from context.
+
+3. **Inference ambiguity with named axes.** When two axes share the same semantic name (e.g., two spatial dimensions both meaning "position"), named-axis systems must disambiguate. Positional systems don't have this problem. Torchdim solves this with object identity (two `i = dims(1)` calls create distinct objects), but this means the "name" is really a memory address, not a semantic label.
+
+4. **Orthogonal concerns.** Axis *identification* (which axis am I operating on?) and axis *semantics* (what does this axis mean?) are separate. OCANNL separates them cleanly: position handles identification, labels handle semantics. In torchdim and DumPy, the name serves both roles, which creates tension (e.g., DumPy explicitly avoids permanent names because of the `A^T A` ambiguity).
+
+5. **Compactness.** Named axes require naming every axis in every operation. Torchdim: `(A[i,k] * B[k,j]).sum(k).order(i,j)`. OCANNL einsum: `"i,k;k,j=>i,j"`. The positional spec is more compact and closer to mathematical convention.
+
+6. **Constraint-based inference.** OCANNL's shape inference maintains an environment of dimension and row variable constraints, solved through unification and subtyping. This machinery works naturally with positional axes and row variables. Adapting it to named axes would require a fundamentally different approach -- name-based unification rather than position-based -- with less clear semantics for broadcasting and unknown-rank tensors.
+
+### Arguments against (from DumPy/torchdim perspective)
+
+1. **Positional is error-prone.** Transposing a positional tensor silently changes which axis is which. Named axes catch this at the operation site.
+
+2. **Self-documenting.** `input[batch, channel, height, width]` is clearer than positional `input` with axes 0,1,2,3. OCANNL's axis kinds (B/I/O) provide partial self-documentation, but within a kind, axes are distinguished only by position.
+
+3. **Implicit batching is powerful.** Torchdim's Rule 1 (batch over union of dims) is elegant and eliminates explicit batch-axis management. OCANNL handles batching via the batch axis kind in einsum specs, which is comparable in power but requires the user to know the batch structure.
+
+4. **Index arithmetic as tensor operations.** Torchdim's Rule 3 -- a dimension acts as `[0, 1, ..., n-1]` -- enables `where(i <= j, 1, 0)` for upper triangular masks. OCANNL currently has no equivalent (see "Transferable Ideas" below).
+
+### Synthesis for the workshop paper
+
+The paper should argue that **named dimensions and positional dimensions are complementary strategies optimized for different programming models:**
+
+- **Named dimensions** (DumPy, torchdim) excel in *imperative* tensor programming where operations are composed step-by-step and each tensor's role must be clear at every point.
+- **Positional dimensions** (OCANNL) excel in *declarative, einsum-based* systems where operations are specified as index-contraction patterns and shape inference handles the plumbing.
+
+OCANNL's optional semantic labels ("basis") occupy a principled middle ground: they provide semantic checking (label mismatch raises `Shape_error`) without conflating identification with semantics. The label `"rgb"` on a dimension of size 3 means "this axis represents color channels" -- it doesn't identify the axis (position does that) or participate in matching (einsum pseudo-labels do that).
+
+## Transferable Ideas
+
+### From torchdim (high value)
+
+**1. Dims-as-tensors / index-component primitive.**
+
+Torchdim's Rule 3 is the most significant gap relative to OCANNL. A dimension `d` acting as `[0, 1, ..., d.size-1]` enables:
+- `eye(n)` as `where(i == j, 1, 0)`
+- `triu(A)` as `where(i <= j, A, 0)`
+- `diag(v)` as `where(i == j, v, 0)`
+- Attention masks, causal masks, relative position encodings
+
+OCANNL currently cannot express these without explicit array initialization. The Tensor Puzzles analysis (#308) identified this as a gap.
+
+**Proposed approach:** Add an `Iota` (or `Arange`) terminal type that creates a 1D tensor whose values are `[0, 1, ..., n-1]` where `n` is the axis dimension. This integrates naturally with OCANNL's existing `Fixed_index` mechanism in einsum specs but operates on *values* rather than *indices*. It could be exposed as:
+
+```ocaml
+(* New terminal: generates index values along one axis *)
+let iota ~d = (* tensor with shape [d] and values 0..d-1 *)
+```
+
+Combined with OCANNL's existing element-wise operations and einsum, this would unlock the operations listed above. This is a narrower, more compositional approach than torchdim's Rule 3 (which overloads the meaning of dimension objects themselves).
+
+**Effort:** Small-medium. The terminal itself is trivial; the main work is ensuring it participates correctly in shape inference and code generation. Could be tracked as an extension to #308.
+
+**2. Tuple-based reshape syntax.**
+
+Torchdim's `A[(i,j), k]` for splitting and `a.order(i, (j,k))` for flattening is more general than OCANNL's concat spec (`a^b`). However, OCANNL's concat spec already covers the primary use cases (concatenation, splitting, shifting, padding), and its integration with shape inference is mature. The generalization to arbitrary nested tuples would add complexity without clear benefit at this stage.
+
+**Assessment:** Low priority. OCANNL's `^` syntax in einsum is adequate.
+
+### From DumPy (medium value)
+
+**3. Strict broadcasting mode.**
+
+DumPy forbids implicit broadcasting entirely, requiring explicit index annotation. OCANNL currently uses implicit broadcasting (a dim-1 axis broadcasts to any size). A "strict broadcasting" mode that requires all broadcasting to be specified in einsum notation would catch subtle shape bugs.
+
+**Proposed approach:** A per-operation or per-module flag that causes shape inference to use equations instead of inequalities for all axis matching (not just einsum). This is already the behavior for einsum operations -- it would extend the same discipline to `Pointwise_bin` and `Compose` operations.
+
+**Effort:** Small. The constraint generation in `get_inequalities` (`shape.ml`) already distinguishes between einsum (equations) and pointwise/compose (inequalities). A flag to force equations globally would be straightforward.
+
+**4. External dimension labeling validation.**
+
+DumPy's temporary labels validate OCANNL's approach: labels applied per-operation (DumPy) are conceptually equivalent to labels local to an einsum spec (OCANNL). Both systems keep names external to the tensor's identity. This is a design validation, not a transferable feature.
+
+### From both (conceptual value)
+
+**5. Loop mental model for documentation.**
+
+Both DumPy and torchdim use "think of it as a loop" as the primary mental model for understanding vectorized operations. The DumPy author scores six problems on a "thinking required" scale (10 = trivial, 1 = painful):
 
 | Method | Mean Score |
 |--------|-----------|
@@ -106,183 +215,46 @@ The author scores six problems on a "thinking required" scale (10 = trivial, 1 =
 
 DumPy achieves near-loop clarity with GPU performance. Multi-head attention scores 10/10 in DumPy vs 1/10 in NumPy.
 
-### Design tradeoffs
+OCANNL's einsum notation is more compact but less immediately readable to newcomers. Documentation and tutorials should emphasize the loop-equivalent reading of einsum specs:
 
-**Strengths:**
-- Explicit intent: every dimension is labeled at the operation site
-- No implicit broadcasting eliminates a class of silent shape bugs
-- Loop-like readability with vectorized execution
-- External (temporary) labels: applied per operation, not stored on tensors
-
-**Limitations:**
-- Prototype only (~700 lines, not maintained)
-- All functions accept maximum 2D inputs; higher dims need explicit indices
-- No partial indexing (e.g., `A[2]` shorthand not allowed)
-- Only one non-scalar array index per operation
-- No performance benchmarks provided
-
-### Relevance to OCANNL
-
-DumPy's temporary external labels are conceptually close to OCANNL's einsum pseudo-labels. Both systems apply names at operation sites and discard them afterward, rather than permanently labeling axes. This validates OCANNL's approach. The key difference: DumPy replaces implicit broadcasting entirely, while OCANNL retains it (controlled by axis kinds and row variables).
-
-## Torchdim Analysis
-
-### Core idea
-
-Torchdim extends PyTorch with first-class dimension objects — Python objects, not strings or integers — that unify named tensors, einsum, automatic batching, and loop-style indexing under a single abstraction.
-
-### Three fundamental rules
-
-**Rule 1 — Implicit batching:** Operations batch over the union of first-class dimensions in their inputs.
-```python
-batch, channel = dims(2)
-input = torch.rand(128, 32)[batch, channel]
-bias = torch.rand(32)[channel]
-result = input + bias  # result.dims == (batch, channel)
+```
+"i,k ; k,j => i,j"    reads as:    for i, for j: sum over k of A[i,k] * B[k,j]
 ```
 
-**Rule 2 — Dims as dimension specifiers:** Wherever an integer specifies a dimension, a `Dim` object works too.
-```python
-batch, channel, width, height = dims(4)
-input = torch.rand(2, 3, 224, 224)[batch, channel, width, height]
-avg_pixel_color = input.mean((width, height))  # dims: (batch, channel)
-```
-
-**Rule 3 — Dims are tensors:** A dimension `d` acts as `[0, 1, ..., d.size-1]`, enabling index arithmetic.
-```python
-i, j = dims(sizes=[4, 4])
-upper_tri = where(i <= j, 1, 0).order(i, j)  # upper triangular mask
-```
-
-### Multiply-then-sum pattern matching
-
-Torchdim pattern-matches the multiply-then-sum idiom and dispatches to optimized matmul kernels:
-```python
-i, j, k = dims(3)
-r = (A[i, k] * B[k, j]).sum(k)  # recognized as matmul, not elementwise * then sum
-```
-
-This appears throughout examples: attention scores, Gram matrices, relative positional embeddings.
-
-### Tuple-based reshape
-
-Tuples of dimensions enable splitting and flattening:
-```python
-i, j, k = dims(3)
-j.size = 2
-a = A[(i, j), k]       # split dim 0 into i and j
-r = a.order(i, (j, k)) # flatten j and k
-```
-
-### Advantages over string-named dimensions (PyTorch Named Tensors)
-
-- **No naming conflicts**: Two `i = dims(1)` in different scopes are distinct objects
-- **Dims carry metadata**: `.size` property, can be passed as function arguments
-- **Rule 3 is impossible with strings**: Strings can't act as tensors
-- **Reuses existing operators**: No new vocabulary needed
-
-### Performance and status
-
-- The README notes "there are known places where performance can be improved" (preview release)
-- Torchdim is not a compiler — it's an ergonomic layer over eager PyTorch
-- Repository archived 2024-08-01; upstreamed as `functorch.dim`
-- Preview release for API feedback
-
-### Relevance to OCANNL
-
-Torchdim's Rule 3 (dims-as-tensors) is the most significant insight for OCANNL. It enables index-component operations (`eye`, `triu`, `diag`, sequence masks) that OCANNL currently cannot express. The multiply-then-sum pattern matching validates einsum-style contraction but uses a more verbose syntax. Torchdim's implicit batching (Rule 1) overlaps with OCANNL's batch axis kind.
-
-## Three-Way Comparison
-
-| Aspect | OCANNL | DumPy | Torchdim |
-|--------|--------|-------|----------|
-| **Axis identification** | Kind (B/I/O) + position | External string labels | First-class Dim objects |
-| **Label scope** | Local to einsum spec | Local to expression (temporary) | Object identity (scope of variable) |
-| **Permanence** | Labels on dims, not axes | Temporary (per operation) | Semi-permanent (until `.order()`) |
-| **Broadcasting** | Implicit via kind matching + row vars | Explicit (forbidden implicitly) | Implicit over union of dims |
-| **Einsum** | String spec: `"i,j;j,k=>i,k"` | Standard `@` + named indices | Multiply + sum (pattern-matched) |
-| **Index arithmetic** | Affine indices in einsum: `stride*i+k` | Loop variables as values | Dims as tensors (Rule 3) |
-| **Reshape/split** | Concat spec: `a^b` in einsum | Not directly supported | Tuple indexing: `A[(i,j), k]` |
-| **Unknown axes** | Row variables (`...`) | Not supported | Not supported (dims have fixed size) |
-| **Semantic checking** | Label mismatch -> error | Type checking at operation site | Identity-based (objects) |
-| **Conflict avoidance** | N/A (positional) | Unique string generation via Range | Object identity (no collisions) |
-| **GPU execution** | C/CUDA/Metal code gen | `jax.vmap` | PyTorch eager |
-| **Compilation** | Ahead-of-time (JIT to C) | `jax.jit` | None (eager with pattern matching) |
-
-## Design Argument: Why Positional + Units for Einsum-Based Systems
-
-**Scope of the claim**: Positional axes with optional dimension units are preferable specifically for systems built around einsum-based notation with constraint-based shape inference and row variables. This is NOT a blanket argument against named dimensions — imperative tensor programming genuinely benefits from named axes.
-
-### Arguments for positional + units
-
-**1. Einsum notation is inherently positional.** Einstein summation uses local index variables over positional axes: $A_{ij} B_{jk} = C_{ik}$ doesn't name the axes of A, B, C. OCANNL's einsum specs (`"i,j;j,k=>i,k"`) mirror this mathematical tradition directly.
-
-**2. Inference ambiguity with named axes.** When two axes of the same tensor share the same semantic meaning (e.g., two spatial dimensions both representing "position"), named-axis systems must disambiguate. Positional systems don't have this problem — axes are distinguished by position within their kind. Example: a 2D convolution kernel has two spatial axes with identical semantics but different roles (height vs. width). Position distinguishes them naturally.
-
-**3. Row variables require positional structure.** Row variables represent "some unknown number of axes." Named-axis systems cannot express "some unknown axes with unknown names" — the names would need to be generated or omitted, falling back to positional structure anyway. OCANNL's positional axes compose naturally with row variables, enabling the "principle of least commitment."
-
-**4. Orthogonal concerns.** Axis *identification* (which axis am I operating on?) and axis *semantics* (what does this axis mean?) are separate concerns. OCANNL separates them cleanly: position handles identification, dimension units handle semantics. Named-axis systems conflate these — the name serves both as identifier and semantic annotation.
-
-**5. Conciseness.** The same matrix multiplication:
-- OCANNL: `"i,j;j,k=>i,k"` (14 characters)
-- Torchdim: `(A[i,k] * B[k,j]).sum(k).order(i,j)` (38 characters)
-- DumPy: `C['i','j','k'] = A['i','k'] * B['k','j']` (with sum implicit in `@`)
-
-Einsum specs are more compact for contraction-heavy patterns.
-
-### Counterarguments: where named dims are genuinely stronger
-
-**1. Self-documenting code.** `input[batch, channel, height, width]` is immediately readable. Positional `input` with axes 0,1,2,3 requires context.
-
-**2. Transposition safety.** Transposing a positional tensor silently changes axis semantics. Named axes catch this class of error.
-
-**3. Implicit batching is elegant.** Torchdim's Rule 1 (batch over union of dims) eliminates explicit batch-axis management. OCANNL's batch axis kind achieves the same effect but requires explicit `batch |` in einsum specs.
-
-**4. Index arithmetic.** Torchdim's Rule 3 (`where(i <= j, 1, 0)` for upper triangular masks) is more natural than any current OCANNL approach. This is a real gap.
-
-### Synthesis
-
-Named dimensions have real advantages for imperative tensor programming. But for einsum-based declarative systems with constraint-based shape inference, positional axes with optional semantic annotations are cleaner: they avoid inference ambiguity, compose with row variables, and are more concise. The two approaches are not mutually exclusive — OCANNL could adopt specific ideas (especially dims-as-tensors) orthogonally.
-
-## Transferable Ideas
-
-### Worth pursuing
-
-**1. Dims-as-tensors / arange primitive** (from torchdim Rule 3)
-- **What**: A dimension acts as its index range `[0, 1, ..., n-1]`. This enables `eye`, `triu`, `diag`, sequence masks.
-- **Why**: OCANNL currently cannot express index-component operations. This was identified as a gap in the Tensor Puzzles analysis (#308).
-- **How**: Add an `arange`-like primitive or allow dimension variables to be used as tensor values within einsum or `%op` expressions.
-- **Priority**: High. Addresses a concrete expressiveness gap.
-- **Maps to**: gh-ocannl-308 (tensor puzzles), potentially a new issue for the primitive itself.
-
-**2. Strict broadcasting mode** (from DumPy)
-- **What**: An optional mode where implicit broadcasting is forbidden and all axis alignment must be specified in einsum notation.
-- **Why**: DumPy demonstrates that forbidding implicit broadcasting eliminates a class of silent shape bugs. OCANNL could offer this as an opt-in safety feature.
-- **How**: A configuration flag or einsum modifier that requires all dimensions to be explicitly matched.
-- **Priority**: Medium. Safety feature, not blocking.
-
-### Worth documenting only
-
-**3. Multiply-then-sum pattern recognition** (from torchdim)
-- Torchdim's `(A[i,k] * B[k,j]).sum(k)` being pattern-matched to matmul is elegant, but OCANNL's einsum spec `"i,j;j,k=>i,k"` already compiles directly to the right kernel. No action needed — but the comparison is useful for the paper.
-
-**4. Loop mental model for documentation** (from both DumPy and torchdim)
-- Both systems use "think of it as a loop" as the primary teaching tool. OCANNL's einsum notation is more compact but less immediately readable to newcomers. Documentation and teaching materials should emphasize loop-equivalent readings of einsum specs.
-- **Priority**: Medium for documentation, not for implementation.
+This framing would help users coming from NumPy/PyTorch backgrounds.
 
 ### Not aligned with OCANNL
 
-**5. Permanent axis naming as primary identification.** Both torchdim and DumPy (in its Range variant) treat names/objects as the primary way to identify axes. This conflicts with OCANNL's positional + kind structure and would require fundamental architectural changes for unclear benefit in an einsum-based system.
+**6. Permanent axis naming as primary identification.** Both torchdim and DumPy (in its Range variant) treat names/objects as the primary way to identify axes. This conflicts with OCANNL's positional + kind structure and would require fundamental architectural changes for unclear benefit in an einsum-based system.
 
-**6. Implicit batching via union of dims.** Torchdim's Rule 1 is elegant but conflicts with OCANNL's explicit axis-kind structure where batch dimensions are a distinct kind, not just "whatever dims are shared."
+**7. Implicit batching via union of dims.** Torchdim's Rule 1 is elegant but conflicts with OCANNL's explicit axis-kind structure where batch dimensions are a distinct kind, not just "whatever dims are shared."
 
-## Impact on Related Tasks
+## Mapping to OCANNL Tasks and Paper
 
-| Insight | Task | Action |
-|---------|------|--------|
-| Three-way comparison for related work | gh-ocannl-299 (workshop paper) | Feeds §7 Related Work |
-| Core design argument for dim units | gh-ocannl-299 (workshop paper) | Feeds §4 Dimension Units |
-| Dims-as-tensors / arange primitive | gh-ocannl-308 (tensor puzzles) | Consider adding index-component primitive |
-| Terminology consistency | gh-ocannl-298 (rename label -> basis) | Use "basis" or "dimension units" consistently |
-| Semantic checking model | gh-ocannl-255 (dimension label audit) | Audit informed by torchdim's identity-based checking |
-| Complementary notation study | gh-ocannl-413 (einops comparison) | Can reference this comparison |
+| Insight | Relevant Task | Action |
+|---|---|---|
+| Named dims in related work | gh-ocannl-299 (paper) | Section 8: Compare torchdim, DumPy, PyTorch Named Tensors |
+| Positional vs named argument | gh-ocannl-299 (paper) | Section 5: Core design argument with formal comparison |
+| Dims-as-tensors (`iota`/`arange`) | gh-ocannl-308 or new issue | Add index-component primitive |
+| Label to basis rename | gh-ocannl-298 | Use "basis" consistently, grounded in this comparison |
+| Strict broadcasting mode | New issue (low priority) | Optional equations-only mode for debugging |
+| Loop mental model | Documentation | Emphasize loop-equivalent readings in tutorials |
+
+## Scope
+
+**In scope:**
+- Three-way comparison of dimension-naming strategies (this document)
+- Design argument for the workshop paper
+- Identification of transferable ideas with effort assessment
+- Posting findings as a GitHub issue comment
+
+**Out of scope:**
+- Implementing any changes (tracked as separate issues)
+- Benchmarking against DumPy or torchdim
+- Studying PyTorch Named Tensors or xarray in detail (related but distinct systems)
+
+**Dependencies:**
+- gh-ocannl-299: Workshop paper (this analysis feeds Sections 5 and 8)
+- gh-ocannl-298: Label to basis rename (terminology depends on this analysis)
+- gh-ocannl-308: Tensor Puzzles (dims-as-tensors idea directly relevant)
+- gh-ocannl-413: einops comparison (related notation study)
