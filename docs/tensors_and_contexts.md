@@ -324,8 +324,8 @@ let ctx1, routine_a = Context.compile ctx0 comp_a bindings in
 let ctx2, routine_b = Context.compile ctx0 comp_b bindings in
 
 (* Via Train.to_routine: chains through Context.context *)
-let routine_a = Train.to_routine ctx comp_a bindings in
-let routine_b = Train.to_routine (Context.context routine_a) comp_b bindings in
+let routine_a = Train.to_routine ctx bindings comp_a in
+let routine_b = Train.to_routine (Context.context routine_a) bindings comp_b in
 (* routine_b depends on routine_a — sequential via stored child context *)
 ```
 

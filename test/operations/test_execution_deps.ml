@@ -80,9 +80,33 @@ let test_can_run () =
   let ctx' = Context.run ctx grad_routine in
   printf "can_run sgd (after grad): %b\n" (Context.can_run ctx' sgd_routine)
 
-(* Test 4: Re-execution pattern — grad -> sgd -> grad succeeds without reset *)
+(* Test 4: Negative test — running a dependent routine out of order raises Failure *)
+let test_wrong_order_raises () =
+  printf "\n=== Test 4: Wrong order raises ===\n";
+  Tensor.unsafe_reinitialize ();
+  let ctx = Context.auto () in
+  let%op e = { a = [ 2 ] } *. { b = [ -3 ] } in
+  let%op d = e + { c = [ 10 ] } in
+  let%op l = d *. { f = [ -2 ] } in
+  let grad = Train.grad_update l in
+  let%op learning_rate = 0.1 in
+  Train.every_non_literal_on_host l;
+  Train.every_non_literal_on_host learning_rate;
+  let sgd = Train.sgd_update ~learning_rate l in
+  let ctx = Train.init_params ctx IDX.empty l in
+  let grad_routine = Train.to_routine ctx IDX.empty grad in
+  let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
+  (* sgd depends on grad — running sgd first must fail *)
+  (try
+     ignore (Context.run ctx sgd_routine);
+     printf "Wrong order (sgd before grad): no error (BUG)\n"
+   with Failure msg ->
+     let is_enforcement = String.is_substring msg ~substring:"Context.run:" in
+     printf "Wrong order raises Failure from Context.run: %b\n" is_enforcement)
+
+(* Test 5: Re-execution pattern — grad -> sgd -> grad succeeds without reset *)
 let test_reexecution () =
-  printf "\n=== Test 4: Re-execution (grad -> sgd -> grad) ===\n";
+  printf "\n=== Test 5: Re-execution (grad -> sgd -> grad) ===\n";
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let%op e = { a = [ 2 ] } *. { b = [ -3 ] } in
@@ -103,4 +127,5 @@ let () =
   test_raw_dependency ();
   test_disjoint ();
   test_can_run ();
+  test_wrong_order_raises ();
   test_reexecution ()

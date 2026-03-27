@@ -17,5 +17,8 @@ can_run grad (before execution): true
 can_run sgd (before grad): false
 can_run sgd (after grad): true
 
-=== Test 4: Re-execution (grad -> sgd -> grad) ===
+=== Test 4: Wrong order raises ===
+Wrong order raises Failure from Context.run: true
+
+=== Test 5: Re-execution (grad -> sgd -> grad) ===
 grad -> sgd -> grad: OK
