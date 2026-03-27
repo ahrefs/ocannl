@@ -1,7 +1,10 @@
 (** CIFAR-10 image classification using LeNet-style CNN.
 
-    Demonstrates: loading real-world RGB data from [Dataprep], [int8] to [float] conversion,
-    CNN training on 3-channel images with cross-entropy loss, and held-out test evaluation.
+    Demonstrates: loading real-world RGB data, [int8] to [float] conversion, CNN training on
+    3-channel images with cross-entropy loss, and held-out test evaluation.
+
+    Uses [Conv_data.load_cifar10] which downloads the binary distribution of CIFAR-10 from U Toronto
+    (the [Dataprep.Cifar10] loader is broken because it downloads the Python pickle version).
 
     {2 Regression mode vs full-run mode}
 
@@ -32,7 +35,9 @@ let () =
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
 
-  (* Xavier init to prevent activation explosion *)
+  (* Xavier init -- same as circles_conv.ml and mnist_conv.ml.
+     CIFAR data is centered to [-0.5, 0.5] in Conv_data.cifar_images_to_float32 so that
+     all-positive Xavier-uniform weights produce zero-centered conv outputs. *)
   TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
   (* --- Configuration ---
@@ -47,15 +52,15 @@ let () =
   let epochs = 100 in
   (* Full-run: 50 *)
   let num_classes = 10 in
-  let out_channels1 = 16 in
+  let out_channels1 = 6 in
   (* Full-run: 32 *)
-  let out_channels2 = 32 in
+  let out_channels2 = 16 in
   (* Full-run: 64 *)
 
   (* --- Data Loading ---
-     Dataprep.Cifar10.load downloads from U Toronto on first call, caching to
-     ~/.cache/ocaml-dataprep/datasets/. Network unavailability will cause a clear failure.
-     Suppress Dataprep's stdout messages (contain machine-specific paths). *)
+     Conv_data.load_cifar10 downloads the binary distribution from U Toronto on first call,
+     caching to ~/.cache/ocaml-dataprep/datasets/cifar-10-bin/.
+     Suppress stdout messages during loading (contain machine-specific paths). *)
   printf "Loading CIFAR-10 dataset...\n%!";
   let load_quietly f =
     Stdlib.flush_all ();
@@ -68,21 +73,14 @@ let () =
         Unix.dup2 old_stdout Unix.stdout;
         Unix.close old_stdout)
   in
-  let data =
-    try Some (load_quietly (fun () -> Dataprep.Cifar10.load ())) with _exn ->
-      printf "CIFAR-10 loading failed (Dataprep.Cifar10 may need updating).\n%!";
-      None
+  let (train_images_raw, train_labels_raw), (test_images_raw, test_labels_raw) =
+    load_quietly (fun () -> Conv_data.load_cifar10 ())
   in
-  match data with
-  | None ->
-    printf "\nTraining complete! (skipped)\n%!";
-    Stdlib.exit 0
-  | Some ((train_images_raw, train_labels_raw), (test_images_raw, test_labels_raw)) ->
 
   let n_batches = num_train / batch_size in
   let n_test_batches = num_test / batch_size in
 
-  (* Convert int8 images to float32 [N; 32; 32; 3], normalize to [0, 1] *)
+  (* Convert int8 images to float32 [N; 32; 32; 3], centered to [-0.5, 0.5] *)
   let train_images_f32 = Conv_data.cifar_images_to_float32 train_images_raw in
   let train_images_f32 = Conv_data.take_prefix_images ~n:num_train train_images_f32 in
   let train_labels_list = Conv_data.labels_to_int_list train_labels_raw in
@@ -209,8 +207,8 @@ let () =
   printf "Test loss = %.2f\n%!" avg_test_loss;
   printf "Test accuracy = %.1f%% (%d/%d)\n%!" accuracy !correct num_test;
   (* Regression-mode threshold checks (conservative, must pass on small subsets).
-     CIFAR-10 is harder than MNIST; random chance = 10%, so 15% shows some learning. *)
+     CIFAR-10 is harder than MNIST; random chance = 10%, so 15% demonstrates some learning. *)
   printf "Test loss below 2.3 = %b\n%!" Float.(avg_test_loss < 2.3);
-  printf "Test accuracy above 12%% = %b\n%!" Float.(accuracy > 12.);
+  printf "Test accuracy above 15%% = %b\n%!" Float.(accuracy > 15.);
 
   printf "\nTraining complete!\n%!"

@@ -48,7 +48,8 @@
 (library
  (name conv_data)
  (package neural_nets_lib)
- (modules conv_data))
+ (modules conv_data)
+ (libraries unix))
 
 (test
  (name mnist_conv)

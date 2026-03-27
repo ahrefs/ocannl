@@ -1,6 +1,24 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 Loading CIFAR-10 dataset...
-CIFAR-10 loading failed (Dataprep.Cifar10 may need updating).
+Training on 2000 samples, testing on 1000 samples, batch_size=50
 
-Training complete! (skipped)
+Starting training for 100 epochs (4000 steps)...
+Epoch 10: avg loss = 2.18
+Epoch 20: avg loss = 2.15
+Epoch 30: avg loss = 2.13
+Epoch 40: avg loss = 2.11
+Epoch 50: avg loss = 2.10
+Epoch 60: avg loss = 2.09
+Epoch 70: avg loss = 2.08
+Epoch 80: avg loss = 2.07
+Epoch 90: avg loss = 2.07
+Epoch 100: avg loss = 2.06
+
+Evaluating on 1000 test samples...
+Test loss = 2.10
+Test accuracy = 19.9% (199/1000)
+Test loss below 2.3 = true
+Test accuracy above 15% = true
+
+Training complete!
