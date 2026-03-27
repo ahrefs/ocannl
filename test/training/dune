@@ -44,3 +44,31 @@
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(library
+ (name conv_data)
+ (package neural_nets_lib)
+ (modules conv_data)
+ (libraries unix))
+
+(test
+ (name mnist_conv)
+ (package neural_nets_lib)
+ (modules mnist_conv)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl dataprep conv_data unix)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name cifar_conv)
+ (package neural_nets_lib)
+ (modules cifar_conv)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl dataprep conv_data unix)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
