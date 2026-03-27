@@ -252,6 +252,9 @@ val bump_next_id : int -> unit
     Called after loading tensors from a checkpoint file to prevent ID collisions with
     subsequently created tensors. *)
 
+val get_next_id : unit -> int
+(** [get_next_id ()] returns the next tensor ID that will be allocated by the session. *)
+
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
     and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode}.

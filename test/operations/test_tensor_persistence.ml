@@ -214,12 +214,38 @@ let () =
     (Set.of_list (module Tn) [ tn1 ])
     path;
   Tensor.unsafe_reinitialize ();
+  let next_before = Tensor.get_next_id () in
   let _loaded = Persistence.load path in
-  (* Now create a new tnode via create_from_padded - it should get id > 5 *)
-  let nd = Nd.create_array ~debug:"new" Ops.single ~dims:[| 1 |] ~padding:None in
-  Nd.set_flat_values nd [| 42.0 |];
-  let new_tn = Tn.create_from_padded ~id:6 ~label:[ "new" ] ~ndarray:nd ~padding:None () in
-  Stdio.printf "Loaded id=5, new tensor id=%d (should be >= 6)\n" new_tn.Tn.id;
+  let next_after = Tensor.get_next_id () in
+  Stdio.printf "next_id before load=%d, after load=%d (should be >= 6)\n"
+    next_before next_after;
   cleanup "idfloor";
+
+  (* === Test 10: Error - padding mismatch on restore === *)
+  Stdio.printf "=== Test 10: Padding mismatch on restore ===\n";
+  Tensor.unsafe_reinitialize ();
+  let padding1 = Some ([| Ops.{ left = 1; right = 1 } |], None) in
+  let tn_padded =
+    let nd = Nd.create_array ~debug:"pad" Ops.single ~dims:[| 4 |] ~padding:padding1 in
+    Nd.set_flat_values nd [| 1.0; 2.0 |];
+    Tn.create_from_padded ~id:0 ~label:[ "p" ] ~ndarray:nd ~padding:padding1 ()
+  in
+  let path = tmp_file "padmismatch" in
+  Persistence.save ~appending:false
+    (Set.of_list (module Tn) [ tn_padded ])
+    path;
+  (* Create a tnode with same dims but different padding *)
+  Tensor.unsafe_reinitialize ();
+  let padding2 = Some ([| Ops.{ left = 0; right = 2 } |], None) in
+  let tn_diff_pad =
+    let nd = Nd.create_array ~debug:"pad2" Ops.single ~dims:[| 4 |] ~padding:padding2 in
+    Nd.set_flat_values nd [| 1.0; 2.0 |];
+    Tn.create_from_padded ~id:0 ~label:[ "p" ] ~ndarray:nd ~padding:padding2 ()
+  in
+  (try
+     Persistence.restore (Set.of_list (module Tn) [ tn_diff_pad ]) path;
+     Stdio.printf "ERROR: should have raised\n"
+   with Failure msg -> Stdio.printf "Caught: %s\n" msg);
+  cleanup "padmismatch";
 
   Stdio.printf "=== All persistence tests completed ===\n"

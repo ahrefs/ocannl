@@ -95,6 +95,7 @@ let session_state =
   { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
 let bump_next_id id = session_state.next_id <- max session_state.next_id (id + 1)
+let get_next_id () = session_state.next_id
 
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id

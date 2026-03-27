@@ -23,5 +23,7 @@ Caught: restore: dimension mismatch for tensor 0
 === Test 8: ID clash on load ===
 Caught: load: tensor with id 0 already exists in registry
 === Test 9: ID floor after load ===
-Loaded id=5, new tensor id=6 (should be >= 6)
+next_id before load=0, after load=6 (should be >= 6)
+=== Test 10: Padding mismatch on restore ===
+Caught: restore: padding mismatch for tensor 0
 === All persistence tests completed ===

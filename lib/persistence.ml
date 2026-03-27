@@ -350,16 +350,17 @@ let load ?prefix_namespace path =
       let header = read_header ic in
       validate_header header;
       let data_start = Stdlib.pos_in ic in
+      (* Pre-check: verify no ID clashes before creating anything *)
+      List.iter header.tensors ~f:(fun meta ->
+          match Tn.find ~id:meta.id with
+          | Some _ ->
+              failwith
+                ("load: tensor with id " ^ Int.to_string meta.id
+               ^ " already exists in registry")
+          | None -> ());
       let max_id = ref (-1) in
       let loaded =
         List.map header.tensors ~f:(fun meta ->
-            (* Check for clash with existing registry *)
-            (match Tn.find ~id:meta.id with
-            | Some _ ->
-                failwith
-                  ("load: tensor with id " ^ Int.to_string meta.id
-                 ^ " already exists in registry")
-            | None -> ());
             (* Create ndarray *)
             let nd =
               Nd.create_array ~debug:"loaded" meta.prec ~dims:meta.dims
@@ -422,6 +423,20 @@ let restore t_set path =
                if not (Array.equal Int.equal tn_dims meta.dims) then
                  failwith
                    ("restore: dimension mismatch for tensor "
+                  ^ Int.to_string tn.Tn.id);
+               (* Verify padding matches *)
+               let tn_padding = Lazy.force tn.Tn.padding in
+               let padding_equal =
+                 match (tn_padding, meta.padding) with
+                 | None, None -> true
+                 | Some (p1, v1), Some (p2, v2) ->
+                     Array.equal Ops.equal_axis_padding p1 p2
+                     && Option.equal Float.equal v1 v2
+                 | _ -> false
+               in
+               if not padding_equal then
+                 failwith
+                   ("restore: padding mismatch for tensor "
                   ^ Int.to_string tn.Tn.id);
                (* Get existing ndarray *)
                let nd =
