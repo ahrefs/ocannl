@@ -10,3 +10,4 @@ module Train = Train
 (** User-facing modules *)
 
 module Nn_blocks = Nn_blocks
+module Persistence = Persistence

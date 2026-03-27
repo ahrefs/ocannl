@@ -247,6 +247,11 @@ val iter_embedded : f:(tn -> unit) -> t -> unit
     [t.forward.embedded_nodes] or '[t.diff.backprop.embedded_nodes]' (if any). Note: [iter_embedded]
     should only be called after shape inference finishes. *)
 
+val bump_next_id : int -> unit
+(** [bump_next_id id] ensures the next allocated tensor ID will be strictly greater than [id].
+    Called after loading tensors from a checkpoint file to prevent ID collisions with
+    subsequently created tensors. *)
+
 val unsafe_reinitialize : unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
     and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode}.
