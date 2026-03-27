@@ -10,6 +10,17 @@
   (pps ppx_here)))
 
 (test
+ (name test_ndarray_binary_io)
+ (package arrayjit)
+ (modules test_ndarray_binary_io)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base stdio arrayjit.ir)
+ (preprocess
+  (pps ppx_here)))
+
+(test
  (name tree_map_test)
  (package arrayjit)
  (modules tree_map_test)

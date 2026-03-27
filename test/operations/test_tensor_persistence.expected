@@ -1,0 +1,29 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Test 1: Round-trip save/load ===
+Loaded 2 tensors
+  id=0 label=weights values=[1.0; 2.0; 3.0; 4.0; 5.0; 6.0]
+  id=1 label=bias values=[10.0; 20.0; 30.0]
+=== Test 2: Restore ===
+Before restore: [99.0; 99.0; 99.0; 99.0]
+After restore: [1.0; 2.0; 3.0; 4.0]
+=== Test 3: Append mode ===
+Loaded 2 tensors after append
+  id=0 values=[1.0; 2.0]
+  id=1 values=[3.0; 4.0]
+=== Test 4: Append overwrite ===
+  id=0 values=[77.0; 88.0]
+=== Test 5: Empty checkpoint ===
+Loaded 0 tensors from empty checkpoint
+Restore on empty set succeeded
+=== Test 6: Missing tensor on restore ===
+Caught: restore: tensor 1 not found in checkpoint
+=== Test 7: Dimension mismatch on restore ===
+Caught: restore: dimension mismatch for tensor 0
+=== Test 8: ID clash on load ===
+Caught: load: tensor with id 0 already exists in registry
+=== Test 9: ID floor after load ===
+next_id before load=0, after load=6 (should be >= 6)
+=== Test 10: Padding mismatch on restore ===
+Caught: restore: padding mismatch for tensor 0
+=== All persistence tests completed ===
