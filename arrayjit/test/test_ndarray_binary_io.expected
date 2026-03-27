@@ -1,0 +1,13 @@
+PASS: Byte
+PASS: Uint16
+PASS: Int32
+PASS: Uint32
+PASS: Int64
+PASS: Uint64
+PASS: Half
+PASS: Bfloat16
+PASS: Fp8
+PASS: Single
+PASS: Double
+PASS: Uint4x32
+PASS: padded

@@ -763,10 +763,285 @@ let to_doc_inline ~num_batch_axes ~num_output_axes ~num_input_axes ?axes_spec ar
   in
   spec_doc ^^ loop 0
 
-(* TODO: restore npy support or alternative. *)
+(** {2 *** Binary payload I/O for persistence ***} *)
 
-(* let save ~file_name t = let f arr = Npy.write arr file_name in map { f } t *)
+(** Compute the C-layout linear offset from multi-dimensional index and dims. *)
+let linear_offset_of_idx dims idx =
+  let offset = ref 0 in
+  let stride = ref 1 in
+  for i = Array.length dims - 1 downto 0 do
+    offset := !offset + (idx.(i) * !stride);
+    stride := !stride * dims.(i)
+  done;
+  !offset
 
-(* let restore ~file_name t = let local = Npy.read_mmap file_name ~shared:false in let f prec arr =
-   let local = Npy.to_bigarray Bigarray.c_layout (precision_to_bigarray_kind prec) local in A.blit
-   (Option.value_exn ~here:[%here] local) arr in map_with_prec { f } t *)
+(** Count the number of logical (unpadded) elements in an ndarray. *)
+let count_logical_elems ?padding nd =
+  let dims = dims nd in
+  if Array.is_empty dims then 1
+  else
+    Array.foldi dims ~init:1 ~f:(fun axis acc d ->
+        match padding with
+        | None -> acc * d
+        | Some padding_arr when axis < Array.length padding_arr ->
+            acc * (d - padding_arr.(axis).Ops.left - padding_arr.(axis).Ops.right)
+        | Some _ -> acc * d)
+
+(** Write the logical (unpadded) payload of an ndarray to a channel in native binary format
+    (little-endian). Returns the number of bytes written. *)
+let write_payload_to_channel ?padding nd oc =
+  let prec = get_prec nd in
+  let elem_bytes = Ops.prec_in_bytes prec in
+  let n_elems = count_logical_elems ?padding nd in
+  let buf = Bytes.create (n_elems * elem_bytes) in
+  let pos = ref 0 in
+  let write_elem (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision)
+      (arr : (ocaml, elt_t) bigarray) =
+    let dims = A.dims arr in
+    let idx = Array.create ~len:(Array.length dims) 0 in
+    let rec iter axis =
+      if axis = Array.length dims then begin
+        let adjusted_idx = adjust_idx_for_padding ?padding idx in
+        (match prec with
+        | Ops.Byte ->
+            let v = A.get arr adjusted_idx in
+            Bytes.set buf !pos v
+        | Ops.Fp8 ->
+            let v = A.get arr adjusted_idx in
+            Bytes.set buf !pos v
+        | Ops.Uint16 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int16_le buf !pos v
+        | Ops.Bfloat16 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int16_le buf !pos v
+        | Ops.Half ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half v)
+        | Ops.Int32 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int32_le buf !pos v
+        | Ops.Uint32 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int32_le buf !pos v
+        | Ops.Single ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int32_le buf !pos (Int32.bits_of_float v)
+        | Ops.Int64 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int64_le buf !pos v
+        | Ops.Uint64 ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int64_le buf !pos v
+        | Ops.Double ->
+            let v = A.get arr adjusted_idx in
+            Stdlib.Bytes.set_int64_le buf !pos (Int64.bits_of_float v)
+        | Ops.Uint4x32 ->
+            (* Raw byte access to preserve arbitrary bit patterns without float conversion. *)
+            let base = bigarray_start_not_managed arr in
+            let lin_off = linear_offset_of_idx dims adjusted_idx in
+            let byte_off = lin_off * 16 in
+            let char_ptr =
+              Ctypes.(from_voidp char (ptr_of_raw_address base))
+            in
+            for j = 0 to 15 do
+              Bytes.set buf (!pos + j) Ctypes.(!@(char_ptr +@ (byte_off + j)))
+            done);
+        pos := !pos + elem_bytes
+      end
+      else
+        let end_idx = compute_end_idx ?padding dims axis in
+        for p = 0 to end_idx do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done
+    in
+    if Array.is_empty dims then begin
+      (* Scalar: single element *)
+      (match prec with
+      | Ops.Byte -> Bytes.set buf !pos (A.get arr [||])
+      | Ops.Fp8 -> Bytes.set buf !pos (A.get arr [||])
+      | Ops.Uint16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr [||])
+      | Ops.Bfloat16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr [||])
+      | Ops.Half -> Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half (A.get arr [||]))
+      | Ops.Int32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr [||])
+      | Ops.Uint32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr [||])
+      | Ops.Single -> Stdlib.Bytes.set_int32_le buf !pos (Int32.bits_of_float (A.get arr [||]))
+      | Ops.Int64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr [||])
+      | Ops.Uint64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr [||])
+      | Ops.Double -> Stdlib.Bytes.set_int64_le buf !pos (Int64.bits_of_float (A.get arr [||]))
+      | Ops.Uint4x32 ->
+          let base = bigarray_start_not_managed arr in
+          let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
+          for j = 0 to 15 do
+            Bytes.set buf (!pos + j) Ctypes.(!@(char_ptr +@ j))
+          done);
+      pos := !pos + elem_bytes
+    end
+    else iter 0
+  in
+  apply_with_prec { f = write_elem } nd;
+  Stdlib.Out_channel.output_bytes oc buf;
+  Bytes.length buf
+
+(** Read native binary data from a channel into an ndarray, populating only the logical
+    (unpadded) region. *)
+let read_payload_from_channel ?padding nd ic n_bytes =
+  let buf = Bytes.create n_bytes in
+  (try Stdlib.really_input ic buf 0 n_bytes
+   with End_of_file -> failwith "read_payload_from_channel: unexpected end of file");
+  let prec = get_prec nd in
+  let elem_bytes = Ops.prec_in_bytes prec in
+  let pos = ref 0 in
+  let read_elem (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision)
+      (arr : (ocaml, elt_t) bigarray) =
+    let dims = A.dims arr in
+    let idx = Array.create ~len:(Array.length dims) 0 in
+    let rec iter axis =
+      if axis = Array.length dims then begin
+        let adjusted_idx = adjust_idx_for_padding ?padding idx in
+        (match prec with
+        | Ops.Byte ->
+            A.set arr adjusted_idx (Bytes.get buf !pos)
+        | Ops.Fp8 ->
+            A.set arr adjusted_idx (Bytes.get buf !pos)
+        | Ops.Uint16 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
+        | Ops.Bfloat16 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
+        | Ops.Half ->
+            A.set arr adjusted_idx (Ops.half_to_single (Stdlib.Bytes.get_uint16_le buf !pos))
+        | Ops.Int32 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
+        | Ops.Uint32 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
+        | Ops.Single ->
+            A.set arr adjusted_idx (Int32.float_of_bits (Stdlib.Bytes.get_int32_le buf !pos))
+        | Ops.Int64 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
+        | Ops.Uint64 ->
+            A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
+        | Ops.Double ->
+            A.set arr adjusted_idx (Int64.float_of_bits (Stdlib.Bytes.get_int64_le buf !pos))
+        | Ops.Uint4x32 ->
+            let base = bigarray_start_not_managed arr in
+            let lin_off = linear_offset_of_idx dims adjusted_idx in
+            let byte_off = lin_off * 16 in
+            let char_ptr =
+              Ctypes.(from_voidp char (ptr_of_raw_address base))
+            in
+            for j = 0 to 15 do
+              Ctypes.((char_ptr +@ (byte_off + j)) <-@ Bytes.get buf (!pos + j))
+            done);
+        pos := !pos + elem_bytes
+      end
+      else
+        let end_idx = compute_end_idx ?padding dims axis in
+        for p = 0 to end_idx do
+          idx.(axis) <- p;
+          iter (axis + 1)
+        done
+    in
+    if Array.is_empty dims then begin
+      (match prec with
+      | Ops.Byte -> A.set arr [||] (Bytes.get buf !pos)
+      | Ops.Fp8 -> A.set arr [||] (Bytes.get buf !pos)
+      | Ops.Uint16 -> A.set arr [||] (Stdlib.Bytes.get_uint16_le buf !pos)
+      | Ops.Bfloat16 -> A.set arr [||] (Stdlib.Bytes.get_uint16_le buf !pos)
+      | Ops.Half -> A.set arr [||] (Ops.half_to_single (Stdlib.Bytes.get_uint16_le buf !pos))
+      | Ops.Int32 -> A.set arr [||] (Stdlib.Bytes.get_int32_le buf !pos)
+      | Ops.Uint32 -> A.set arr [||] (Stdlib.Bytes.get_int32_le buf !pos)
+      | Ops.Single -> A.set arr [||] (Int32.float_of_bits (Stdlib.Bytes.get_int32_le buf !pos))
+      | Ops.Int64 -> A.set arr [||] (Stdlib.Bytes.get_int64_le buf !pos)
+      | Ops.Uint64 -> A.set arr [||] (Stdlib.Bytes.get_int64_le buf !pos)
+      | Ops.Double -> A.set arr [||] (Int64.float_of_bits (Stdlib.Bytes.get_int64_le buf !pos))
+      | Ops.Uint4x32 ->
+          let base = bigarray_start_not_managed arr in
+          let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
+          for j = 0 to 15 do
+            Ctypes.((char_ptr +@ j) <-@ Bytes.get buf (!pos + j))
+          done);
+      pos := !pos + elem_bytes
+    end
+    else iter 0
+  in
+  apply_with_prec { f = read_elem } nd
+
+(** Byte-for-byte comparison of logical payloads of two ndarrays.
+    Both must have the same precision and logical dimensions. *)
+let payloads_equal ?padding nd1 nd2 =
+  let prec1 = get_prec nd1 and prec2 = get_prec nd2 in
+  if not (Ops.equal_prec prec1 prec2) then false
+  else
+    let elem_bytes = Ops.prec_in_bytes prec1 in
+    let n_elems = count_logical_elems ?padding nd1 in
+    let n_bytes = n_elems * elem_bytes in
+    let buf1 = Bytes.create n_bytes and buf2 = Bytes.create n_bytes in
+    let write_to_buf buf nd =
+      let pos = ref 0 in
+      let write_elem (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision)
+          (arr : (ocaml, elt_t) bigarray) =
+        let dims = A.dims arr in
+        let idx = Array.create ~len:(Array.length dims) 0 in
+        let rec iter axis =
+          if axis = Array.length dims then begin
+            let adjusted_idx = adjust_idx_for_padding ?padding idx in
+            (match prec with
+            | Ops.Byte -> Bytes.set buf !pos (A.get arr adjusted_idx)
+            | Ops.Fp8 -> Bytes.set buf !pos (A.get arr adjusted_idx)
+            | Ops.Uint16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Bfloat16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Half -> Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half (A.get arr adjusted_idx))
+            | Ops.Int32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Uint32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Single ->
+                Stdlib.Bytes.set_int32_le buf !pos (Int32.bits_of_float (A.get arr adjusted_idx))
+            | Ops.Int64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Uint64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr adjusted_idx)
+            | Ops.Double ->
+                Stdlib.Bytes.set_int64_le buf !pos (Int64.bits_of_float (A.get arr adjusted_idx))
+            | Ops.Uint4x32 ->
+                let base = bigarray_start_not_managed arr in
+                let lin_off = linear_offset_of_idx dims adjusted_idx in
+                let byte_off = lin_off * 16 in
+                let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
+                for j = 0 to 15 do
+                  Bytes.set buf (!pos + j) Ctypes.(!@(char_ptr +@ (byte_off + j)))
+                done);
+            pos := !pos + elem_bytes
+          end
+          else
+            let end_idx = compute_end_idx ?padding dims axis in
+            for p = 0 to end_idx do
+              idx.(axis) <- p;
+              iter (axis + 1)
+            done
+        in
+        if Array.is_empty dims then begin
+          (match prec with
+          | Ops.Byte -> Bytes.set buf !pos (A.get arr [||])
+          | Ops.Fp8 -> Bytes.set buf !pos (A.get arr [||])
+          | Ops.Uint16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr [||])
+          | Ops.Bfloat16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr [||])
+          | Ops.Half -> Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half (A.get arr [||]))
+          | Ops.Int32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr [||])
+          | Ops.Uint32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr [||])
+          | Ops.Single -> Stdlib.Bytes.set_int32_le buf !pos (Int32.bits_of_float (A.get arr [||]))
+          | Ops.Int64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr [||])
+          | Ops.Uint64 -> Stdlib.Bytes.set_int64_le buf !pos (A.get arr [||])
+          | Ops.Double -> Stdlib.Bytes.set_int64_le buf !pos (Int64.bits_of_float (A.get arr [||]))
+          | Ops.Uint4x32 ->
+              let base = bigarray_start_not_managed arr in
+              let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
+              for j = 0 to 15 do
+                Bytes.set buf (!pos + j) Ctypes.(!@(char_ptr +@ j))
+              done);
+          pos := !pos + elem_bytes
+        end
+        else iter 0
+      in
+      apply_with_prec { f = write_elem } nd
+    in
+    write_to_buf buf1 nd1;
+    write_to_buf buf2 nd2;
+    Bytes.equal buf1 buf2
