@@ -237,7 +237,7 @@ let%op transformer_with_loss ~label:_ ~model () ~train_step ~src ~tgt_input ~tgt
   let loss = -(tgt_target *. log_probs) ++ "...|... => 0" in
 
   (* Return both loss and logits for potential additional metrics *)
-  (loss, logits)
+  [%oc (loss, logits)]
 
 (** {2 Convolutional Neural Network Building Blocks} *)
 
@@ -410,7 +410,7 @@ let%op sokoban_cnn ~label ?(num_actions = 4) () =
     (* Optional: value head for actor-critic methods *)
     let value = ({ w_value } * x) + { b_value = 0.; o = [ 1 ] } in
 
-    (action_logits, value)
+    [%oc (action_logits, value)]
 
 (** Modern CNN with depthwise separable convolutions for efficiency. Suitable for mobile/edge
     deployment. *)

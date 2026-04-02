@@ -12,7 +12,7 @@
   - [Using OCANNL's generalized einsum notation](#using-ocannls-generalized-einsum-notation)
     - [Syntax of the generalized einsum notation](#syntax-of-the-generalized-einsum-notation)
     - [Axis concatenation with the ^ operator](#axis-concatenation-with-the--operator)
-    - [Block tensor syntax (upcoming)](#block-tensor-syntax-upcoming)
+    - [Block tensor syntax](#block-tensor-syntax)
   - [Further features of the syntax extension %cd](#further-features-of-the-syntax-extension-cd)
     - [Referencing arrays: tensor value, tensor gradient, merge buffer of a tensor node](#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node)
     - [Block comments](#block-comments)
@@ -549,21 +549,63 @@ let%cd update_prefix ~target ~source =
 
 Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the planned block tensor syntax.
 
-### Block tensor syntax (upcoming)
+### Block tensor syntax
 
-The tensor literal syntax will be generalized to support block tensor construction, where tensor literals become a special case with scalar components. The syntax extensions recursively compose argument tensors by introducing and concatenating along a new leading axis:
+The tensor literal syntax is generalized to support block tensor construction, where tensor literals
+become a special case with scalar components. The syntax extensions compose argument tensors by
+introducing and concatenating along a new leading axis:
 
 | Syntax | Axis kind | Example |
 |--------|-----------|---------|
-| `( , )` | Input | `(ta, tb)` concatenates along a new input axis |
-| `[ ; ]` | Output | `[ta; tb]` concatenates along a new output axis |
-| `[| ; |]` | Batch | `[|ta; tb|]` concatenates along a new batch axis |
+| `[ ; ]` | Output | `[ta; tb]` stacks along a new leading output axis |
+| `( , )` | Input | `(ta, tb)` stacks along a new leading input axis |
+| `[| ; |]` | Batch | `[|ta; tb|]` stacks along a new leading batch axis |
 
-For example, `[ta; tb]` translates to:
-1. Introduce a new output axis for each component: `...|...->... => ...|...->0, ...` for `ta` and `tb`
-2. Concatenate along that axis: `...|...->a,... ; ...|...->b,... => ...|...->a^b,...`
+**Disambiguation**: When a list `[...; ...]`, tuple `(..., ...)`, or array `[|...; ...|]` appears in
+a `%op` block, the PPX checks the first leaf expression by following the container structure. If the
+first leaf is a numeric constant (float or int literal), the expression is treated as an ndarray
+constant (existing behavior). Otherwise, it is treated as a block tensor construction.
 
-This allows constructing block matrices, block tensors, and other structured tensors from smaller components.
+This means `[1.0; some_float_expr]` remains an ndarray constant (backward compatible), while
+`[x1; x2]` where `x1` is an identifier becomes a block tensor.
+
+**Tuple caveat**: Since `(ta, tb)` inside `%op` is now a block tensor, use `[%oc (ta, tb)]` when you
+need an actual OCaml tuple (e.g., to return multiple tensors from a `%op` function).
+
+**How it works**: For `[ta; tb]`, the PPX generates:
+1. An `einsum1` unsqueeze for each component: `"...|...->... => ...|...->0, ..."` adds a leading
+   size-1 output axis
+2. A `concat` call: `"...|...-> a, ...; ...|...-> b, ... => ...|...-> a^b, ..."` concatenates
+   along the new axis
+
+All components must have compatible shapes (same number and sizes of remaining axes after the new
+concat axis). Components of different shapes along non-concat axes will produce a shape error.
+
+**Examples**:
+```ocaml
+(* Stack two 3-element vectors into a 2x3 matrix (output axis) *)
+let%op m = [x1; x2]
+
+(* Stack along input axis *)
+let%op input_stacked = (x1, x2)
+
+(* Stack along batch axis *)
+let%op batched = [|x1; x2|]
+
+(* 3-way stacking *)
+let%op triple = [x1; x2; x3]
+
+(* Single-element list adds a dim-1 leading axis (unsqueeze) *)
+let%op unsqueezed = [x]
+
+(* Return a tuple (not a block tensor) from a %op function *)
+let%op f () x = [%oc (x, x)]
+```
+
+**Known limitation — nesting**: Direct nesting like `[[x1; x2]; [x3; x4]]` does not currently work.
+The inner block tensors produce `Concat` dimensions that the outer broadcast variable (`...`) cannot
+unify, causing a shape error. Use explicit `++^` with a fully-specified einsum spec for nested block
+tensor constructions.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 

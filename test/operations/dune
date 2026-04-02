@@ -323,6 +323,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_block_tensor)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_block_tensor)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_random_histograms)
  (package neural_nets_lib)
  (deps

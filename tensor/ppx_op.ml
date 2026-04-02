@@ -350,8 +350,41 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } as list_expr
+    when not (is_ndarray_constant_expr list_expr) ->
+      let elems = collect_list [] list_expr in
+      let n = List.length elems in
+      let vbss, elems' = List.unzip (List.map elems ~f:loop) in
+      let unsqueeze_spec = Ast_builder.Default.estring ~loc (block_tensor_unsqueeze_spec ~axis_kind:`Output) in
+      let concat_spec = Ast_builder.Default.estring ~loc (block_tensor_concat_spec ~axis_kind:`Output n) in
+      let unsqueezed = List.map elems' ~f:(fun e -> [%expr einsum1 [%e unsqueeze_spec] [%e e]]) in
+      let rhses_expr = Ast_builder.Default.pexp_array ~loc unsqueezed in
+      ( reduce_vbss vbss,
+        [%expr concat ?label:[%e opt_expr ~loc label] [%e concat_spec] [%e rhses_expr]] )
+  | { pexp_desc = Pexp_array elems; _ }
+    when not (is_ndarray_constant_expr expr) ->
+      let n = List.length elems in
+      let vbss, elems' = List.unzip (List.map elems ~f:loop) in
+      let unsqueeze_spec = Ast_builder.Default.estring ~loc (block_tensor_unsqueeze_spec ~axis_kind:`Batch) in
+      let concat_spec = Ast_builder.Default.estring ~loc (block_tensor_concat_spec ~axis_kind:`Batch n) in
+      let unsqueezed = List.map elems' ~f:(fun e -> [%expr einsum1 [%e unsqueeze_spec] [%e e]]) in
+      let rhses_expr = Ast_builder.Default.pexp_array ~loc unsqueezed in
+      ( reduce_vbss vbss,
+        [%expr concat ?label:[%e opt_expr ~loc label] [%e concat_spec] [%e rhses_expr]] )
+  | { pexp_desc = Pexp_tuple elems; _ }
+    when List.length elems >= 2 && not (is_ndarray_constant_expr expr) ->
+      let n = List.length elems in
+      let vbss, elems' = List.unzip (List.map elems ~f:loop) in
+      let unsqueeze_spec = Ast_builder.Default.estring ~loc (block_tensor_unsqueeze_spec ~axis_kind:`Input) in
+      let concat_spec = Ast_builder.Default.estring ~loc (block_tensor_concat_spec ~axis_kind:`Input n) in
+      let unsqueezed = List.map elems' ~f:(fun e -> [%expr einsum1 [%e unsqueeze_spec] [%e e]]) in
+      let rhses_expr = Ast_builder.Default.pexp_array ~loc unsqueezed in
+      ( reduce_vbss vbss,
+        [%expr concat ?label:[%e opt_expr ~loc label] [%e concat_spec] [%e rhses_expr]] )
   | { pexp_desc = Pexp_array _; _ }
-  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }
+  | { pexp_desc = Pexp_tuple _; _ }
+    when is_ndarray_constant_expr expr ->
       (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as
