@@ -72,3 +72,14 @@
  (libraries ocannl dataprep conv_data unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name transformer_names)
+ (package neural_nets_lib)
+ (modules transformer_names)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl dataprep stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

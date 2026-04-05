@@ -1,0 +1,20 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+names: 32033
+sequences: 32256, seq_len: 15, n_batches: 126
+  batch 0 loss: 3.3322
+  batch 1 loss: 3.0506
+  batch 2 loss: 2.8805
+Epoch 0, avg token loss: 2.8665, epoch loss below 430=true
+Epoch 1, avg token loss: 2.8414, epoch loss below 370=true
+Epoch 2, avg token loss: 2.8376, epoch loss below 365=true
+Epoch 3, avg token loss: 2.8350, epoch loss below 362=true
+Epoch 4, avg token loss: 2.8331, epoch loss below 360=true
+Epoch 5, avg token loss: 2.8314, epoch loss below 359=true
+Epoch 6, avg token loss: 2.8301, epoch loss below 358=true
+Epoch 7, avg token loss: 2.8290, epoch loss below 357.5=true
+Epoch 8, avg token loss: 2.8281, epoch loss below 357=true
+Epoch 9, avg token loss: 2.8276, epoch loss below 356.5=true
+wooepa
+yunarynnat
+liairbacciuidi
