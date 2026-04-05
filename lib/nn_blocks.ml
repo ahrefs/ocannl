@@ -126,15 +126,9 @@ type position_embedding =
       (** Rotary embeddings applied to Q/K inside self-attention. No additive component. *)
   | No_pos_embed  (** No position information. *)
 
-(* TODO(#398): PoPE (arXiv:2509.10534) — Polar Position Embeddings.
-   PoPE applies softplus to each of the d elements of Q/K independently, producing d magnitudes.
-   Each magnitude mu_c = softplus(x_c) is paired with a position-only phase:
-     output_c = mu_c * exp(i * pos * theta_c)
-   i.e. (mu_c * cos(pos * theta_c), mu_c * sin(pos * theta_c)).
-   This produces d complex numbers = 2d real values, doubling the dimensionality.
-   The Q/K projections would need to output d_k/2 before PoPE expands to d_k, requiring
-   architectural changes to multi_head_attention (separate projection width from head width).
-   Blocked on: deciding whether to change the attention API or add a PoPE-specific attention. *)
+(* PoPE (arXiv:2509.10534) deferred to #444.
+   PoPE maps d scalars → 2d reals (softplus magnitude × position phase), doubling dimensionality.
+   Requires decoupling projection width from head width in multi_head_attention. See #444. *)
 
 (** RoPE inverse frequencies: theta_k = base^(-2k/d) for k = 0..half_d-1.
     @param half_d Per-head key dimension divided by 2 (i.e. d_k / 2, NOT d_model / 2).

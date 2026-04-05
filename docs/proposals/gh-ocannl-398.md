@@ -8,7 +8,7 @@ Add non-learned (computed) position embedding support to OCANNL's transformer bl
 
 - [ ] Implement RoPE as a function in `nn_blocks.ml` that applies rotary embeddings to query/key tensors
 - [ ] RoPE frequency tensors are non-learned (`grad_spec:Prohibit_grad`)
-- [ ] Implement PoPE variant (arXiv:2509.10534) -- clarify whether PoPE differs from RoPE only in attention score normalization (see note below)
+- [ ] ~~Implement PoPE variant~~ — Deferred to #444. PoPE (arXiv:2509.10534) doubles dimensionality (d → 2d), requiring attention API changes to decouple projection width from head width. Clarification done: PoPE is NOT just a score normalization change.
 - [ ] Implement sinusoidal positional encoding as a non-learned additive embedding
 - [ ] Add a `position_embedding` strategy type and integrate it into `multi_head_attention` and the `transformer` function
 - [ ] Assert even `d_k` at construction time (RoPE requires pairs)
