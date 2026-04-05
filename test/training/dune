@@ -74,6 +74,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name fsm_transformer)
+ (package neural_nets_lib)
+ (modules fsm_transformer)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name transformer_names)
  (package neural_nets_lib)
  (modules transformer_names)
