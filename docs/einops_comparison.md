@@ -173,11 +173,11 @@ OCANNL:
 The `^` operator creates a concatenated axis. This also enables slicing:
 ```ocaml
 (* Extract prefix *)
-x ++ "a^b => a"
+x ++^ "a^b => a"
 (* Extract suffix *)
-x ++ "a^b => b"
+x ++^ "a^b => b"
 (* Skip first 3 elements *)
-x ++ "3^a => a"
+x ++^ "3^a => a"
 ```
 
 ### Layer normalization
