@@ -345,6 +345,26 @@ let interleave =
   in
   Tensor.binop ~op_label:"interleave" ~compose_op:Defined_by_cd_logic ~op_asn ~grad_asn
 
+let deinterleave_even =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~t ~t1 ~projections:_ =
+    t =:+ id t1 ~logic:"... | ... -> ..., 2*i => ... | ... -> ..., i"
+  in
+  let%cd grad_asn ~t ~g:_ ~t1 ~projections:_ =
+    t1.grad =+ id t.grad ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i"
+  in
+  Tensor.unop ~op_label:"deinterleave_even" ~transpose_op:Defined_by_cd_logic ~op_asn ~grad_asn
+
+let deinterleave_odd =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~t ~t1 ~projections:_ =
+    t =:+ id t1 ~logic:"... | ... -> ..., 2*i + 1 => ... | ... -> ..., i"
+  in
+  let%cd grad_asn ~t ~g:_ ~t1 ~projections:_ =
+    t1.grad =+ id t.grad ~logic:"... | ... -> ..., i => ... | ... -> ..., 2*i + 1"
+  in
+  Tensor.unop ~op_label:"deinterleave_odd" ~transpose_op:Defined_by_cd_logic ~op_asn ~grad_asn
+
 let threefry4x32_crypto =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ^^^^ v2 in
@@ -774,6 +794,8 @@ struct
   let uniform1 = uniform1 ~grad_spec
   let uniform_at1 = uniform_at1 ~grad_spec
   let interleave = interleave ~grad_spec
+  let deinterleave_even = deinterleave_even ~grad_spec
+  let deinterleave_odd = deinterleave_odd ~grad_spec
 
   module O = struct
     let ( * ) ?label t1 t2 = matmul ?label t1 t2 ()
@@ -826,6 +848,8 @@ struct
     let uniform1 ?label () = uniform1 () ?label ()
     let uniform_at1 ?label counter = uniform_at1 ?label counter ()
     let interleave ?label t1 t2 = interleave ?label t1 t2 ()
+    let deinterleave_even ?label t = deinterleave_even ?label t ()
+    let deinterleave_odd ?label t = deinterleave_odd ?label t ()
   end
 end
 
