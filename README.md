@@ -14,7 +14,7 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
   * or the user can compile parts of a model separately, manually composing the corresponding forward pass code and the backprop code.
 * Tensor axes are split into kinds: batch, input and output. Tensor dimensions have optional labels.
   * The labels ensure a more precise semantics for dimension matching, alternative name: dimension units. It's **not** an axis selection mechanism.
-* OCANNL has full support for a significantly extended `einsum` notation, integrated with shape inference. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
+* OCANNL has full support for a significantly extended `einsum` notation, integrated with shape inference. See [comparison with einops](docs/einops_comparison.md) for how this relates to the popular [einops](https://einops.rocks/) library. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
   * OCANNL does not have dynamic indexing (using the last axis of one tensor as indices into another tensor). If it's needed, it can be added (we had a prototype once, removed to reduce complexity). Then it would also be integrated with shape inference.
 * OCANNL offers two main levels of abstraction.
   * Tensor expressions as differentiable computations, centered around the [`%op`](tensor/ppx_op.ml) syntax extension.

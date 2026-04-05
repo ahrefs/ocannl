@@ -394,6 +394,8 @@ To maintain the familiar concise syntax, yet allow for configurability during in
 
 ## Using OCANNL's generalized einsum notation
 
+> **For einops users**: If you're familiar with [einops](https://einops.rocks/), see [einops_comparison.md](einops_comparison.md) for a side-by-side mapping of einops operations to OCANNL's notation.
+
 As we mentioned above, in the `%cd` syntax you can set up an arbitrary assignment with projections derived from a generalized einsum specification, by passing the specification as a string with the `~logic` label. However, both the `%cd` and `%op` syntaxes support built-in operators that take an einsum specification: `+*` binding to `NTDSL.einsum` resp. `TDSL.einsum`, and `++` binding to `NTDSL.einsum1` resp. `TDSL.einsum1`. `+*` is a "ternary" operator, binary wrt. tensor arguments, and `++` is a binary operator, unary postfix wrt. tensor arguments. There are even more einsum operators: binary `@^+` and `+++`; unary `@^^`. When the einsum specification is a literal string, we support two syntax patterns: the string can either directly follow the operator (infix-style notation), or the string can follow the second argument (mixfix-style notation). When the spec string is an identifier, it must directly follow the operator.
 
 `+*`, `+++` and `++` use addition for the accumulation operation; `@^+` and `@^^` use maximum. You can verify that looking at the definitions of `Operation.einsum`, `Operation.einsum1`, etc. You can find examples of `+*` and `++` behavior in the test suite [einsum_trivia.ml](test/einsum_trivia.ml) and in [nn_blocks.ml](lib/nn_blocks.ml). A frequent use-case for `++` is to sum out all axes of a tensor:
