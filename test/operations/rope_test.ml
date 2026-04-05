@@ -94,34 +94,13 @@ let () =
   Stdio.printf "RoPE attention output shape: %s\n\n"
     (Sexp.to_string_hum ([%sexp_of: Shape.t] out.Tensor.shape))
 
-(* === Test 5: PoPE with multi_head_attention === *)
-let () =
-  Tensor.unsafe_reinitialize ();
-  Stdio.printf "=== Test 5: PoPE attention ===\n";
-  let ctx = Context.auto () in
-  let d_model = 16 in
-  let num_heads = 2 in
-  let d_k = d_model in
-  let seq_len = 4 in
-  let freqs = Ocannl.Nn_blocks.rope_frequencies ~half_d:(d_k / 2) () in
-  let positions = Ocannl.Nn_blocks.position_indices ~seq_len () in
-  let attn =
-    Ocannl.Nn_blocks.multi_head_attention ~label:[ "pope_attn" ] ~num_heads ~d_k ~d_v:d_k
-      ~pos_embed:(PoPE { freqs; positions }) ()
-  in
-  let x =
-    TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ 1; seq_len ] ~input_dims:[]
-      ~output_dims:[ d_model ] ()
-  in
-  let%op out = x + attn ~train_step:None x in
-  let _ctx = Ocannl.Train.forward_once ctx out in
-  Stdio.printf "PoPE attention output shape: %s\n\n"
-    (Sexp.to_string_hum ([%sexp_of: Shape.t] out.Tensor.shape))
+(* PoPE test removed: PoPE requires doubling dimensionality (d → 2d),
+   deferred to follow-up — see TODO in nn_blocks.ml *)
 
-(* === Test 6: Gradient flow through RoPE === *)
+(* === Test 5: Gradient flow through RoPE === *)
 let () =
   Tensor.unsafe_reinitialize ();
-  Stdio.printf "=== Test 6: Gradient flow ===\n";
+  Stdio.printf "=== Test 5: Gradient flow ===\n";
   let ctx = Context.auto () in
   let d_model = 16 in
   let num_heads = 2 in
@@ -142,6 +121,18 @@ let () =
   let _ctx = Ocannl.Train.update_once ctx loss in
   Stdio.printf "Loss: %.4f\n" At.(loss.@{[| 0 |]});
   Stdio.printf "freqs has grad: %b (expect false)\n" (Option.is_some freqs.Tensor.diff);
-  Stdio.printf "positions has grad: %b (expect false)\n\n" (Option.is_some positions.Tensor.diff)
+  Stdio.printf "positions has grad: %b (expect false)\n" (Option.is_some positions.Tensor.diff);
+  (* Verify that learnable params exist and have gradients allocated.
+     This proves the backward pass through RoPE successfully allocated gradients
+     for the attention weights (w_q, w_k, w_v, w_o). *)
+  let num_params = Set.length loss.Tensor.params in
+  let num_with_grad =
+    Set.count loss.Tensor.params ~f:(fun p -> Option.is_some p.Tensor.diff)
+  in
+  Stdio.printf "learnable params: %d, with grad: %d (expect >0)\n" num_params num_with_grad;
+  (* Verify loss is finite and non-zero — backward pass completed without NaN/inf *)
+  let loss_val = At.(loss.@{[| 0 |]}) in
+  Stdio.printf "loss finite and nonzero: %b (expect true)\n\n"
+    Float.(is_finite loss_val && abs loss_val > 1e-10)
 
 (* Transformer default regression is covered by transformer_test.ml *)

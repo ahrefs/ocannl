@@ -33,21 +33,10 @@ RoPE attention output shape: ((batch
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
  (id 110) (debug_name out))
 
-=== Test 5: PoPE attention ===
-PoPE attention output shape: ((batch
-  ((dims
-    ((Dim ((d 1) (label ()) (proj_id ((Proj_id 748)))))
-     (Dim ((d 4) (label ()) (proj_id ((Proj_id 749)))))))
-   (bcast Broadcastable) (prov (((sh_id 99) (kind Batch))))))
- (input ((dims ()) (bcast Broadcastable) (prov (((sh_id 99) (kind Input))))))
- (output
-  ((dims ((Dim ((d 16) (label ()) (proj_id ((Proj_id 750)))))))
-   (bcast Broadcastable) (prov (((sh_id 99) (kind Output))))))
- (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 99) (debug_name out))
-
-=== Test 6: Gradient flow ===
+=== Test 5: Gradient flow ===
 Loss: 2016.0000
 freqs has grad: false (expect false)
 positions has grad: false (expect false)
+learnable params: 4, with grad: 4 (expect >0)
+loss finite and nonzero: true (expect true)
 

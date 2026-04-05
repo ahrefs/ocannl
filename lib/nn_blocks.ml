@@ -118,16 +118,23 @@ let%op softmax ~spec ?(temperature = 1.0) () =
 type position_embedding =
   | Learned_additive
       (** Current default: learned parameter added to input embeddings. *)
-  | Sinusoidal_additive of { encoding : Tensor.t }
-      (** Fixed sinusoidal encoding added to input embeddings. *)
+  | Sinusoidal_additive of { enc_encoding : Tensor.t; dec_encoding : Tensor.t }
+      (** Fixed sinusoidal encoding added to input embeddings.
+          Use separate tensors for encoder and decoder when [d_enc <> d_dec]. For equal widths,
+          the same tensor can be passed for both. Build with {!sinusoidal_position_encoding}. *)
   | RoPE of { freqs : Tensor.t; positions : Tensor.t }
       (** Rotary embeddings applied to Q/K inside self-attention. No additive component. *)
-  | PoPE of { freqs : Tensor.t; positions : Tensor.t }
-      (** Polar position embeddings (arXiv:2509.10534). Like RoPE but decouples content from
-          position: each pair [(x[2k], x[2k+1])] is transformed to
-          [(softplus(x[2k]) * cos(pos*theta_k), softplus(x[2k]) * sin(pos*theta_k))].
-          Content affects only magnitude (via softplus), position affects only phase. *)
   | No_pos_embed  (** No position information. *)
+
+(* TODO(#398): PoPE (arXiv:2509.10534) — Polar Position Embeddings.
+   PoPE applies softplus to each of the d elements of Q/K independently, producing d magnitudes.
+   Each magnitude mu_c = softplus(x_c) is paired with a position-only phase:
+     output_c = mu_c * exp(i * pos * theta_c)
+   i.e. (mu_c * cos(pos * theta_c), mu_c * sin(pos * theta_c)).
+   This produces d complex numbers = 2d real values, doubling the dimensionality.
+   The Q/K projections would need to output d_k/2 before PoPE expands to d_k, requiring
+   architectural changes to multi_head_attention (separate projection width from head width).
+   Blocked on: deciding whether to change the attention API or add a PoPE-specific attention. *)
 
 (** RoPE inverse frequencies: theta_k = base^(-2k/d) for k = 0..half_d-1.
     @param half_d Per-head key dimension divided by 2 (i.e. d_k / 2, NOT d_model / 2).
@@ -177,35 +184,18 @@ let%op rope ~freqs ~positions x =
   let out_odd = (x_even *. sin_a) + (x_odd *. cos_a) in
   interleave out_even out_odd
 
-(** Apply PoPE (Polar Position Embeddings, arXiv:2509.10534) to tensor [x].
-    Unlike RoPE which rotates x directly (entangling content and position),
-    PoPE decouples them: content determines magnitude via softplus, position
-    determines phase via rotation. For each pair [(x[2k], x[2k+1])]:
-    - magnitude: [mu = softplus(x[2k]) = log(1 + exp(x[2k]))]
-    - result: [(mu * cos(pos * theta_k), mu * sin(pos * theta_k))]
-    The odd element [x[2k+1]] is discarded — only even elements carry content. *)
-let%op pope ~freqs ~positions x =
-  let cos_a = cos (positions *. freqs) in
-  let sin_a = sin (positions *. freqs) in
-  let x_even = deinterleave_even x in
-  let mu = log (1. + exp x_even) in
-  let out_even = mu *. cos_a in
-  let out_odd = mu *. sin_a in
-  interleave out_even out_odd
-
 let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0)
     ?(pos_embed = No_pos_embed) ()
     ~train_step ?mask x =
-  (match pos_embed with (RoPE _ | PoPE _) -> assert Int.(d_k % 2 = 0) | _ -> ());
+  (match pos_embed with RoPE _ -> assert Int.(d_k % 2 = 0) | _ -> ());
   let q = { w_q } * x in
   let k = { w_k } * x in
   let v = { w_v } * x in
-  (* RoPE/PoPE rotate within the last output axis (d, the per-head width).
+  (* RoPE rotates within the last output axis (d, the per-head width).
      The h axis (heads) is preserved — no rotation across head boundaries. *)
   let q, k =
     match pos_embed with
     | RoPE { freqs; positions } -> (rope ~freqs ~positions q, rope ~freqs ~positions k)
-    | PoPE { freqs; positions } -> (pope ~freqs ~positions q, pope ~freqs ~positions k)
     | _ -> (q, k)
   in
   let scores =
@@ -303,7 +293,7 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
   let enc_att = [%oc d_enc / num_heads] in
   let dec_att = [%oc d_dec / num_heads] in
   let attn_pos_embed =
-    match pos_embed with (RoPE _ | PoPE _) as pe -> pe | _ -> No_pos_embed
+    match pos_embed with RoPE _ as pe -> pe | _ -> No_pos_embed
   in
   let encoder =
     transformer_encoder ~label:("encoder" :: label) ~num_layers:num_encoder_layers ~num_heads
@@ -321,15 +311,15 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     let enc_output =
       match pos_embed with
       | Learned_additive -> encoder ~train_step (enc_input + { pos_encoding })
-      | Sinusoidal_additive { encoding } -> encoder ~train_step (enc_input + encoding)
-      | RoPE _ | PoPE _ | No_pos_embed -> encoder ~train_step enc_input
+      | Sinusoidal_additive { enc_encoding; _ } -> encoder ~train_step (enc_input + enc_encoding)
+      | RoPE _ | No_pos_embed -> encoder ~train_step enc_input
     in
     let tgt_embedded_base = { tgt_embed; o = [ d_dec ] } * tgt in
     let tgt_embedded =
       match pos_embed with
       | Learned_additive -> tgt_embedded_base + pos_encoding_tgt
-      | Sinusoidal_additive { encoding } -> tgt_embedded_base + encoding
-      | RoPE _ | PoPE _ | No_pos_embed -> tgt_embedded_base
+      | Sinusoidal_additive { dec_encoding; _ } -> tgt_embedded_base + dec_encoding
+      | RoPE _ | No_pos_embed -> tgt_embedded_base
     in
     { w_out } * decoder ~train_step tgt_embedded ~enc_output ~mask
 
