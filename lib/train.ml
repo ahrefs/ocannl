@@ -61,14 +61,14 @@ let run ctx routine = ignore (Context.run ctx routine)
    ~f:(fun (v, name) -> let f arr = Npy.Npz.restore in_file name arr in Nd.map { f } @@
    Option.value_exn ~here:[%here] @@ Lazy.force v.array) *)
 let set_on_host ?(from_device = true) (a : Tn.t) =
-  let memtype = if from_device then Tn.(Changed_on_devices Unset) else Volatile in
+  let memtype = if from_device then Tn.Changed_on_devices else Volatile in
   Tn.update_memory_mode a (Hosted memtype) 27
 
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 
 let set_hosted (a : Tn.t) =
   if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 411
-  else Tn.update_memory_mode a (Hosted (Changed_on_devices Unset)) 412
+  else Tn.update_memory_mode a (Hosted Changed_on_devices) 412
 
 (** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
     label-derived comment. *)
@@ -127,53 +127,6 @@ let%track3_sexp sequential_loop ~f lowered_bindings =
         idx := old_idx
   in
   loop lowered_bindings
-
-(** Distributes iterated indices to workers in a round-robin fashion. All and only bindings with
-    associated ranges are iterated, with the binding's initial value lost. Bindings without ranges
-    remain at their initial values. [sync] is called after each round of calling all workers, and at
-    the end if needed, with the number of workers called during the round. *)
-let%track3_sexp round_robin fs parallel_jitbs jitbs ~sync : unit =
-  let num_streams : int = Array.length fs in
-  assert (Array.length parallel_jitbs = num_streams);
-  let pos = ref 0 in
-  let rec loop = function
-    | [] ->
-        fs.(!pos % num_streams) ();
-        Int.incr pos;
-        if !pos % num_streams = 0 then sync num_streams
-    | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
-    | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx)
-      :: ({ Idx.static_range = None; static_symbol = _ }, _)
-      :: more
-    | (({ Idx.static_range = Some range; static_symbol = _ } as s), idx) :: more ->
-        for i = 0 to range - 1 do
-          idx := i;
-          if List.is_empty more then Idx.find_exn parallel_jitbs.(!pos % num_streams) s := i
-          else Array.iter parallel_jitbs ~f:(fun jb -> Idx.find_exn jb s := i);
-          loop more
-        done
-  in
-  loop jitbs;
-  if !pos % num_streams <> 0 then sync (!pos % num_streams)
-
-let%track3_sexp round_robin_dry_run ~num_streams jitbs ~dry_sync : unit =
-  let pos = ref 0 in
-  let rec loop = function
-    | [] ->
-        Int.incr pos;
-        if !pos % num_streams = 0 then dry_sync num_streams
-    | ({ Idx.static_range = None; static_symbol = _ }, _) :: more -> loop more
-    | ({ Idx.static_range = Some range; static_symbol = _ }, idx)
-      :: ({ Idx.static_range = None; static_symbol = _ }, _)
-      :: more
-    | ({ Idx.static_range = Some range; static_symbol = _ }, idx) :: more ->
-        for i = 0 to range - 1 do
-          idx := i;
-          loop more
-        done
-  in
-  loop jitbs;
-  if !pos % num_streams <> 0 then dry_sync (!pos % num_streams)
 
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 

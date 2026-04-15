@@ -1,26 +1,26 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 Tnode: collecting accessible arrays...
-n0 moons_flat as moons_flat: Host&shared/49039; single prec 40x10x2; mem in bytes: 3_200
-n1 moons_classes as moons_classes: Host&shared/49039; single prec 40x10x1; mem in bytes: 1_600
+n0 moons_flat as moons_flat: Host-unset/49; single prec 40x10x2; mem in bytes: 3_200
+n1 moons_classes as moons_classes: Host-unset/49; single prec 40x10x1; mem in bytes: 1_600
 n2 range_over_offsets as range_over_offsets: Virt/15; uint4x32 prec 1x16; mem in bytes: <not-hosted>
 n3 42_random_seed as random_seed_42: Virt/40; uint4x32 prec 1; mem in bytes: <not-hosted>
 n4 !@self_id as n4: Virt/40; uint4x32 prec 1; mem in bytes: <not-hosted>
 n5 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 1x16; mem in bytes: <not-hosted>
 n6 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 1x16; mem in bytes: <not-hosted>
-n7 w2 as w2: Host&stream/412410; single prec 1x16; mem in bytes: <not-in-yet>
+n7 w2 as w2: Host&dev/412; single prec 1x16; mem in bytes: <not-in-yet>
 n8 grad_w2 as w2.grad: Local/26046; single prec 1x16; mem in bytes: <not-in-yet>
 n9 range_over_offsets as range_over_offsets: Virt/15; uint4x32 prec 16; mem in bytes: <not-hosted>
 n10 !@self_id as n10: Virt/40; uint4x32 prec 1; mem in bytes: <not-hosted>
 n11 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 16; mem in bytes: <not-hosted>
 n12 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 16; mem in bytes: <not-hosted>
-n13 b1 as b1: Host&stream/412410; single prec 16; mem in bytes: <not-in-yet>
+n13 b1 as b1: Host&dev/412; single prec 16; mem in bytes: <not-in-yet>
 n14 grad_b1 as b1.grad: Local/26046; single prec 16; mem in bytes: <not-in-yet>
 n15 range_over_offsets as range_over_offsets: Virt/15; uint4x32 prec 16x2; mem in bytes: <not-hosted>
 n16 !@self_id as n16: Virt/40; uint4x32 prec 1; mem in bytes: <not-hosted>
 n17 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 16x2; mem in bytes: <not-hosted>
 n18 threefry4x32_light as threefry4x32_light: Virt/15; uint4x32 prec 16x2; mem in bytes: <not-hosted>
-n19 w1 as w1: Host&stream/412410; single prec 16x2; mem in bytes: <not-in-yet>
+n19 w1 as w1: Host&dev/412; single prec 16x2; mem in bytes: <not-in-yet>
 n20 grad_w1 as w1.grad: Local/26046; single prec 16x2; mem in bytes: <not-in-yet>
 n21 @|_moons_input as moons_input: Virt/15; single prec 10x2; mem in bytes: <not-in-yet>
 n24 @|_moons_class as moons_class: Virt/15; single prec 10x1; mem in bytes: <not-in-yet>
@@ -42,7 +42,7 @@ n41 grad_relu_margin_loss as relu_margin_loss.grad: Virt/151; single prec 10x1; 
 n42 10 as _10: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n43 => as n43: Local/9046; single prec 1; mem in bytes: <not-in-yet>
 n44 grad_=> as n43.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n45 /._scalar_loss as scalar_loss: Host&stream/412410; single prec 1; mem in bytes: <not-in-yet>
+n45 /._scalar_loss as scalar_loss: Host&dev/412; single prec 1; mem in bytes: <not-in-yet>
 n46 grad_/._scalar_loss as scalar_loss.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n47 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n48 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
@@ -53,7 +53,7 @@ n52 *. as n52: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n53 - as n53: Virt/151; single prec 1; mem in bytes: <not-in-yet>
 n54 0.1 as n54: Virt/40; single prec 1; mem in bytes: <not-in-yet>
 n55 *. as n55: Virt/151; single prec 1; mem in bytes: <not-in-yet>
-n56 /._learning_rate as learning_rate: Host&stream/412410; single prec 1; mem in bytes: <not-in-yet>
+n56 /._learning_rate as learning_rate: Host&dev/412; single prec 1; mem in bytes: <not-in-yet>
 n57 sgd_delta_w2 as sgd_delta_w2: Virt/15; single prec 1x16; mem in bytes: <not-in-yet>
 n58 sgd_momentum_w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 n59 0.0001 as n59: Virt/40; single prec 1; mem in bytes: <not-in-yet>

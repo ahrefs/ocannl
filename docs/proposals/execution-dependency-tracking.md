@@ -20,7 +20,7 @@ The gap: if a user schedules routine B (which reads tensor X) before routine A (
 - These sets are computed at link time from the lowered IR (`Low_level.input_and_output_nodes`).
 
 **`sync_routine`** (`arrayjit/lib/backends.ml` lines 207-235):
-- Handles cross-stream synchronization via events: waits on `shared_writer_streams` for input nodes, records `updating_for` events for output nodes.
+- Handles cross-stream synchronization via events: records `updating_for` events for output nodes. (Note: `shared_writer_streams` was removed in the streams cleanup; cross-stream synchronization is now simplified.)
 - Handles `from_host` transfers for hosted inputs when `automatic_host_transfers` is enabled.
 - Does NOT enforce any ordering of routines within the same stream beyond FIFO queue order.
 

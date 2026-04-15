@@ -110,9 +110,7 @@ module Alloc_buffer = struct
 end
 
 (* Functor defining the backend *)
-module Fresh (Config : sig
-  val config : Ir.Backend_intf.config
-end) : Ir.Backend_impl.Lowered_backend = struct
+module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
@@ -244,10 +242,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     Unsigned.ULLong.equal current_signaled expected_signaled
 
   (* --- Configuration and Info --- *)
-  let suggested_num_streams _device =
-    match Config.config with
-    | Only_devices_parallel | For_parallel_copying | Most_parallel_streams -> 1
-
   let get_used_memory _device = Atomic.get allocated_memory
 
   let static_properties =
@@ -367,8 +361,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     stream.merge_buffer :=
       Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ~size_in_bytes stream)
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-    let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
 
     let memcpy ~dst_ptr =
@@ -384,13 +377,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     match (into_merge_buffer, dst_ptr) with
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
     | No, Some dst_ptr -> memcpy ~dst_ptr
-    | Streaming_for _, _ ->
-        if same_device then dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
-        else (
-          (* Fall back to copy for different devices *)
-          opt_alloc_merge_buffer ~size_in_bytes dst.stream;
-          let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-          memcpy ~dst_ptr:buffer.ptr)
     | Copy, _ ->
         opt_alloc_merge_buffer ~size_in_bytes dst.stream;
         let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
@@ -761,7 +747,7 @@ using namespace metal;|} in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
             | Param_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
                 let buffer =
-                  Hashtbl.find_or_add stream.device.cross_stream_candidates tn ~default:(fun () ->
+                  Hashtbl.find_or_add stream.device.constant_buffer_cache tn ~default:(fun () ->
                       get_buffer_for_ptr device ~size_in_bytes:(Lazy.force tn.size_in_bytes)
                       @@ Ndarray.get_voidptr_not_managed
                       @@ Option.value_exn ~here:[%here]

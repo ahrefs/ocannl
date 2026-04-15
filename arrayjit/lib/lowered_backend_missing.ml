@@ -122,9 +122,6 @@ struct
 
   let num_devices () = 0
 
-  let suggested_num_streams _device =
-    failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
-
   let new_stream _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 

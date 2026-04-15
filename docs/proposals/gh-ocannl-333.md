@@ -34,7 +34,7 @@ Eliminate the dual host/device memory model by removing the `array` field from `
 
 ### Current architecture
 
-`Tnode.t` maintains a dual-memory model where tensor nodes can have both a host-side `Ndarray` (the `array` field) and device-side buffers managed by backends. The `Hosted of memory_type` memory mode controls synchronization between host and device copies, with five `memory_type` sub-variants driving a complex state machine in `update_memory_mode` (tnode.ml lines 306-352) and `update_memory_sharing` (tnode.ml lines 357-388).
+`Tnode.t` maintains a dual-memory model where tensor nodes can have both a host-side `Ndarray` (the `array` field) and device-side buffers managed by backends. The `Hosted of memory_type` memory mode controls synchronization between host and device copies, with five `memory_type` sub-variants driving a complex state machine in `update_memory_mode` (tnode.ml lines 306-352). (Note: `update_memory_sharing` was removed in the streams cleanup.)
 
 Key code locations:
 - **Tnode.t type**: arrayjit/lib/tnode.ml lines 73-98 (record with `array`, `devices_not_lagging_host`)

@@ -134,11 +134,7 @@ struct
       dev;
       ordinal;
       device_id;
-      cross_stream_candidates = Hashtbl.create (module Tnode);
-      owner_stream = Hashtbl.create (module Tnode);
-      shared_writer_streams = Hashtbl.create (module Tnode);
-      host_reading_streams = Hashtbl.create (module Tnode);
-      host_writing_streams = Hashtbl.create (module Tnode);
+      constant_buffer_cache = Hashtbl.create (module Tnode);
       streams = Utils.weak_create ();
     }
 
@@ -152,7 +148,6 @@ struct
           allocated_buffer = None;
           updating_for = Hashtbl.create (module Tnode);
           updating_for_merge_buffer = None;
-          reader_streams = Hashtbl.create (module Tnode);
         })
 
   let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
@@ -188,7 +183,6 @@ end
 *)
 module type For_add_scheduler = sig
   val name : string
-  val config : config
 
   include No_device_buffer_and_copying
 end

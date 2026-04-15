@@ -25,15 +25,6 @@ let check_merge_buffer stream ~code_node =
            ^ ", expected by code: " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
-  let wait_for_all ctx streams tn =
-    let s = ctx.stream in
-    Hashtbl.update_and_return streams tn
-      ~f:
-        (Fn.compose (List.filter ~f:(fun (_, e) -> not (Backend.is_done e)))
-        @@ Option.value ~default:[])
-    |> List.iter ~f:(fun (work_stream, e) ->
-        if not (equal_stream work_stream s) then Backend.will_wait_for ctx e)
-
   let wait_for_ready ~dst ~src tn =
     let s = src.stream in
     let d = dst.stream in
@@ -45,44 +36,26 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
   let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
-        if Tn.potentially_cross_stream tn then
-          wait_for_all ctx ctx.stream.device.shared_writer_streams tn;
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
         (* Stdio.printf "copying: %s to_host\n" (Tn.debug_name tn); *)
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
-        let s = ctx.stream in
-        let e = Backend.all_work s in
-        Hashtbl.update s.device.host_writing_streams tn ~f:(fun l ->
-            (s, e) :: Option.value ~default:[] l);
         true
     | _ -> false
 
-  let update_writer_event ?e ?from ctx tn =
+  let update_writer_event ?e ctx tn =
     let s = ctx.stream in
     let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
-    let f l = (s, e) :: Option.value ~default:[] l in
-    (match (from, tn) with
-    | None, _ -> ()
-    | Some `Host, Assignments.(Node tn | Merge_buffer tn) ->
-        Hashtbl.update s.device.host_reading_streams tn ~f
-    | Some (`Src src), (Assignments.Node tn | Assignments.Merge_buffer tn) ->
-        Hashtbl.update src.reader_streams tn ~f);
     (* Wait for writing to finish before reading. *)
-    (match (from, tn) with
-    | _, Assignments.Merge_buffer _ | Some `Host, _ -> ()
-    | _, Assignments.Node tn ->
+    (match tn with
+    | Assignments.Merge_buffer _ -> ()
+    | Assignments.Node tn ->
         Tnode.prepare_read
           ~is_done:(fun () -> Backend.is_done e)
           ~sync:(fun () -> Backend.sync e)
           ~transfer:(fun () -> if to_host ctx tn then Backend.await s)
           tn);
-    (* To be on the safe side, record events for potentially cross-stream nodes. *)
     match tn with
     | Node tn ->
-        if Tn.potentially_cross_stream tn then
-          Hashtbl.update s.device.shared_writer_streams tn ~f:(fun l ->
-              (s, e) :: Option.value ~default:[] l)
-        else Hashtbl.remove s.device.shared_writer_streams tn;
         Hash_set.add tn.devices_not_lagging_host ctx.stream.device.device_id;
         Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
     | Merge_buffer tn ->
@@ -92,11 +65,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
   let%track3_sexp from_host (ctx : Backend.context) tn =
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
-        wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
-        update_writer_event ~from:`Host ctx @@ Node tn;
+        update_writer_event ctx @@ Node tn;
         true
     | _ -> false
 
@@ -106,11 +78,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         let dims = Lazy.force tn.dims in
         (* Use alloc_array since we're immediately copying from host *)
         let dst = Backend.alloc_array (Lazy.force tn.prec) ~dims ctx.stream in
-        wait_for_all ctx ctx.stream.reader_streams tn;
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
-        update_writer_event ~from:`Host ctx @@ Node tn;
+        update_writer_event ctx @@ Node tn;
         { ctx with ctx_arrays = Map.add_exn ctx.ctx_arrays ~key:tn ~data:dst }
     | _, Some _ ->
         raise
@@ -125,82 +96,56 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let%track3_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) =
-    let ordinal_of ctx = ctx.stream.device.ordinal in
-    let name_of ctx = Backend.(get_name ctx.stream) in
-    let same_device = ordinal_of dst = ordinal_of src in
-    if same_device && (Tn.known_shared_cross_streams tn || String.equal (name_of src) (name_of dst))
-    then false
-    else
-      match Map.find src.ctx_arrays tn with
-      | None -> false
-      | Some s_arr -> (
-          wait_for_ready ~dst ~src tn;
-          match into_merge_buffer with
-          | No -> (
-              match Map.find dst.ctx_arrays tn with
-              | None -> false
-              | Some d_arr ->
+    match Map.find src.ctx_arrays tn with
+    | None -> false
+    | Some s_arr -> (
+        wait_for_ready ~dst ~src tn;
+        match into_merge_buffer with
+        | No -> (
+            match Map.find dst.ctx_arrays tn with
+            | None -> false
+            | Some d_arr ->
+                if phys_equal s_arr d_arr then false
+                else (
                   Backend.(
                     device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                       ~src);
-                  update_writer_event ~from:(`Src src.stream) dst @@ Node tn;
-                  [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
-                  true)
-          | Copy ->
-              Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
-              update_writer_event ~from:(`Src src.stream) dst @@ Merge_buffer tn;
-              [%log "copy into merge buffer", Tn.debug_name tn, "from", name_of src];
-              true
-          | Streaming_for task ->
-              Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
-              dst.stream.updating_for_merge_buffer <- Some (tn, None);
-              let merge_task () = Task.run task in
-              merge_task ();
-              update_writer_event ~from:(`Src src.stream) dst @@ Merge_buffer tn;
-              [%log "streaming into merge buffer", Tn.debug_name tn, "from", name_of src];
-              true)
+                  update_writer_event dst @@ Node tn;
+                  [%log "copying", Tn.debug_name tn, "from", Backend.get_name src.stream, "to", Backend.get_name dst.stream];
+                  true))
+        | Copy ->
+            Backend.(
+              device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
+            update_writer_event dst @@ Merge_buffer tn;
+            [%log "copy into merge buffer", Tn.debug_name tn, "from", Backend.get_name src.stream];
+            true)
 
   let%track3_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
-    let ordinal_of ctx = ctx.stream.device.ordinal in
-    let name_of ctx = Backend.(get_name ctx.stream) in
     match Map.find src.ctx_arrays tn with
     | None ->
         raise
         @@ Utils.User_error
              ("init_from_device: tensor node " ^ Tn.debug_name tn ^ " is not in input context "
             ^ Backend.get_name src.stream ^ ", for stream " ^ Backend.get_name dst.stream)
-    | Some s_arr ->
-        let same_device = ordinal_of dst = ordinal_of src in
-        if
-          same_device
-          && (Tn.known_shared_cross_streams tn || String.equal (name_of src) (name_of dst))
-        then
-          (* TODO: should we add s_arr to the output context? Failing now to be on the safe side. *)
-          raise
-          @@ Utils.User_error
-               ("init_from_device: tensor node " ^ Tn.debug_name tn
-              ^ " is shared across streams, for stream " ^ Backend.get_name src.stream)
-        else (
-          wait_for_ready ~dst ~src tn;
-          match Map.find dst.ctx_arrays tn with
-          | Some _ ->
-              raise
-              @@ Utils.User_error
-                   ("init_from_device: tensor node " ^ Tn.debug_name tn
-                  ^ " already in output context " ^ Backend.get_name dst.stream ^ ", for stream "
-                  ^ Backend.get_name src.stream)
-          | None ->
-              let dims = Lazy.force tn.dims in
-              (* Use alloc_array since we're immediately copying from another device *)
-              let d_arr = Backend.alloc_array (Lazy.force tn.prec) ~dims dst.stream in
-              Backend.(
-                device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
-                  ~src);
-              update_writer_event ~from:(`Src src.stream) dst @@ Node tn;
-              [%log "copying", Tn.debug_name tn, "from", name_of src, "to", name_of dst];
-              { dst with ctx_arrays = Map.add_exn dst.ctx_arrays ~key:tn ~data:d_arr })
+    | Some s_arr -> (
+        wait_for_ready ~dst ~src tn;
+        match Map.find dst.ctx_arrays tn with
+        | Some _ ->
+            raise
+            @@ Utils.User_error
+                 ("init_from_device: tensor node " ^ Tn.debug_name tn
+                ^ " already in output context " ^ Backend.get_name dst.stream ^ ", for stream "
+                ^ Backend.get_name src.stream)
+        | None ->
+            let dims = Lazy.force tn.dims in
+            (* Use alloc_array since we're immediately copying from another device *)
+            let d_arr = Backend.alloc_array (Lazy.force tn.prec) ~dims dst.stream in
+            Backend.(
+              device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
+                ~src);
+            update_writer_event dst @@ Node tn;
+            [%log "copying", Tn.debug_name tn, "from", Backend.get_name src.stream, "to", Backend.get_name dst.stream];
+            { dst with ctx_arrays = Map.add_exn dst.ctx_arrays ~key:tn ~data:d_arr })
 
   type r = Backend.context routine [@@deriving sexp_of]
 
@@ -212,15 +157,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       if Utils.settings.automatic_host_transfers then
         Set.iter hosted_inputs ~f:(fun tn ->
             if not (Hash_set.mem tn.devices_not_lagging_host s.device.device_id) then
-              assert (from_host r.context tn));
-      Set.iter r.inputs ~f:(fun tn ->
-          if Tn.potentially_cross_stream tn then
-            Option.iter (Hashtbl.find s.device.shared_writer_streams tn) ~f:(fun data ->
-                let data = List.filter data ~f:(fun (_, e) -> not (Backend.is_done e)) in
-                Hashtbl.set s.device.shared_writer_streams ~key:tn ~data;
-                List.iter data ~f:(fun (work_stream, e) ->
-                    if not (equal_stream work_stream s) then Backend.will_wait_for r.context e))
-          else Hashtbl.remove s.device.shared_writer_streams tn)
+              assert (from_host r.context tn))
       (* Since merge buffers are always per-stream, no need to check r.merge_buffer_input. *)
     in
     let post () =
@@ -236,11 +173,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   let sync_device device =
     Utils.weak_iter device.streams ~f:Backend.await;
-    Hashtbl.clear device.host_writing_streams;
-    Hashtbl.clear device.host_reading_streams;
-    Hashtbl.clear device.shared_writer_streams;
     Utils.weak_iter device.streams ~f:(fun s ->
-        Hashtbl.clear s.reader_streams;
         s.updating_for_merge_buffer <- None;
         Hashtbl.clear s.updating_for)
 end
@@ -302,16 +235,12 @@ module Add_device
         with type buffer_ptr = Impl.buffer_ptr
          and type optimize_ctx = Low_level.optimize_ctx)
     (Backend : Lowered_no_device_backend)
-    (Config : sig
-      val config : config
-    end)
 (* : Lowered_backend *) =
 struct
   include Backend
 
   include Add_scheduler (struct
     include Backend
-    include Config
   end)
 
   type code = { lowered : Low_level.optimized; proc : Backend.procedure } [@@deriving sexp_of]
@@ -379,7 +308,6 @@ struct
       match (into_merge_buffer, dst_ptr) with
       | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_ptr"
       | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
-      | Streaming_for _, _ -> fun () -> s.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
       | Copy, _ ->
           fun () ->
             let allocated_capacity =
@@ -506,13 +434,6 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           [%log "Backends.alloc_if_needed: failed to add old node to context", (key : Tnode.t)];
           raise exn
       in
-      let hash_find_exn ~message:_msg tbl =
-        try Hashtbl.find_exn tbl key
-        with exn ->
-          [%log
-            "Backends.alloc_if_needed: failed to find node in hash table", _msg, (key : Tnode.t)];
-          raise exn
-      in
       let device = stream.device in
       (* It's the user's responsibility to ensure that constants are initialized on devices, the
          user can choose to run initialization code on multiple streams redundantly, or on the owner
@@ -520,43 +441,23 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       if node.Low_level.read_only || Tn.known_constant key then (
         if not node.Low_level.read_only then
           [%log "Backends.alloc_if_needed: constant node is not read-only", (key : Tnode.t)];
-        if Tn.known_non_cross_stream key then add_new_exn ()
-        else
-          let read_only_buffer : Device.buffer_ptr =
-            match use_host_memory with
-            | None -> Hashtbl.find_or_add device.cross_stream_candidates key ~default
-            | Some get_buffer_ptr ->
-                if
-                  (not (Hashtbl.mem device.cross_stream_candidates key))
-                  && Tn.known_shared_cross_streams key && Tn.is_hosted_force key 44
-                then
-                  Hashtbl.update_and_return device.cross_stream_candidates key ~f:(fun _ ->
-                      get_buffer_ptr ~size_in_bytes:(Lazy.force key.size_in_bytes)
-                      @@ Ndarray.get_voidptr_not_managed
-                      @@ Option.value_exn ~here:[%here]
-                      @@ Lazy.force key.array)
-                else Hashtbl.find_or_add device.cross_stream_candidates key ~default
-          in
-          if Hashtbl.mem device.cross_stream_candidates key then
-            Tn.update_memory_sharing key Tn.Shared_cross_streams 39;
-          add_old_exn read_only_buffer)
-      else if Tn.known_shared_cross_streams key then (
-        if Hashtbl.mem device.owner_stream key then (
-          if not (equal_stream stream (hash_find_exn ~message:"owner_stream" device.owner_stream))
-          then
-            raise
-            @@ Utils.User_error
-                 ("Backends.alloc_if_needed: node " ^ Tn.debug_name key
-                ^ " assumed to be cross-stream-shared but then written to on multiple devices"))
-        else Hashtbl.add_exn device.owner_stream ~key ~data:stream;
-        let shared_buffer : Device.buffer_ptr =
-          hash_find_exn ~message:"cross_stream_candidates" device.cross_stream_candidates
+        let read_only_buffer : Device.buffer_ptr =
+          match use_host_memory with
+          | None -> Hashtbl.find_or_add device.constant_buffer_cache key ~default
+          | Some get_buffer_ptr ->
+              if
+                (not (Hashtbl.mem device.constant_buffer_cache key))
+                && Tn.known_constant key && Tn.is_hosted_force key 44
+              then
+                Hashtbl.update_and_return device.constant_buffer_cache key ~f:(fun _ ->
+                    get_buffer_ptr ~size_in_bytes:(Lazy.force key.size_in_bytes)
+                    @@ Ndarray.get_voidptr_not_managed
+                    @@ Option.value_exn ~here:[%here]
+                    @@ Lazy.force key.array)
+              else Hashtbl.find_or_add device.constant_buffer_cache key ~default
         in
-        add_old_exn shared_buffer)
-      else (
-        Tn.update_memory_sharing key Tn.Per_stream 410;
-        Hashtbl.remove device.cross_stream_candidates key;
-        add_new_exn ()))
+        add_old_exn read_only_buffer)
+      else add_new_exn ())
     else ctx_arrays
 
   let%debug3_sexp link context (code : code) =
@@ -614,12 +515,9 @@ module Make_device_backend_from_lowered
       With_scheduler
         with type buffer_ptr = Impl.buffer_ptr
          and type optimize_ctx = Low_level.optimize_ctx)
-    (Backend_impl : Lowered_no_device_backend)
-    (Config : sig
-      val config : config
-    end) =
+    (Backend_impl : Lowered_no_device_backend) =
 struct
-  module Lowered_device = Add_device (Add_scheduler) (Backend_impl) (Config)
+  module Lowered_device = Add_device (Add_scheduler) (Backend_impl)
   module Backend_device = Raise_backend (Lowered_device)
   include Backend_device
 end
@@ -637,29 +535,25 @@ let finalize (type buffer_ptr dev runner event optimize_ctx)
         Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
             if
               (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
-              && not (Hashtbl.mem ctx.stream.device.cross_stream_candidates key)
+              && not (Hashtbl.mem ctx.stream.device.constant_buffer_cache key)
             then mem_free ctx.stream data)))
 
-let%track5_sexp fresh_backend ?backend_name ?(config = For_parallel_copying) () =
+let%track5_sexp fresh_backend ?backend_name () =
   Stdlib.Gc.full_major ();
   (* TODO: is running again needed to give time to weak arrays to become empty? *)
   Stdlib.Gc.full_major ();
   (* Note: we invoke functors from within fresh_backend to fully isolate backends from distinct
      calls to fresh_backend. *)
-  let module Config = struct
-    let config = config
-  end in
   match
     Option.value_or_thunk backend_name ~default:(fun () ->
         Utils.get_global_arg ~arg_name:"backend" ~default:"multicore_cc")
     |> String.lowercase
   with
   | "multicore_cc" ->
-      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) (Config)
-      : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) : Backend)
   | "sync_cc" ->
-      (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) (Config) : Backend)
-  | "cuda" -> (module Raise_backend (Cuda_backend_impl.Fresh (Config) : Lowered_backend) : Backend)
+      (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
+  | "cuda" -> (module Raise_backend (Cuda_backend_impl.Fresh () : Lowered_backend) : Backend)
   | "metal" ->
-      (module Raise_backend (Metal_backend_impl.Fresh (Config) : Lowered_backend) : Backend)
+      (module Raise_backend (Metal_backend_impl.Fresh () : Lowered_backend) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

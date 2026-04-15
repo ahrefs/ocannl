@@ -33,15 +33,15 @@ These are used in ~194 occurrences across 34 files (tests, training examples, li
 
 ### The `Hosted` memory mode
 
-`memory_mode` (tnode.ml, lines 47-65) includes `Hosted of memory_type`, where `memory_type` has five variants. The `update_memory_mode` function (lines 306-352) and `update_memory_sharing` (lines 357-388) contain extensive case analysis involving `Hosted` modes.
+`memory_mode` (tnode.ml, lines 47-65) includes `Hosted of memory_type`, where `memory_type` has five variants. The `update_memory_mode` function (lines 306-352) contains extensive case analysis involving `Hosted` modes. (Note: `update_memory_sharing` was removed in the streams cleanup.)
 
-Helper predicates: `is_hosted_force`, `is_in_context_force`, `known_volatile`, `known_shared_cross_streams` all pattern-match on `Hosted` variants.
+Helper predicates: `is_hosted_force`, `is_in_context_force`, `known_volatile` all pattern-match on `Hosted` variants. (Note: `known_shared_cross_streams` was removed in the streams cleanup.)
 
 ### Train.ml hosted helpers
 
 `train.ml` exposes:
-- `set_on_host` (line 63): marks a tnode as `Hosted (Changed_on_devices Unset)` or `Hosted Volatile`
-- `set_hosted` (line 69): marks as `Hosted Constant` or `Hosted (Changed_on_devices Unset)`
+- `set_on_host` (line 63): marks a tnode as `Hosted Changed_on_devices` or `Hosted Volatile` (note: `Changed_on_devices` is no longer parameterized after streams cleanup)
+- `set_hosted` (line 69): marks as `Hosted Constant` or `Hosted Changed_on_devices`
 - `every_non_literal_on_host` (line 180): sets all embedded, unspecified nodes as hosted
 - `forward` (line 75), `grad_update` (line 84): call `set_hosted` on root values
 - `to_routine` (line 186), `init_params` (line 208), `run_once` (line 251), `forward_once` (line 278): all accept `?(hosted = true)` parameter and call `set_hosted` on collected nodes
@@ -98,7 +98,7 @@ The choice affects all 34 files and the workshop paper examples.
 
 - Removing `array` field from `Tnode.t` and `Hosted` from `memory_mode`
 - Removing `memory_type` type entirely
-- Simplifying `update_memory_mode` and `update_memory_sharing` case analysis
+- Simplifying `update_memory_mode` case analysis (note: `update_memory_sharing` was already removed in the streams cleanup)
 - Removing `set_on_host`, `set_hosted`, `every_non_literal_on_host` from `train.ml`
 - Removing `?(hosted = ...)` parameters from `to_routine`, `init_params`, `run_once`, `forward_once`
 - Implementing context-based value access (the new `get_value`/`set_value`)
@@ -116,5 +116,5 @@ The choice affects all 34 files and the workshop paper examples.
 
 ### Dependencies
 
-- **watch-ocannl-README-md-b61f3434** (deprecated streams cleanup): recommended to complete first, as it simplifies the backend types this task modifies (fewer `sharing` variants in `On_device`)
+- **watch-ocannl-README-md-b61f3434** (deprecated streams cleanup): completed; the `sharing` type and `On_device of sharing` parameterization have been removed
 - **gh-ocannl-373** (tensor saving/loading): depends on this task's design for on-demand retrieval
