@@ -402,12 +402,16 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           } ->
           (* input_size = stride * (output_size - 1) + effective_kernel_span *)
           let span = effective_kernel_span ~dilation ~kernel_size:k.d in
-          Dim
-            {
-              d = (stride * (s.d - 1)) + span;
-              label = Option.first_some s.label k.label;
-              proj_id = None;
-            }
+          let label =
+            match (s.label, k.label) with
+            | Some l1, Some l2 when not (String.equal l1 l2) ->
+                raise
+                @@ Shape_error
+                     ( "convolution: conflicting dimension labels between stride and kernel",
+                       [ Dim_mismatch [ Dim s; Dim k ] ] )
+            | l1, l2 -> Option.first_some l1 l2
+          in
+          Dim { d = (stride * (s.d - 1)) + span; label; proj_id = None }
       | Affine
           {
             stride;
@@ -415,7 +419,16 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
             conv = Some { kernel = Dim k; use_padding = true; _ };
             stride_offset = _;
           } ->
-          Dim { d = s.d * stride; label = Option.first_some s.label k.label; proj_id = None }
+          let label =
+            match (s.label, k.label) with
+            | Some l1, Some l2 when not (String.equal l1 l2) ->
+                raise
+                @@ Shape_error
+                     ( "convolution: conflicting dimension labels between stride and kernel",
+                       [ Dim_mismatch [ Dim s; Dim k ] ] )
+            | l1, l2 -> Option.first_some l1 l2
+          in
+          Dim { d = s.d * stride; label; proj_id = None }
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
           Dim { d = s.d * stride; label = s.label; proj_id = None }
       | res -> res)
@@ -431,7 +444,18 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
             let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
             let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
-            let label = List.find_map solved_dims ~f:(fun s -> s.label) in
+            let labels = List.filter_map solved_dims ~f:(fun s -> s.label) in
+            let label = List.hd labels in
+            (* All non-None labels must be consistent *)
+            (if
+               not
+                 (List.for_all labels ~f:(fun l ->
+                      Option.value ~default:true (Option.map label ~f:(String.equal l))))
+             then
+               raise
+               @@ Shape_error
+                    ( "concat: conflicting dimension labels",
+                      [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] ));
             Dim { d = total_d; label; proj_id = None }
           else Concat dims)
   | Dim _ | Var _ -> in_
@@ -1600,7 +1624,30 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       raise
       @@ Shape_error
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
+  | Dim { d = d1; label = l1; _ }, Dim { d = d2; label = l2; _ }
+    when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
+      (* When one side carries a label and the other doesn't, upgrade the variable
+         that resolved to the unlabeled dim so the label persists in future checks. *)
+      let env =
+        match (l1, l2) with
+        | None, (Some _ as label) | (Some _ as label), None ->
+            let rec upgrade_var v env =
+              match find_dim env.dim_env v with
+              | Some (Solved_dim (Dim ({ d; label = None; _ } as sd))) when d = d1 ->
+                  {
+                    env with
+                    dim_env =
+                      add_dim env.dim_env ~key:v ~data:(Solved_dim (Dim { sd with label }));
+                  }
+              | Some (Solved_dim (Var w)) -> upgrade_var w env
+              | _ -> env
+            in
+            let env = match fst eq with Var v -> upgrade_var v env | _ -> env in
+            let env = match snd eq with Var v -> upgrade_var v env | _ -> env in
+            env
+        | _ -> env
+      in
+      ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   | ( Affine { stride = 1; over; conv = Some { use_padding = true; _ } | None; stride_offset = _ },
       dim )
@@ -1637,12 +1684,12 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ }, dim
   | dim, Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      unify_dim ~stage origin (get_dim ~d:(stride * s.d) (), dim) env
+      unify_dim ~stage origin (get_dim ~d:(stride * s.d) ?label:s.label (), dim) env
   | Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
       if s.d >= 0 && s.d % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:(s.d / stride) (), over) env
+        unify_dim ~stage origin (get_dim ~d:(s.d / stride) ?label:s.label (), over) env
       else
         raise
         @@ Shape_error
@@ -1656,7 +1703,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
     ->
       (* input_size = stride * (output_size - 1) + effective_kernel_span *)
       let span = effective_kernel_span ~dilation ~kernel_size:k.d in
-      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) (), dim) env
+      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) ?label:s.label (), dim) env
   | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
     ->
@@ -1665,7 +1712,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       let span : int = effective_kernel_span ~dilation ~kernel_size:k.d in
       let numerator : int = s.d - span in
       if numerator >= 0 && numerator % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((numerator / stride) + 1) (), over) env
+        unify_dim ~stage origin (get_dim ~d:((numerator / stride) + 1) ?label:s.label (), over) env
       else
         raise
         @@ Shape_error
@@ -2093,7 +2140,9 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       raise
       @@ Shape_error
            ("dimension comparison for axis: different labels", [ Dim_mismatch [ cur; subr ] ])
-  | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 = d2 -> ([], env)
+  | Dim { d = d1; label = l1; _ }, Dim { d = d2; label = l2; _ }
+    when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
+      ([], env)
   | _, Dim { d = 1; label = None; _ } -> ([], env)
   | (Dim { d = 1; label = None; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Affine _, _ | _, Affine _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
@@ -2361,10 +2410,11 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
               when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
                 ((if Option.is_some l1 then cur else lub2), [])
             | Dim _, Dim _ (* when d1 <> d2 or l1 <> l2 *) ->
+                (* Intentional broadcast semantics: conflicting labels (or different sizes)
+                   demote to d=1, meaning these axes are incompatible and should be broadcast.
+                   This is NOT a bug — do not tighten to raise Shape_error here. *)
                 let lub = get_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
-                (* raise @@ Shape_error ( "dimension comparison for axis: upper bound mismatch", [
-                   Dim_mismatch [ lub2; cur; subr ] ] ) *)
             | Var _, _ | _, Var _ -> assert false
             | Affine _, _ | _, Affine _ -> assert false
             | Concat _, _ | _, Concat _ -> assert false
@@ -2777,11 +2827,12 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
           (* TODO: we lose connection here with the other bound if both have row variables. *)
           let lub_bcast = if lub_is_cur then r_cur.bcast else lub2.bcast in
           let lub_dims =
+            (* Row-level LUB: prefer generality for broadcasting.
+               Unlabeled d=1 is most general, conflicting labels demote to d=1.
+               This is intentional broadcast generalization, not a label-checking gap. *)
             List.map2_exn (take_from_end r_cur.dims lub_len) (take_from_end lub2.dims lub_len)
               ~f:(fun d1 d2 ->
                 match (d1, d2) with
-                (* Prefer dimensions without labels (more general), then prefer d=1 (more general
-                   size) *)
                 | Dim { d = 1; label = None; _ }, _ -> d1
                 | _, Dim { d = 1; label = None; _ } -> d2
                 | Dim { d = 1; label = Some _; _ }, Dim { label = None; _ } -> d2

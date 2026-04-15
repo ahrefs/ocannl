@@ -1,0 +1,68 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Dimension Label Tests ===
+
+Test 1: Same label, same size -- succeeds
+  PASS: same label unification succeeded
+
+Test 2: Conflicting labels, same size -- raises
+  PASS: got expected Shape_error: solved dimensions for axis: different labels
+
+Test 3: One labeled, one unlabeled, same size -- compatible
+  PASS: labeled + unlabeled compatible
+
+Test 4: Variable-mediated: unlabeled first, labeled later -- compatible
+  PASS: variable-mediated unlabeled then labeled
+
+Test 5: Variable-mediated: unlabeled, labeled, then conflicting -- raises
+  PASS: got expected Shape_error: solved dimensions for axis: different labels
+
+Test 6: Shape.to_labels after inference
+  Labels: [batch]
+  PASS: label visible in Shape.to_labels
+
+Test 7: Tensor.number ~axis_label
+  Labels: [count]
+  PASS: axis_label survives inference
+
+Test 8: Operation.range ~axis_label
+  Labels: [idx]
+  PASS: range axis_label survives inference
+
+Test 9: Concat, consistent labels -- label preserved
+  Not fully solved
+  PASS: concat with consistent labels did not raise
+
+Test 10: Concat, conflicting labels -- raises
+  PASS: got expected Shape_error: concat: conflicting dimension labels
+
+Test 11: Concat, mix labeled/unlabeled -- label preserved
+  Not fully solved
+  PASS: concat with mixed labels did not raise
+
+Test 12: Affine, matching labels -- preserved
+  Solved to d=6
+  PASS: affine with matching labels did not raise
+
+Test 13: Affine, conflicting labels -- raises
+  PASS: got expected Shape_error: convolution: conflicting dimension labels between stride and kernel
+
+Test 14: Stride no-conv forward -- label propagated
+  PASS: stride forward with matching labels succeeded
+
+Test 15: Stride no-conv reverse -- label propagated
+  Solved over to d=4
+  PASS: stride reverse with label propagation succeeded
+
+Test 16: Conv no-padding forward -- label propagated
+  PASS: conv forward with matching labels succeeded
+
+Test 17: Conv no-padding reverse -- label propagated
+  Solved over to d=4
+  PASS: conv reverse with label propagation succeeded
+
+Test 18: LUB with conflicting labels -- demotion to d=1
+  INFO: Shape_error in LUB test: dimension comparison for axis: different labels
+  NOTE: LUB may raise when axes are mutually constrained
+
+=== Done ===
