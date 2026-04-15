@@ -576,10 +576,8 @@ will trigger block tensor interpretation.
 let%op stacked = [v1; v2; v3]
 (* Shape: if each vi has output [d], result has output [3, d] *)
 
-(* 2x2 block matrix from scalars -- nesting currently requires let bindings *)
-let%op row1 = [a; b] in
-let%op row2 = [c; d] in
-let%op mat = (row1, row2) ++^ "a; b => a^b"
+(* 2x2 block matrix from vectors via direct nesting *)
+let%op mat = [[a; b]; [c; d]]
 
 (* Batch two samples *)
 let%op batched = [|sample1; sample2|]
@@ -594,8 +592,8 @@ let%op input_block = (x, y)
 - Single-element block tensors like `[ta]` act as unsqueeze (add a size-1 leading axis).
 - Tuple syntax `(ta, tb)` only works at the top level of a `%op` expression. Tuples inside function
   arguments (e.g., `f (ta, tb)`) are preserved as regular OCaml tuples.
-- Direct nesting like `[[ta; tb]; [tc; td]]` is currently limited by shape inference; use
-  intermediate let bindings or explicit `++^` for nested block construction.
+- Nesting works: `[[ta; tb]; [tc; td]]` constructs a 2x2 block matrix (two new output axes).
+  Components at each nesting level must have the same shape.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 

@@ -58,19 +58,24 @@ let () =
   let ctx = Train.forward_once ctx triple in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline triple;
 
-  (* --- Test 5: Scalars in block tensor --- *)
-  (* NOTE: Nesting like [[s1; s2]; [s3; s4]] or [row1; row2] where row1/row2 are
-     themselves block tensor results is currently limited by shape inference:
-     the Concat dimension types produced by inner blocks can't be reconciled
-     with the row variable (...) in the outer concat spec. Use explicit ++^ for nesting. *)
-  printf "\n--- Test 5: Scalars in block tensor ---\n%!";
-  let s1 = PDSL.ndarray [| 1.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[] () in
-  let s2 = PDSL.ndarray [| 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[] () in
-  let s3 = PDSL.ndarray [| 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[] () in
-  let%op scalar_stack = [s1; s2; s3] in
-  Train.set_hosted scalar_stack.value;
-  let ctx = Train.forward_once ctx scalar_stack in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline scalar_stack;
+  (* --- Test 5: Nested block matrix [[a; b]; [c; d]] --- *)
+  printf "\n--- Test 5: Nested block matrix [[a; b]; [c; d]] ---\n%!";
+  let s1 =
+    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let s2 =
+    PDSL.ndarray [| 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let s3 =
+    PDSL.ndarray [| 5.0; 6.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let s4 =
+    PDSL.ndarray [| 7.0; 8.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let%op block_matrix = [[s1; s2]; [s3; s4]] in
+  Train.set_hosted block_matrix.value;
+  let ctx = Train.forward_once ctx block_matrix in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline block_matrix;
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";
