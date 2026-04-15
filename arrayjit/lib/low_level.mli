@@ -14,6 +14,8 @@ end
 type scope_id = Scope_id.t = { tn : Tnode.t; scope_id : int }
 [@@deriving sexp_of, equal, hash, compare]
 
+val get_scope : Tnode.t -> scope_id
+
 (** {2 Low-level representation} *)
 
 (** Cases: [t] -- code, [scalar_t] -- single number at some precision. *)
@@ -39,6 +41,7 @@ type t =
       mutable debug : string;
     }
   | Set_local of scope_id * scalar_t
+  | Declare_local of scope_id
 [@@deriving sexp_of, equal]
 
 and scalar_t =
@@ -152,6 +155,12 @@ val eliminate_common_subexpressions : t -> t
 (** Eliminates common subexpressions within each statement's scalar expression tree. Replaces
     duplicate [Local_scope] nodes (structurally identical modulo [scope_id]) with [Get_local]
     references to the first occurrence. Called internally by [optimize]; exposed for testing. *)
+
+val hoist_cross_statement_cse : t -> t
+(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
+    When two or more sibling statements share an alpha-equivalent [Local_scope] node, the
+    computation is extracted as a [Declare_local] + body preceding the first user, and all
+    occurrences are replaced with [Get_local]. *)
 
 val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tnode.t option
 (** Inputs are the materialized read-only and read-before-write (within the code) non-constant

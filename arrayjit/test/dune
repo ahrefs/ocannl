@@ -30,3 +30,12 @@
  (libraries base stdio arrayjit.utils)
  (preprocess
   (pps ppx_sexp_conv ppx_here)))
+
+(test
+ (name test_cross_cse)
+ (package arrayjit)
+ (modules test_cross_cse)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base stdio arrayjit.ir))

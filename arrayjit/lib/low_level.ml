@@ -47,6 +47,7 @@ type t =
       mutable debug : string;
     }
   | Set_local of scope_id * scalar_t
+  | Declare_local of scope_id
 [@@deriving sexp_of, equal]
 
 and scalar_t =
@@ -377,6 +378,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> track_symbol s)
           | Indexing.Concat syms -> List.iter syms ~f:track_symbol)
     | Set_local (_, llsc) -> loop_scalar env None llsc
+    | Declare_local _ -> ()
     | Comment _ -> ()
     | Staged_compilation _ -> ()
   and loop_scalar env (access_pos : int array option) llsc =
@@ -543,6 +545,7 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
             | _ -> ());
         loop_scalar ~env_dom arg
     | Set_local (_, llsc) -> loop_scalar ~env_dom llsc
+    | Declare_local _ -> raise @@ Non_virtual 19
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual 8
   and loop_scalar ~env_dom llsc =
@@ -712,6 +715,7 @@ let%track7_sexp inline_computation ~id
       | Set _ -> None
       | Set_from_vec _ -> None
       | Set_local (id, llsc) -> Some (Set_local (id, loop_scalar env llsc))
+      | Declare_local _ -> None
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
     and loop_scalar env llsc : scalar_t =
@@ -821,6 +825,7 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
           check_and_store_virtual computations_table traced static_indices result;
         result
     | Set_local (id, llsc) -> Set_local (id, loop_scalar ~process_for llsc)
+    | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
   and loop_scalar ~process_for (llsc : scalar_t) : scalar_t =
@@ -917,6 +922,7 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
         assert (not @@ Tn.known_non_virtual id.tn);
         Tn.update_memory_mode id.tn Virtual 16;
         Some (Set_local (id, loop_scalar ~balanced ~env_dom llsc))
+    | Declare_local _ -> Some llc
     | Comment _ -> Some llc
     | Staged_compilation _ -> Some llc
   and loop_scalar ~balanced ~env_dom (llsc : scalar_t) : scalar_t =
@@ -1000,6 +1006,7 @@ and substitute_proc ~var ~value llc =
   | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
       Set_from_vec { tn; idcs; length; vec_unop; arg = (loop_scalar arg_scalar, arg_prec); debug }
   | Set_local (id, llsc) -> Set_local (id, loop_scalar llsc)
+  | Declare_local _ -> llc
   | Comment _ -> llc
   | Staged_compilation _ -> llc
 
@@ -1020,6 +1027,7 @@ let simplify_llc llc =
     | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
         Set_from_vec { tn; idcs; length; vec_unop; arg = loop_scalar arg; debug }
     | Set_local (id, llsc) -> Set_local (id, fst (loop_scalar (llsc, Lazy.force id.tn.Tn.prec)))
+    | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
   and loop_scalar ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
@@ -1191,7 +1199,7 @@ let simplify_llc llc =
     | Set { tn; llsc; _ } -> check_float tn llsc
     | Set_from_vec { tn; arg = arg_scalar, _; _ } -> check_float tn arg_scalar
     | Set_local (id, llsc) -> check_float id.tn llsc
-    | Noop | Comment _ | Staged_compilation _ -> ()
+    | Declare_local _ | Noop | Comment _ | Staged_compilation _ -> ()
   and check_float tn llsc =
     let loop = check_float tn in
     match llsc with
@@ -1264,6 +1272,7 @@ let cse_equal_scalar s1 s2 =
         && Array.equal idx_equal i1 i2
         && equal_scalar s1 s2
     | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
+    | Declare_local id1, Declare_local id2 -> ids_equal id1 id2
     | _ -> false
   and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
     match (a, b) with
@@ -1348,19 +1357,204 @@ let eliminate_common_subexpressions llc =
           let llsc = loop_scalar llsc in
           seen := saved;
           Set_local (id, llsc)
+      | Declare_local _ -> llc
     in
     loop_scalar llsc
   in
   let rec loop_proc (llc : t) : t =
     match llc with
     | Noop -> Noop
-    | Comment _ | Staged_compilation _ | Zero_out _ -> llc
+    | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> llc
     | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
     | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
     | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = cse_scalar llsc; debug }
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         Set_from_vec { tn; idcs; length; vec_unop; arg = (cse_scalar arg_scalar, arg_prec); debug }
     | Set_local (id, llsc) -> Set_local (id, cse_scalar llsc)
+  in
+  loop_proc llc
+
+(** Collect all top-level [Local_scope] nodes from a scalar expression tree. Returns a list of
+    [(local_scope_scalar, scope_id)] pairs. Does not recurse into nested [Local_scope] bodies. *)
+let collect_local_scopes_in_scalar (llsc : scalar_t) : (scalar_t * scope_id) list =
+  let acc = ref [] in
+  let rec loop (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id; _ } -> acc := (llsc, id) :: !acc
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
+        loop s1;
+        loop s2;
+        loop s3
+    | Binop (_, (s1, _), (s2, _)) ->
+        loop s1;
+        loop s2
+    | Unop (_, (s, _)) -> loop s
+  in
+  loop llsc;
+  List.rev !acc
+
+(** Collect all [Local_scope] candidates from a statement's scalar trees. *)
+let collect_local_scopes_in_stmt (stmt : t) : (scalar_t * scope_id) list =
+  match stmt with
+  | Set { llsc; _ } -> collect_local_scopes_in_scalar llsc
+  | Set_from_vec { arg = arg_scalar, _; _ } -> collect_local_scopes_in_scalar arg_scalar
+  | Set_local (_, llsc) -> collect_local_scopes_in_scalar llsc
+  | _ -> []
+
+(** Replace all [Local_scope] nodes alpha-equivalent to [target] with [Get_local replacement]
+    in a scalar expression tree. *)
+let replace_local_scope_in_scalar ~target ~(replacement : scope_id) (llsc : scalar_t) : scalar_t =
+  let rec loop (llsc : scalar_t) : scalar_t =
+    match llsc with
+    | Local_scope _ -> if cse_equal_scalar llsc target then Get_local replacement else llsc
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> llsc
+    | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
+        Ternop (op, (loop s1, p1), (loop s2, p2), (loop s3, p3))
+    | Binop (op, (s1, p1), (s2, p2)) -> Binop (op, (loop s1, p1), (loop s2, p2))
+    | Unop (op, (s, p)) -> Unop (op, (loop s, p))
+  in
+  loop llsc
+
+(** Replace matching [Local_scope] nodes in a statement's scalar children. *)
+let replace_local_scope_in_stmt ~target ~replacement (stmt : t) : t =
+  let repl = replace_local_scope_in_scalar ~target ~replacement in
+  match stmt with
+  | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = repl llsc; debug }
+  | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
+      Set_from_vec { tn; idcs; length; vec_unop; arg = (repl arg_scalar, arg_prec); debug }
+  | Set_local (id, llsc) -> Set_local (id, repl llsc)
+  | other -> other
+
+(** Collect all tensor nodes read via [Get(tn, _)] in a statement tree. *)
+let reads_of_body (body : t) : Set.M(Tn).t =
+  let acc = ref (Set.empty (module Tn)) in
+  let rec loop_proc (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> ()
+    | Seq (c1, c2) ->
+        loop_proc c1;
+        loop_proc c2
+    | For_loop { body; _ } -> loop_proc body
+    | Set { llsc; _ } -> loop_scalar llsc
+    | Set_from_vec { arg = arg_scalar, _; _ } -> loop_scalar arg_scalar
+    | Set_local (_, llsc) -> loop_scalar llsc
+  and loop_scalar (llsc : scalar_t) =
+    match llsc with
+    | Get (tn, _) -> acc := Set.add !acc tn
+    | Get_merge_buffer (tn, _) -> acc := Set.add !acc tn
+    | Local_scope { body; _ } -> loop_proc body
+    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
+        loop_scalar s1;
+        loop_scalar s2;
+        loop_scalar s3
+    | Binop (_, (s1, _), (s2, _)) ->
+        loop_scalar s1;
+        loop_scalar s2
+    | Unop (_, (s, _)) -> loop_scalar s
+  in
+  loop_proc body;
+  !acc
+
+(** Collect all tensor nodes written by a statement. *)
+let writes_of_stmt (stmt : t) : Set.M(Tn).t =
+  match stmt with
+  | Set { tn; _ } -> Set.singleton (module Tn) tn
+  | Set_from_vec { tn; _ } -> Set.singleton (module Tn) tn
+  | Zero_out tn -> Set.singleton (module Tn) tn
+  | _ -> Set.empty (module Tn)
+
+(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
+    Operates on a flat list of sibling statements. *)
+let hoist_shared_locals (stmts : t list) : t list =
+  (* Step 1: Collect all Local_scope candidates with their statement indices *)
+  let candidates =
+    List.concat_mapi stmts ~f:(fun stmt_idx stmt ->
+        List.map (collect_local_scopes_in_stmt stmt) ~f:(fun (scalar, id) ->
+            (stmt_idx, scalar, id)))
+  in
+  (* Step 2: Group by alpha-equivalence *)
+  (* Each group is: (representative_scalar, representative_id, list of stmt indices) *)
+  let groups : (scalar_t * scope_id * int list) list ref = ref [] in
+  List.iter candidates ~f:(fun (stmt_idx, scalar, cand_id) ->
+      let found =
+        List.find_mapi !groups ~f:(fun group_idx (rep_scalar, _rep_id, _indices) ->
+            if cse_equal_scalar rep_scalar scalar then Some group_idx else None)
+      in
+      match found with
+      | Some group_idx ->
+          groups :=
+            List.mapi !groups ~f:(fun i (s, id, idxs) ->
+                if i = group_idx then (s, id, stmt_idx :: idxs) else (s, id, idxs))
+      | None -> groups := (scalar, cand_id, [ stmt_idx ]) :: !groups);
+  (* Keep only groups with 2+ members *)
+  let shared_groups =
+    List.filter_map !groups ~f:(fun (scalar, id, indices) ->
+        let indices = List.dedup_and_sort indices ~compare:Int.compare in
+        if List.length indices >= 2 then Some (scalar, id, indices) else None)
+  in
+  if List.is_empty shared_groups then stmts
+  else
+    (* Step 3: Safety check + rewrite *)
+    let stmts = Array.of_list stmts in
+    let insertions : (int * t list) list ref = ref [] in
+    List.iter shared_groups ~f:(fun (target_scalar, canonical_id, user_indices) ->
+        let first_user = List.hd_exn user_indices in
+        let last_user = List.last_exn user_indices in
+        (* Collect reads of the Local_scope body *)
+        let body_reads =
+          match target_scalar with
+          | Local_scope { body; _ } -> reads_of_body body
+          | _ -> Set.empty (module Tn)
+        in
+        (* Check for intervening writes between first_user and last_user *)
+        let safe =
+          let intervening_writes = ref (Set.empty (module Tn)) in
+          for i = first_user to last_user do
+            if not (List.mem user_indices i ~equal:Int.equal) then
+              intervening_writes := Set.union !intervening_writes (writes_of_stmt stmts.(i))
+          done;
+          Set.is_empty (Set.inter body_reads !intervening_writes)
+        in
+        if safe then (
+          (* Extract body from canonical Local_scope *)
+          let body =
+            match target_scalar with Local_scope { body; _ } -> body | _ -> assert false
+          in
+          (* Replace all occurrences in all user statements *)
+          List.iter user_indices ~f:(fun idx ->
+              stmts.(idx) <-
+                replace_local_scope_in_stmt ~target:target_scalar ~replacement:canonical_id
+                  stmts.(idx));
+          (* Record insertion: Declare_local + body before first user *)
+          insertions := (first_user, [ Declare_local canonical_id; body ]) :: !insertions));
+    (* Apply insertions (sorted by position, last first to preserve indices) *)
+    let insertions =
+      List.sort !insertions ~compare:(fun (a, _) (b, _) -> Int.descending a b)
+    in
+    let result = Array.to_list stmts in
+    let result =
+      List.fold insertions ~init:result ~f:(fun acc (pos, prefix) ->
+          let before = List.take acc pos in
+          let after = List.drop acc pos in
+          before @ prefix @ after)
+    in
+    result
+
+(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
+    When two or more sibling statements share an alpha-equivalent [Local_scope] node, the
+    computation is extracted as a [Declare_local] + body preceding the first user, and all
+    occurrences are replaced with [Get_local]. *)
+let hoist_cross_statement_cse llc =
+  let rec loop_proc (llc : t) : t =
+    match llc with
+    | Seq _ ->
+        let stmts = flat_lines [ llc ] in
+        let stmts = List.map stmts ~f:loop_proc in
+        hoist_shared_locals stmts |> unflat_lines
+    | For_loop fc -> For_loop { fc with body = loop_proc fc.body }
+    | _ -> llc
   in
   loop_proc llc
 
@@ -1398,7 +1592,8 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
     virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc
   in
   let llc =
-    eliminate_common_subexpressions @@ simplify_llc
+    hoist_cross_statement_cse
+    @@ eliminate_common_subexpressions @@ simplify_llc
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
     @@ virtual_llc_result
   in
@@ -1456,6 +1651,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
     | Set_local ({ tn; _ }, llsc) ->
         visit tn;
         loop_scalar llsc
+    | Declare_local { tn; _ } -> visit tn
   and loop_scalar fc =
     match fc with
     | Local_scope { id = { tn; _ }; body; orig_indices = _ } ->
@@ -1551,6 +1747,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Set_local (id, llsc) ->
         let prec = Lazy.force id.tn.prec in
         group (doc_local id ^^ string " := " ^^ doc_of_float prec llsc ^^ string ";")
+    | Declare_local id -> group (string "declare " ^^ doc_local id ^^ string ";")
   and doc_of_float prec value =
     match value with
     | Local_scope { id; body; _ } ->
@@ -1645,6 +1842,7 @@ let to_doc ?name ?static_indices () llc =
     | Staged_compilation callback -> callback ()
     | Set_local (id, llsc) ->
         group (doc_local id ^^ string " := " ^^ doc_of_float llsc ^^ string ";")
+    | Declare_local id -> group (string "declare " ^^ doc_local id ^^ string ";")
   and doc_of_float value =
     match value with
     | Local_scope { id; body; _ } ->
