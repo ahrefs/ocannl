@@ -228,27 +228,33 @@ let%op transformer_encoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1
     let x1 = ln1 (input + mha ~train_step input) in
     ln2 (x1 + ffn x1)
 
-(** Decoder-only block: masked self-attention + FFN with pre-norm residual connections.
-    Unlike {!transformer_decoder_block}, this has no cross-attention — suitable for
-    autoregressive language models (GPT-style). *)
-let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
-  let masked_mha = multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v () in
+(** Decoder-only transformer block: masked self-attention + FFN with post-norm LayerNorm.
+    Like {!transformer_encoder_block} but accepts a [~mask] parameter for causal masking.
+    No cross-attention — suitable for autoregressive language models. *)
+let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5)
+    ?(dropout_rate = 0.0) ?(pos_embed = No_pos_embed) () =
+  let masked_mha =
+    multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v ~dropout_rate ~pos_embed
+      ()
+  in
   let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
   let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
-  fun ~train_step ~mask input ->
-    let x1 = ln1 (input + masked_mha ~train_step ~mask input) in
+  fun ~train_step x ~mask ->
+    let x1 = ln1 (x + masked_mha ~train_step ~mask x) in
     ln2 (x1 + ffn x1)
 
-let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
+(** Stack of {!decoder_only_block} layers. *)
+let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate
+    ?(pos_embed = No_pos_embed) () =
   let layers =
     List.init num_layers ~f:(fun i ->
         decoder_only_block
           ~label:(("layer" ^ Int.to_string i) :: label)
-          ~num_heads ~d_k ~d_v ~d_ff ~epsilon ())
+          ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ~pos_embed ())
   in
-  fun ~train_step ~mask x ->
-    List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step ~mask x)
+  fun ~train_step x ~mask ->
+    List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x ~mask)
 
 (* Cross-attention does not apply RoPE — position encoding is for self-attention only. *)
 let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) () ~train_step
