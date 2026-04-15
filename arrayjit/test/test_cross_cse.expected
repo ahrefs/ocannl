@@ -1,0 +1,28 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Before hoist (to_doc) ===
+
+out1[0] := v100_src { for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); } };
+  out2[0] := v200_src { for i2 = 0 to 3 { v200_src := (v200_src + src[i2]); } };
+
+=== After hoist (to_doc) ===
+
+declare v100_src;
+  for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); }
+  out1[0] := v100_src;
+  out2[0] := v100_src;
+
+=== After hoist (to_doc_cstyle) ===
+
+declare v100_src;
+  for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); }
+  out1[0] := v100_src;
+  out2[0] := v100_src;
+
+=== After hoist (c_syntax pp_ll) ===
+float v100_src = (float)(0);
+for (uint32_t i1 = 0; i1 <= 3; ++i1) {
+  v100_src = (v100_src + src[i1]);
+}
+out1[0] = v100_src;
+out2[0] = v100_src;
