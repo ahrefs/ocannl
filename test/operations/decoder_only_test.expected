@@ -1,0 +1,16 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Testing decoder_only (2-layer stack)
+Output shape:
+((batch
+  ((dims
+    ((Dim ((d 2) (label ()) (proj_id ((Proj_id 1)))))
+     (Dim ((d 4) (label ()) (proj_id ((Proj_id 2)))))))
+   (bcast Broadcastable) (prov (((sh_id 307) (kind Batch))))))
+ (input
+  ((dims ()) (bcast Broadcastable) (prov (((sh_id 307) (kind Input))))))
+ (output
+  ((dims ((Dim ((d 16) (label ()) (proj_id ((Proj_id 3)))))))
+   (bcast Broadcastable) (prov (((sh_id 307) (kind Output))))))
+ (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
+ (id 307) (debug_name layer_norm))
