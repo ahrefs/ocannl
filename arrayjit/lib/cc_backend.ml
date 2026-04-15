@@ -48,7 +48,7 @@ type procedure = {
   bindings : Indexing.unit_bindings;
   name : string;
   result : library;
-  params : (string * param_source) list;
+  kparams : (string * kparam_source) list;
 }
 [@@deriving sexp_of]
 
@@ -329,7 +329,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
   end)) in
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
-  let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+  let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
   let filtered_code =
     Syntax.filter_and_prepend_builtins ~includes:Builtins_cc.includes ~builtins:Builtins_cc.builtins
       ~proc_doc
@@ -340,7 +340,7 @@ let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized)
 
   (* let result = c_compile_and_load ~f_name:pp_file.f_name in *)
   let result_library = c_compile_and_load ~f_path:build_file.f_path in
-  { result = result_library; params; bindings; name }
+  { result = result_library; kparams; bindings; name }
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized option array) :
     procedure option array =
@@ -371,8 +371,8 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
   let result_library = c_compile_and_load ~f_path:build_file.f_path in
   (* Note: for simplicity, we share ctx_arrays across all contexts. *)
   Array.mapi params_and_docs ~f:(fun i opt_params_and_doc ->
-      Option.bind opt_params_and_doc ~f:(fun (params, _doc) ->
-          Option.map names.(i) ~f:(fun name -> { result = result_library; params; bindings; name })))
+      Option.bind opt_params_and_doc ~f:(fun (kparams, _doc) ->
+          Option.map names.(i) ~f:(fun name -> { result = result_library; kparams; bindings; name })))
 
 let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
   let name : string = code.name in
@@ -383,11 +383,11 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
       let rec link :
           'a 'b 'idcs.
           'idcs Indexing.bindings ->
-          param_source list ->
+          kparam_source list ->
           ('a -> 'b) Ctypes.fn ->
           ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
-       fun (type a b idcs) (binds : idcs Indexing.bindings) params (cs : (a -> b) Ctypes.fn) ->
-        match (binds, params) with
+       fun (type a b idcs) (binds : idcs Indexing.bindings) kparams (cs : (a -> b) Ctypes.fn) ->
+        match (binds, kparams) with
         | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result.lib name cs)
         | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
         | Bind (_, bs), Static_idx _ :: ps -> Param_idx (ref 0, link bs ps Ctypes.(int @-> cs))
@@ -397,7 +397,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         | bs, Merge_buffer :: ps ->
             let get_ptr buf = buf.ptr in
             Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
-        | bs, Param_ptr tn :: ps ->
+        | bs, Kparam_ptr tn :: ps ->
             let c_ptr =
               match Map.find ctx_arrays tn with
               | None ->
@@ -415,8 +415,8 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
          [code.bindings] are traversed in the wrong order but that's OK because [link] only uses
          them to check the number of indices. *)
-      let params = List.rev_map code.params ~f:(fun (_, p) -> p) in
-      link code.bindings params Ctypes.(void @-> returning void)]
+      let kparams = List.rev_map code.kparams ~f:(fun (_, p) -> p) in
+      link code.bindings kparams Ctypes.(void @-> returning void)]
   in
   let%diagn_sexp work () : unit =
     [%log_result name];

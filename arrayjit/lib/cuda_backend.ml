@@ -295,7 +295,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   type code = {
     traced_store : Low_level.traced_store;
     ptx : Nvrtc.compile_to_ptx_result;
-    params : (string * param_source) list;
+    kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     name : string;
   }
@@ -305,7 +305,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     traced_stores : Low_level.traced_store option array;
     ptx : Nvrtc.compile_to_ptx_result;
     bindings : Indexing.unit_bindings;
-    params_and_names : ((string * param_source) list * string) option array;
+    kparams_and_names : ((string * kparam_source) list * string) option array;
   }
   [@@deriving sexp_of]
 
@@ -850,7 +850,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       let procs = [| lowered |]
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+    let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let cuda_includes =
       {|#include <cuda_fp16.h>
 #include <cuda_bf16.h>
@@ -872,21 +872,21 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         ~proc_doc
     in
     let ptx = cuda_to_ptx ~name source in
-    { traced_store; ptx; params; bindings; name }
+    { traced_store; ptx; kparams; bindings; name }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
     let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
       let procs = Array.filter_opt lowereds
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
-    let params_and_docs =
+    let kparams_and_docs =
       Array.map2_exn names lowereds
         ~f:
           (Option.map2 ~f:(fun name lowered ->
-               let params, doc = Syntax.compile_proc ~name idx_params lowered in
-               ((params, name), doc)))
+               let kparams, doc = Syntax.compile_proc ~name idx_params lowered in
+               ((kparams, name), doc)))
     in
-    let all_proc_docs = List.filter_map (Array.to_list params_and_docs) ~f:(Option.map ~f:snd) in
+    let all_proc_docs = List.filter_map (Array.to_list kparams_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
     let cuda_includes =
       {|#include <cuda_fp16.h>
@@ -916,8 +916,8 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     let ptx = cuda_to_ptx ~name source in
     let traced_stores = Array.map lowereds ~f:(Option.map ~f:(fun l -> l.Low_level.traced_store)) in
-    let params_and_names = Array.map params_and_docs ~f:(Option.map ~f:fst) in
-    { traced_stores; ptx; params_and_names; bindings }
+    let kparams_and_names = Array.map kparams_and_docs ~f:(Option.map ~f:fst) in
+    { traced_stores; ptx; kparams_and_names; bindings }
 
   let get_global_run_id =
     let next_id = ref 0 in
@@ -926,7 +926,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       if !next_id < 0 then next_id := 0;
       !next_id
 
-  let link_proc ~prior_context ~name ~(params : (string * param_source) list) ~ctx_arrays
+  let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list) ~ctx_arrays
       lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name in
     let stream = prior_context.stream in
@@ -940,13 +940,13 @@ end) : Ir.Backend_impl.Lowered_backend = struct
         "on",
         stream_name,
         (log_id : int),
-        (params : (string * param_source) list)];
+        (kparams : (string * kparam_source) list)];
       let module S = Cu.Stream in
       let args : S.kernel_param list =
         (* TODO: should we prohibit or warn about local-only tensors that are in
            prior_context.ctx_arrays? *)
-        List.map params ~f:(function
-          | _name, Param_ptr tn ->
+        List.map kparams ~f:(function
+          | _name, Kparam_ptr tn ->
               let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
               S.Tensor arr
           | _name, Log_file_name -> S.Int log_id
@@ -996,7 +996,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
       List.map idx_params ~f:(fun s -> (s, ref 0))
     in
     let task =
-      link_proc ~prior_context ~name:code.name ~params:code.params ~ctx_arrays lowered_bindings
+      link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~ctx_arrays lowered_bindings
         run_module
     in
     (lowered_bindings, task)
@@ -1011,11 +1011,11 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
     prior_context.stream.device.dev.set_builtins_in run_module;
     let procs =
-      Array.mapi code_batch.params_and_names ~f:(fun i pns ->
+      Array.mapi code_batch.kparams_and_names ~f:(fun i pns ->
           Option.value ~default:None
-          @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (params, name) ctx_arrays ->
+          @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (kparams, name) ctx_arrays ->
               let task =
-                link_proc ~prior_context ~name ~params ~ctx_arrays lowered_bindings run_module
+                link_proc ~prior_context ~name ~kparams ~ctx_arrays lowered_bindings run_module
               in
               Some task))
     in

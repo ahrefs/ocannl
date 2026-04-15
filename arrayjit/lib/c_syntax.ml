@@ -754,11 +754,11 @@ module C_syntax (B : C_syntax_config) = struct
   let compile_main llc : PPrint.document = pp_ll llc
 
   let compile_proc ~name idx_params Low_level.{ traced_store; llc; merge_node; optimize_ctx = _ } :
-      (string * param_source) list * PPrint.document =
+      (string * kparam_source) list * PPrint.document =
     let open PPrint in
-    let params : (string * param_source) list =
+    let kparams : (string * kparam_source) list =
       List.rev
-      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ params ->
+      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ kparams ->
           let backend_info, is_param =
             if Tn.is_virtual_force tn 334 then ("Virt", false)
             else if in_ctx tn then ("Ctx", true)
@@ -770,8 +770,8 @@ module C_syntax (B : C_syntax_config) = struct
           if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
             tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
           if is_param then
-            (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Param_ptr tn) :: params
-          else params)
+            (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Kparam_ptr tn) :: kparams
+          else kparams)
     in
     let idx_params =
       List.map idx_params ~f:(fun s ->
@@ -790,7 +790,7 @@ module C_syntax (B : C_syntax_config) = struct
         @@ map merge_node ~f:(fun tn ->
             ("const " ^ B.typ_of_prec (Lazy.force tn.prec) ^ " *merge_buffer", Merge_buffer)))
     in
-    let all_params = log_file_param @ merge_param @ idx_params @ params in
+    let all_params = log_file_param @ merge_param @ idx_params @ kparams in
     let sorted_params =
       List.sort all_params ~compare:(fun (p1_name, _) (p2_name, _) ->
           compare_string p1_name p2_name)
@@ -841,7 +841,7 @@ module C_syntax (B : C_syntax_config) = struct
                       ~base_message_literal:base_msg
                       ~args_docs:[ string @@ "(" ^ B.buffer_prefix ^ "void*)merge_buffer" ]
                 | Log_file_name -> empty (* Already handled by fopen or if it's just an ID *)
-                | Param_ptr tn ->
+                | Kparam_ptr tn ->
                     let base_msg =
                       Printf.sprintf "%s &[%d] = %%p\n" p_name_and_type (Tnode.num_elems tn)
                     in

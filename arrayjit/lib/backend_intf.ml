@@ -41,10 +41,10 @@ type config = Only_devices_parallel | For_parallel_copying | Most_parallel_strea
 
 type merge_buffer_use = No | Streaming_for of Task.t | Copy [@@deriving sexp_of]
 
-type param_source =
+type kparam_source =
   | Log_file_name
   | Merge_buffer
-  | Param_ptr of Tnode.t
+  | Kparam_ptr of Tnode.t
   | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
