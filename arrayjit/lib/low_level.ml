@@ -1403,12 +1403,18 @@ let collect_local_scopes_in_stmt (stmt : t) : (scalar_t * scope_id) list =
   | _ -> []
 
 (** Replace all [Local_scope] nodes alpha-equivalent to [target] with [Get_local replacement]
-    in a scalar expression tree. *)
-let replace_local_scope_in_scalar ~target ~(replacement : scope_id) (llsc : scalar_t) : scalar_t =
+    in a scalar expression tree. Also remaps [Get_local] nodes whose [scope_id] is in
+    [stale_ids] to point to [replacement], since their original [Local_scope] is being hoisted. *)
+let replace_local_scope_in_scalar ~target ~(replacement : scope_id) ~(stale_ids : scope_id list)
+    (llsc : scalar_t) : scalar_t =
   let rec loop (llsc : scalar_t) : scalar_t =
     match llsc with
     | Local_scope _ -> if cse_equal_scalar llsc target then Get_local replacement else llsc
-    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> llsc
+    | Get_local id ->
+        if List.exists stale_ids ~f:(fun stale -> equal_scope_id id stale) then
+          Get_local replacement
+        else llsc
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> llsc
     | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
         Ternop (op, (loop s1, p1), (loop s2, p2), (loop s3, p3))
     | Binop (op, (s1, p1), (s2, p2)) -> Binop (op, (loop s1, p1), (loop s2, p2))
@@ -1416,9 +1422,10 @@ let replace_local_scope_in_scalar ~target ~(replacement : scope_id) (llsc : scal
   in
   loop llsc
 
-(** Replace matching [Local_scope] nodes in a statement's scalar children. *)
-let replace_local_scope_in_stmt ~target ~replacement (stmt : t) : t =
-  let repl = replace_local_scope_in_scalar ~target ~replacement in
+(** Replace matching [Local_scope] nodes in a statement's scalar children, and remap stale
+    [Get_local] references. *)
+let replace_local_scope_in_stmt ~target ~replacement ~stale_ids (stmt : t) : t =
+  let repl = replace_local_scope_in_scalar ~target ~replacement ~stale_ids in
   match stmt with
   | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = repl llsc; debug }
   | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
@@ -1475,31 +1482,33 @@ let hoist_shared_locals (stmts : t list) : t list =
             (stmt_idx, scalar, id)))
   in
   (* Step 2: Group by alpha-equivalence *)
-  (* Each group is: (representative_scalar, representative_id, list of stmt indices) *)
-  let groups : (scalar_t * scope_id * int list) list ref = ref [] in
+  (* Each group is: (representative_scalar, representative_id, list of stmt indices,
+     all scope_ids in the group) *)
+  let groups : (scalar_t * scope_id * int list * scope_id list) list ref = ref [] in
   List.iter candidates ~f:(fun (stmt_idx, scalar, cand_id) ->
       let found =
-        List.find_mapi !groups ~f:(fun group_idx (rep_scalar, _rep_id, _indices) ->
+        List.find_mapi !groups ~f:(fun group_idx (rep_scalar, _rep_id, _indices, _all_ids) ->
             if cse_equal_scalar rep_scalar scalar then Some group_idx else None)
       in
       match found with
       | Some group_idx ->
           groups :=
-            List.mapi !groups ~f:(fun i (s, id, idxs) ->
-                if i = group_idx then (s, id, stmt_idx :: idxs) else (s, id, idxs))
-      | None -> groups := (scalar, cand_id, [ stmt_idx ]) :: !groups);
+            List.mapi !groups ~f:(fun i (s, id, idxs, all_ids) ->
+                if i = group_idx then (s, id, stmt_idx :: idxs, cand_id :: all_ids)
+                else (s, id, idxs, all_ids))
+      | None -> groups := (scalar, cand_id, [ stmt_idx ], [ cand_id ]) :: !groups);
   (* Keep only groups with 2+ members *)
   let shared_groups =
-    List.filter_map !groups ~f:(fun (scalar, id, indices) ->
+    List.filter_map !groups ~f:(fun (scalar, id, indices, all_ids) ->
         let indices = List.dedup_and_sort indices ~compare:Int.compare in
-        if List.length indices >= 2 then Some (scalar, id, indices) else None)
+        if List.length indices >= 2 then Some (scalar, id, indices, all_ids) else None)
   in
   if List.is_empty shared_groups then stmts
   else
     (* Step 3: Safety check + rewrite *)
     let stmts = Array.of_list stmts in
     let insertions : (int * t list) list ref = ref [] in
-    List.iter shared_groups ~f:(fun (target_scalar, canonical_id, user_indices) ->
+    List.iter shared_groups ~f:(fun (target_scalar, canonical_id, user_indices, all_ids) ->
         let first_user = List.hd_exn user_indices in
         let last_user = List.last_exn user_indices in
         (* Collect reads of the Local_scope body *)
@@ -1508,25 +1517,29 @@ let hoist_shared_locals (stmts : t list) : t list =
           | Local_scope { body; _ } -> reads_of_body body
           | _ -> Set.empty (module Tn)
         in
-        (* Check for intervening writes between first_user and last_user *)
+        (* Check for writes between first_user and last_user that could invalidate hoisting.
+           Include writes from ALL statements (including user statements) from first_user up to
+           but not including last_user. User statements perform tensor writes after evaluating
+           their Local_scope, so earlier users' writes can affect what later users would read. *)
         let safe =
-          let intervening_writes = ref (Set.empty (module Tn)) in
-          for i = first_user to last_user do
-            if not (List.mem user_indices i ~equal:Int.equal) then
-              intervening_writes := Set.union !intervening_writes (writes_of_stmt stmts.(i))
+          let hazard_writes = ref (Set.empty (module Tn)) in
+          for i = first_user to last_user - 1 do
+            hazard_writes := Set.union !hazard_writes (writes_of_stmt stmts.(i))
           done;
-          Set.is_empty (Set.inter body_reads !intervening_writes)
+          Set.is_empty (Set.inter body_reads !hazard_writes)
         in
         if safe then (
           (* Extract body from canonical Local_scope *)
           let body =
             match target_scalar with Local_scope { body; _ } -> body | _ -> assert false
           in
-          (* Replace all occurrences in all user statements *)
+          (* Replace all occurrences in all user statements, also remapping stale Get_local
+             references that were created by intra-statement CSE pointing at Local_scope nodes
+             that are now being hoisted away. *)
           List.iter user_indices ~f:(fun idx ->
               stmts.(idx) <-
                 replace_local_scope_in_stmt ~target:target_scalar ~replacement:canonical_id
-                  stmts.(idx));
+                  ~stale_ids:all_ids stmts.(idx));
           (* Record insertion: Declare_local + body before first user *)
           insertions := (first_user, [ Declare_local canonical_id; body ]) :: !insertions));
     (* Apply insertions (sorted by position, last first to preserve indices) *)
