@@ -110,9 +110,7 @@ module Alloc_buffer = struct
 end
 
 (* Functor defining the backend *)
-module Fresh (Config : sig
-  val config : Ir.Backend_intf.config
-end) : Ir.Backend_impl.Lowered_backend = struct
+module Fresh : Ir.Backend_impl.Lowered_backend = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
@@ -244,10 +242,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     Unsigned.ULLong.equal current_signaled expected_signaled
 
   (* --- Configuration and Info --- *)
-  let suggested_num_streams _device =
-    match Config.config with
-    | Only_devices_parallel | For_parallel_copying | Most_parallel_streams -> 1
-
   let get_used_memory _device = Atomic.get allocated_memory
 
   let static_properties =
@@ -367,8 +361,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     stream.merge_buffer :=
       Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ~size_in_bytes stream)
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-    let same_device = dst.stream.device.ordinal = src.stream.device.ordinal in
+  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
 
     let memcpy ~dst_ptr =
@@ -384,13 +377,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     match (into_merge_buffer, dst_ptr) with
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
     | No, Some dst_ptr -> memcpy ~dst_ptr
-    | Streaming_for _, _ ->
-        if same_device then dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
-        else (
-          (* Fall back to copy for different devices *)
-          opt_alloc_merge_buffer ~size_in_bytes dst.stream;
-          let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-          memcpy ~dst_ptr:buffer.ptr)
     | Copy, _ ->
         opt_alloc_merge_buffer ~size_in_bytes dst.stream;
         let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
@@ -401,7 +387,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     metal_source : string; (* Store source, compile during link if not already compiled *)
     compiled_code : Me.Library.t option array; (* Store compiled code per device *)
     func_name : string;
-    params : (string * param_source) list;
+    kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     traced_store : Low_level.traced_store;
   }
@@ -410,7 +396,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
   type code_batch = {
     metal_source : string; (* Store combined source *)
     compiled_code : Me.Library.t option array; (* Store compiled code per device *)
-    funcs : (string * (string * param_source) list) option array; (* func_name * params *)
+    funcs : (string * (string * kparam_source) list) option array; (* func_name * kparams *)
     bindings : Indexing.unit_bindings;
     traced_stores : Low_level.traced_store option array;
   }
@@ -685,7 +671,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     end)) in
     let idx_params = Indexing.bound_symbols bindings in
     (* Add Metal address space qualifiers *)
-    let params, proc_doc = Syntax.compile_proc ~name idx_params lowered in
+    let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let metal_includes = {|#include <metal_stdlib>
 using namespace metal;|} in
     let source =
@@ -697,7 +683,7 @@ using namespace metal;|} in
       compiled_code = Array.create ~len:num_devs None;
       (* One slot per device *)
       func_name = name;
-      params;
+      kparams;
       bindings;
       traced_store = lowered.traced_store;
     }
@@ -711,8 +697,8 @@ using namespace metal;|} in
       Array.map2_exn names lowereds
         ~f:
           (Option.map2 ~f:(fun name lowered ->
-               let params, doc = Syntax.compile_proc ~name idx_params lowered in
-               ((name, params), doc)))
+               let kparams, doc = Syntax.compile_proc ~name idx_params lowered in
+               ((name, kparams), doc)))
     in
     let all_proc_docs = List.filter_map (Array.to_list funcs_and_docs) ~f:(Option.map ~f:snd) in
     let final_doc = PPrint.(separate hardline all_proc_docs) in
@@ -734,7 +720,7 @@ using namespace metal;|} in
     }
 
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
-      ~(params : (string * param_source) list) ~lowered_bindings ~(ctx_arrays : buffer_ptr Tn.t_map)
+      ~(kparams : (string * kparam_source) list) ~lowered_bindings ~(ctx_arrays : buffer_ptr Tn.t_map)
       : Task.t =
     let stream = prior_context.stream in
     let device = stream.device.dev in
@@ -754,23 +740,23 @@ using namespace metal;|} in
         Me.ComputeCommandEncoder.set_compute_pipeline_state encoder pso;
 
         (* Set arguments *)
-        List.iteri params ~f:(fun index (_p_name, p_source) ->
+        List.iteri kparams ~f:(fun index (_p_name, p_source) ->
             match p_source with
-            | Param_ptr tn when Map.mem ctx_arrays tn ->
+            | Kparam_ptr tn when Map.mem ctx_arrays tn ->
                 let buffer = Map.find_exn ctx_arrays tn in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-            | Param_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
+            | Kparam_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
                 let buffer =
-                  Hashtbl.find_or_add stream.device.cross_stream_candidates tn ~default:(fun () ->
+                  Hashtbl.find_or_add stream.device.device_buffer_cache tn ~default:(fun () ->
                       get_buffer_for_ptr device ~size_in_bytes:(Lazy.force tn.size_in_bytes)
                       @@ Ndarray.get_voidptr_not_managed
                       @@ Option.value_exn ~here:[%here]
                       @@ Lazy.force tn.array)
                 in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-            | Param_ptr tn ->
+            | Kparam_ptr tn ->
                 failwith
-                  [%string "Param_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
+                  [%string "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in
@@ -817,7 +803,7 @@ using namespace metal;|} in
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
     let task =
-      link_proc ~prior_context ~library ~func_name:code.func_name ~params:code.params
+      link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
         ~lowered_bindings ~ctx_arrays
     in
     (lowered_bindings, task)
@@ -831,9 +817,9 @@ using namespace metal;|} in
 
     let tasks =
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
-          Option.bind func_opt ~f:(fun (func_name, params) ->
+          Option.bind func_opt ~f:(fun (func_name, kparams) ->
               Option.map ctx_arrays_opts.(i) ~f:(fun ctx_arrays ->
-                  link_proc ~prior_context ~library ~func_name ~params ~lowered_bindings ~ctx_arrays)))
+                  link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings ~ctx_arrays)))
     in
     (lowered_bindings, tasks)
 end

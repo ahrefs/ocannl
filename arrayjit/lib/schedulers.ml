@@ -16,7 +16,6 @@ module Multicore (Backend : For_add_scheduler) :
      and type optimize_ctx = Ir.Low_level.optimize_ctx = struct
   include Backend
   module Domain = Domain [@warning "-3"]
-  (* Currently, Backend.config is not used. *)
 
   type task_list = Ir.Task.t Utils.mutable_list [@@deriving sexp_of]
 
@@ -175,21 +174,23 @@ module Multicore (Backend : For_add_scheduler) :
       { state; domain = Domain.spawn worker }
     in
     (* We cannot use make_stream because runner needs stream_id. *)
-    Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
-        let runner = create stream_id in
-        {
-          device;
-          runner;
-          merge_buffer = ref None;
-          stream_id;
-          allocated_buffer = None;
-          updating_for = Hashtbl.create (module Ir.Tnode);
-          updating_for_merge_buffer = None;
-          reader_streams = Hashtbl.create (module Ir.Tnode);
-        })
+    let stream_id = device.next_stream_id in
+    device.next_stream_id <- stream_id + 1;
+    let runner = create stream_id in
+    let stream =
+      {
+        device;
+        runner;
+        merge_buffer = ref None;
+        stream_id;
+        allocated_buffer = None;
+        merge_buffer_node = ref None;
+      }
+    in
+    device.current_stream <- Some stream;
+    stream
 
   let num_devices () = 1
-  let suggested_num_streams _device = Domain.recommended_domain_count () - 2
 
   let static_properties =
     Sexp.List
@@ -235,9 +236,6 @@ module Multicore (Backend : For_add_scheduler) :
   let get_debug_info (stream : stream) = sexp_of_runner stream.runner
 end
 
-(** For debugging, allow [Sync_scheduler(...).suggested_num_streams] calls to return >1 numbers. *)
-let sync_suggested_num_streams = ref 1
-
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
     There is only one device, but an arbitrary number of streams. *)
 module Sync (Backend : For_add_scheduler) = struct
@@ -274,7 +272,6 @@ module Sync (Backend : For_add_scheduler) = struct
     device
 
   let num_devices () = 1
-  let suggested_num_streams _ = !sync_suggested_num_streams
   let get_used_memory _ = Backend.get_used_memory ()
   let new_stream device = make_stream device ()
   let all_work _stream = ()
