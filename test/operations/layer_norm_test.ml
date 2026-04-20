@@ -1,20 +1,6 @@
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
 
-let%op mini_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) () =
-  let open Ocannl.Nn_blocks in
-  let masked_mha = multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v () in
-  (* Standard 2-layer FFN: expand to d_ff then contract back to d_model *)
-  let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
-  let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
-  let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
-  fun ~train_step target ~mask ->
-    let x1 = ln1 (target + masked_mha ~train_step ~mask target) in
-    ln2 (x1 + ffn x1)
-
-open! Base
-open Ocannl.Nn_blocks.DSL_modules
-
 let () =
   (* Basic transformer test *)
   let ctx = Context.auto () in
@@ -30,7 +16,8 @@ let () =
 
   (* Create a simple transformer model *)
   let mini_decoder_model =
-    mini_decoder_block ~label:[ "test_mini_decoder" ] ~num_heads ~d_k:d_model ~d_v:d_model ~d_ff ()
+    Ocannl.Nn_blocks.decoder_only_block ~label:[ "test_mini_decoder" ] ~num_heads ~d_k:d_model
+      ~d_v:d_model ~d_ff ()
   in
 
   let tgt =
