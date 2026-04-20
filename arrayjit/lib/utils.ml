@@ -247,11 +247,13 @@ let diagn_log_file fname =
 
 let () =
   (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
-  let remove_dir_if_exists dirname =
+  let rec remove_dir_if_exists dirname =
     if Stdlib.Sys.file_exists dirname && Stdlib.Sys.is_directory dirname then
       try
         Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
-            Stdlib.Sys.remove (Stdlib.Filename.concat dirname fname));
+            let path = Stdlib.Filename.concat dirname fname in
+            if Stdlib.Sys.is_directory path then remove_dir_if_exists path
+            else Stdlib.Sys.remove path);
         Stdlib.Sys.rmdir dirname
       with exn ->
         Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn)
