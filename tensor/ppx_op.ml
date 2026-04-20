@@ -105,8 +105,8 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
       let concat_spec_str =
         match axis_kind with
         | `Output ->
-            String.concat ~sep:"; " (List.map labels ~f:(fun l -> l ^ ",..."))
-            ^ " => " ^ concat_parts ^ ",..."
+            String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|...-> " ^ l ^ ",..."))
+            ^ " => ...|...-> " ^ concat_parts ^ ",..."
         | `Input ->
             String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|" ^ l ^ ",...->..."))
             ^ " => ...|" ^ concat_parts ^ ",...->..."

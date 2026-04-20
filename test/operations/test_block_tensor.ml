@@ -166,4 +166,18 @@ let () =
   let _ctx = Train.forward_once ctx preserved_tuple in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline preserved_tuple;
 
+  (* --- Test 13: List block tensor with input-dim components --- *)
+  (* Verifies output-axis concat spec preserves input axes via broadcast. *)
+  printf "\n--- Test 13: List block tensor with input dims ---\n%!";
+  let m1 =
+    PDSL.ndarray [| 1.0; 2.0; 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
+  in
+  let m2 =
+    PDSL.ndarray [| 5.0; 6.0; 7.0; 8.0 |] ~batch_dims:[] ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
+  in
+  let%op stacked_mat = [m1; m2] in
+  Train.set_hosted stacked_mat.value;
+  let _ctx = Train.forward_once ctx stacked_mat in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline stacked_mat;
+
   printf "\n=== Block Tensor Literal Tests Complete ===\n%!"
