@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+g = a + e where e = a + b:
+HERE: test/einsum/test_nofuse_dependency.ml:36:21
+[3]: +_g shape 0:4  [ 0.00 ; 3.00 ; 6.00 ; 9.00 ]
+

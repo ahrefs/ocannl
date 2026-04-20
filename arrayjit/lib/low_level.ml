@@ -1472,6 +1472,133 @@ let writes_of_stmt (stmt : t) : Set.M(Tn).t =
   | Zero_out tn -> Set.singleton (module Tn) tn
   | _ -> Set.empty (module Tn)
 
+(** Rename an [Indexing.symbol] in an axis index. *)
+let rename_sym_in_idx ~from ~to_ (idx : Indexing.axis_index) : Indexing.axis_index =
+  match idx with
+  | Indexing.Iterator s when Indexing.equal_symbol s from -> Indexing.Iterator to_
+  | Indexing.Affine { symbols; offset } ->
+      Indexing.Affine
+        {
+          symbols =
+            List.map symbols ~f:(fun (c, s) ->
+                if Indexing.equal_symbol s from then (c, to_) else (c, s));
+          offset;
+        }
+  | Indexing.Concat syms ->
+      Indexing.Concat (List.map syms ~f:(fun s -> if Indexing.equal_symbol s from then to_ else s))
+  | _ -> idx
+
+(** Rename a loop iterator symbol throughout a statement tree. *)
+let rec rename_sym_in_proc ~from ~to_ (llc : t) : t =
+  match llc with
+  | Noop | Comment _ | Staged_compilation _ | Zero_out _ -> llc
+  | Declare_local _ -> llc
+  | Seq (c1, c2) -> Seq (rename_sym_in_proc ~from ~to_ c1, rename_sym_in_proc ~from ~to_ c2)
+  | For_loop ({ index; body; _ } as fc) ->
+      let index = if Indexing.equal_symbol index from then to_ else index in
+      For_loop { fc with index; body = rename_sym_in_proc ~from ~to_ body }
+  | Set { tn; idcs; llsc; debug } ->
+      Set
+        {
+          tn;
+          idcs = Array.map idcs ~f:(rename_sym_in_idx ~from ~to_);
+          llsc = rename_sym_in_scalar ~from ~to_ llsc;
+          debug;
+        }
+  | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
+      Set_from_vec
+        {
+          tn;
+          idcs = Array.map idcs ~f:(rename_sym_in_idx ~from ~to_);
+          length;
+          vec_unop;
+          arg = (rename_sym_in_scalar ~from ~to_ arg_scalar, arg_prec);
+          debug;
+        }
+  | Set_local (id, llsc) -> Set_local (id, rename_sym_in_scalar ~from ~to_ llsc)
+
+and rename_sym_in_scalar ~from ~to_ (llsc : scalar_t) : scalar_t =
+  match llsc with
+  | Local_scope { id; body; orig_indices } ->
+      Local_scope
+        {
+          id;
+          body = rename_sym_in_proc ~from ~to_ body;
+          orig_indices = Array.map orig_indices ~f:(rename_sym_in_idx ~from ~to_);
+        }
+  | Get_local _ -> llsc
+  | Get (tn, idcs) -> Get (tn, Array.map idcs ~f:(rename_sym_in_idx ~from ~to_))
+  | Get_merge_buffer (tn, idcs) ->
+      Get_merge_buffer (tn, Array.map idcs ~f:(rename_sym_in_idx ~from ~to_))
+  | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
+      let r = rename_sym_in_scalar ~from ~to_ in
+      Ternop (op, (r s1, p1), (r s2, p2), (r s3, p3))
+  | Binop (op, (s1, p1), (s2, p2)) ->
+      let r = rename_sym_in_scalar ~from ~to_ in
+      Binop (op, (r s1, p1), (r s2, p2))
+  | Unop (op, (s, p)) -> Unop (op, (rename_sym_in_scalar ~from ~to_ s, p))
+  | Embed_index idx -> Embed_index (rename_sym_in_idx ~from ~to_ idx)
+  | Constant _ | Constant_bits _ -> llsc
+
+(** Check whether two [For_loop] bodies can be safely fused. Bodies are fusible when
+    neither body reads a tensor that the other writes — i.e. no read-after-write hazards
+    in either direction. The reverse direction (b1 reads what b2 writes) matters because
+    loop-carried dependencies across iterations can change semantics:
+    e.g. b1 reads x[i-1], b2 writes x[i] — fusion would let iteration i+1 of b1
+    see the value written by b2 at iteration i. *)
+let fusible_bodies (b1 : t) (b2 : t) : bool =
+  let collect_writes (body : t) : Set.M(Tn).t =
+    let acc = ref (Set.empty (module Tn)) in
+    let rec loop (s : t) =
+      match s with
+      | Set { tn; _ } | Zero_out tn -> acc := Set.add !acc tn
+      | Set_from_vec { tn; _ } -> acc := Set.add !acc tn
+      | Set_local _ | Declare_local _ | Noop | Comment _ | Staged_compilation _ -> ()
+      | Seq (c1, c2) ->
+          loop c1;
+          loop c2
+      | For_loop { body; _ } -> loop body
+    in
+    loop body;
+    !acc
+  in
+  let writes1 = collect_writes b1 in
+  let writes2 = collect_writes b2 in
+  (* Neither body may read tensors written by the other *)
+  let reads1 = reads_of_body b1 in
+  let reads2 = reads_of_body b2 in
+  Set.is_empty (Set.inter reads2 writes1) && Set.is_empty (Set.inter reads1 writes2)
+
+(** Fuse sibling [For_loop]s with the same iteration range when safe. The second loop's
+    iterator is renamed to match the first's. Skips intervening [Comment]/[Noop] nodes. *)
+let fuse_sibling_loops (stmts : t list) : t list =
+  let rec fuse = function
+    | [] -> []
+    | (For_loop { index = idx1; from_ = f1; to_ = t1; body = b1; trace_it = tr1 } as loop1)
+      :: rest -> (
+        let rec find_next_loop acc = function
+          | (Comment _ as c) :: rest -> find_next_loop (c :: acc) rest
+          | (Noop as c) :: rest -> find_next_loop (c :: acc) rest
+          | For_loop { index = idx2; from_ = f2; to_ = t2; body = b2; trace_it = tr2 } :: rest
+            when Int.equal f1 f2 && Int.equal t1 t2 && Bool.equal tr1 tr2 ->
+              let b2_renamed = rename_sym_in_proc ~from:idx2 ~to_:idx1 b2 in
+              if fusible_bodies b1 b2_renamed then
+                let comments_body = unflat_lines (List.rev acc) in
+                let merged_body = unflat_lines (flat_lines [ b1; comments_body; b2_renamed ]) in
+                Some
+                  ( For_loop
+                      { index = idx1; from_ = f1; to_ = t1; body = merged_body; trace_it = tr1 },
+                    rest )
+              else None
+          | _ -> None
+        in
+        match find_next_loop [] rest with
+        | Some (merged, rest) -> fuse (merged :: rest)
+        | None -> loop1 :: fuse rest)
+    | stmt :: rest -> stmt :: fuse rest
+  in
+  fuse stmts
+
 (** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
     Operates on a flat list of sibling statements. *)
 let hoist_shared_locals (stmts : t list) : t list =
@@ -1565,6 +1692,13 @@ let hoist_cross_statement_cse llc =
     | Seq _ ->
         let stmts = flat_lines [ llc ] in
         let stmts = List.map stmts ~f:loop_proc in
+        (* Fuse sibling For_loops with same range when safe, then recurse into fused bodies *)
+        let stmts = fuse_sibling_loops stmts in
+        let stmts =
+          List.map stmts ~f:(function
+            | For_loop fc -> For_loop { fc with body = loop_proc fc.body }
+            | s -> s)
+        in
         hoist_shared_locals stmts |> unflat_lines
     | For_loop fc -> For_loop { fc with body = loop_proc fc.body }
     | _ -> llc

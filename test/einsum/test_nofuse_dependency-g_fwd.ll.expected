@@ -1,0 +1,9 @@
+
+g_fwd (): /* g fwd */
+  for i5 = 0 to 3 {
+    r4_a[i5] := i5;
+    r4_b[i5] := i5;
+  }
+  for i7 = 0 to 3 { e[i7] := (r4_a[i7] + r4_b[i7]); }
+  for i8 = 0 to 3 { g[i8] := (r4_a[i8] + e[i8]); }
+  /* end */

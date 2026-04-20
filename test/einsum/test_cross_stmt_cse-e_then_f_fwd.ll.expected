@@ -1,0 +1,14 @@
+
+e_then_f_fwd (): /* e fwd */
+  for i8 = 0 to 2 { for i9 = 0 to 3 { r3x4_a[i8, i9] := 4*i8+i9; } }
+  for i10 = 0 to 3 { r4_b[i10] := i10; }
+  for i13 = 0 to 2 {
+    declare v2_c;
+    v2_c := 0;
+    for i15 = 0 to 3 { v2_c := fma(r3x4_a[i13, i15], r4_b[i15], v2_c); }
+    e[i13] := (v2_c + 1);
+    /* end */
+    /* f fwd */
+    f[i13] := (v2_c - 1);
+  }
+  /* end */

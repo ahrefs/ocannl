@@ -1,0 +1,9 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+e = c + 1:
+HERE: test/einsum/test_cross_stmt_cse.ml:41:21
+[4]: +_e shape 0:3  [ 15.00 ; 39.00 ; 63.00 ]
+f = c - 1:
+HERE: test/einsum/test_cross_stmt_cse.ml:43:21
+[6]: -_f shape 0:3  [ 13.00 ; 37.00 ; 61.00 ]
+
