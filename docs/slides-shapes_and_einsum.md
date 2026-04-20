@@ -224,7 +224,7 @@ let%op skip_first_3 x = x ++^ "3^rest => rest"
 
 {pause up=concat-example}
 
-{#block-tensors .block title="Block Tensor Construction (upcoming)"}
+{#block-tensors .block title="Block Tensor Construction"}
 > The tensor literal syntax generalizes to block tensors:
 >
 > | Syntax | Axis | Example |

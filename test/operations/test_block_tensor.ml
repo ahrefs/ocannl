@@ -136,5 +136,34 @@ let () =
   printf "\nGradient of h3:\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true h3;
 
-  printf "\n=== Block Tensor Literal Tests Complete ===\n%!";
-  ignore ctx
+  (* --- Test 9: ndarray constant tuple (1.0, 2.0) — must NOT become block tensor --- *)
+  printf "\n--- Test 9: ndarray constant tuple (1.0, 2.0) ---\n%!";
+  let%op nd_tuple = (1.0, 2.0) in
+  Train.set_hosted nd_tuple.value;
+  let ctx = Train.forward_once ctx nd_tuple in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline nd_tuple;
+
+  (* --- Test 10: ndarray constant list [1.0; 2.0; 3.0] --- *)
+  printf "\n--- Test 10: ndarray constant list [1.0; 2.0; 3.0] ---\n%!";
+  let%op nd_list = [1.0; 2.0; 3.0] in
+  Train.set_hosted nd_list.value;
+  let ctx = Train.forward_once ctx nd_list in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline nd_list;
+
+  (* --- Test 11: ndarray constant array [|1.0; 2.0|] --- *)
+  printf "\n--- Test 11: ndarray constant array [|1.0; 2.0|] ---\n%!";
+  let%op nd_array = [|1.0; 2.0|] in
+  Train.set_hosted nd_array.value;
+  let ctx = Train.forward_once ctx nd_array in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline nd_array;
+
+  (* --- Test 12: Tuple in function application preserved as OCaml tuple --- *)
+  (* [%oc fst] keeps fst as a plain OCaml function; (x1, x2) must remain an
+     OCaml tuple, not a block tensor.  Wrapping in sin produces a root tensor. *)
+  printf "\n--- Test 12: Tuple in apply preserved ---\n%!";
+  let%op preserved_tuple = sin ([%oc fst] (x1, x2)) in
+  Train.set_hosted preserved_tuple.value;
+  let _ctx = Train.forward_once ctx preserved_tuple in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline preserved_tuple;
+
+  printf "\n=== Block Tensor Literal Tests Complete ===\n%!"

@@ -165,4 +165,20 @@ HERE: test/operations/test_block_tensor.ml:137:21
 │└┴───────────────────┘           │
 └─────────────────────────────────┘
 
+--- Test 9: ndarray constant tuple (1.0, 2.0) ---
+HERE: test/operations/test_block_tensor.ml:144:21
+[102]: 1,2_nd_tuple shape 0:2->   1.00 , 2.00
+
+--- Test 10: ndarray constant list [1.0; 2.0; 3.0] ---
+HERE: test/operations/test_block_tensor.ml:151:21
+[103]: 1,2,3_nd_list shape 0:3  [ 1.00 ; 2.00 ; 3.00 ]
+
+--- Test 11: ndarray constant array [|1.0; 2.0|] ---
+HERE: test/operations/test_block_tensor.ml:158:21
+[104]: 1,2_nd_array shape 0:2|  [| 1.00 ; 2.00 |]
+
+--- Test 12: Tuple in apply preserved ---
+HERE: test/operations/test_block_tensor.ml:167:21
+[105]: sin_preserved_tuple shape 0:3  [ 0.84 ; 0.91 ; 0.14 ]
+
 === Block Tensor Literal Tests Complete ===

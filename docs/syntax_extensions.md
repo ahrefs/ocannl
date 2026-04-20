@@ -12,7 +12,7 @@
   - [Using OCANNL's generalized einsum notation](#using-ocannls-generalized-einsum-notation)
     - [Syntax of the generalized einsum notation](#syntax-of-the-generalized-einsum-notation)
     - [Axis concatenation with the ^ operator](#axis-concatenation-with-the--operator)
-    - [Block tensor syntax (upcoming)](#block-tensor-syntax-upcoming)
+    - [Block tensor syntax](#block-tensor-syntax)
   - [Further features of the syntax extension %cd](#further-features-of-the-syntax-extension-cd)
     - [Referencing arrays: tensor value, tensor gradient, merge buffer of a tensor node](#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node)
     - [Block comments](#block-comments)
@@ -549,7 +549,7 @@ let%cd update_prefix ~target ~source =
   target =: source ~logic:"a => a^b"
 ```
 
-Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the planned block tensor syntax.
+Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the block tensor syntax (implemented in `%op`).
 
 ### Block tensor syntax
 
