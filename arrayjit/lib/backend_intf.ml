@@ -36,10 +36,10 @@ end
 
 type merge_buffer_use = No | Copy [@@deriving sexp_of]
 
-type kparam_source =
+type param_source =
   | Log_file_name
   | Merge_buffer
-  | Kparam_ptr of Tnode.t
+  | Param_ptr of Tnode.t
   | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 

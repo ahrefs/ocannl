@@ -88,6 +88,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       match Map.find src.ctx_arrays tn with
       | None -> false
       | Some s_arr -> (
+          (* For cross-device copies, wait for the source stream's writes to complete
+             before the destination stream reads the data. *)
+          if not same_device then
+            Backend.will_wait_for dst (Backend.all_work src.stream);
           match into_merge_buffer with
           | No -> (
               match Map.find dst.ctx_arrays tn with
@@ -122,6 +126,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                ("init_from_device: tensor node " ^ Tn.debug_name tn
               ^ " already on same stream, for stream " ^ Backend.get_name src.stream)
         else (
+          (* For cross-device copies, wait for source writes to complete. *)
+          if not same_device then
+            Backend.will_wait_for dst (Backend.all_work src.stream);
           match Map.find dst.ctx_arrays tn with
           | Some _ ->
               raise
