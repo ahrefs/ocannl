@@ -1540,12 +1540,9 @@ and rename_sym_in_scalar ~from ~to_ (llsc : scalar_t) : scalar_t =
   | Embed_index idx -> Embed_index (rename_sym_in_idx ~from ~to_ idx)
   | Constant _ | Constant_bits _ -> llsc
 
-(** Check whether two [For_loop] bodies can be safely fused. Bodies are fusible when
-    neither body reads a tensor that the other writes — i.e. no read-after-write hazards
-    in either direction. The reverse direction (b1 reads what b2 writes) matters because
-    loop-carried dependencies across iterations can change semantics:
-    e.g. b1 reads x[i-1], b2 writes x[i] — fusion would let iteration i+1 of b1
-    see the value written by b2 at iteration i. *)
+(** Check whether two [For_loop] bodies can be safely fused. Rejects fusion when:
+    - either body reads a tensor the other writes (read-after-write in either direction),
+    - both bodies write the same tensor (write-write conflict changes interleaving order). *)
 let fusible_bodies (b1 : t) (b2 : t) : bool =
   let collect_writes (body : t) : Set.M(Tn).t =
     let acc = ref (Set.empty (module Tn)) in
@@ -1564,10 +1561,13 @@ let fusible_bodies (b1 : t) (b2 : t) : bool =
   in
   let writes1 = collect_writes b1 in
   let writes2 = collect_writes b2 in
-  (* Neither body may read tensors written by the other *)
   let reads1 = reads_of_body b1 in
   let reads2 = reads_of_body b2 in
-  Set.is_empty (Set.inter reads2 writes1) && Set.is_empty (Set.inter reads1 writes2)
+  (* No read-after-write in either direction *)
+  Set.is_empty (Set.inter reads2 writes1)
+  && Set.is_empty (Set.inter reads1 writes2)
+  (* No write-write conflicts (interleaving order would change) *)
+  && Set.is_empty (Set.inter writes1 writes2)
 
 (** Fuse sibling [For_loop]s with the same iteration range when safe. The second loop's
     iterator is renamed to match the first's. Skips intervening [Comment]/[Noop] nodes. *)
