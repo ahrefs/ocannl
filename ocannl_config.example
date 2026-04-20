@@ -57,7 +57,13 @@ automatic_host_transfers=true
 # Set to true for models with tensors larger than 2^32 elements.
 big_models=false
 
+# If non-empty, generated code files are placed in build_files/<prefix>/ instead of
+# build_files/. This prevents filename collisions when multiple test executables run
+# in parallel. Each test should use a unique prefix (typically its executable name).
+build_files_prefix=
+
 # If true, the build_files directory is deleted on startup.
+# When build_files_prefix is set, only the specific prefix subdirectory is deleted.
 clean_up_build_files_on_startup=true
 
 # If true, the log_files directory is deleted on startup.

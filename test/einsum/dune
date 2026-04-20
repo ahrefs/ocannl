@@ -101,8 +101,9 @@
    (progn
     (run
      %{dep:inline_permuted_view.exe}
-     "--ocannl_output_debug_files_in_build_directory=true")
-    (copy build_files/c_fwd.ll %{target})))))
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_build_files_prefix=inline_permuted_view")
+    (copy build_files/inline_permuted_view/c_fwd.ll %{target})))))
 
 (rule
  (alias runtest)
@@ -135,8 +136,9 @@
    (progn
     (run
      %{dep:test_cse.exe}
-     "--ocannl_output_debug_files_in_build_directory=true")
-    (copy build_files/cse_d_fwd.ll %{target})))))
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_build_files_prefix=test_cse")
+    (copy build_files/test_cse/cse_d_fwd.ll %{target})))))
 
 (rule
  (alias runtest)
