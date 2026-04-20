@@ -225,9 +225,16 @@ let clean_filename fname =
   fname
 
 let build_file fname =
-  let build_files_dir = "build_files" in
+  let prefix = get_global_arg ~default:"" ~arg_name:"build_files_prefix" in
+  let build_files_dir =
+    if String.is_empty prefix then "build_files"
+    else filename_concat "build_files" (clean_filename prefix)
+  in
   (try assert (Stdlib.Sys.is_directory build_files_dir)
-   with Stdlib.Sys_error _ -> Stdlib.Sys.mkdir build_files_dir 0o777);
+   with Stdlib.Sys_error _ | Assert_failure _ ->
+     (try assert (Stdlib.Sys.is_directory "build_files")
+      with Stdlib.Sys_error _ | Assert_failure _ -> Stdlib.Sys.mkdir "build_files" 0o777);
+     if not (String.is_empty prefix) then Stdlib.Sys.mkdir build_files_dir 0o777);
   filename_concat build_files_dir @@ clean_filename fname
 
 let diagn_log_file fname =
@@ -261,7 +268,10 @@ let () =
   let clean_up_build_files_on_startup =
     get_global_flag ~default:true ~arg_name:"clean_up_build_files_on_startup"
   in
-  if clean_up_build_files_on_startup then remove_dir_if_exists "build_files"
+  if clean_up_build_files_on_startup then (
+    let prefix = get_global_arg ~default:"" ~arg_name:"build_files_prefix" in
+    if String.is_empty prefix then remove_dir_if_exists "build_files"
+    else remove_dir_if_exists (filename_concat "build_files" (clean_filename prefix)))
 
 let get_local_debug_runtime =
   let snapshot_every_sec =
