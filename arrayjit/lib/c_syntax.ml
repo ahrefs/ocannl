@@ -505,6 +505,12 @@ module C_syntax (B : C_syntax_config) = struct
         else
           let block_content = local_defs ^^ hardline ^^ assignment in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
+    | Declare_local ({ tn = { prec; _ }; _ } as id) ->
+        let scope_prec = Lazy.force prec in
+        let num_typ = string (B.typ_of_prec scope_prec) in
+        let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+        let init_zero = string " = " ^^ string prefix ^^ string "0" ^^ string postfix in
+        num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi
 
   and pp_scalar (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       (int * PPrint.document) list * PPrint.document =

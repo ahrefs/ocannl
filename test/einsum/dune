@@ -217,3 +217,71 @@
  (libraries base ocannl stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name test_cross_stmt_cse)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_cross_stmt_cse)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (target test_cross_stmt_cse-e_then_f_fwd.ll.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:test_cross_stmt_cse.exe}
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/e_then_f_fwd.ll %{target})))))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "test_cross_stmt_cse-e_then_f_fwd.ll.expected"
+   "test_cross_stmt_cse-e_then_f_fwd.ll.actual")))
+
+(test
+ (name test_nofuse_dependency)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_nofuse_dependency)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (target test_nofuse_dependency-g_fwd.ll.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:test_nofuse_dependency.exe}
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy build_files/g_fwd.ll %{target})))))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "test_nofuse_dependency-g_fwd.ll.expected"
+   "test_nofuse_dependency-g_fwd.ll.actual")))
