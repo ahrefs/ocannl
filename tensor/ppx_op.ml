@@ -70,6 +70,55 @@ let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
+let rec is_ndarray_constant_expr expr =
+  match expr.pexp_desc with
+  | Pexp_constant (Pconst_float _) | Pexp_constant (Pconst_integer _) -> true
+  | Pexp_tuple (e :: _) | Pexp_array (e :: _) -> is_ndarray_constant_expr e
+  | Pexp_construct ({ txt = Lident "::"; _ }, _) ->
+      let elems = collect_list [] expr in
+      (match elems with e :: _ -> is_ndarray_constant_expr e | [] -> true)
+  | Pexp_construct ({ txt = Lident "[]"; _ }, _) -> true
+  | Pexp_array [] -> true
+  | _ -> false
+
+let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
+  match elems with
+  | [] ->
+      ( no_vbs,
+        Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc
+             "ppx_ocannl %%op: block tensor requires at least one component" )
+  | _ ->
+      let vbss, translated = List.unzip (List.map elems ~f:loop) in
+      let unsqueeze_spec_str =
+        match axis_kind with
+        | `Output -> "...|...->... => ...|...->0,..."
+        | `Input -> "...|...->... => ...|0,...->..."
+        | `Batch -> "...|...->... => 0,...|...->..."
+      in
+      let unsqueeze_spec = substitute_identifiers_in_einsum_spec ~loc unsqueeze_spec_str in
+      let unsqueezed =
+        List.map translated ~f:(fun e -> [%expr einsum1 [%e unsqueeze_spec] [%e e]])
+      in
+      let labels = List.mapi elems ~f:(fun i _ -> "bt" ^ Int.to_string i) in
+      let concat_parts = String.concat ~sep:"^" labels in
+      let concat_spec_str =
+        match axis_kind with
+        | `Output ->
+            String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|...-> " ^ l ^ ",..."))
+            ^ " => ...|...-> " ^ concat_parts ^ ",..."
+        | `Input ->
+            String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|" ^ l ^ ",...->..."))
+            ^ " => ...|" ^ concat_parts ^ ",...->..."
+        | `Batch ->
+            String.concat ~sep:"; " (List.map labels ~f:(fun l -> l ^ ",...|...->..."))
+            ^ " => " ^ concat_parts ^ ",...|...->..."
+      in
+      let concat_spec = substitute_identifiers_in_einsum_spec ~loc concat_spec_str in
+      let rhses_array = Ast_builder.Default.pexp_array ~loc unsqueezed in
+      ( reduce_vbss vbss,
+        [%expr concat ?label:[%e opt_expr ~loc label] [%e concat_spec] [%e rhses_array]] )
+
 let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label in
@@ -350,9 +399,20 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
-  | { pexp_desc = Pexp_array _; _ }
-  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-      (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } as list_expr ->
+      if is_ndarray_constant_expr list_expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] list_expr)
+      else
+        let elems = collect_list [] list_expr in
+        translate_block_tensor ~loc ~loop ~label ~opt_label `Output elems
+  | { pexp_desc = Pexp_array _; _ } ->
+      if is_ndarray_constant_expr expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
+      else
+        let elems =
+          match expr.pexp_desc with Pexp_array elems -> elems | _ -> assert false
+        in
+        translate_block_tensor ~loc ~loop ~label ~opt_label `Batch elems
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as
          already tensors. *)
@@ -364,6 +424,10 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
+  | { pexp_desc = Pexp_tuple elems; _ } when is_toplevel && List.length elems >= 2 ->
+      if is_ndarray_constant_expr expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
+      else translate_block_tensor ~loc ~loop ~label ~opt_label `Input elems
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
     when Hashtbl.mem binary_ops op_ident ->
@@ -408,10 +472,16 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))
-            | _ ->
+            | _ -> (
                 (* After unit or no unit: transform *)
-                let vbs, e = loop arg_expr in
-                (vbs, (arg_label, e)))
+                match arg_expr.pexp_desc with
+                | Pexp_tuple _ ->
+                    (* Preserve tuple arguments to avoid block tensor misinterpretation.
+                       Matches current behavior: tuples fell through catch-all. *)
+                    (no_vbs, (arg_label, arg_expr))
+                | _ ->
+                    let vbs, e = loop arg_expr in
+                    (vbs, (arg_label, e))))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
       (all_vbs, Ast_builder.Default.pexp_apply ~loc e_fn processed_args)

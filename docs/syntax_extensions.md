@@ -12,7 +12,7 @@
   - [Using OCANNL's generalized einsum notation](#using-ocannls-generalized-einsum-notation)
     - [Syntax of the generalized einsum notation](#syntax-of-the-generalized-einsum-notation)
     - [Axis concatenation with the ^ operator](#axis-concatenation-with-the--operator)
-    - [Block tensor syntax (upcoming)](#block-tensor-syntax-upcoming)
+    - [Block tensor syntax](#block-tensor-syntax)
   - [Further features of the syntax extension %cd](#further-features-of-the-syntax-extension-cd)
     - [Referencing arrays: tensor value, tensor gradient, merge buffer of a tensor node](#referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node)
     - [Block comments](#block-comments)
@@ -549,23 +549,51 @@ let%cd update_prefix ~target ~source =
   target =: source ~logic:"a => a^b"
 ```
 
-Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the planned block tensor syntax.
+Multi-argument syntax for `%cd` (needed for tensor concatenation with multiple sources) is still being designed. The natural choice `[rhs1; rhs2]` conflicts with the block tensor syntax (implemented in `%op`).
 
-### Block tensor syntax (upcoming)
+### Block tensor syntax
 
-The tensor literal syntax will be generalized to support block tensor construction, where tensor literals become a special case with scalar components. The syntax extensions recursively compose argument tensors by introducing and concatenating along a new leading axis:
+The tensor literal syntax is generalized to support block tensor construction: when a list, tuple, or
+array literal inside `%op` contains tensor expressions (rather than numeric literals), it desugars
+into `einsum1` (unsqueeze) + `concat` calls that stack the components along a new leading axis.
 
-| Syntax | Axis kind | Example |
-|--------|-----------|---------|
-| `( , )` | Input | `(ta, tb)` concatenates along a new input axis |
-| `[ ; ]` | Output | `[ta; tb]` concatenates along a new output axis |
-| `[| ; |]` | Batch | `[|ta; tb|]` concatenates along a new batch axis |
+**Axis mapping by syntax form:**
 
-For example, `[ta; tb]` translates to:
-1. Introduce a new output axis for each component: `...|...->... => ...|...->0, ...` for `ta` and `tb`
-2. Concatenate along that axis: `...|...->a,... ; ...|...->b,... => ...|...->a^b,...`
+- `[ta; tb; ...]` -- stacks along a new leading **output** axis
+- `(ta, tb, ...)` -- stacks along a new leading **input** axis (top-level `%op` expressions only)
+- `[|ta; tb; ...|]` -- stacks along a new leading **batch** axis
 
-This allows constructing block matrices, block tensors, and other structured tensors from smaller components.
+**Disambiguation rule:** if the first leaf of the nested literal is a numeric constant (int or
+float), the expression is treated as an ndarray constant (existing behavior). Otherwise it is a block
+tensor. To include scalar constants alongside tensors, wrap them with `!.` or `!..`
+(e.g., `[!.1.0; ta]`). Computed-number expressions like `Float.sin 1.0` at the first leaf position
+will trigger block tensor interpretation.
+
+**Examples:**
+
+```ocaml
+(* Stack two vectors along a new leading output axis *)
+let%op stacked = [v1; v2; v3]
+(* Shape: if each vi has output [d], result has output [3, d] *)
+
+(* 2x2 block matrix from vectors via direct nesting *)
+let%op mat = [[a; b]; [c; d]]
+
+(* Batch two samples *)
+let%op batched = [|sample1; sample2|]
+
+(* Stack along input axis (top-level only) *)
+let%op input_block = (x, y)
+```
+
+**Notes:**
+
+- All components must have the same trailing shape (stacking requires shape compatibility).
+- Single-element block tensors like `[ta]` act as unsqueeze (add a size-1 leading axis).
+- Tuple syntax `(ta, tb)` only works at the top level of a `%op` expression. Tuples inside function
+  arguments (e.g., `f (ta, tb)`) are preserved as regular OCaml tuples.
+- Nesting works: `[[ta; tb]; [tc; td]]` constructs a 2x2 block matrix (two new output axes).
+  Components at each nesting level must have the same shape.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 

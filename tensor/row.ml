@@ -1884,6 +1884,11 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         (more_ineqs @ ineqs, env)
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
+  | Concat dims1, Concat dims2 when List.length dims1 = List.length dims2 ->
+      (* Unify element-wise: Concat [a; b] = Concat [c; d] iff a = c and b = d *)
+      List.fold2_exn dims1 dims2 ~init:([], env) ~f:(fun (ineqs, env) d1 d2 ->
+          let more_ineqs, env = unify_dim ~stage origin (d1, d2) env in
+          (more_ineqs @ ineqs, env))
   | dim1, dim2 ->
       (* Note: at the unify_dim phase, it's strict equality (no broadcasting). *)
       raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])

@@ -237,7 +237,7 @@ let%op concat_matrices a b =
 let%op get_prefix x = x ++^ "a^b => a"  (* size of 'a' inferred from context *)
 let%op get_suffix x = x ++^ "a^b => b"  (* size of 'b' inferred from context *)
 
-(* Block tensor construction (upcoming syntax) *)
+(* Block tensor construction *)
 let%op block_matrix () =
   [[a; b]; [c; d]]  (* Creates 2x2 block matrix from components *)
 ```
