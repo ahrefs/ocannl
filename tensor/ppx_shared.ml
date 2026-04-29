@@ -113,6 +113,59 @@ let ndarray_constant expr =
   in
   (values, List.rev batch_dims, List.rev output_dims, List.rev input_dims)
 
+(** Returns true if the expression is structurally an ndarray constant (nested list/tuple/array of
+    numeric literals). The check is shallow: inspect the first leaf encountered by following the
+    list/tuple/array backbone. If the first leaf is a numeric literal, treat the whole expression as
+    an ndarray constant. This preserves backward compatibility with computed-scalar leaves like
+    [1.0; some_float_expr] which [ndarray_constant] accepts at line 62. *)
+let rec is_ndarray_constant_expr expr =
+  match expr.pexp_desc with
+  | Pexp_constant (Pconst_float _) | Pexp_constant (Pconst_integer _) -> true
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "~-"; _ }; _ }, [ (Nolabel, e) ])
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "~-."; _ }; _ }, [ (Nolabel, e) ]) ->
+      is_ndarray_constant_expr e
+  | Pexp_tuple (e :: _) | Pexp_array (e :: _) -> is_ndarray_constant_expr e
+  | Pexp_construct ({ txt = Lident "::"; _ }, _) -> (
+      match collect_list [] expr with e :: _ -> is_ndarray_constant_expr e | [] -> true)
+  | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> true
+  | _ -> false
+
+(** Generate an unsqueeze einsum1 spec that adds a leading size-1 axis of the given kind.
+    This is step 1 of block tensor construction: each component gets a new leading axis. *)
+let block_tensor_unsqueeze_spec ~axis_kind =
+  match axis_kind with
+  | `Output -> "...|...->... => ...|...->0, ..."
+  | `Input -> "...|...->... => ...|0, ...->..."
+  | `Batch -> "...|...->... => 0, ...|...->..."
+
+(** Generate a concatenation spec for block tensor literal syntax. This is step 2: after each
+    component has been unsqueezed, concatenate them along the new leading axis.
+
+    All specs include broadcast for all three axis kinds to handle components with arbitrary shapes.
+    Named row variables ([..rb..], [..ri..], [..ro..]) are used instead of anonymous [...]
+    so that the shape inference creates a single shared variable across all components. This is
+    critical for nesting: inner block tensors produce [Concat] dims that anonymous broadcast
+    variables fail to unify, but shared named row variables handle correctly.
+
+    For output axis (list syntax): ["..rb..|..ri..->bt0, ..ro..; ... => ..rb..|..ri..->bt0^bt1, ..ro.."].
+    For input axis (tuple syntax): ["..rb..|bt0, ..ri..->..ro..; ... => ..rb..|bt0^bt1, ..ri..->..ro.."].
+    For batch axis (array syntax): ["bt0, ..rb..|..ri..->..ro..; ... => bt0^bt1, ..rb..|..ri..->..ro.."].
+
+    Note: [^] and [,] trigger multichar mode in the lexer. Labels use [bt0], [bt1], ... to support
+    an arbitrary number of components without running into invalid characters. *)
+let block_tensor_concat_spec ~axis_kind n =
+  let labels = List.init n ~f:(fun i -> "bt" ^ Int.to_string i) in
+  let concat_label = String.concat ~sep:"^" labels in
+  let wrap lbl =
+    match axis_kind with
+    | `Output -> "..rb..|..ri..-> " ^ lbl ^ ", ..ro.."
+    | `Input -> "..rb..|" ^ lbl ^ ", ..ri..->..ro.."
+    | `Batch -> lbl ^ ", ..rb..|..ri..->..ro.."
+  in
+  let rhs_specs = List.map labels ~f:wrap in
+  let result_spec = wrap concat_label in
+  String.concat ~sep:"; " rhs_specs ^ " => " ^ result_spec
+
 (** Convert an einsum spec string to an OCaml expression that constructs the runtime string.
 
     This function parses the einsum spec using the Einsum_parser, then reconstructs a runtime string
