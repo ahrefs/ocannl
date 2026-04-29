@@ -91,9 +91,7 @@ end
 let initialized_devices = Hash_set.create (module Int)
 let initialized = ref false
 
-module Fresh (Config : sig
-  val config : Ir.Backend_intf.config
-end) : Ir.Backend_impl.Lowered_backend = struct
+module Fresh : Ir.Backend_impl.Lowered_backend = struct
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
   let use_host_memory = None
@@ -131,7 +129,7 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
     (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-    Hashtbl.iter device.cross_stream_candidates ~f:(fun buffer_ptr ->
+    Hashtbl.iter device.device_buffer_cache ~f:(fun buffer_ptr ->
         Cu.Deviceptr.mem_free buffer_ptr)
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
@@ -243,12 +241,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     in
     get_props
 
-  let suggested_num_streams device =
-    match Config.config with
-    | Only_devices_parallel -> 1
-    | For_parallel_copying -> 1 + (cuda_properties device).async_engine_count
-    | Most_parallel_streams -> (cuda_properties device).multiprocessor_count
-
   let await stream : unit =
     set_ctx stream.device.dev.primary_context;
     Cu.Stream.synchronize stream.runner
@@ -283,9 +275,6 @@ end) : Ir.Backend_impl.Lowered_backend = struct
     | No, Some dst_ptr ->
         set_ctx @@ ctx_of dst;
         memcpy ~dst_ptr
-    | Streaming_for _, _ ->
-        assert same_device;
-        dst.stream.merge_buffer := Some { ptr = src_ptr; size_in_bytes }
     | Copy, _ ->
         set_ctx @@ ctx_of dst;
         opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;

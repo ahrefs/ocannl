@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+
+- Removed deprecated multi-streaming infrastructure (#341). Each device now has a single execution context. Removed `config` type, `suggested_num_streams`, `Streaming_for`, `sharing` type (`Per_stream`/`Shared_cross_streams`), cross-stream synchronization logic, and `round_robin`/`round_robin_dry_run` training helpers.
+
 ### Added
 
 - Axis concatenation/block tensor support in einsum notation (`a^b` syntax)

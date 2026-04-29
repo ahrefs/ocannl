@@ -34,12 +34,7 @@ module type Alloc_buffer = sig
   val free_buffer : (stream -> buffer_ptr -> unit) option
 end
 
-(** For now, we only configure a backend with regard to how many streams it should suggest using
-    (where applicable). *)
-type config = Only_devices_parallel | For_parallel_copying | Most_parallel_streams
-[@@deriving equal, sexp, variants]
-
-type merge_buffer_use = No | Streaming_for of Task.t | Copy [@@deriving sexp_of]
+type merge_buffer_use = No | Copy [@@deriving sexp_of]
 
 type param_source =
   | Log_file_name
@@ -92,15 +87,11 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
   dev : 'dev;
   ordinal : int;
   device_id : int;
-  cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
-  owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
-  shared_writer_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-  host_reading_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-  host_writing_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
+  device_buffer_cache : 'buffer_ptr Hashtbl.M(Tnode).t;
+      (** Per-device buffer cache for reusing allocated arrays (e.g. read-only/constant nodes, or
+          host-backed buffers on unified memory systems). *)
+  mutable current_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref option;
+  mutable next_stream_id : int;
 }
 
 and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
@@ -109,10 +100,9 @@ and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
   merge_buffer : 'buffer_ptr buffer option ref;
   stream_id : int;
   mutable allocated_buffer : 'buffer_ptr buffer option;
-  updating_for : 'event Hashtbl.M(Tnode).t;
-  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
-  reader_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
+  merge_buffer_node : Tnode.t option ref;
+      (** The tensor node currently occupying this stream's merge buffer, if any. Used for
+          consistency checking before routine execution. *)
 }
 
 let sexp_of_device_ref _ _ _ _ device = [%sexp_of: string * int] ("ordinal", device.ordinal)
@@ -120,64 +110,11 @@ let sexp_of_stream_ref _ _ _ _ stream = [%sexp_of: string * int] ("stream_id", s
 let equal_stream_ref s1 s2 = s1.stream_id = s2.stream_id && s1.device.ordinal = s2.device.ordinal
 
 type ('buffer_ptr, 'dev, 'runner, 'event) device =
-      ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
-  dev : 'dev;
-  ordinal : int;
-      (** The number of the represented backend's device, in the range from 0 to the number of the
-          backend's devices - 1. *)
-  device_id : int;
-      (** A unique identifier among all device instances of all backends. Note that multiple
-          [device_id] (distinct device instances) might refer to the same physical device. *)
-  cross_stream_candidates : 'buffer_ptr Hashtbl.M(Tnode).t;
-      (** Freshly created arrays that might be shared across streams. The map can both grow and
-          shrink. This map also contains buffer/pointer wrappers for hosted tnodes on unified memory
-          systems. *)
-  owner_stream : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Hashtbl.M(Tnode).t;
-      (** The stream owning a given node. This map can only grow. Currently, if the memory mode of a
-          node is inferred, only this stream will modify a cross-stream shared array. But memory
-          modes can also be set manually. *)
-  shared_writer_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been scheduled to update (write to) a
-          cross-stream-shared node, and the associated update completion event. The completed events
-          are removed opportunistically. *)
-  host_reading_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been reading from a node's on-host array. The
-          completed events are removed opportunistically. *)
-  host_writing_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams that most recently have been writing to a node's on-host array. The completed
-          events are removed opportunistically. *)
-  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
-      (** All (live) streams created on the device. Used by
-          {!With_buffer_retrieval_and_syncing.sync_device}. Warning: stream_id fields of garbage
-          collected streams can be reused! *)
-}
+  ('buffer_ptr, 'dev, 'runner, 'event) device_ref
 [@@deriving sexp_of]
 
 type ('buffer_ptr, 'dev, 'runner, 'event) stream =
-      ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
-  device : ('buffer_ptr, 'dev, 'runner, 'event) device_ref;
-  runner : 'runner;
-  merge_buffer : 'buffer_ptr buffer option ref;
-      (** Depending on backend implementations, either the currently used merge buffer, or the one
-          most recently scheduled. Note that the pointer can be reused for nodes that fit in an
-          already allocated buffer. *)
-  stream_id : int;  (** An ID unique within the device for the lifetime of the stream. *)
-  mutable allocated_buffer : 'buffer_ptr buffer option;
-  updating_for : 'event Hashtbl.M(Tnode).t;
-  (* The completion event for the most recent updating (writing to) a node via this stream. *)
-  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
-      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. The
-          event finishes after the [task] from a [Streaming_for task]. See also
-          {!field-updating_for}. *)
-  reader_streams :
-    (('buffer_ptr, 'dev, 'runner, 'event) stream_ref * 'event) list Hashtbl.M(Tnode).t;
-      (** The streams, other than this stream, that most recently have been reading from a node in
-          this stream's context, and the associated use completion events. The completed events are
-          removed opportunistically. *)
-}
+  ('buffer_ptr, 'dev, 'runner, 'event) stream_ref
 [@@deriving sexp_of]
 
 let equal_stream = equal_stream_ref
@@ -297,11 +234,6 @@ module type Backend_device_common = sig
 
   val get_device : ordinal:int -> device
   val num_devices : unit -> int
-
-  val suggested_num_streams : device -> int
-  (** The optimal number of streams for the given device to follow the {!type:Backend_intf.config}
-      strategy. *)
-
   val new_stream : device -> stream
 end
 
@@ -334,14 +266,8 @@ module type With_buffer_retrieval_and_syncing = sig
       - If the node is absent from the [src] context and either it is present in the [dst] context
         or [into_merge_buffer] is different from [No]: raises an error.
       - If the node is absent from [dst] and [into_merge_buffer=No]: returns false.
-      - Schedules waiting for writing into the tensor node on [src] to finish, if any.
       - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst] and
         updates the writer event for the node.
-      - If [into_merge_buffer] is different from [No]: sets on [dst] the merge buffer source to the
-        given node.
-      - If [into_merge_buffer=Streaming_for task], remembers the buffer pointer of the source node
-        to use for streaming, runs [task] -- intended to be the routine making use of the merge
-        buffer, and initializes the merge buffer's streaming event.
       - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
         stream, and updates the writer event for the merge buffer. *)
 
@@ -351,7 +277,7 @@ module type With_buffer_retrieval_and_syncing = sig
       and outputs the [dst] context with the tensor node. *)
 
   val sync_device : device -> unit
-  (** Synchronizes all the streams on a device, and cleans up (removes) all associated events. *)
+  (** Synchronizes the device's stream and cleans up merge buffer state. *)
 end
 
 module type Backend = sig

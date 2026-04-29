@@ -71,8 +71,8 @@ This is the "paper-ready" release with mature frontend API.
   - Get rid of `array` field of `Tnode.t`
   - Remove or minimize `Ndarray` module
 
-- **Deprecated streams cleanup**
-  - Remove legacy streams functionality
+- **Deprecated streams cleanup** (done)
+  - Removed multi-streaming infrastructure; each device now has a single execution context
 
 - **Tensor persistence** (#373)
   - Tensor saving, loading, and restoring

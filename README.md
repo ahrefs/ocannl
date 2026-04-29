@@ -65,7 +65,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [ ] RoPE embeddings.
   - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
 * **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
-  - [ ] Cleanup of deprecated streams functionality.
+  - [x] Cleanup of deprecated streams functionality.
   - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
   - [ ] Tensor saving, loading, and restoring.
 * **0.7.1 (Mid-Mar 2026): Real world examples.**
