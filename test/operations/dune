@@ -129,8 +129,9 @@
     (run
      %{dep:threefry4x32_demo.exe}
      "--ocannl_output_prec_in_ll_files=true"
-     "--ocannl_output_debug_files_in_build_directory=true")
-    (copy build_files/n3_fwd-unoptimized.ll %{target})))))
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_build_files_prefix=threefry4x32_demo")
+    (copy build_files/threefry4x32_demo/n3_fwd-unoptimized.ll %{target})))))
 
 (rule
  (targets top_down_prec-unoptimized.ll.actual top_down_prec.extension.actual)
@@ -145,12 +146,13 @@
     (run
      %{dep:top_down_prec.exe}
      "--ocannl_output_prec_in_ll_files=true"
-     "--ocannl_output_debug_files_in_build_directory=true")
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_build_files_prefix=top_down_prec")
     (copy
-     build_files/d_fwd-unoptimized.ll
+     build_files/top_down_prec/d_fwd-unoptimized.ll
      top_down_prec-unoptimized.ll.actual)
     (copy
-     build_files/d_fwd.%{read:config/ocannl_backend_extension.txt}
+     build_files/top_down_prec/d_fwd.%{read:config/ocannl_backend_extension.txt}
      top_down_prec.extension.actual)))))
 
 (rule
@@ -168,12 +170,13 @@
     (run
      %{dep:test_where_precision.exe}
      "--ocannl_output_prec_in_ll_files=true"
-     "--ocannl_output_debug_files_in_build_directory=true")
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_build_files_prefix=test_where_precision")
     (copy
-     build_files/where_fwd-unoptimized.ll
+     build_files/test_where_precision/where_fwd-unoptimized.ll
      test_where_precision-unoptimized.ll.actual)
     (copy
-     build_files/where_fwd.%{read:config/ocannl_backend_extension.txt}
+     build_files/test_where_precision/where_fwd.%{read:config/ocannl_backend_extension.txt}
      test_where_precision.extension.actual)))))
 
 (rule
