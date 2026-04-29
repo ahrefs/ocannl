@@ -63,7 +63,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
     - [x] Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
   - [x] Sokoban CNN building block.
   - [ ] RoPE embeddings.
-  - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
+  - [x] Transformer for the Names dataset (bigram MLP exists, not full transformer).
 * **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
   - [ ] Cleanup of deprecated streams functionality.
   - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.

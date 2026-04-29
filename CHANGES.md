@@ -13,6 +13,8 @@
   - Binary ops: `add`, `sub`, `pointmul`, `pointpow`, `pointdiv`, `lt`, `eq`, `ne`
   - Unary ops: `relu`, `sat01`, `exp`, `log`, `exp2`, `log2`, `sin`, `cos`, `sqrt`, `recip`, `recip_sqrt`, `tanh`, `neg`, `not`, `stop_gradient`
 - Common gotchas and idioms section in CLAUDE.md documentation
+- `decoder_only_block` and `decoder_only` building blocks in `nn_blocks.ml` for GPT-style models
+- Transformer language model example on Names dataset (`test/training/transformer_names.ml`)
 - `Rev_sides` support in lowering for reverse-direction Block operations
 
 ### Changed
