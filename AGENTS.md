@@ -41,6 +41,16 @@ Testing notes:
 - `OCANNL_BACKEND` is special-cased by tests; other env vars may not retrigger tests without
   touching sources or cleaning.
 - Tests read `test/config/ocannl_config` and can emit .ll/.c/.cu/.metal into build_files/.
+- `.expected` files for standalone tests must begin with the two-line config-lookup banner
+  emitted at startup:
+  ```
+  Retrieving commandline, environment, or config file variable ocannl_log_level
+  Found 0, in the config file
+  ```
+  A hand-written `.expected` that omits these lines will fail diffing. Canonical workflow:
+  write the test, run `dune build test/<...>.exe.output`, then either
+  `cp _build/default/test/<...>.exe.output test/<name>.expected` or `dune promote`. Both
+  capture the banner correctly.
 
 ## Coding Conventions
 - Prefer small, composable functions; avoid unneeded global state.
