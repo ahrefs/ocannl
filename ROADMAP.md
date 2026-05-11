@@ -178,17 +178,15 @@ This is a research-heavy milestone requiring ~2.5 months.
 ## Post-1.0 Considerations (v1.1+)
 
 - **Shape inference enhancements**
-  - Axis labels (as opposed to dimension units)
-  - Shape schemes for tensor functions (#404)
+  - Shape schemes for tensor functions (#404, post-workshop-paper)
 
 - **Advanced examples**
-  - BERT/ModernBERT implementation (#297)
+  - BERT/ModernBERT implementation (#297, after v0.7.1 transformer inference)
   - LLM101n replication (#275)
-  - DisTrO distributed training (#278)
+  - DisTrO distributed training (#278, see docs/proposals/distro-feasibility-study.md)
 
 - **Performance explorations**
   - Lean Attention / Flash Attention (#263)
-  - Quantization for optimizers (#271)
   - XLA backend (#300)
 
 ---
