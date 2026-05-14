@@ -53,6 +53,9 @@ let () =
   (match Backend.device_to_device b.value ~into_merge_buffer:Copy ~dst:src ~src with
   | None -> Stdio.printf "UNEXPECTED: device_to_device b.value returned None\n"
   | Some transfer_b ->
+      (* link with a matching producer succeeds; then the transfer + consumer run end to end:
+         the transfer copies b.value into the merge buffer, the consumer reads it back into
+         b.value. *)
       let consumer_routine = Backend.link transfer_b.context consumer_code in
       Task.run transfer_b.schedule;
       Task.run consumer_routine.schedule;
