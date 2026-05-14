@@ -8,7 +8,7 @@ x2 = [4.0, 5.0] (dim 2)
 
 --- Forward pass: sin((x1, x2) ++^ "a; b => a^b") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:42:21
+HERE: test/operations/test_concat_graph.ml:40:21
 ┌──────────────────────────────────────────────────┐
 │[6]: sin_result shape 0:5                         │
 │┌┬───────────────────────────────────────────────┐│
@@ -20,7 +20,7 @@ HERE: test/operations/test_concat_graph.ml:42:21
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:46:21
+HERE: test/operations/test_concat_graph.ml:44:21
 ┌───────────────────────┐
 │[9]: =>_loss shape 0:1 │
 │┌┬─────────┐           │
@@ -31,7 +31,7 @@ HERE: test/operations/test_concat_graph.ml:46:21
 └───────────────────────┘
 
 Gradient of x1 (cos of original values):
-HERE: test/operations/test_concat_graph.ml:49:21
+HERE: test/operations/test_concat_graph.ml:47:21
 ┌─────────────────────┐
 │[0]: 1,2,3 shape 0:3 │
 │┌┬──────────────────┐│
@@ -50,7 +50,7 @@ HERE: test/operations/test_concat_graph.ml:49:21
 └────────────────────────────────┘
 
 Gradient of x2:
-HERE: test/operations/test_concat_graph.ml:52:21
+HERE: test/operations/test_concat_graph.ml:50:21
 ┌───────────────────┐
 │[2]: 4,5 shape 0:2 │
 │┌┬────────────┐    │
@@ -77,7 +77,7 @@ x3_3 = [6.0, 7.0] (dim 2)
 
 --- Forward pass: sin((x1_3, x2_3, x3_3) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:88:21
+HERE: test/operations/test_concat_graph.ml:82:21
 ┌─────────────────────────────────────────────┐
 │[20]: sin_result3 shape 0:7                  │
 │┌┬──────────────────────────────────────────┐│
@@ -89,7 +89,7 @@ HERE: test/operations/test_concat_graph.ml:88:21
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:92:21
+HERE: test/operations/test_concat_graph.ml:86:21
 ┌─────────────────────────┐
 │[23]: =>_loss3 shape 0:1 │
 │┌┬─────────┐             │
@@ -100,7 +100,7 @@ HERE: test/operations/test_concat_graph.ml:92:21
 └─────────────────────────┘
 
 Gradient of x1_3 (cos of original values):
-HERE: test/operations/test_concat_graph.ml:95:21
+HERE: test/operations/test_concat_graph.ml:89:21
 ┌────────────────────┐
 │[12]: 1,2 shape 0:2 │
 │┌┬────────────┐     │
@@ -119,7 +119,7 @@ HERE: test/operations/test_concat_graph.ml:95:21
 └─────────────────────────────┘
 
 Gradient of x2_3:
-HERE: test/operations/test_concat_graph.ml:98:21
+HERE: test/operations/test_concat_graph.ml:92:21
 ┌──────────────────────┐
 │[14]: 3,4,5 shape 0:3 │
 │┌┬──────────────────┐ │
@@ -138,7 +138,7 @@ HERE: test/operations/test_concat_graph.ml:98:21
 └─────────────────────────────────┘
 
 Gradient of x3_3:
-HERE: test/operations/test_concat_graph.ml:101:21
+HERE: test/operations/test_concat_graph.ml:95:21
 ┌────────────────────┐
 │[16]: 6,7 shape 0:2 │
 │┌┬────────────┐     │
@@ -165,7 +165,7 @@ x3_u = [4.0, 5.0] (dim 2)
 
 --- Forward pass: sin((x1_u, x2_u, x3_u) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:138:23
+HERE: test/operations/test_concat_graph.ml:130:23
 ┌──────────────────────────────────────────────────┐
 │[34]: sin_result_u shape 0:5                      │
 │┌┬───────────────────────────────────────────────┐│
@@ -177,7 +177,7 @@ HERE: test/operations/test_concat_graph.ml:138:23
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:142:23
+HERE: test/operations/test_concat_graph.ml:134:23
 ┌──────────────────────────┐
 │[37]: =>_loss_u shape 0:1 │
 │┌┬─────────┐              │
@@ -188,7 +188,7 @@ HERE: test/operations/test_concat_graph.ml:142:23
 └──────────────────────────┘
 
 Gradient of x1_u (cos of original values):
-HERE: test/operations/test_concat_graph.ml:145:23
+HERE: test/operations/test_concat_graph.ml:137:23
 ┌────────────────────┐
 │[26]: 1,2 shape 0:2 │
 │┌┬────────────┐     │
@@ -207,7 +207,7 @@ HERE: test/operations/test_concat_graph.ml:145:23
 └─────────────────────────────┘
 
 Gradient of x2_u:
-HERE: test/operations/test_concat_graph.ml:148:23
+HERE: test/operations/test_concat_graph.ml:140:23
 [28]: 3 shape 0:1  <not-hosted>
 ┌─────────────────────────┐
 │[28]: 3 shape 0:1  grad_3│
@@ -219,7 +219,7 @@ HERE: test/operations/test_concat_graph.ml:148:23
 └─────────────────────────┘
 
 Gradient of x3_u:
-HERE: test/operations/test_concat_graph.ml:151:23
+HERE: test/operations/test_concat_graph.ml:143:23
 ┌────────────────────┐
 │[30]: 4,5 shape 0:2 │
 │┌┬────────────┐     │
@@ -246,7 +246,7 @@ n3 = [6.0, 7.0] (dim 2)
 
 --- Forward pass: sin(((n1, n2) ++^ "a; b => a^b", n3) ++^ "a; b => a^b") ---
 Nested concatenation result (after sin):
-HERE: test/operations/test_concat_graph.ml:182:21
+HERE: test/operations/test_concat_graph.ml:172:21
 ┌─────────────────────────────────────────────┐
 │[50]: sin_nested shape 0:7                   │
 │┌┬──────────────────────────────────────────┐│
@@ -258,7 +258,7 @@ HERE: test/operations/test_concat_graph.ml:182:21
 
 --- Backward pass: gradients ---
 Loss:
-HERE: test/operations/test_concat_graph.ml:186:21
+HERE: test/operations/test_concat_graph.ml:176:21
 ┌──────────────────────────┐
 │[53]: =>_loss_n shape 0:1 │
 │┌┬─────────┐              │
@@ -269,7 +269,7 @@ HERE: test/operations/test_concat_graph.ml:186:21
 └──────────────────────────┘
 
 Gradient of n1:
-HERE: test/operations/test_concat_graph.ml:189:21
+HERE: test/operations/test_concat_graph.ml:179:21
 ┌────────────────────┐
 │[40]: 1,2 shape 0:2 │
 │┌┬────────────┐     │
@@ -288,7 +288,7 @@ HERE: test/operations/test_concat_graph.ml:189:21
 └─────────────────────────────┘
 
 Gradient of n2:
-HERE: test/operations/test_concat_graph.ml:192:21
+HERE: test/operations/test_concat_graph.ml:182:21
 ┌──────────────────────┐
 │[42]: 3,4,5 shape 0:3 │
 │┌┬──────────────────┐ │
@@ -307,7 +307,7 @@ HERE: test/operations/test_concat_graph.ml:192:21
 └─────────────────────────────────┘
 
 Gradient of n3:
-HERE: test/operations/test_concat_graph.ml:195:21
+HERE: test/operations/test_concat_graph.ml:185:21
 ┌────────────────────┐
 │[44]: 6,7 shape 0:2 │
 │┌┬────────────┐     │
@@ -334,7 +334,7 @@ b3 = [5.0, 6.0] (dim 2)
 
 --- Forward pass ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:224:21
+HERE: test/operations/test_concat_graph.ml:212:21
 ┌──────────────────────────────────────────────┐
 │[64]: sin_result_b1 shape 0:6                 │
 │┌┬───────────────────────────────────────────┐│
@@ -347,7 +347,7 @@ HERE: test/operations/test_concat_graph.ml:224:21
 --- Backward pass: gradients ---
 
 Gradient of b1:
-HERE: test/operations/test_concat_graph.ml:228:21
+HERE: test/operations/test_concat_graph.ml:216:21
 [56]: 1 shape 0:1  <not-hosted>
 ┌─────────────────────────┐
 │[56]: 1 shape 0:1  grad_1│
@@ -359,7 +359,7 @@ HERE: test/operations/test_concat_graph.ml:228:21
 └─────────────────────────┘
 
 Gradient of b2:
-HERE: test/operations/test_concat_graph.ml:231:21
+HERE: test/operations/test_concat_graph.ml:219:21
 ┌──────────────────────┐
 │[58]: 2,3,4 shape 0:3 │
 │┌┬──────────────────┐ │
@@ -378,7 +378,7 @@ HERE: test/operations/test_concat_graph.ml:231:21
 └─────────────────────────────────┘
 
 Gradient of b3:
-HERE: test/operations/test_concat_graph.ml:234:21
+HERE: test/operations/test_concat_graph.ml:222:21
 ┌────────────────────┐
 │[60]: 5,6 shape 0:2 │
 │┌┬────────────┐     │
@@ -405,7 +405,7 @@ l3 = [6.0] (dim 1)
 
 --- Forward pass ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:263:21
+HERE: test/operations/test_concat_graph.ml:249:21
 ┌──────────────────────────────────────────────┐
 │[78]: sin_result_l shape 0:6                  │
 │┌┬───────────────────────────────────────────┐│
@@ -418,7 +418,7 @@ HERE: test/operations/test_concat_graph.ml:263:21
 --- Backward pass: gradients ---
 
 Gradient of l1:
-HERE: test/operations/test_concat_graph.ml:267:21
+HERE: test/operations/test_concat_graph.ml:253:21
 ┌────────────────────┐
 │[70]: 1,2 shape 0:2 │
 │┌┬────────────┐     │
@@ -437,7 +437,7 @@ HERE: test/operations/test_concat_graph.ml:267:21
 └─────────────────────────────┘
 
 Gradient of l2:
-HERE: test/operations/test_concat_graph.ml:270:21
+HERE: test/operations/test_concat_graph.ml:256:21
 ┌──────────────────────┐
 │[72]: 3,4,5 shape 0:3 │
 │┌┬──────────────────┐ │
@@ -456,7 +456,7 @@ HERE: test/operations/test_concat_graph.ml:270:21
 └─────────────────────────────────┘
 
 Gradient of l3:
-HERE: test/operations/test_concat_graph.ml:273:21
+HERE: test/operations/test_concat_graph.ml:259:21
 [74]: 6 shape 0:1  <not-hosted>
 ┌─────────────────────────┐
 │[74]: 6 shape 0:1  grad_6│
