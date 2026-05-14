@@ -132,18 +132,25 @@ When using the default stream, CUDA would predictably write to the standard outp
 
 OCANNL expects backends to implement FIFO queue scheduling, and an event mechanism for synchronizing between streams (and ideally devices), matching the CUDA specification. On top of events, OCANNL implements per-tensor-node synchronization.
 
-Note: the per-device fields `shared_writer_streams`, `host_reading_streams`, `host_writing_streams` and the per-stream fields `reader_streams`, `updating_for_merge_buffer` (with its `Streaming_for` mode) were removed in the streams cleanup. The remaining synchronization field is:
+Note: the per-device fields `shared_writer_streams`, `host_reading_streams`, `host_writing_streams` and the per-stream field `reader_streams` were removed in the streams cleanup, along with the `Streaming_for` merge-buffer mode. The synchronization fields that remain are:
 
 ```ocaml
   updating_for : 'event Hashtbl.M(Tnode).t;
       (* The completion event for updating (writing to) a node via this stream, if any. *)
+  updating_for_merge_buffer : (Tnode.t * 'event option) option;
+      (* The tensor node most recently scheduled into the stream's merge buffer; read by the
+         defensive runtime `check_merge_buffer` backstop. *)
 ```
 
-Besides routines, calling `from_host`, `to_host`, `device_to_device` from a backend puts the corresponding tasks on the device's queue. Both invoking a routine and calling these copying functions will perform the necessary event creations and synchronizations to ensure that when scheduling writing into an array precedes scheduling reading from it, the actual writing also precedes the actual reading.
+The *static* merge-buffer fact -- which node a `device_to_device` transfer produces -- now lives on the context (`merge_buffer_node`), not on the stream; see [Data transfers](#data-transfers) below.
+
+Besides routines, calling `from_host`, `to_host` from a backend puts the corresponding tasks on the device's queue. `device_to_device` instead *returns a transfer routine* that the caller schedules or links (see [Data transfers](#data-transfers)). Both invoking a routine and running these copying tasks will perform the necessary event creations and synchronizations to ensure that when scheduling writing into an array precedes scheduling reading from it, the actual writing also precedes the actual reading.
 
 ### Data transfers
 
-OCANNL supports asynchronous data transfers -- `from_host`, `to_host`, `device_to_device` -- by embedding them in the scheduling mechanism. The transfers themselves synchronize streams in a non-blocking way -- when it's time for the destination stream to copy a node, it waits for the source stream to finish computing the node.
+OCANNL supports asynchronous data transfers: `from_host` and `to_host` embed the copy in the scheduling mechanism directly, while `device_to_device` *returns a `context routine option`* -- the caller runs `r.schedule` or links a consumer against `r.context`. The transfers themselves synchronize streams in a non-blocking way -- when it's time for the destination stream to copy a node, it waits for the source stream to finish computing the node.
+
+Returning a routine lets `device_to_device` carry the produced merge-buffer node on `r.context.merge_buffer_node`. Linking a consumer of the merge buffer against that context verifies the node *statically, at link time* (raising `Utils.User_error` from `link`/`link_batch` on a mismatch), in the natural producer -> consumer chaining direction (gh-ocannl-288). The runtime `check_merge_buffer` check is kept as a defensive backstop.
 
 OCANNL provides explicit _merge buffers_ for performing those tensor node updates, where different versions of a tensor node from two streams feature in the same computation. The `%cd` syntax for using merge buffers is via the `.merge` pseudo-field. For example, the code for merging gradients might be: `[%cd p.grad =+ p.grad.merge]`. In the current design, there's at most one merge buffer per stream, and the memory is reused for merging different nodes.
 
@@ -170,7 +177,7 @@ There are three code components to the automation.
   - `do_write` is invoked from `set_value`, `set_values`.
   - `Tnode` exposes `prepare_read` and `prepare_write` for updating the fields: only the new data transfer is preserved, but the synchronization codes are combined.
 - Within `Backends.Add_buffer_retrieval_and_syncing`:
-  - The `update_writer_event` helper adds the after-modification event to synchronization and sets data transfer to `to_host` from the stream, using `prepare_read`. This happens for `device_to_device` and `sync_routine` (after scheduling the routine) scheduling calls, and independently of `automatic_host_transfers`.
+  - The `update_writer_event` helper adds the after-modification event to synchronization and sets data transfer to `to_host` from the stream, using `prepare_read`. This happens inside the `device_to_device` transfer routine's schedule (when it is run) and for `sync_routine` (after scheduling the routine), and independently of `automatic_host_transfers`.
   - Moreover, `sync_routine`, before scheduling the routine and only if `automatic_host_transfers`, directly schedules `from_host` for input nodes that are not tagged with the device (via `devices_not_lagging_host`). Note that input nodes are the "read only" and "read before write" nodes that are not constants.
 - Within `Backends.Raise_backend.alloc_if_needed`:
   - If `automatic_host_transfers` and the node allocated for the context is a constant, `alloc_if_needed` directly schedules `from_host` for the node regardless of whether it is tagged with the device (via `devices_not_lagging_host`); it does add the device tag to the node (if missing).

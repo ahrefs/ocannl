@@ -60,7 +60,7 @@ struct
   let make_context ?ctx_arrays:_ ?optimize_ctx:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let make_child ?ctx_arrays:_ ?optimize_ctx:_ _context =
+  let make_child ?ctx_arrays:_ ?optimize_ctx:_ ?merge_buffer_node:_ _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let get_name _stream =
