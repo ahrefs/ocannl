@@ -1,0 +1,25 @@
+
+#include <stdio.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* No longer need export macros since we're using textual prepending */
+
+ void out_fwd(
+    float *out) {
+
+  /* Local declarations and initialization. */
+  float sparse[12] = {0};
+
+  /* Main logic. */
+  /* out fwd */
+  for (uint32_t i7 = 0; i7 <= 3; ++i7) {
+    sparse[(i7) * 3 + 0] = (float)(i7);
+  }
+  for (uint32_t i10 = 0; i10 <= 3; ++i10) {
+    out[i10] = (sparse[(i10) * 3 + 2] * sparse[(i10) * 3 + 2]);
+  }
+  /* end */
+}

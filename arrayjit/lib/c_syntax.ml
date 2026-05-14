@@ -302,6 +302,25 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     string ("v" ^ Int.to_string scope_id ^ "_" ^ get_ident tn)
 
+  (* Set by [compile_proc] so that [pp_ll] can consult per-node tracing info (e.g. to elide a
+     [Zero_out] loop that the declaration's [= {0}] already covers). *)
+  let current_traced_store : Low_level.traced_store option ref = ref None
+
+  (* A [Zero_out] loop is redundant when the array's declaration already initializes it with
+     [= {0}]. That happens for local (non-virtual, non-materialized) declarations whose traced
+     node has [zero_initialized_by_code = true]; see [compile_proc]'s [local_decls]. Materialized
+     nodes do NOT get [= {0}] (allocation handles zeroing, and is skipped exactly when
+     [zero_initialized_by_code] is true), so their [Zero_out] loop must be kept. *)
+  let zero_out_loop_redundant tn =
+    match !current_traced_store with
+    | None -> false
+    | Some traced_store -> (
+        match Hashtbl.find traced_store tn with
+        | Some node ->
+            node.Low_level.zero_initialized_by_code
+            && not (Tn.is_virtual_force tn 337 || Tn.is_materialized_force tn 338)
+        | None -> false)
+
   let rec pp_ll ?(log_set_locals = true) (c : Low_level.t) : PPrint.document =
     let open PPrint in
     match c with
@@ -329,6 +348,9 @@ module C_syntax (B : C_syntax_config) = struct
            in
            body_doc := log_doc ^^ hardline ^^ !body_doc);
         group (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body_doc) ^^ hardline ^^ rbrace)
+    | Zero_out tn when zero_out_loop_redundant tn ->
+        (* The declaration already emits [= {0}] for this array. *)
+        empty
     | Zero_out tn ->
         pp_ll ~log_set_locals
           (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
@@ -805,6 +827,7 @@ module C_syntax (B : C_syntax_config) = struct
   let compile_proc ~name idx_params Low_level.{ traced_store; llc; merge_node; optimize_ctx = _ } :
       (string * kparam_source) list * PPrint.document =
     let open PPrint in
+    current_traced_store := Some traced_store;
     let kparams : (string * kparam_source) list =
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ kparams ->
