@@ -108,11 +108,62 @@ approach. Its shape system combines three ideas:
   resolves shapes at model construction time, before any data flows through
   the network.
 \end{enumerate}
-
 These are integrated into OCaml via PPX syntax extensions (\code{\%op} and
 \code{\%cd}), yielding an embedded DSL that feels native while providing
-shape safety. This paper describes the design, the inference algorithm, and
-its application to standard deep learning patterns.
+shape safety.
+
+\paragraph{The approach in one example.}
+A single line of OCANNL computes multi-head attention scores:
+\begin{lstlisting}
+q +* k "... s | h d; ... t | h d
+        => ... s | t -> h" ["h"; "d"]
+\end{lstlisting}
+Every shape in OCANNL is partitioned into three \emph{axis kinds}---batch,
+input, and output---written \spec{batch | input -> output}; the einsum spec
+above gives that partition for each of the two operands and the result. The
+ellipsis \spec{...} is a \emph{row variable}: it stands for any number of
+batch axes, so the same code works whether the input has one batch dimension
+or three. The labels \spec{h} and \spec{d} (heads, key dimension) are matched
+positionally across the operands, and \code{["h"; "d"]} \emph{captures} their
+inferred sizes as ordinary OCaml values, usable for scaling or for setting
+the head count. The result spec \spec{... s | t -> h} places the key
+positions \spec{t} on the output side and heads \spec{h} on the input side,
+so the subsequent softmax---which reduces over output axes---naturally
+reduces over \spec{t} while leaving \spec{h} alone. None of the projection
+matrices feeding \spec{q}, \spec{k}, \spec{v} carry a dimension annotation:
+all of their shapes are inferred. A standard einsum (\spec{bhsd,bhtd->bhst})
+would commit to an exact axis count, check nothing until runtime, and offer
+no capture or input/output structure.
+
+\paragraph{How inference works.}
+Shapes are not declared---they are \emph{inferred}, in the spirit of
+Hindley--Milner type inference. As a model is constructed, each tensor
+operation emits constraints relating the shapes of its operands and result:
+equations from einsum operations, which demand exact matching, and
+inequalities from pointwise and compose operations, which permit
+broadcasting. A multi-stage solver resolves these constraints, progressing
+from conservative propagation (run online, as expressions are built) to
+increasingly aggressive closure of the remaining dimension and row variables.
+Crucially, this all happens at model construction time, before any data flows
+through the network, so a shape error surfaces when the offending line is
+elaborated---not on the first forward pass. Each constraint carries a
+\emph{provenance} record naming the einsum spec or operation that produced
+it, so when unification fails the error message can point back to the
+source-level specification rather than to an anonymous internal shape.
+
+\paragraph{Contributions and outline.}
+This paper presents the design of OCANNL's shape system and its inference
+algorithm. Section~\ref{sec:shapes} describes the three axis kinds, the
+generalized einsum notation, row variables, and optional dimension units.
+Section~\ref{sec:inference} gives the constraint language and the multi-stage
+solver that resolves shapes before execution, with provenance-tracked error
+messages. Section~\ref{sec:ocaml} covers the PPX integration, and
+Section~\ref{sec:examples} works through attention, convolution, and layer
+normalization drawn from running OCANNL code. Readers satisfied by the
+example above may treat the remainder as elaboration: the essential claim is
+that generalized einsum plus row variables plus constraint inference yields
+notation that is at once more concise, more general, and safer than the
+status quo.
 
 %% ============================================================
 \section{The Shape System}
@@ -149,6 +200,17 @@ Each row is independently broadcastable: a dimension-1 axis broadcasts to
 match any dimension, and a row with fewer axes is extended with dimension-1
 axes. Unlike NumPy, which pads from the left, OCANNL broadcasts ``in the
 middle''---preserving both specified leading and trailing axes of a row.
+
+\paragraph{Suggested, not enforced.}
+The axis kinds are a convention, not a type discipline: einsum specs may move
+an axis from one kind to another (the attention example,
+Section~\ref{sec:attention}, does exactly this). They are nonetheless not
+redundant. Because each kind is a separate row, a shape admits \emph{three}
+row variables instead of one, letting a specification leave one kind
+polymorphic while constraining another---as in \spec{... | t -> ...}.
+Collapsing the kinds into a single row would make every \spec{...}
+all-or-nothing, losing the polymorphism the principle of least commitment
+relies on (Section~\ref{sec:row-vars}).
 
 \subsection{Generalized Einsum Notation}
 \label{sec:einsum}
@@ -209,8 +271,8 @@ over the range of \spec{a}, then over the range of \spec{b}. This enables
 block tensor construction and axis slicing within the same notation.
 
 \paragraph{Dimension capture.}
-Einsum specs can capture dimension variables for use in subsequent
-computations:
+Einsum specs can capture dimension variables for use in the surrounding
+computation:
 \begin{lstlisting}
 let scores =
   q +* "... s | h d; ... t | h d
@@ -222,7 +284,11 @@ scores /. sqrt (dim d)
 The list \code{["h"; "d"]} binds OCaml variables \code{h} and \code{d} to
 the inferred dimensions of the corresponding axes. These can be used to set
 dimension constraints (\code{Shape.set\_dim}) or to compute scaling factors
-(\code{dim d} retrieves the integer dimension value).
+(\code{dim d} retrieves the integer dimension value). The capture bindings
+are lifted to the nearest \emph{discharge point}---the top of the enclosing
+function body, or the syntax-extension entry point if there is no enclosing
+function definition---so they are in scope throughout that body, not merely
+after the einsum expression.
 
 \paragraph{Additional operators.}
 Beyond the standard addition-multiply einsum (\code{+*}), OCANNL provides:
@@ -625,20 +691,29 @@ unknown sequences of axes.
 \label{sec:discussion}
 
 \paragraph{Limitations.}
-OCANNL's shape system is currently monomorphic: variables are interpreted
-existentially, not universally. A tensor-producing function that is called
-twice shares shape variables between calls, which can over-constrain shapes.
-The workaround is the unit-parameter pattern (\code{let layer = make () in
-...}), which creates fresh variables per call. True shape polymorphism would
-require abstracting over fresh variables when forming tensor functions and
-freshening them at application sites---essentially an abstract interpretation
-mechanism. This is planned for a future version.
+OCANNL's shape system is currently monomorphic: shape variables are
+interpreted existentially, not universally. This is not a loss of
+expressivity---tensor operations are ordinary OCaml functions, and inference
+constraints are built along OCaml tensor values, so re-running the
+constructing code yields fresh variables. It is a loss of \emph{efficiency},
+which can be substantial: a tensor-producing function called many times with
+the same shapes redundantly re-derives, and shares, the same constraints
+unless the user reconstructs it per call. The unit-parameter pattern
+(\code{let layer = make () in ...}) makes this reconstruction explicit,
+creating fresh variables per call. True shape polymorphism would abstract
+over fresh variables when forming tensor functions and freshen them at
+application sites---essentially an abstract interpretation mechanism---so
+that a function need be constructed only once. This is planned for a future
+version.
 
 \paragraph{Shape schemes.}
 A natural extension would be \emph{shape schemes}: universally quantified
 shape specifications that are freshened at each use site, analogous to
 type schemes in Hindley-Milner. This would eliminate the need for
-unit-parameter workarounds and enable shape-polymorphic libraries.
+unit-parameter workarounds and enable shape-polymorphic libraries. It would
+also surface some shape errors earlier: a function's internal constraints
+could be checked once, at the function's own construction, rather than only
+when its results are eventually lowered at a call site.
 
 \paragraph{Formal guarantees.}
 The current system relies on testing rather than formal proofs for

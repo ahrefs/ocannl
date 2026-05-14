@@ -50,3 +50,11 @@ build_files/
 # AI interaction files
 .specstory/
 .qodo
+# LaTeX build artifacts
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.bbl
+docs/*.blg
