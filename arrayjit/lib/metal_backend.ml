@@ -146,7 +146,8 @@ module Alloc_buffer = struct
 end
 
 (* Functor defining the backend *)
-module Fresh () : Ir.Backend_impl.Lowered_backend = struct
+module Fresh () :
+  Ir.Backend_impl.Lowered_backend with type buffer_ptr = Me.Buffer.t = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
@@ -393,9 +394,9 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let opt_alloc_merge_buffer ~size_in_bytes stream : unit =
+  let opt_alloc_merge_buffer ?mode ~size_in_bytes stream : unit =
     stream.merge_buffer :=
-      Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ~size_in_bytes stream)
+      Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ?mode ~size_in_bytes stream)
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
@@ -414,7 +415,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
     | No, Some dst_ptr -> memcpy ~dst_ptr
     | Copy, _ ->
-        opt_alloc_merge_buffer ~size_in_bytes dst.stream;
+        (* The merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode
+           classification: a GPU-only [tn] gets a private merge buffer. *)
+        opt_alloc_merge_buffer
+          ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
+          ~size_in_bytes dst.stream;
         let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
         memcpy ~dst_ptr:buffer.ptr
 
