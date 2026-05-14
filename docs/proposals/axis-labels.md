@@ -1,48 +1,48 @@
-# Axis Labels Design (as opposed to dimension units)
+# Axis Labels Design (as opposed to dimension basis)
 
 ## Motivation
 
-OCANNL's shape system identifies axes positionally and provides optional **dimension labels** (aka "units" or "basis") as semantic annotations on individual dimensions. These labels constrain matching -- axes with different labels cannot be unified -- but do not name axes themselves. This means there is no way to refer to a specific axis of a tensor by name after construction.
+OCANNL's shape system identifies axes positionally and provides an optional **dimension basis** (aka "units"; formerly "dimension label") as a semantic annotation on individual dimensions. These bases constrain matching -- axes with different bases cannot be unified -- but do not name axes themselves. This means there is no way to refer to a specific axis of a tensor by name after construction.
 
 Axis labels would allow naming axes explicitly (e.g., `batch`, `seq_len`, `hidden`), similar to PyTorch's named tensors or xarray's dimension names. This could improve:
 - **Readability**: operations like transpose and reshape can reference axes by name instead of position.
 - **Safety**: catch permutation errors at the type/shape level (e.g., accidentally swapping `seq_len` and `hidden`).
 - **Interoperability**: named axes are a common convention in the broader ML ecosystem.
 
-The README (line 92) and ROADMAP (lines 181, 224) list this as a post-1.0 consideration. GitHub issue [#298](https://github.com/ahrefs/ocannl/issues/298) tracks the related but distinct task of renaming dimension labels to "basis" and making them more usable.
+The README (line 92) and ROADMAP (lines 181, 224) list this as a post-1.0 consideration. GitHub issue [#298](https://github.com/ahrefs/ocannl/issues/298) covers the related but distinct task of renaming dimension labels to "basis" and making them more usable; that rename has landed, so this document uses "basis" terminology throughout.
 
 ## Current State
 
 ### Three kinds of "labels" in OCANNL today
 
-1. **Dimension labels (units/basis)** on `solved_dim` (`tensor/row.ml`, line 63):
+1. **Dimension basis (units)** on `solved_dim` (`tensor/row.ml`):
 
    ```ocaml
-   type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+   type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
    ```
 
-   These act as semantic units: two dimensions that must agree in size must also agree on label (if both are labeled). A label like `"rgb"` on a dimension of size 3 means "this axis represents RGB channels." Labels need not be unique within a row and are inferred during shape inference. They are *not* an axis selection mechanism.
+   These act as semantic units: two dimensions that must agree in size must also agree on basis (if both are based). A basis like `"rgb"` on a dimension of size 3 means "this axis represents RGB channels." Bases need not be unique within a row and are inferred during shape inference. They are *not* an axis selection mechanism.
 
 2. **Einsum pseudo-labels** in the notation `"...s | h d; ...t | h d => ...s | t -> h"`. These are single- or multi-character identifiers local to the notation, parsed as `Label of string` in `einsum_types.ml` (line 18). They identify which axes correspond to each other within a single einsum spec but do **not** persist on the resulting tensor.
 
-3. **Shape-spec position labels** in `shape_spec_to_dims_bio` (`tensor/shape.ml`, around line 2343). The `name=42` syntax sets a dimension to a fixed size. The name part is an axis label but is currently **discarded** -- the comment says "This is not a dimension label i.e. unit!" This is the only place where axis labels (distinct from dimension labels) are acknowledged in code, but they are not stored or propagated.
+3. **Shape-spec position labels** in `shape_spec_to_dims_bio` (`tensor/shape.ml`, around line 2343). The `name=42` syntax sets a dimension to a fixed size. The name part is an axis label but is currently **discarded** -- the comment says "This is not a dimension basis i.e. unit!" This is the only place where axis labels (distinct from dimension basis) are acknowledged in code, but they are not stored or propagated.
 
 ### Existing misleading API names
 
-The current codebase has parameters that use "axis" terminology but actually set **dimension labels**, not axis labels:
+The current codebase has parameters that use "axis" terminology but actually set the **dimension basis**, not axis labels:
 
-- `Tensor.number ?axis_label` and `Tensor.bits ?axis_label`: these pass the string to `output_axes`, which calls `Shape.make ~output_axes:[(label, 1)]`, which passes to `get_dim ~d ~label ()` -- i.e., it sets a **dimension label** (unit), not an axis label in the sense proposed here.
-- `Shape.make ?batch_axes ?input_axes ?output_axes`: documented as "these are dimension labels and not axis labels" (shape.mli line 196). The `(string * int) list` pairs set dimension labels.
+- `Tensor.number ?axis_basis` and `Tensor.bits ?axis_basis`: these pass the string to `output_axes`, which calls `Shape.make ~output_axes:[(basis, 1)]`, which passes to `get_dim ~d ~basis ()` -- i.e., it sets a **dimension basis** (unit), not an axis label in the sense proposed here.
+- `Shape.make ?batch_axes ?input_axes ?output_axes`: documented as "these are dimension bases and not axis labels". The `(string * int) list` pairs set dimension bases.
 
 This terminological collision must be addressed by the implementation. See the API compatibility section below.
 
 ### Key files
 
-- `tensor/row.ml` -- `dim`, `solved_dim`, `dim_var`, constraint solving, label matching (lines 1599, 2092)
+- `tensor/row.ml` -- `dim`, `solved_dim`, `dim_var`, constraint solving, basis matching
 - `tensor/shape.ml` -- shape inference, `shape_spec_to_dims_bio`, einsum integration
 - `tensor/einsum_types.ml` -- `axis_spec`, `parsed_axis_labels`, `AxisKey`
-- `tensor/shape.mli` -- public API, notes on dimension labels vs axis labels (line 196)
-- `docs/shape_inference.md` -- explanation of the label system (line 49)
+- `tensor/shape.mli` -- public API, notes on dimension basis vs axis labels
+- `docs/shape_inference.md` -- explanation of the basis system (line 49)
 - `docs/workshop-paper-proposal.md` -- design rationale for positional axes (line 32)
 
 ## Design Decisions
@@ -52,7 +52,7 @@ This terminological collision must be addressed by the implementation. See the A
 Axis labels belong at the **row level**, not on the `dim` type. Rationale:
 
 - A `dim_var` can be shared across multiple axes in an einsum spec (e.g., `i` in `"ij;jk=>ik"` appears in different rows of different operands). The axis label names the *position in a specific tensor*, not the dimension value.
-- A `solved_dim` already carries `label` (dimension label/unit) and `proj_id`. Adding axis labels to `dim` conflates two distinct concerns: what the dimension measures (unit) vs. what role the axis plays (identity).
+- A `solved_dim` already carries `basis` (dimension basis/unit) and `proj_id`. Adding axis labels to `dim` conflates two distinct concerns: what the dimension measures (unit) vs. what role the axis plays (identity).
 - `Row.t` naturally represents "the axes of a particular kind in a particular tensor" -- the right granularity for axis naming.
 
 **Chosen representation**: add an `axis_labels : string option list` field to `Row.t`:
@@ -123,7 +123,7 @@ Future work may add a `~persist_labels:bool` parameter to einsum operations, but
 
 ### Decision 6: API naming and compatibility
 
-The existing `?axis_label` parameters on `Tensor.number` and `Tensor.bits` and the `*_axes` parameters on `Shape.make` actually set **dimension labels** (units), not axis labels in the new sense. This terminology collision is addressed as follows:
+The `?axis_basis` parameters on `Tensor.number` and `Tensor.bits` and the `*_axes` parameters on `Shape.make` actually set the **dimension basis** (units), not axis labels in the new sense. This terminology collision is addressed as follows:
 
 **Phase 1 (this task)**: Introduce new, distinctly named parameters for true axis labels. Do not rename or change the existing parameters (to avoid breaking existing code):
 
@@ -131,9 +131,9 @@ The existing `?axis_label` parameters on `Tensor.number` and `Tensor.bits` and t
 - `Shape.get_axis_labels : t -> [` Batch | ` Input | ` Output] -> string option list` -- retrieves axis labels for a row.
 - `Shape.set_axis_labels : t -> [` Batch | ` Input | ` Output] -> string option list -> unit` -- sets axis labels on a mutable row.
 
-**Phase 2 (coordinated with #298)**: When dimension labels are renamed to "basis", the existing `*_axes` and `?axis_label` parameters can be deprecated and replaced with clearer names. This is tracked separately and not a blocker.
+**Phase 2 (done in #298)**: The dimension-label terminology has been renamed to "basis": the parameter formerly called `?axis_label` is now `?axis_basis`, disambiguating it from the axis labels proposed here. The `*_axes` parameters on `Shape.make` keep their names but their docs now say "dimension bases".
 
-**Documentation**: All new APIs clearly document that axis labels are distinct from dimension labels. The existing `*_axes` parameter docs are updated to note the distinction.
+**Documentation**: All new APIs clearly document that axis labels are distinct from the dimension basis. The existing `*_axes` parameter docs are updated to note the distinction.
 
 ## Operation Semantics
 
@@ -215,26 +215,26 @@ Axis label information is included in `Shape_error` messages whenever it is avai
 
 ### Fallback for unlabeled axes
 
-When axis labels are not present (`axis_labels = []` or position is `None`), the error message falls back to the existing behavior: positional references with dimension label (unit) if available, or just size.
+When axis labels are not present (`axis_labels = []` or position is `None`), the error message falls back to the existing behavior: positional references with the dimension basis (unit) if available, or just size.
 
-### Distinction between axis-label errors and dimension-label errors
+### Distinction between axis-label errors and dimension-basis errors
 
-Axis-label mismatches and dimension-label mismatches are reported as **separate error conditions**:
+Axis-label mismatches and dimension-basis mismatches are reported as **separate error conditions**:
 
 - **Axis-label mismatch**: "axis label mismatch: 'seq_len' vs 'hidden'" -- the axis positions have conflicting names.
-- **Dimension-label mismatch**: "solved dimensions for axis: different labels" (existing message) -- the dimension values have conflicting units.
+- **Dimension-basis mismatch**: "solved dimensions for axis: different bases" (existing message) -- the dimension values have conflicting units.
 
-Both can occur at once (axes with different names AND different units). Since axis labels are checked as part of `unify_row` (after positional alignment is determined but within the same call), the axis label mismatch is detected and reported first. If both errors would occur, only the axis label error is raised -- fixing it may also reveal or resolve the dimension label issue.
+Both can occur at once (axes with different names AND different units). Since axis labels are checked as part of `unify_row` (after positional alignment is determined but within the same call), the axis label mismatch is detected and reported first. If both errors would occur, only the axis label error is raised -- fixing it may also reveal or resolve the dimension basis issue.
 
 ### Display format
 
-For axis labels in printed shapes and error messages, axis labels use a colon separator to distinguish from dimension labels which use equals:
+For axis labels in printed shapes and error messages, axis labels use a colon separator to distinguish from the dimension basis which uses equals:
 
 - Axis label: `seq_len:128` (axis name, then size)
-- Dimension label: `rgb=3` (dimension unit, then size)
+- Dimension basis: `rgb=3` (dimension unit, then size)
 - Both present: `seq_len:rgb=3` (axis name, then dimension unit, then size)
 
-The `row_to_labels` function (`tensor/row.ml`) is updated to prefer axis labels over dimension labels when both are available.
+The `row_to_bases` function (`tensor/row.ml`) is updated to prefer axis labels over dimension bases when both are available.
 
 ## Scope
 
@@ -246,14 +246,14 @@ The `row_to_labels` function (`tensor/row.ml`) is updated to prefer axis labels 
 - Backwards compatibility: all existing code without axis labels continues to work unchanged.
 
 **Out of scope:**
-- Renaming dimension labels to "basis" (tracked separately in [#298](https://github.com/ahrefs/ocannl/issues/298)).
+- Renaming dimension labels to "basis" (done separately in [#298](https://github.com/ahrefs/ocannl/issues/298)).
 - Shape schemes / polymorphism for tensor functions (separate post-1.0 item).
 - Dynamic axis selection or advanced named-tensor algebra (e.g., xarray-style alignment).
 - Making einsum pseudo-labels automatically persist (potential future `~persist_labels:bool`).
 - PPX syntax extensions for axis labels (deferred until runtime representation is stable).
 
 **Dependencies:**
-- Issue [#298](https://github.com/ahrefs/ocannl/issues/298) (rename labels to basis) should ideally land first to reduce terminology confusion. Not a hard blocker.
+- Issue [#298](https://github.com/ahrefs/ocannl/issues/298) (rename labels to basis) has landed, so this proposal already uses "basis" terminology. Not a hard blocker.
 - No hard blockers from other tasks.
 
 ## Design Tension
@@ -261,7 +261,7 @@ The `row_to_labels` function (`tensor/row.ml`) is updated to prefer axis labels 
 The workshop paper proposal (`docs/workshop-paper-proposal.md`, line 51) articulates a deliberate design rationale for positional axes:
 - Positional representation builds on mathematical tradition.
 - Row variable inference is ambiguity-free with positional axes but problematic with named axes.
-- Optional dimension units provide semantic safety without requiring unique axis names.
+- An optional dimension basis provides semantic safety without requiring unique axis names.
 
 Axis labels therefore remain **strictly optional** and do not change the semantics of shape inference for unlabeled axes. They are an additional layer of checking, not a replacement for positional identification.
 
@@ -282,7 +282,7 @@ This inline approach means:
 3. Thread axis labels through `unify_row` and row substitution.
 4. Update `Shape.make` with `*_axis_labels` parameters.
 5. Update `shape_spec_to_dims_bio` to store `name=N` as axis labels.
-6. Update `row_to_labels` to prefer axis labels.
+6. Update `row_to_bases` to prefer axis labels.
 7. Add error messages for axis label mismatches.
 8. Tests for basic construction, propagation, mismatch errors, backward compatibility.
 
@@ -294,6 +294,6 @@ This inline approach means:
 
 ### Phase 3: API and syntax (after runtime representation is stable)
 1. Add axis label arguments to `Tensor.term`, `Tensor.number`, etc.
-2. Coordinate with #298 to clean up `*_axes` / `?axis_label` naming.
+2. Coordinate with #298 to clean up `*_axes` / `?axis_basis` naming.
 3. PPX sugar for axis labels in `%op` and `%cd`.
 4. Update `docs/syntax_extensions.md` with examples.

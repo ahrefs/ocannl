@@ -2,7 +2,7 @@
 
 To separate concerns, OCANNL is split into the `arrayjit` library, responsible for compilation of high-level n-D array operation sequences (`Assignments.comp`) via backends such as sync_cc, metal and cuda, and the main `ocannl` library, responsible for deriving the operations computing the forward propagation and backpropagation from tensor expressions. In particular, `arrayjit` contains `Indexing`, which represents complex indexing into arrays, and the main library `ocannl` has `Row` and `Shape` modules, which do the most "heavy-lifting" in the translation from concise tensor expressions to sequences of assignments.
 
-Shape inference broadly speaking consists in OCANNL of inferring the `Shape.t` record -- shape inference proper, and inferring the `Indexing.projections` record -- projections inference. `Shape.t` records are mutable, so that the partially inferred shapes can be observed by the user. Shape and projections inference is intended to be declarative -- independent of the order in which constraints are added. There is one aspect that is not declarative: when tensor expressions are compiled to assignments, i.e. jitted, still-unsolved shape variables in terminal nodes are substituted by their least upper bounds if any, or by dimension-1 (no label) / no-more-axes.
+Shape inference broadly speaking consists in OCANNL of inferring the `Shape.t` record -- shape inference proper, and inferring the `Indexing.projections` record -- projections inference. `Shape.t` records are mutable, so that the partially inferred shapes can be observed by the user. Shape and projections inference is intended to be declarative -- independent of the order in which constraints are added. There is one aspect that is not declarative: when tensor expressions are compiled to assignments, i.e. jitted, still-unsolved shape variables in terminal nodes are substituted by their least upper bounds if any, or by dimension-1 (no basis) / no-more-axes.
 
 The bulk of the projections inference happens alongside shape inference, with the projections-relevant information stored in auxiliary fields -- this prevents subtle bugs where projection semantics deviates from shape semantics, and will simplify adding new shape/projection inference features. Shape inference happens during `propagate_shapes` calls, and then again in a `finish_inference` call, which is triggered whenever the dimensions or projections are required (i.e. typically by jitting). Finally, the projections are reconstructed in `derive_projections`. It would seem `derive_projections` could reuse the already-computed solutions constraints. But we face a problem: we must prevent contaminating projections across different operations. To illustrate: we conclude the dimensions of two axes are the same because they are reduced together in another operation -- this should not force the axes to share a projection in the processed operation. To prevent the contamination, in each `derive_projections` call, we freshen the projection ids in the (inferred) shapes, and regenerate and re-solve the constraints with the fresh projection ids.
 
@@ -15,7 +15,7 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed. (TODO: clarify here the precise logic as it is implemented, I'm not sure this description is correct.)
 
 ```ocaml
-type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
 (** A single axis in a shape. *)
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
@@ -50,11 +50,11 @@ The actual implementation is split into the `Row` module, which handles multi-ro
 
 OCANNL uses three distinct label-like mechanisms in its shape system. It is important to understand which is which:
 
-1. **Dimension labels (units/basis)**: stored as `label : string option` on `solved_dim`. These are semantic annotations on dimension *values* -- e.g., `"rgb"` on a dimension of size 3 means "this axis represents three RGB channels." Two dimensions that must agree in size must also agree on label (if both are labeled). Labels need not be unique within a row and are inferred during shape inference. They do not name the axis itself. See `Row.solved_dim` in `tensor/row.ml`.
+1. **Dimension basis (units)**: stored as `basis : string option` on `solved_dim`. These are semantic annotations on dimension *values* -- e.g., `"rgb"` on a dimension of size 3 means "this axis represents three RGB channels." Two dimensions that must agree in size must also agree on basis (if both are based). Bases need not be unique within a row and are inferred during shape inference. They do not name the axis itself. See `Row.solved_dim` in `tensor/row.ml`.
 
 2. **Einsum pseudo-labels**: the single- or multi-character identifiers used in einsum notation (e.g., `i`, `j`, `k` in `"ij;jk=>ik"`). These are local to the notation -- they identify which axes correspond to each other within a single einsum spec but do not persist on the resulting tensor. See `Einsum_types.axis_spec` in `tensor/einsum_types.ml`.
 
-3. **Axis labels (planned, v1.1+)**: persistent names for axis *positions* within a row, stored as `axis_labels : string option list` on `Row.t`. Unlike dimension labels which annotate what a dimension measures (its unit), axis labels name the role the axis plays (e.g., `"seq_len"`, `"hidden"`). Axis labels are unique within a row, propagated during row unification, and checked for conflicts. They are strictly optional and do not change inference outcomes. See the design proposal in `docs/proposals/axis-labels.md`.
+3. **Axis labels (planned, v1.1+)**: persistent names for axis *positions* within a row, stored as `axis_labels : string option list` on `Row.t`. Unlike dimension basis which annotates what a dimension measures (its unit), axis labels name the role the axis plays (e.g., `"seq_len"`, `"hidden"`). Axis labels are unique within a row, propagated during row unification, and checked for conflicts. They are strictly optional and do not change inference outcomes. See the design proposal in `docs/proposals/axis-labels.md`.
 
 ### Affine indexing and convolutions
 
@@ -122,7 +122,7 @@ When guessing dimension variables to minimal values (at Stage 5 and Stage 7), va
 
 ### Preventing Premature Guessing with Total_elems Constraints
 
-A critical aspect of shape inference is avoiding premature "guessing" of dimension variables to minimal values (dimension-1-no-label or no-further-axes for rows) when such guessing would make pending constraints unsatisfiable. This is particularly important for `Total_elems` constraints of the form:
+A critical aspect of shape inference is avoiding premature "guessing" of dimension variables to minimal values (dimension-1-no-basis or no-further-axes for rows) when such guessing would make pending constraints unsatisfiable. This is particularly important for `Total_elems` constraints of the form:
 
 ```ocaml
 Total_elems { numerator = Strided_var { coeff; var; denom }; divided_by }
@@ -148,7 +148,7 @@ This mechanism ensures that `Total_elems` constraints with stride-based numerato
 
 ### Inference strategy
 
-The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature. The subtyping stems merely from the fact that a dimension-1-no-label axis can be used in the context of any dimension due to per-axis broadcasting. Row polymorphism stems from broadcasting to more axes: for example, when unifying an unknown (shape) row with a known one, we cannot assume that the unknown row will have just the axes of the known one, because maybe the known row is meant to be broadcasted here to more axes. The combination of row polymorphism with nominal subtyping means that the constraints we are solving are inequalities, both inequalities between rows (the `Row.t` type, i.e. the `row` type above), and between axes/dimensions (the `Row.dim` type). We maintain the inequality ordering between variables in the environment to compute the transitive closure during simplification. We also maintain a least upper bound on the solution.
+The actual shape inference combines row polymorphism with (nominal) subtyping, as known in the type inference literature. The subtyping stems merely from the fact that a dimension-1-no-basis axis can be used in the context of any dimension due to per-axis broadcasting. Row polymorphism stems from broadcasting to more axes: for example, when unifying an unknown (shape) row with a known one, we cannot assume that the unknown row will have just the axes of the known one, because maybe the known row is meant to be broadcasted here to more axes. The combination of row polymorphism with nominal subtyping means that the constraints we are solving are inequalities, both inequalities between rows (the `Row.t` type, i.e. the `row` type above), and between axes/dimensions (the `Row.dim` type). We maintain the inequality ordering between variables in the environment to compute the transitive closure during simplification. We also maintain a least upper bound on the solution.
 
 ```ocaml
 type dim_entry =
@@ -272,7 +272,7 @@ During the solution process, the constraints are incorporated, or propagated, in
 
 ## Solving the constraints
 
-The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. The inequalities are like in type systems combining parametric polymorphism with structural and nominal subtyping, where the nominal subtyping relation states that dimension-1 without a label axis is smaller than all axes, and axes of other mismatching dimensions or mismatching labels are incomparable. For rows, the subtyping is suffix-wise (shorter is smaller) and axis-wise.
+The constraints are solved by: unification of the equation constraints, unification-like simplification of the inequality constraints, propagation of the complex constraints. The inequalities are like in type systems combining parametric polymorphism with structural and nominal subtyping, where the nominal subtyping relation states that dimension-1 without a basis axis is smaller than all axes, and axes of other mismatching dimensions or mismatching bases are incomparable. For rows, the subtyping is suffix-wise (shorter is smaller) and axis-wise.
 
 Simplification of an inequality, and constraint propagation, can generate more constraints, so we need to be careful to keep it terminating. The solution proceeds in stages. Currently there are 8 stages, with a fractional stage coming from splitting an earlier design.
 

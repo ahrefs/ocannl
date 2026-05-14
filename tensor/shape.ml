@@ -2424,7 +2424,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
           | [ l; d ] -> (l, d)
           | _ -> invalid_arg "shape_spec_to_dims_bio: too many '='"
         in
-        (* This is not a dimension label i.e. unit! *)
+        (* This is not a dimension basis i.e. unit! *)
         try Row.get_dim ~d:(Int.of_string dim) ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
     | Label name ->

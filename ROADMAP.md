@@ -46,7 +46,7 @@ This roadmap outlines the development plan for OCANNL from the current state to 
   - Handle shifting as special case: `1^i=>i` for left shift
   - Handle padding as special case: `i=>1^i` for left padding
 
-- **Dimension units vs axis labels** (#298)
+- **Dimension basis vs axis labels** (#298)
   - Clarify design decisions
   - Document rationale
 
@@ -219,7 +219,7 @@ This is a research-heavy milestone requiring ~2.5 months.
 1. **Generalized einsum notation** with convolutions, strided iteration, and concatenation
 2. **Row variables** for flexible axis handling ("principle of least commitment")
 3. **Constraint-based shape inference** with provenance tracking for error messages
-4. **Dimension units** design rationale (vs axis labels)
+4. **Dimension basis** design rationale (vs axis labels)
 5. **Integration with OCaml's type system** via syntax extensions
 
 ### Related Work to Address

@@ -12,8 +12,8 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
   * the whole training update step can be a single routine,
   * or the step can be composed of a gradient update routine (a forward pass and a backprop pass) and a params update routine (e.g. SGD with momentum, ADAM, etc.),
   * or the user can compile parts of a model separately, manually composing the corresponding forward pass code and the backprop code.
-* Tensor axes are split into kinds: batch, input and output. Tensor dimensions have optional labels.
-  * The labels ensure a more precise semantics for dimension matching, alternative name: dimension units. It's **not** an axis selection mechanism.
+* Tensor axes are split into kinds: batch, input and output. Tensor dimensions have an optional basis.
+  * The basis (aka dimension units) ensures a more precise semantics for dimension matching. It's **not** an axis selection mechanism.
 * OCANNL has full support for a significantly extended `einsum` notation, integrated with shape inference. See [comparison with einops](docs/einops_comparison.md) for how this relates to the popular [einops](https://einops.rocks/) library. Supports static indexing, with a built-in operation to take a slice of the batch axes, integrated with shape inference. Extensible to more static indexing patterns as needs arise.
   * OCANNL does not have dynamic indexing (using the last axis of one tensor as indices into another tensor). If it's needed, it can be added (we had a prototype once, removed to reduce complexity). Then it would also be integrated with shape inference.
 * OCANNL offers two main levels of abstraction.
@@ -90,7 +90,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2
   - [ ] Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
   - [ ] Similarly to how contexts track initialization dependencies for compilation, we should also track them for execution.
 * **1.1: shape inference and safety enhancements.**
-  - [ ] Consider introducing axis labels (as opposed to dimension units).
+  - [ ] Consider introducing axis labels (as opposed to the dimension basis).
   - [ ] Consider introducing shape schemes for tensor functions.
 
 ### Releases
