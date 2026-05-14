@@ -1,0 +1,5 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+mismatch: link raised at link time, schedule not run = true
+matched: link succeeded and transfer + consumer schedules ran
+done

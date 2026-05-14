@@ -12,6 +12,10 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 (* export OCANNL_LOG_LEVEL_BACKENDS=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_BACKENDS"]
 
+(* Dynamic backstop for merge-buffer verification: runs as the first work of a consumer's schedule
+   and checks the node most recently scheduled into the stream's merge buffer. The primary check is
+   now the static [check_merge_buffer_static] performed at link time (gh-ocannl-288); this remains
+   as a defensive backstop for transfers that are scheduled without a downstream link. *)
 let check_merge_buffer stream ~code_node =
   let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
   match (stream.updating_for_merge_buffer, code_node) with
@@ -23,6 +27,22 @@ let check_merge_buffer stream ~code_node =
            ("Merge buffer mismatch, on stream: "
            ^ name (Option.map ~f:fst stream.updating_for_merge_buffer)
            ^ ", expected by code: " ^ name code_node)
+
+(* Static counterpart of [check_merge_buffer]: verifies at link time -- before any schedule runs --
+   that the merge-buffer node statically recorded on the linked [context] (by a [device_to_device]
+   transfer routine, see {!Add_buffer_retrieval_and_syncing.device_to_device}) matches the node the
+   linked [code] expects. This is the "static verification in the right direction" of
+   gh-ocannl-288: the transfer routine's context chains naturally into the consumer's link. *)
+let check_merge_buffer_static ~merge_buffer_node ~code_node =
+  let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
+  match (merge_buffer_node, code_node) with
+  | _, None -> ()
+  | Some actual, Some expected when Tnode.equal actual expected -> ()
+  | _ ->
+      raise
+      @@ Utils.User_error
+           ("Merge buffer mismatch at link time: the linked context provides "
+           ^ name merge_buffer_node ^ ", but the linked code expects " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let wait_for_ready ~dst ~src tn =
@@ -100,36 +120,79 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
              ("init_from_host: tensor node is not hosted: " ^ Tn.debug_name tn ^ ", for stream "
             ^ Backend.get_name ctx.stream)
 
+  (* [device_to_device] builds a transfer routine instead of scheduling the copy directly. The
+     caller schedules it (via [Task.run r.schedule]) or links a consumer against [r.context]. For
+     the [Copy] case, [r.context]'s [merge_buffer_node] records the produced node statically, so
+     that [link] can verify it against a consumer's [expected_merge_node] at link time -- the
+     "static verification in the right direction" of gh-ocannl-288. *)
   let%track3_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
-      ~(src : Backend.context) =
+      ~(src : Backend.context) : Backend.context routine option =
     match Map.find src.ctx_arrays tn with
-    | None -> false
+    | None -> None
     | Some s_arr -> (
-        wait_for_ready ~dst ~src tn;
         match into_merge_buffer with
         | No -> (
             match Map.find dst.ctx_arrays tn with
-            | None -> false
+            | None -> None
             | Some d_arr ->
-                if phys_equal s_arr d_arr then false
-                else (
-                  Backend.(
-                    device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
-                      ~src);
-                  update_writer_event dst @@ Node tn;
-                  [%log
-                    "copying",
-                    Tn.debug_name tn,
-                    "from",
-                    Backend.get_name src.stream,
-                    "to",
-                    Backend.get_name dst.stream];
-                  true))
+                if phys_equal s_arr d_arr then None
+                else
+                  let context = Backend.make_child dst in
+                  let description =
+                    "device_to_device " ^ Tn.debug_name tn ^ " from " ^ Backend.get_name src.stream
+                    ^ " to " ^ Backend.get_name dst.stream
+                  in
+                  let work () =
+                    wait_for_ready ~dst ~src tn;
+                    Backend.(
+                      device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst
+                        ~src_ptr:s_arr ~src);
+                    update_writer_event dst @@ Node tn;
+                    [%log
+                      "copying",
+                      Tn.debug_name tn,
+                      "from",
+                      Backend.get_name src.stream,
+                      "to",
+                      Backend.get_name dst.stream]
+                  in
+                  let schedule =
+                    Task.Task { context_lifetime = (src, dst); description; work }
+                  in
+                  Some
+                    {
+                      context;
+                      schedule;
+                      bindings = [];
+                      name = description;
+                      inputs = Set.singleton (module Tnode) tn;
+                      merge_buffer_input = None;
+                      outputs = Set.singleton (module Tnode) tn;
+                    })
         | Copy ->
-            Backend.(device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
-            update_writer_event dst @@ Merge_buffer tn;
-            [%log "copy into merge buffer", Tn.debug_name tn, "from", Backend.get_name src.stream];
-            true)
+            let context = Backend.make_child dst ~merge_buffer_node:(Some tn) in
+            let description =
+              "device_to_device " ^ Tn.debug_name tn ^ " into merge buffer from "
+              ^ Backend.get_name src.stream
+            in
+            let work () =
+              wait_for_ready ~dst ~src tn;
+              Backend.(
+                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
+              update_writer_event dst @@ Merge_buffer tn;
+              [%log "copy into merge buffer", Tn.debug_name tn, "from", Backend.get_name src.stream]
+            in
+            let schedule = Task.Task { context_lifetime = (src, dst); description; work } in
+            Some
+              {
+                context;
+                schedule;
+                bindings = [];
+                name = description;
+                inputs = Set.singleton (module Tnode) tn;
+                merge_buffer_input = None;
+                outputs = Set.empty (module Tnode);
+              })
 
   let%track3_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
     match Map.find src.ctx_arrays tn with
@@ -480,6 +543,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
   let%debug3_sexp link context (code : code) =
     verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
       ~from_prior_context:code.from_prior_context;
+    (* Static merge-buffer verification "in the right direction" (gh-ocannl-288): the linked
+       context carries the merge-buffer node of the producing [device_to_device] transfer routine;
+       a mismatch with the consuming code raises here, at link time, before any schedule runs. *)
+    check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
+      ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
     let ctx_arrays =
       Hashtbl.fold code.lowered.traced_store ~init:context.ctx_arrays ~f:(alloc_if_needed context)
@@ -510,8 +578,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       | Some schedule ->
           let ctx_arrays = Option.value_exn ctx_arrays.(i) in
           let optimize_ctx = (Option.value_exn code_batch.lowereds.(i)).Low_level.optimize_ctx in
-          let context = make_child ~ctx_arrays ~optimize_ctx context in
           let expected_merge_node = code_batch.expected_merge_nodes.(i) in
+          (* Static merge-buffer verification at link time (gh-ocannl-288): check the node provided
+             by the fold-current context before deriving the consumer's child context. *)
+          check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
+            ~code_node:expected_merge_node;
+          let context = make_child ~ctx_arrays ~optimize_ctx context in
           let (inputs, outputs), merge_buffer_input =
             Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)
           in

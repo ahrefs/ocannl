@@ -154,17 +154,28 @@ struct
 
   let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?optimize_ctx stream =
     let optimize_ctx = Option.value_or_thunk optimize_ctx ~default:empty_optimize_ctx in
-    { stream; parent = None; ctx_arrays; finalized = Atomic.make false; optimize_ctx }
+    {
+      stream;
+      parent = None;
+      ctx_arrays;
+      finalized = Atomic.make false;
+      optimize_ctx;
+      merge_buffer_node = None;
+    }
 
-  let make_child ?ctx_arrays ?optimize_ctx parent =
+  let make_child ?ctx_arrays ?optimize_ctx ?merge_buffer_node parent =
     let ctx_arrays = Option.value ctx_arrays ~default:parent.ctx_arrays in
     let optimize_ctx = Option.value optimize_ctx ~default:parent.optimize_ctx in
+    let merge_buffer_node =
+      Option.value merge_buffer_node ~default:parent.merge_buffer_node
+    in
     {
       stream = parent.stream;
       parent = Some parent;
       ctx_arrays;
       finalized = Atomic.make false;
       optimize_ctx;
+      merge_buffer_node;
     }
 end
 

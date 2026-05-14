@@ -115,6 +115,15 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name merge_buffer_static_verification)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules merge_buffer_static_verification)
+ (libraries base ocannl stdio arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Generate both ll files and actual files in one rule using no-infer
 
 (rule

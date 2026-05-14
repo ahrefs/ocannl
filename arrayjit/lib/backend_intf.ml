@@ -153,6 +153,12 @@ type ('buffer_ptr, 'stream, 'optimize_ctx) context = {
           but might also be cross-stream shared). *)
   finalized : Utils.atomic_bool;
   optimize_ctx : 'optimize_ctx;
+  merge_buffer_node : Tnode.t option;
+      (** The tensor node that a {!Backend.device_to_device} transfer with [into_merge_buffer:Copy]
+          placed (or will place) into this context's stream's merge buffer. It is a static,
+          immutably-chained fact carried producer -> consumer: linking a consumer whose code expects
+          a merge-buffer node verifies it against this field at link time. A transfer with
+          [into_merge_buffer:No] does not touch the merge buffer and inherits the parent's value. *)
 }
 [@@deriving sexp_of]
 
@@ -174,10 +180,16 @@ module type Device = sig
   val make_context : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> stream -> context
   (** Returns a context without a parent. *)
 
-  val make_child : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> context -> context
+  val make_child :
+    ?ctx_arrays:ctx_arrays ->
+    ?optimize_ctx:optimize_ctx ->
+    ?merge_buffer_node:Tnode.t option ->
+    context ->
+    context
   (** Returns a context with the same {!field:Backend_intf.context.stream}, and
-      {!field:Backend_intf.context.ctx_arrays}, {!field:Backend_intf.context.optimize_ctx} if
-      omitted, as the given context's, which is also the {!field:Backend_intf.context.parent}. *)
+      {!field:Backend_intf.context.ctx_arrays}, {!field:Backend_intf.context.optimize_ctx},
+      {!field:Backend_intf.context.merge_buffer_node} if omitted, as the given context's, which is
+      also the {!field:Backend_intf.context.parent}. *)
 
   val get_name : stream -> string
 end
@@ -287,15 +299,24 @@ module type With_buffer_retrieval_and_syncing = sig
       same buffer (note that this depends on the memory mode of the tensor node). *)
 
   val device_to_device :
-    Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
-  (** [device_to_device tn ~into_merge_buffer ~dst ~src] proceeds as follows:
-      - If the node is absent from [src]: returns false.
-      - Schedules waiting for writing into the tensor node on [src] to finish, if any.
-      - If [into_merge_buffer=No]: schedules a copy of the tensor node from [src] to [dst] and
-        updates the writer event for the node. Skips if source and destination buffers are
-        physically the same.
-      - If [into_merge_buffer=Copy], schedules copying from [src] to the merge buffer of [dst]'s
-        stream, and updates the writer event for the merge buffer. *)
+    Tnode.t ->
+    into_merge_buffer:merge_buffer_use ->
+    dst:context ->
+    src:context ->
+    context routine option
+  (** [device_to_device tn ~into_merge_buffer ~dst ~src] builds a transfer {e routine} instead of
+      scheduling the copy directly. The caller schedules it (e.g. via [Task.run r.schedule]) or
+      links a consumer against [r.context]. It returns:
+      - [None] if there is nothing to transfer: the node is absent from [src]; or, for
+        [into_merge_buffer=No], the node is absent from [dst] or the source and destination buffers
+        are physically the same.
+      - [Some r] otherwise. Running [r.schedule] waits for writing into the tensor node on [src] to
+        finish, then performs the copy and updates the writer event.
+      - For [into_merge_buffer=No], the copy goes from [src] to [dst]; [r.context] is a child of
+        [dst] inheriting its {!field:Backend_intf.context.merge_buffer_node}.
+      - For [into_merge_buffer=Copy], the copy goes from [src] to the merge buffer of [dst]'s
+        stream; [r.context] is a child of [dst] with [merge_buffer_node = Some tn], so that linking
+        a consumer of the merge buffer against [r.context] statically verifies the node. *)
 
   val init_from_device : Tnode.t -> dst:context -> src:context -> context
   (** Schedules a copy from [src] to [dst]: a variant of {!device_to_device} with
