@@ -302,13 +302,13 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     string ("v" ^ Int.to_string scope_id ^ "_" ^ get_ident tn)
 
-  let rec pp_ll (c : Low_level.t) : PPrint.document =
+  let rec pp_ll ?(log_set_locals = true) (c : Low_level.t) : PPrint.document =
     let open PPrint in
     match c with
     | Low_level.Noop -> empty
     | Seq (c1, c2) ->
-        let d1 = pp_ll c1 in
-        let d2 = pp_ll c2 in
+        let d1 = pp_ll ~log_set_locals c1 in
+        let d2 = pp_ll ~log_set_locals c2 in
         (* Avoid extra hardlines if one side is empty *)
         if PPrint.is_empty d1 then d2 else if PPrint.is_empty d2 then d1 else d1 ^^ hardline ^^ d2
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
@@ -318,7 +318,7 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space ^^ string "++" ^^ pp_symbol i
           ^^ string ")"
         in
-        let body_doc = ref (pp_ll body) in
+        let body_doc = ref (pp_ll ~log_set_locals body) in
         (if Utils.debug_log_from_routines () then
            let log_doc =
              let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
@@ -330,7 +330,7 @@ module C_syntax (B : C_syntax_config) = struct
            body_doc := log_doc ^^ hardline ^^ !body_doc);
         group (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body_doc) ^^ hardline ^^ rbrace)
     | Zero_out tn ->
-        pp_ll
+        pp_ll ~log_set_locals
           (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
                Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
     | Set { tn; idcs; llsc; debug } ->
@@ -498,10 +498,54 @@ module C_syntax (B : C_syntax_config) = struct
           let block_content = local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ assignments in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Set_local (({ tn = { prec; _ }; _ } as id), value) ->
-        let local_defs, value_doc = pp_scalar (Lazy.force prec) value in
+        let prec = Lazy.force prec in
+        let local_defs, value_doc = pp_scalar prec value in
         let local_defs = pp_local_defs local_defs in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
-        if PPrint.is_empty local_defs then assignment
+        if Utils.debug_log_from_routines () && log_set_locals then
+          let new_var = string "new_set_local_v" in
+          let num_typ = string (B.typ_of_prec prec) in
+          let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ value_doc ^^ semi in
+          let debug_val_doc, debug_args_docs = debug_float prec value in
+          let debug_val_str = doc_to_string debug_val_doc in
+          let pp_args_docs =
+            List.map debug_args_docs ~f:(function
+              | `Accessor idx -> pp_array_offset idx
+              | `Value v_doc -> B.styled_log_arg v_doc)
+          in
+          let log_doc =
+            let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
+            let scope_doc = pp_scope_id id in
+            let comment_base_msg =
+              "# local " ^ doc_to_string scope_doc ^ " := " ^ doc_to_string value_doc ^ "\n"
+            in
+            let value_base_msg =
+              Printf.sprintf "%s{=%s} = %s = %s\n" (doc_to_string scope_doc) B.float_log_style
+                B.float_log_style debug_val_str
+            in
+            let comment_log =
+              B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                ~base_message_literal:comment_base_msg ~args_docs:[]
+            in
+            let value_log =
+              B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                ~base_message_literal:value_base_msg
+                ~args_docs:
+                  (B.styled_log_arg scope_doc :: B.styled_log_arg new_var :: pp_args_docs)
+            in
+            let flush_log =
+              if B.log_involves_file_management then string "fflush(log_file);" else empty
+            in
+            comment_log ^^ hardline ^^ value_log ^^ hardline ^^ flush_log
+          in
+          let assignment' = pp_scope_id id ^^ string " = " ^^ new_var ^^ semi in
+          let block_content =
+            if PPrint.is_empty local_defs then
+              decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
+            else local_defs ^^ hardline ^^ decl ^^ hardline ^^ log_doc ^^ hardline ^^ assignment'
+          in
+          lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
+        else if PPrint.is_empty local_defs then assignment
         else
           let block_content = local_defs ^^ hardline ^^ assignment in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
@@ -527,7 +571,7 @@ module C_syntax (B : C_syntax_config) = struct
           string " = " ^^ string prefix ^^ string "0" ^^ string postfix
         in
         let decl = num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi in
-        let body_doc = pp_ll body in
+        let body_doc = pp_ll ~log_set_locals:false body in
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in

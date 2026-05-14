@@ -108,6 +108,8 @@ let () =
       let full_printf_support = true
     end))
   in
+  Utils.set_log_level 2;
+  Utils.settings.debug_log_from_routines <- true;
   Stdio.printf "=== After hoist (c_syntax pp_ll) ===\n";
   PPrint.ToChannel.pretty 0.9 110 Stdio.stdout (Syntax.compile_main result);
   Stdio.printf "\n%!"
