@@ -4,4 +4,6 @@ val storage_mode_for_memory_mode :
     ([Local], [Device_only], [On_device]) map to [Private]; every other mode (and the [None]
     default) maps to [Shared] because the CPU may need to access the buffer. *)
 
-module Fresh () : Ir.Backend_impl.Lowered_backend
+module Fresh () : Ir.Backend_impl.Lowered_backend with type buffer_ptr = Metal.Buffer.t
+(** [buffer_ptr] is exposed concretely as [Metal.Buffer.t] so that tests can inspect the storage
+    mode ([Metal.Resource.get_storage_mode]) of buffers produced by the allocator paths. *)

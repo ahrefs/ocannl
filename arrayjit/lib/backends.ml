@@ -403,7 +403,10 @@ struct
             in
             if allocated_capacity < size_in_bytes then
               s.allocated_buffer <-
-                Some (alloc_buffer ?old_buffer:s.allocated_buffer ~size_in_bytes dst.stream);
+                Some
+                  (alloc_buffer ?old_buffer:s.allocated_buffer
+                     ?mode:(Option.map tn.Tnode.memory_mode ~f:fst)
+                     ~size_in_bytes dst.stream);
             let merge_ptr = (Option.value_exn ~here:[%here] s.allocated_buffer).ptr in
             s.merge_buffer := s.allocated_buffer;
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
