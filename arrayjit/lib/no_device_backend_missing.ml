@@ -32,11 +32,14 @@ struct
 
   let sexp_of_ctx_arrays _ctx_arrays = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ () =
+  let alloc_buffer ?old_buffer:_ ?mode:_ ~size_in_bytes:_ () =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let alloc_array _prec ~dims:_ () = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
-  let alloc_zeros _prec ~dims:_ () = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
+  let alloc_array ?mode:_ _prec ~dims:_ () =
+    failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
+
+  let alloc_zeros ?mode:_ _prec ~dims:_ () =
+    failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
   let free_buffer = None
   let get_used_memory () = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 

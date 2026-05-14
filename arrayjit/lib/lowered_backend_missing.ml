@@ -40,13 +40,13 @@ struct
   let sexp_of_context _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_buffer ?old_buffer:_ ~size_in_bytes:_ _stream =
+  let alloc_buffer ?old_buffer:_ ?mode:_ ~size_in_bytes:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_array _prec ~dims:_ _stream =
+  let alloc_array ?mode:_ _prec ~dims:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_zeros _prec ~dims:_ _stream =
+  let alloc_zeros ?mode:_ _prec ~dims:_ _stream =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let free_buffer = None

@@ -1,0 +1,15 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Local                  -> Private
+Device_only            -> Private
+On_device              -> Private
+Hosted Constant        -> Shared
+Hosted Nonconstant     -> Shared
+Hosted Volatile        -> Shared
+Hosted Changed_on_dev  -> Shared
+Hosted Unset_hosted    -> Shared
+Materialized           -> Shared
+Effectively_constant   -> Shared
+Never_virtual          -> Shared
+Virtual                -> Shared
+None                   -> Shared

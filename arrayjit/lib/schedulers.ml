@@ -256,8 +256,8 @@ module Sync (Backend : For_add_scheduler) = struct
   let is_done () = true
   let will_wait_for _context () = ()
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
-    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _stream =
+    Backend.alloc_buffer ?old_buffer ?mode ~size_in_bytes ()
 
   let device : device = make_device CPU ~ordinal:0
 
