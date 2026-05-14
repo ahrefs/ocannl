@@ -543,15 +543,15 @@ let tropical ?(capture_dims = []) spec =
 let offsets = Tensor.term ~fetch_op:Range_over_offsets ?init_data:None
 
 (** [range] is a 1D tensor of shape [upto], spans [0] inclusive, [upto] exclusive. *)
-let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_label upto =
+let range ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?axis_basis upto =
   let result =
     Tensor.term ~fetch_op:Range_over_offsets ~grad_spec ~batch_dims:[]
       ~label:(("0" ^ "..." ^ Int.to_string (upto - 1)) :: label)
       ~input_dims:[]
   in
-  match axis_label with
+  match axis_basis with
   | None -> result ~output_dims:[ upto ] ()
-  | Some l -> result ~output_axes:[ (l, upto) ] ()
+  | Some b -> result ~output_axes:[ (b, upto) ] ()
 
 let range_of_shape ?(label = []) ?(grad_spec = Tensor.Prohibit_grad) ?batch_dims ?input_dims
     ?output_dims ?batch_axes ?input_axes ?output_axes () =
@@ -769,7 +769,8 @@ struct
   let relu ?spec ?capture_dims = relu ?spec ?capture_dims ~grad_spec
   let sat01 ?spec ?capture_dims = sat01 ?spec ?capture_dims ~grad_spec
   let fma = fma ~grad_spec
-  let number_int ?label ?axis_label i = Tensor.number ?label ?axis_label ~grad_spec (Float.of_int i)
+  let number_int ?label ?axis_basis i =
+    Tensor.number ?label ?axis_basis ~grad_spec (Float.of_int i)
   let embed_symbol = embed_symbol ~grad_spec
   let embed_dim = embed_dim ~grad_spec
   let sub ?spec ?capture_dims = sub ?spec ?capture_dims ~grad_spec

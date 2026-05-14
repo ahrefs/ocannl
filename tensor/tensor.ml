@@ -579,15 +579,15 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
-let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c : t =
-  (* Note: no axis label so that we do not conflict with user labels. *)
+let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c : t =
+  (* Note: no dimension basis by default so that we do not conflict with user-provided bases. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
-    match axis_label with
+    match axis_basis with
     | None -> t ~output_dims:[ 1 ] ()
-    | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
+    | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   (* FIXME: make this always pick a matching precision. *)
@@ -595,15 +595,15 @@ let%track7_sexp number ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) c 
     if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
   t
 
-let%track7_sexp bits ?(label = []) ?axis_label ?(grad_spec = Prohibit_grad) i : t =
+let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : t =
   (* Use Constant_bits for exact bit representation, primarily for uint4x32 *)
   let label = Int64.to_string i :: label in
   let fetch_op = Ir.Assignments.Constant_bits i in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
-    match axis_label with
+    match axis_basis with
     | None -> t ~output_dims:[ 1 ] ()
-    | Some axis_label -> t ~output_axes:[ (axis_label, 1) ] ()
+    | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
   t
@@ -808,7 +808,7 @@ let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
     let indices = Shape.default_display_indices t.shape in
-    let labels = Shape.to_labels t.shape in
+    let labels = Shape.to_bases t.shape in
     let where_located a = Tn.(debug_memory_mode a.memory_mode) in
     let txt =
       if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
@@ -936,7 +936,7 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     assert (String.is_prefix label ~prefix:"grad");
     label
   in
-  let labels = Shape.to_labels t.shape in
+  let labels = Shape.to_bases t.shape in
   let indices =
     match style with
     | `Default -> Shape.default_display_indices sh
@@ -964,7 +964,7 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     || Shape.(List.exists ~f:Row.(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
   in
   let axes_spec =
-    if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_labels sh) else None
+    if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_bases sh) else None
   in
   let num_batch_axes = List.length sh.batch.dims in
   let num_input_axes = List.length sh.input.dims in

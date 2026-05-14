@@ -19,10 +19,12 @@ val dim_map_empty : 'a dim_map
 val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
 
-type solved_dim = { d : int; label : string option; proj_id : proj_id option }
+type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
-(** A single axis in a shape. [proj_id] is used for projection inference, and abused for provenance
-    tracking during shape inference. *)
+(** A single axis in a shape. [basis] is an optional semantic annotation on the dimension (e.g.
+    ["rgb"] on a size-3 axis); two dimensions that must agree in size must also agree on a non-None
+    [basis]. [proj_id] is used for projection inference, and abused for provenance tracking during
+    shape inference. *)
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
 [@@deriving equal, hash, compare, sexp]
@@ -40,11 +42,11 @@ and dim =
   | Concat of dim list  (** Concatenation of multiple dimensions into a single axis. *)
 [@@deriving equal, hash, compare, sexp]
 
-val get_dim : d:int -> ?label:string -> ?proj_id:int -> unit -> dim
+val get_dim : d:int -> ?basis:string -> ?proj_id:int -> unit -> dim
 val dim_to_int_exn : dim -> int
 val vars_of_dim : dim -> dim_var_set
 
-type print_style = Only_labels | Axis_size | Axis_number_and_size | Projection_and_size
+type print_style = Only_bases | Axis_size | Axis_number_and_size | Projection_and_size
 [@@deriving equal, compare, sexp]
 
 val solved_dim_to_string : print_style -> solved_dim -> string
@@ -71,7 +73,7 @@ type bcast =
 type t = { dims : dim list; bcast : bcast; prov : provenance }
 [@@deriving equal, hash, compare, sexp]
 
-val dims_label_assoc : t -> (string * dim) list
+val dims_basis_assoc : t -> (string * dim) list
 val get_row_for_var : provenance -> row_var -> t
 val row_shapes : t -> int list
 
@@ -200,7 +202,7 @@ val solve_inequalities :
 (** [invalid_vars] are safe to guess dimension = 0, they do not participate in projections for the
     update step the constraints were derived for. *)
 
-val row_to_labels : environment -> t -> string array
+val row_to_bases : environment -> t -> string array
 
 type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp_of]

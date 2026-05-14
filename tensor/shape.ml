@@ -2299,8 +2299,8 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
       Some (Array.concat [ batch; output; input ], padded_value)
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
-let to_labels (sh : t) : string array =
-  Array.concat_map ~f:(Row.row_to_labels !state) [| sh.batch; sh.output; sh.input |]
+let to_bases (sh : t) : string array =
+  Array.concat_map ~f:(Row.row_to_bases !state) [| sh.batch; sh.output; sh.input |]
 
 let sexp_of_error_trace = function
   | Shape_mismatch ts -> Sexp.List (Sexp.Atom "Shape_mismatch" :: List.map ts ~f:sexp_of_t)
@@ -2337,8 +2337,8 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     | `Batch | `Input -> get_dim ~d ()
     | `Output ->
         if (not known_no_batch) && num_dim1_output = 1 && d = 1 then
-          let label = debug_name ^ "_output" in
-          get_dim ~d ~label ()
+          let basis = debug_name ^ "_output" in
+          get_dim ~d ~basis ()
         else get_dim ~d ()
   in
   let make_dims kind ds =
@@ -2346,7 +2346,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   in
   let make_axes kind ds =
     {
-      dims = List.map ~f:(fun (label, d) -> get_dim ~d ~label ()) ds;
+      dims = List.map ~f:(fun (basis, d) -> get_dim ~d ~basis ()) ds;
       bcast = Broadcastable;
       prov = provenance ~sh_id:id ~kind;
     }
@@ -2424,7 +2424,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
           | [ l; d ] -> (l, d)
           | _ -> invalid_arg "shape_spec_to_dims_bio: too many '='"
         in
-        (* This is not a dimension label i.e. unit! *)
+        (* This is not a dimension basis i.e. unit! *)
         try Row.get_dim ~d:(Int.of_string dim) ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
     | Label name ->
@@ -2527,7 +2527,7 @@ let to_string_hum ?(style = Row.Axis_size) (sh : t) =
           match kind with `Input -> n_batch + n_outputs + i | `Output -> n_batch + i | `Batch -> i
         in
         match style with
-        | Row.Only_labels | Axis_size | Projection_and_size -> Row.dim_to_string style d
+        | Row.Only_bases | Axis_size | Projection_and_size -> Row.dim_to_string style d
         | Axis_number_and_size -> Int.to_string num ^ ":" ^ Row.dim_to_string style d)
   in
   let batch_dims = dims_to_string `Batch in

@@ -324,7 +324,7 @@ N-dimensional array literals combine the list, tuple and array syntaxes to stric
 
 For example, `[ (1, 2, 3); (4, 5, 6) ]` is a mathematical matrix converting 3D vectors into 2D vectors.
 
-OCANNL supports dimension labels. The syntax for number allows prefixing a number by a character that stands for the dimension label of the resulting output dimension 1. These labels can then propagate to specify labels of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * 'q' 2.0) + 'p' 1.0 in ...`
+OCANNL supports dimension bases (semantic annotations). The syntax for number allows prefixing a number by a character that stands for the dimension basis of the resulting output dimension 1. These bases can then propagate to specify bases of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * 'q' 2.0) + 'p' 1.0 in ...`
 
 ## Wildcard bindings
 

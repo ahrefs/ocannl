@@ -1,75 +1,83 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-=== Dimension Label Tests ===
+=== Dimension Basis Tests ===
 
-Test 1: Same label, same size -- succeeds
-  Result labels: [batch]
-  PASS: label preserved in result
+Test 1: Same basis, same size -- succeeds
+  Result bases: [batch]
+  PASS: basis preserved in result
 
-Test 2: Conflicting labels, same size -- raises
-  PASS: got expected Shape_error: solved dimensions for axis: different labels
+Test 2: Conflicting bases, same size -- raises
+  PASS: got expected Shape_error: solved dimensions for axis: different bases
 
-Test 3: One labeled, one unlabeled, same size -- compatible
-  Result labels: [batch]
-  PASS: labeled + unlabeled compatible
+Test 3: One based, one unbased, same size -- compatible
+  Result bases: [batch]
+  PASS: based + unbased compatible
 
-Test 4: Variable-mediated: unlabeled first, labeled later -- compatible
-  PASS: variable-mediated unlabeled then labeled
+Test 4: Variable-mediated: unbased first, based later -- compatible
+  PASS: variable-mediated unbased then based
 
-Test 5: Variable-mediated: unlabeled, labeled, then conflicting -- raises
-  PASS: got expected Shape_error: solved dimensions for axis: different labels
+Test 5: Variable-mediated: unbased, based, then conflicting -- raises
+  PASS: got expected Shape_error: solved dimensions for axis: different bases
 
-Test 5b: Variable-mediated: label upgrade verified in environment
-  Var v label after upgrade: "batch"
-  PASS: variable label upgraded to "batch"
+Test 5b: Variable-mediated: basis upgrade verified in environment
+  Var v basis after upgrade: "batch"
+  PASS: variable basis upgraded to "batch"
 
-Test 6: Shape.to_labels after inference
-  Labels: [batch]
-  PASS: label visible in Shape.to_labels
+Test 6: Shape.to_bases after inference
+  Bases: [batch]
+  PASS: basis visible in Shape.to_bases
 
-Test 7: Tensor.number ~axis_label
-  Labels: [count]
-  PASS: axis_label survives inference
+Test 7: Tensor.number ~axis_basis
+  Bases: [count]
+  PASS: axis_basis survives inference
 
-Test 8: Operation.range ~axis_label
-  Labels: [idx]
-  PASS: range axis_label survives inference
+Test 7b: Tensor.bits ~axis_basis
+  Bases: [word]
+  PASS: bits axis_basis survives inference
 
-Test 9: Concat, consistent labels -- label preserved
-  Solved to d=5, label="x"
-  PASS: concat preserved label "x" with d=5
+Test 8: Operation.range ~axis_basis
+  Bases: [idx]
+  PASS: range axis_basis survives inference
 
-Test 10: Concat, conflicting labels -- raises
-  PASS: got expected Shape_error: concat: conflicting dimension labels
+Test 8b: NTDSL.number_int ~axis_basis
+  Bases: [k]
+  PASS: number_int axis_basis survives inference
 
-Test 11: Concat, mix labeled/unlabeled -- label preserved
-  Solved to d=5, label="x"
-  PASS: concat preserved label "x" from labeled component
+Test 9: Concat, consistent bases -- basis preserved
+  Solved to d=5, basis="x"
+  PASS: concat preserved basis "x" with d=5
 
-Test 12: Affine, matching labels -- preserved
-  Solved to d=6, label="x"
-  PASS: affine preserved label "x" with d=6
+Test 10: Concat, conflicting bases -- raises
+  PASS: got expected Shape_error: concat: conflicting dimension bases
 
-Test 13: Affine, conflicting labels -- raises
-  PASS: got expected Shape_error: convolution: conflicting dimension labels between stride and kernel
+Test 11: Concat, mix based/unbased -- basis preserved
+  Solved to d=5, basis="x"
+  PASS: concat preserved basis "x" from based component
 
-Test 14: Stride no-conv forward -- label propagated
-  Solved to d=8, label="x"
-  PASS: stride forward propagated label "x"
+Test 12: Affine, matching bases -- preserved
+  Solved to d=6, basis="x"
+  PASS: affine preserved basis "x" with d=6
 
-Test 15: Stride no-conv reverse -- label propagated
-  Solved over to d=4, label="x"
-  PASS: stride reverse propagated label "x" to over
+Test 13: Affine, conflicting bases -- raises
+  PASS: got expected Shape_error: convolution: conflicting dimension bases between stride and kernel
 
-Test 16: Conv no-padding forward -- label propagated
-  Solved to d=6, label="x"
-  PASS: conv forward propagated label "x"
+Test 14: Stride no-conv forward -- basis propagated
+  Solved to d=8, basis="x"
+  PASS: stride forward propagated basis "x"
 
-Test 17: Conv no-padding reverse -- label propagated
-  Solved over to d=4, label="x"
-  PASS: conv reverse propagated label "x" to over
+Test 15: Stride no-conv reverse -- basis propagated
+  Solved over to d=4, basis="x"
+  PASS: stride reverse propagated basis "x" to over
 
-Test 18: LUB with conflicting labels -- strict equality raises
-  PASS: conflicting labels in mutual inequality correctly raises: dimension comparison for axis: different labels
+Test 16: Conv no-padding forward -- basis propagated
+  Solved to d=6, basis="x"
+  PASS: conv forward propagated basis "x"
+
+Test 17: Conv no-padding reverse -- basis propagated
+  Solved over to d=4, basis="x"
+  PASS: conv reverse propagated basis "x" to over
+
+Test 18: LUB with conflicting bases -- strict equality raises
+  PASS: conflicting bases in mutual inequality correctly raises: dimension comparison for axis: different bases
 
 === Done ===
