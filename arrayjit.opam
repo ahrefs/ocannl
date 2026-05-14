@@ -37,6 +37,7 @@ depends: [
   "ppx_minidebug" {>= "3.0.0"}
   "metal" {os = "macos"}
   "odoc" {with-doc}
+  "menhir" {>= "20180523"}
 ]
 depopts: [
   "cudajit" {>= "0.7.0"}
