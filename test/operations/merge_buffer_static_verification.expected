@@ -1,5 +1,6 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-mismatch: link raised at link time, schedule not run = true
-matched: link succeeded and transfer + consumer schedules ran
+no eager side effect (updating_for_merge_buffer still None) = true
+mismatch: link raised at link time
+matched: out (init [9 9]) after transfer + consumer = [3 4]
 done
