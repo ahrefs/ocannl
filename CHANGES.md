@@ -41,6 +41,16 @@
 - Concat symbols are now grouped into connected components for iteration using union-find
 - Product space and product iterators now use list arrays to handle concatenated dimensions
 - Moved `datasets/` to separate `dataprep` package
+- **Breaking:** `Backend.device_to_device` now returns `context routine option` instead of `bool`.
+  Instead of scheduling the copy as a side effect, it builds a transfer *routine*: callers run
+  `r.schedule` (or link a consumer against `r.context`). `None` replaces the old `false` ("nothing
+  to transfer": node absent from `src`; or, for `into_merge_buffer:No`, node absent from `dst` or
+  identical source/destination buffers). The transfer routine's context records the produced
+  merge-buffer node in the new `Backend_intf.context.merge_buffer_node` field, so that linking a
+  consumer of the merge buffer against it statically verifies the node *at link time* (raising
+  `Utils.User_error` from `link`/`link_batch` on a mismatch), "in the right direction" — transfer
+  -> consumer (gh-ocannl-288). The runtime `check_merge_buffer` check is kept as a defensive
+  backstop.
 
 ### Fixed
 
