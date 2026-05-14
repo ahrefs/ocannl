@@ -10,19 +10,11 @@ module Asgns = Ir.Assignments
 
 let num_states = 8
 
-(* transition.(state).(input_bit) = next_state
-   A fixed deterministic FSM with 8 states and binary input.  All states are reachable
-   and every state has two distinct successors. *)
+(* transition.(state).(input_bit) = next_state A fixed deterministic FSM with 8 states and binary
+   input. All states are reachable and every state has two distinct successors. *)
 let transition =
   [|
-    [| 3; 5 |];
-    [| 6; 0 |];
-    [| 7; 4 |];
-    [| 1; 2 |];
-    [| 5; 7 |];
-    [| 0; 6 |];
-    [| 4; 1 |];
-    [| 2; 3 |];
+    [| 3; 5 |]; [| 6; 0 |]; [| 7; 4 |]; [| 1; 2 |]; [| 5; 7 |]; [| 0; 6 |]; [| 4; 1 |]; [| 2; 3 |];
   |]
 
 let generate_sequence rng ~seq_len ~init_state =
@@ -103,24 +95,22 @@ let () =
   let mask =
     NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ eff_seq_len ] ~i:[ eff_seq_len ] ~o:[]
       ~f:(function
-        | [| s; t |] -> if s >= t then 1. else 0.
-        | _ -> failwith "unexpected mask indices")
+        | [| s; t |] -> if s >= t then 1. else 0. | _ -> failwith "unexpected mask indices")
       ()
   in
 
-  (* Model: decoder-only transformer (single block, no layer_norm).
-     Layer norm is omitted because with recentered weights, it normalizes values to
-     unit variance and kills the gradient signal.  Residual connections preserve
-     gradients for this small model. *)
+  (* Model: decoder-only transformer (single block, no layer_norm). Layer norm is omitted because
+     with recentered weights, it normalizes values to unit variance and kills the gradient signal.
+     Residual connections preserve gradients for this small model. *)
   let open Nn_blocks in
   let mha = multi_head_attention ~label:[ "mha" ] ~num_heads ~d_k ~d_v () in
   let ffn = Nn_blocks.mlp ~label:[ "ffn" ] ~hid_dims:[ d_ff ] () in
   let%op build_model () =
-    fun ~train_step ~mask input ->
-      let embedded = ({ w_embed; o = [ d_model ] } * input) + { pos_encoding } in
-      let x1 = embedded + mha ~train_step ~mask embedded in
-      let x2 = x1 + ffn x1 in
-      { w_out } * x2
+   fun ~train_step ~mask input ->
+    let embedded = ({ w_embed; o = [ d_model ] } * input) + { pos_encoding } in
+    let x1 = embedded + mha ~train_step ~mask embedded in
+    let x2 = x1 + ffn x1 in
+    { w_out } * x2
   in
   let model = build_model () in
 
@@ -137,10 +127,10 @@ let () =
   let%op learning_rate = 1.0 *. ((1.5 *. !..steps) - !@step_n) /. !..steps in
   let sgd = Train.sgd_update ~learning_rate batch_loss in
 
-  (* === Inference computation (forward-only, shares trained weights) ===
-     Following the bigram_mlp.ml pattern: invoke the model a second time via %cd
-     with a fresh input tensor.  This creates a separate forward graph that shares
-     the trained weight parameters but has its own (unconsumed) forward code. *)
+  (* === Inference computation (forward-only, shares trained weights) === Following the
+     bigram_mlp.ml pattern: invoke the model a second time via %cd with a fresh input tensor. This
+     creates a separate forward graph that shares the trained weight parameters but has its own
+     (unconsumed) forward code. *)
   let infer_input =
     let open Bigarray in
     let ga = Genarray.create Float32 c_layout [| num_test_seqs; eff_seq_len; num_states |] in
@@ -160,12 +150,11 @@ let () =
   let ctx = Train.init_params ctx bindings batch_loss in
   Train.set_on_host input_batch.value;
   Train.set_on_host target_batch.value;
-  (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25).
-     OCANNL's default uniform1 init produces all-positive weights; through the
-     transformer's Q*K^T attention scores this causes extreme values and exp overflow.
-     Centered initialization (e.g. xavier/normal) is standard for transformers but
-     not yet available as a built-in default_param_init in OCANNL, so we recenter
-     post-init. *)
+  (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25). OCANNL's default uniform1
+     init produces all-positive weights; through the transformer's Q*K^T attention scores this
+     causes extreme values and exp overflow. Centered initialization (e.g. xavier/normal) is
+     standard for transformers but not yet available as a built-in default_param_init in OCANNL, so
+     we recenter post-init. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
       Train.set_on_host tn;
@@ -174,22 +163,21 @@ let () =
       Tn.set_values tn vals);
   Train.set_on_host infer_logits.value;
   Train.set_on_host infer_input.value;
-  (* Compile the training routine.  This adds all training nodes (including the
-     shared mask constant) to the context via Context.compile. *)
+  (* Compile the training routine. This adds all training nodes (including the shared mask constant)
+     to the context via Context.compile. *)
   let train_comp = Asgns.sequence [ update; sgd ] in
   Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_hosted;
   let ctx, sgd_step = Context.compile ctx train_comp bindings in
-  (* Compile the inference routine using the context from training compilation,
-     which already contains the mask constant and all model weight buffers.
-     This is forward-only: no backprop, no SGD update. *)
+  (* Compile the inference routine using the context from training compilation, which already
+     contains the mask constant and all model weight buffers. This is forward-only: no backprop, no
+     SGD update. *)
   Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_hosted;
-  (* The mask constant is embedded in the training compilation but not in the inference
-     compilation (because consume_forward_code builds embedded_nodes independently for
-     each tensor).  Add mask to the inference comp's embedded_nodes so Context.compile
-     treats it as an embedded constant rather than an uninitialized input. *)
+  (* The mask constant is embedded in the training compilation but not in the inference compilation
+     (because consume_forward_code builds embedded_nodes independently for each tensor). Add mask to
+     the inference comp's embedded_nodes so Context.compile treats it as an embedded constant rather
+     than an uninitialized input. *)
   let infer_comp =
-    { infer_comp with
-      Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
+    { infer_comp with Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
   in
   let ctx, infer_routine = Context.compile ctx infer_comp IDX.empty in
 
@@ -197,9 +185,8 @@ let () =
   let step_ref = IDX.find_exn (Context.bindings sgd_step) step_n in
   Train.set_on_host batch_loss.value;
 
-  (* === Training loop ===
-     Per-token random baseline: ln(8) ≈ 2.08, epoch sum ≈ 2.08 * n_batches ≈ 16.6.
-     Optimal loss for binary FSM: ln(2) ≈ 0.693 per token, epoch sum ≈ 5.5. *)
+  (* === Training loop === Per-token random baseline: ln(8) ≈ 2.08, epoch sum ≈ 2.08 * n_batches ≈
+     16.6. Optimal loss for binary FSM: ln(2) ≈ 0.693 per token, epoch sum ≈ 5.5. *)
   let epoch_loss_limit_first = 16.0 in
   let epoch_loss_limit_mid = 8.0 in
   let epoch_loss_limit_last = 7.0 in
@@ -216,23 +203,22 @@ let () =
       epoch_loss := !epoch_loss +. batch_loss.@[0];
       Int.incr step_ref
     done;
-    if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then (
+    if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then
       let limit =
         if epoch = 0 then epoch_loss_limit_first
         else if epoch = epochs / 2 then epoch_loss_limit_mid
         else epoch_loss_limit_last
       in
-      printf "Epoch %d, loss below threshold=%b\n%!" epoch Float.(!epoch_loss < limit))
+      printf "Epoch %d, loss below threshold=%b\n%!" epoch Float.(!epoch_loss < limit)
   done;
 
-  (* === Held-out Evaluation (inference only, no gradient update) ===
-     We evaluate "valid transition accuracy": whether the argmax-predicted state is
-     one of the two valid successors for the current state.  This tests whether the
-     model learned the FSM transition function (which two states are reachable from
-     each state).  The binary input bit is intentionally unobserved, so exact-match
-     prediction of the specific successor caps at ~50%, but a model that learned
-     the transition relation achieves ~100% valid-transition accuracy.
-     Random baseline: 2/8 = 25%.  Threshold: >= 90%. *)
+  (* === Held-out Evaluation (inference only, no gradient update) === We evaluate "valid transition
+     accuracy": whether the argmax-predicted state is one of the two valid successors for the
+     current state. This tests whether the model learned the FSM transition function (which two
+     states are reachable from each state). The binary input bit is intentionally unobserved, so
+     exact-match prediction of the specific successor caps at ~50%, but a model that learned the
+     transition relation achieves ~100% valid-transition accuracy. Random baseline: 2/8 = 25%.
+     Threshold: >= 90%. *)
   Tn.set_values infer_input.value
     (seqs_to_flat_one_hot ~batch_size:num_test_seqs ~eff_seq_len test_inputs_arr ~offset:0);
   let _ctx = Context.run ctx infer_routine in

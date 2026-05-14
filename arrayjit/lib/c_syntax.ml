@@ -530,8 +530,7 @@ module C_syntax (B : C_syntax_config) = struct
             let value_log =
               B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
                 ~base_message_literal:value_base_msg
-                ~args_docs:
-                  (B.styled_log_arg scope_doc :: B.styled_log_arg new_var :: pp_args_docs)
+                ~args_docs:(B.styled_log_arg scope_doc :: B.styled_log_arg new_var :: pp_args_docs)
             in
             let flush_log =
               if B.log_involves_file_management then string "fflush(log_file);" else empty

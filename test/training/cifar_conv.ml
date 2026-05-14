@@ -35,13 +35,12 @@ let () =
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
 
-  (* Xavier init -- same as circles_conv.ml and mnist_conv.ml.
-     CIFAR data is centered to [-0.5, 0.5] in Conv_data.cifar_images_to_float32 so that
-     all-positive Xavier-uniform weights produce zero-centered conv outputs. *)
+  (* Xavier init -- same as circles_conv.ml and mnist_conv.ml. CIFAR data is centered to [-0.5, 0.5]
+     in Conv_data.cifar_images_to_float32 so that all-positive Xavier-uniform weights produce
+     zero-centered conv outputs. *)
   TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
-  (* --- Configuration ---
-     Regression mode (default): fast, loose thresholds, used by dune runtest.
+  (* --- Configuration --- Regression mode (default): fast, loose thresholds, used by dune runtest.
      Full-run mode: change these constants for issue acceptance targets (>60% accuracy). *)
   let num_train = 2000 in
   (* Full-run: 50000 *)
@@ -57,10 +56,9 @@ let () =
   let out_channels2 = 16 in
   (* Full-run: 64 *)
 
-  (* --- Data Loading ---
-     Conv_data.load_cifar10 downloads the binary distribution from U Toronto on first call,
-     caching to ~/.cache/ocaml-dataprep/datasets/cifar-10-bin/.
-     Suppress stdout messages during loading (contain machine-specific paths). *)
+  (* --- Data Loading --- Conv_data.load_cifar10 downloads the binary distribution from U Toronto on
+     first call, caching to ~/.cache/ocaml-dataprep/datasets/cifar-10-bin/. Suppress stdout messages
+     during loading (contain machine-specific paths). *)
   printf "Loading CIFAR-10 dataset...\n%!";
   let load_quietly f =
     Stdlib.flush_all ();
@@ -107,8 +105,8 @@ let () =
   let%op batch_images = images @| batch_n in
   let%op batch_labels = labels_one_hot @| batch_n in
 
-  (* LeNet with wider channels for CIFAR's 3-channel RGB input.
-     Store the model function so we can reuse it (with shared parameters) for eval. *)
+  (* LeNet with wider channels for CIFAR's 3-channel RGB input. Store the model function so we can
+     reuse it (with shared parameters) for eval. *)
   let model = lenet ~out_channels1 ~out_channels2 () in
   let%op logits = model ~train_step:None batch_images in
 
@@ -147,19 +145,17 @@ let () =
       printf "Epoch %d: avg loss = %.2f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)
   done;
 
-  (* --- Test-Set Evaluation (forward-only) ---
-     Build a separate eval graph that reuses trained lenet parameters. Following the pattern from
-     moons_demo.ml and bigram_mlp.ml: apply the model to new inputs and compile a forward-only
-     routine. No gradients, no backprop, no SGD updates -- parameters are not mutated. *)
+  (* --- Test-Set Evaluation (forward-only) --- Build a separate eval graph that reuses trained
+     lenet parameters. Following the pattern from moons_demo.ml and bigram_mlp.ml: apply the model
+     to new inputs and compile a forward-only routine. No gradients, no backprop, no SGD updates --
+     parameters are not mutated. *)
   printf "\nEvaluating on %d test samples...\n%!" num_test;
 
   let test_images_ndarray = Ir.Ndarray.as_array Ir.Ops.Single test_images_f32 in
   let test_labels_one_hot = Nn_blocks.one_hot_of_int_list ~num_classes test_labels_list in
   let test_images_t = TDSL.rebatch ~l:"images" test_images_ndarray () in
 
-  let eval_batch_n, eval_bindings =
-    IDX.get_static_symbol ~static_range:n_test_batches IDX.empty
-  in
+  let eval_batch_n, eval_bindings = IDX.get_static_symbol ~static_range:n_test_batches IDX.empty in
   let%op eval_batch_images = test_images_t @| eval_batch_n in
   let _eval_batch_labels = [%op test_labels_one_hot @| eval_batch_n] in
 
@@ -178,7 +174,9 @@ let () =
   (* Forward-only routine via %cd .forward -- no grad_update, no sgd_update *)
   let eval_routine =
     Train.to_routine (Context.context sgd_routine) eval_bindings
-      [%cd ~~("eval forward"; eval_batch_loss.forward)]
+      [%cd
+        ~~("eval forward";
+           eval_batch_loss.forward)]
   in
 
   (* Compute test loss and accuracy across all test batches *)
@@ -188,15 +186,17 @@ let () =
   Train.sequential_loop (Context.bindings eval_routine) ~f:(fun () ->
       Train.run ctx eval_routine;
       test_loss := !test_loss +. eval_batch_loss.@[0];
-      (* Read all probability values for this batch as a flat array,
-         then compute argmax per sample in OCaml. *)
+      (* Read all probability values for this batch as a flat array, then compute argmax per sample
+         in OCaml. *)
       let flat_probs = Tn.get_values eval_probs.value in
       for s = 0 to batch_size - 1 do
         let max_c = ref 0 in
         let max_v = ref Float.neg_infinity in
         for c = 0 to num_classes - 1 do
-          let v = flat_probs.(s * num_classes + c) in
-          if Float.(v > !max_v) then (max_v := v; max_c := c)
+          let v = flat_probs.((s * num_classes) + c) in
+          if Float.(v > !max_v) then (
+            max_v := v;
+            max_c := c)
         done;
         let label_idx = (!batch_idx * batch_size) + s in
         if !max_c = test_labels_arr.(label_idx) then Int.incr correct
@@ -206,8 +206,8 @@ let () =
   let accuracy = Float.of_int !correct /. Float.of_int num_test *. 100. in
   printf "Test loss = %.2f\n%!" avg_test_loss;
   printf "Test accuracy = %.1f%% (%d/%d)\n%!" accuracy !correct num_test;
-  (* Regression-mode threshold checks (conservative, must pass on small subsets).
-     CIFAR-10 is harder than MNIST; random chance = 10%, so 15% demonstrates some learning. *)
+  (* Regression-mode threshold checks (conservative, must pass on small subsets). CIFAR-10 is harder
+     than MNIST; random chance = 10%, so 15% demonstrates some learning. *)
   printf "Test loss below 2.3 = %b\n%!" Float.(avg_test_loss < 2.3);
   printf "Test accuracy above 15%% = %b\n%!" Float.(accuracy > 15.);
 

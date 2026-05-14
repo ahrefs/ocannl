@@ -11,17 +11,16 @@ module type Backend = Ir.Backend_intf.Backend
 
 (* Makemore progression — Part 2 (Bengio MLP on Names).
 
-   Corresponds to Karpathy's "Building makemore Part 2: MLP". Each prediction
-   is conditioned on a context window of [block_size] preceding characters,
-   each of which is mapped through a learned embedding table [c] of width
-   [embed_dim]. The concatenated context embeddings are fed through a
-   [tanh]-activated hidden layer and then a linear output. Shape inference
-   handles the "flattening" of the [block_size, embed_dim] input axes into the
-   hidden linear weight — no manual reshape needed.
+   Corresponds to Karpathy's "Building makemore Part 2: MLP". Each prediction is conditioned on a
+   context window of [block_size] preceding characters, each of which is mapped through a learned
+   embedding table [c] of width [embed_dim]. The concatenated context embeddings are fed through a
+   [tanh]-activated hidden layer and then a linear output. Shape inference handles the "flattening"
+   of the [block_size, embed_dim] input axes into the hidden linear weight — no manual reshape
+   needed.
 
-   The dataset is split deterministically 80/10/10 over [Dataprep.Names]; we
-   report final train / dev / test NLL numerically plus a coarse below-threshold
-   boolean guard for `.expected`. See [docs/makemore_tutorial.md]. *)
+   The dataset is split deterministically 80/10/10 over [Dataprep.Names]; we report final train /
+   dev / test NLL numerically plus a coarse below-threshold boolean guard for `.expected`. See
+   [docs/makemore_tutorial.md]. *)
 
 let block_size = 3
 let embed_dim = 10
@@ -33,8 +32,8 @@ let split_seed = 42
 
 (* === Data preparation === *)
 
-(** Slide a [block_size + 1] window over [pad * block_size @ name @ ['.']] and
-    emit [(context_indices, target_index)] pairs. *)
+(** Slide a [block_size + 1] window over [pad * block_size @ name @ ['.']] and emit
+    [(context_indices, target_index)] pairs. *)
 let name_to_contexts name =
   let padded = List.init block_size ~f:(fun _ -> '.') @ String.to_list name @ [ '.' ] in
   let n = List.length padded in
@@ -72,8 +71,8 @@ let split_names names =
   let test = List.drop rest n_dev in
   (train, dev, test)
 
-(** Flatten a list of names into aligned [(contexts, targets)] int arrays, then
-    truncate to a multiple of [batch_size]. *)
+(** Flatten a list of names into aligned [(contexts, targets)] int arrays, then truncate to a
+    multiple of [batch_size]. *)
 let names_to_examples names =
   let pairs = List.concat_map names ~f:name_to_contexts in
   let n = List.length pairs in
@@ -99,8 +98,7 @@ let fill_ctx_one_hot buf contexts ~offset =
     done
   done
 
-(** Fill a per-batch flat one-hot buffer for targets (shape
-    [batch_size * vocab_size]). *)
+(** Fill a per-batch flat one-hot buffer for targets (shape [batch_size * vocab_size]). *)
 let fill_tgt_one_hot buf targets ~offset =
   Array.fill buf ~pos:0 ~len:(Array.length buf) 0.;
   for i = 0 to batch_size - 1 do
@@ -119,8 +117,7 @@ let () =
   let train_ctx, train_tgt, n_train = names_to_examples train_names in
   let dev_ctx, dev_tgt, n_dev = names_to_examples dev_names in
   let test_ctx, test_tgt, n_test = names_to_examples test_names in
-  printf "train/dev/test examples (after batch truncation): %d/%d/%d\n%!"
-    n_train n_dev n_test;
+  printf "train/dev/test examples (after batch truncation): %d/%d/%d\n%!" n_train n_dev n_test;
 
   let n_batches = n_train / batch_size in
   let step_n, bindings = IDX.get_static_symbol IDX.empty in
@@ -145,21 +142,15 @@ let () =
   let input_batch = make_ctx_tensor "input_batch" in
   let target_batch = make_tgt_tensor "target_batch" in
 
-  (* === Model ===
-     embed: per-position character embedding. [input] has [block_size] as a
-            batch axis; ordinary matmul with [c : vocab_size -> embed_dim] gives
-            embeddings per-position.
-     hidden: contracts [block_size] (batch axis of embed) and [embed_dim]
-             (output axis of embed) into [hid_dim] via a block-weighted linear
-             layer. This mirrors Bengio's "concatenate context embeddings and
-             linear" — here expressed as an explicit einsum contraction with
-             [w1] shaped [block_size, embed_dim -> hid_dim].
-     logits: final linear projection to [vocab_size]. *)
+  (* === Model === embed: per-position character embedding. [input] has [block_size] as a batch
+     axis; ordinary matmul with [c : vocab_size -> embed_dim] gives embeddings per-position. hidden:
+     contracts [block_size] (batch axis of embed) and [embed_dim] (output axis of embed) into
+     [hid_dim] via a block-weighted linear layer. This mirrors Bengio's "concatenate context
+     embeddings and linear" — here expressed as an explicit einsum contraction with [w1] shaped
+     [block_size, embed_dim -> hid_dim]. logits: final linear projection to [vocab_size]. *)
   let%op embed input = { c; o = [ embed_dim ] } * input in
   let%op hidden x =
-    tanh
-      ((embed x +* { w1 } "bs|->e; |se->h => b|->h" [ "s"; "e" ])
-      + { b1; o = [ hid_dim ] })
+    tanh (embed x +* { w1 } "bs|->e; |se->h => b|->h" [ "s"; "e" ] + { b1; o = [ hid_dim ] })
   in
   let%op logits x = ({ w2 } * hidden x) + { b2 } in
 
@@ -182,10 +173,9 @@ let () =
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  (* Recenter all-positive uniform1 inits to [-0.25, 0.25). Same mitigation as
-     transformer_names.ml / fsm_transformer.ml — OCANNL's default init produces
-     non-negative weights, which makes the hidden preactivation saturate and
-     traps SGD at a high-loss plateau. *)
+  (* Recenter all-positive uniform1 inits to [-0.25, 0.25). Same mitigation as transformer_names.ml
+     / fsm_transformer.ml — OCANNL's default init produces non-negative weights, which makes the
+     hidden preactivation saturate and traps SGD at a high-loss plateau. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
       Train.set_on_host tn;
@@ -205,10 +195,7 @@ let () =
   (* === Training === *)
   (* Coarse threshold guard: monotonically decreasing upper bound. *)
   let epoch_loss_limit epoch =
-    if epoch = 0 then 4.0
-    else if epoch < 5 then 3.0
-    else if epoch < 10 then 2.6
-    else 2.5
+    if epoch = 0 then 4.0 else if epoch < 5 then 3.0 else if epoch < 10 then 2.6 else 2.5
   in
   for epoch = 0 to epochs - 1 do
     let epoch_loss = ref 0. in
@@ -228,11 +215,10 @@ let () =
       Float.(mean_loss < limit)
   done;
 
-  (* === Evaluation on train/dev/test ===
-     Build a separate forward-only subgraph with fresh input/target tensors
-     so the trained batch_loss's forward code (already consumed by
-     grad_update) isn't re-used. Weights/embeddings are shared because the
-     model is invoked a second time under %cd. *)
+  (* === Evaluation on train/dev/test === Build a separate forward-only subgraph with fresh
+     input/target tensors so the trained batch_loss's forward code (already consumed by grad_update)
+     isn't re-used. Weights/embeddings are shared because the model is invoked a second time under
+     %cd. *)
   let eval_input =
     let open Bigarray in
     let ga = Genarray.create Float32 c_layout [| batch_size; block_size; vocab_size |] in
@@ -259,7 +245,10 @@ let () =
   Train.set_on_host eval_loss.value;
   Train.set_on_host eval_input.value;
   Train.set_on_host eval_target.value;
-  let%cd eval_comp = ~~("mlp_names eval"; eval_loss.forward) in
+  let%cd eval_comp =
+    ~~("mlp_names eval";
+       eval_loss.forward)
+  in
   let eval_step = Train.to_routine (Context.context sgd_step) IDX.empty eval_comp in
 
   let mean_loss_over (ctx_arr, tgt_arr, n) =
@@ -287,14 +276,11 @@ let () =
   let train_below = 2.5 in
   let dev_below = 2.55 in
   let test_below = 2.55 in
-  printf "Final train loss=%.4f train_below=%b\n%!" final_train
-    Float.(final_train < train_below);
+  printf "Final train loss=%.4f train_below=%b\n%!" final_train Float.(final_train < train_below);
   printf "Final dev   loss=%.4f dev_below=%b\n%!" final_dev Float.(final_dev < dev_below);
-  printf "Final test  loss=%.4f test_below=%b\n%!" final_test
-    Float.(final_test < test_below);
+  printf "Final test  loss=%.4f test_below=%b\n%!" final_test Float.(final_test < test_below);
 
-  (* === Generation ===
-     Autoregressive sampling from a rolling [block_size] context. *)
+  (* === Generation === Autoregressive sampling from a rolling [block_size] context. *)
   let infer_input =
     let open Bigarray in
     let ga = Genarray.create Float32 c_layout [| 1; block_size; vocab_size |] in
@@ -312,9 +298,7 @@ let () =
   in
   Train.set_on_host infer_logits.value;
   Train.set_on_host infer_input.value;
-  let infer_step =
-    Train.to_routine (Context.context eval_step) infer_bindings infer_comp
-  in
+  let infer_step = Train.to_routine (Context.context eval_step) infer_bindings infer_comp in
   let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
@@ -338,9 +322,7 @@ let () =
         Int.incr counter_ref;
         Train.run ctx infer_step;
         let dice_value = dice.@[0] in
-        let logits_arr =
-          Array.init vocab_size ~f:(fun v -> infer_logits.@{[| 0; v |]})
-        in
+        let logits_arr = Array.init vocab_size ~f:(fun v -> infer_logits.@{[| 0; v |]}) in
         let max_logit = Array.fold logits_arr ~init:Float.neg_infinity ~f:Float.max in
         let exp_logits = Array.map logits_arr ~f:(fun l -> Float.exp (l -. max_logit)) in
         let sum_exp = Array.fold exp_logits ~init:0. ~f:( +. ) in
@@ -354,8 +336,7 @@ let () =
         in
         let sampled = sample 0 0. in
         let sampled_char = List.nth_exn Dataprep.Names.letters_with_dot sampled in
-        if Char.equal sampled_char '.' || Char.equal sampled_char ' ' then
-          Buffer.contents buf
+        if Char.equal sampled_char '.' || Char.equal sampled_char ' ' then Buffer.contents buf
         else begin
           Buffer.add_char buf sampled_char;
           for t = 0 to block_size - 2 do

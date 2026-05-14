@@ -34,8 +34,7 @@ let () =
   (* Xavier init to prevent activation explosion -- same as circles_conv.ml *)
   TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
-  (* --- Configuration ---
-     Regression mode (default): fast, loose thresholds, used by dune runtest.
+  (* --- Configuration --- Regression mode (default): fast, loose thresholds, used by dune runtest.
      Full-run mode: change these constants for issue acceptance targets (>95% accuracy). *)
   let num_train = 2000 in
   (* Full-run: 60000 *)
@@ -47,10 +46,9 @@ let () =
   (* Full-run: 20 *)
   let num_classes = 10 in
 
-  (* --- Data Loading ---
-     Dataprep.Mnist.load downloads from S3 on first call, caching to
-     ~/.cache/ocannl/datasets/. Network unavailability will cause a clear failure.
-     Suppress Dataprep's stdout messages (contain machine-specific paths). *)
+  (* --- Data Loading --- Dataprep.Mnist.load downloads from S3 on first call, caching to
+     ~/.cache/ocannl/datasets/. Network unavailability will cause a clear failure. Suppress
+     Dataprep's stdout messages (contain machine-specific paths). *)
   printf "Loading MNIST dataset...\n%!";
   let load_quietly f =
     Stdlib.flush_all ();
@@ -97,8 +95,8 @@ let () =
   let%op batch_images = images @| batch_n in
   let%op batch_labels = labels_one_hot @| batch_n in
 
-  (* LeNet with default channels (6, 16) -- sufficient for MNIST.
-     Store the model function so we can reuse it (with shared parameters) for eval. *)
+  (* LeNet with default channels (6, 16) -- sufficient for MNIST. Store the model function so we can
+     reuse it (with shared parameters) for eval. *)
   let model = lenet ~out_channels1:6 ~out_channels2:16 () in
   let%op logits = model ~train_step:None batch_images in
 
@@ -137,19 +135,17 @@ let () =
       printf "Epoch %d: avg loss = %.2f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)
   done;
 
-  (* --- Test-Set Evaluation (forward-only) ---
-     Build a separate eval graph that reuses trained lenet parameters. Following the pattern from
-     moons_demo.ml and bigram_mlp.ml: apply the model to new inputs and compile a forward-only
-     routine. No gradients, no backprop, no SGD updates -- parameters are not mutated. *)
+  (* --- Test-Set Evaluation (forward-only) --- Build a separate eval graph that reuses trained
+     lenet parameters. Following the pattern from moons_demo.ml and bigram_mlp.ml: apply the model
+     to new inputs and compile a forward-only routine. No gradients, no backprop, no SGD updates --
+     parameters are not mutated. *)
   printf "\nEvaluating on %d test samples...\n%!" num_test;
 
   let test_images_ndarray = Ir.Ndarray.as_array Ir.Ops.Single test_images_f32 in
   let test_labels_one_hot = Nn_blocks.one_hot_of_int_list ~num_classes test_labels_list in
   let test_images_t = TDSL.rebatch ~l:"images" test_images_ndarray () in
 
-  let eval_batch_n, eval_bindings =
-    IDX.get_static_symbol ~static_range:n_test_batches IDX.empty
-  in
+  let eval_batch_n, eval_bindings = IDX.get_static_symbol ~static_range:n_test_batches IDX.empty in
   let%op eval_batch_images = test_images_t @| eval_batch_n in
   let _eval_batch_labels = [%op test_labels_one_hot @| eval_batch_n] in
 
@@ -168,7 +164,9 @@ let () =
   (* Forward-only routine via %cd .forward -- no grad_update, no sgd_update *)
   let eval_routine =
     Train.to_routine (Context.context sgd_routine) eval_bindings
-      [%cd ~~("eval forward"; eval_batch_loss.forward)]
+      [%cd
+        ~~("eval forward";
+           eval_batch_loss.forward)]
   in
 
   (* Compute test loss and accuracy across all test batches *)
@@ -178,15 +176,17 @@ let () =
   Train.sequential_loop (Context.bindings eval_routine) ~f:(fun () ->
       Train.run ctx eval_routine;
       test_loss := !test_loss +. eval_batch_loss.@[0];
-      (* Read all probability values for this batch as a flat array,
-         then compute argmax per sample in OCaml. *)
+      (* Read all probability values for this batch as a flat array, then compute argmax per sample
+         in OCaml. *)
       let flat_probs = Tn.get_values eval_probs.value in
       for s = 0 to batch_size - 1 do
         let max_c = ref 0 in
         let max_v = ref Float.neg_infinity in
         for c = 0 to num_classes - 1 do
-          let v = flat_probs.(s * num_classes + c) in
-          if Float.(v > !max_v) then (max_v := v; max_c := c)
+          let v = flat_probs.((s * num_classes) + c) in
+          if Float.(v > !max_v) then (
+            max_v := v;
+            max_c := c)
         done;
         let label_idx = (!batch_idx * batch_size) + s in
         if !max_c = test_labels_arr.(label_idx) then Int.incr correct
@@ -196,8 +196,8 @@ let () =
   let accuracy = Float.of_int !correct /. Float.of_int num_test *. 100. in
   printf "Test loss = %.2f\n%!" avg_test_loss;
   printf "Test accuracy = %.1f%% (%d/%d)\n%!" accuracy !correct num_test;
-  (* Regression-mode threshold checks (conservative, must pass on small subsets).
-     Random chance on 10 classes = 10%, so 25% demonstrates meaningful learning. *)
+  (* Regression-mode threshold checks (conservative, must pass on small subsets). Random chance on
+     10 classes = 10%, so 25% demonstrates meaningful learning. *)
   printf "Test loss below 2.0 = %b\n%!" Float.(avg_test_loss < 2.0);
   printf "Test accuracy above 25%% = %b\n%!" Float.(accuracy > 25.);
 

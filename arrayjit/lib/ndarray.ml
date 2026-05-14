@@ -841,9 +841,7 @@ let write_payload_to_channel ?padding nd oc =
             let base = bigarray_start_not_managed arr in
             let lin_off = linear_offset_of_idx dims adjusted_idx in
             let byte_off = lin_off * 16 in
-            let char_ptr =
-              Ctypes.(from_voidp char (ptr_of_raw_address base))
-            in
+            let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
             for j = 0 to 15 do
               Bytes.set buf (!pos + j) Ctypes.(!@(char_ptr +@ (byte_off + j)))
             done);
@@ -884,8 +882,8 @@ let write_payload_to_channel ?padding nd oc =
   Stdlib.Out_channel.output_bytes oc buf;
   Bytes.length buf
 
-(** Read native binary data from a channel into an ndarray, populating only the logical
-    (unpadded) region. *)
+(** Read native binary data from a channel into an ndarray, populating only the logical (unpadded)
+    region. *)
 let read_payload_from_channel ?padding nd ic n_bytes =
   let buf = Bytes.create n_bytes in
   (try Stdlib.really_input ic buf 0 n_bytes
@@ -901,37 +899,27 @@ let read_payload_from_channel ?padding nd ic n_bytes =
       if axis = Array.length dims then begin
         let adjusted_idx = adjust_idx_for_padding ?padding idx in
         (match prec with
-        | Ops.Byte ->
-            A.set arr adjusted_idx (Bytes.get buf !pos)
-        | Ops.Fp8 ->
-            A.set arr adjusted_idx (Bytes.get buf !pos)
-        | Ops.Uint16 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
-        | Ops.Bfloat16 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
+        | Ops.Byte -> A.set arr adjusted_idx (Bytes.get buf !pos)
+        | Ops.Fp8 -> A.set arr adjusted_idx (Bytes.get buf !pos)
+        | Ops.Uint16 -> A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
+        | Ops.Bfloat16 -> A.set arr adjusted_idx (Stdlib.Bytes.get_uint16_le buf !pos)
         | Ops.Half ->
             A.set arr adjusted_idx (Ops.half_to_single (Stdlib.Bytes.get_uint16_le buf !pos))
-        | Ops.Int32 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
-        | Ops.Uint32 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
+        | Ops.Int32 -> A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
+        | Ops.Uint32 -> A.set arr adjusted_idx (Stdlib.Bytes.get_int32_le buf !pos)
         | Ops.Single ->
             A.set arr adjusted_idx (Int32.float_of_bits (Stdlib.Bytes.get_int32_le buf !pos))
-        | Ops.Int64 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
-        | Ops.Uint64 ->
-            A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
+        | Ops.Int64 -> A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
+        | Ops.Uint64 -> A.set arr adjusted_idx (Stdlib.Bytes.get_int64_le buf !pos)
         | Ops.Double ->
             A.set arr adjusted_idx (Int64.float_of_bits (Stdlib.Bytes.get_int64_le buf !pos))
         | Ops.Uint4x32 ->
             let base = bigarray_start_not_managed arr in
             let lin_off = linear_offset_of_idx dims adjusted_idx in
             let byte_off = lin_off * 16 in
-            let char_ptr =
-              Ctypes.(from_voidp char (ptr_of_raw_address base))
-            in
+            let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
             for j = 0 to 15 do
-              Ctypes.((char_ptr +@ (byte_off + j)) <-@ Bytes.get buf (!pos + j))
+              Ctypes.(char_ptr +@ (byte_off + j) <-@ Bytes.get buf (!pos + j))
             done);
         pos := !pos + elem_bytes
       end
@@ -959,7 +947,7 @@ let read_payload_from_channel ?padding nd ic n_bytes =
           let base = bigarray_start_not_managed arr in
           let char_ptr = Ctypes.(from_voidp char (ptr_of_raw_address base)) in
           for j = 0 to 15 do
-            Ctypes.((char_ptr +@ j) <-@ Bytes.get buf (!pos + j))
+            Ctypes.(char_ptr +@ j <-@ Bytes.get buf (!pos + j))
           done);
       pos := !pos + elem_bytes
     end
@@ -967,8 +955,8 @@ let read_payload_from_channel ?padding nd ic n_bytes =
   in
   apply_with_prec { f = read_elem } nd
 
-(** Byte-for-byte comparison of logical payloads of two ndarrays.
-    Both must have the same precision and logical dimensions. *)
+(** Byte-for-byte comparison of logical payloads of two ndarrays. Both must have the same precision
+    and logical dimensions. *)
 let payloads_equal ?padding nd1 nd2 =
   let prec1 = get_prec nd1 and prec2 = get_prec nd2 in
   if not (Ops.equal_prec prec1 prec2) then false
@@ -991,7 +979,8 @@ let payloads_equal ?padding nd1 nd2 =
             | Ops.Fp8 -> Bytes.set buf !pos (A.get arr adjusted_idx)
             | Ops.Uint16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr adjusted_idx)
             | Ops.Bfloat16 -> Stdlib.Bytes.set_int16_le buf !pos (A.get arr adjusted_idx)
-            | Ops.Half -> Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half (A.get arr adjusted_idx))
+            | Ops.Half ->
+                Stdlib.Bytes.set_int16_le buf !pos (Ops.single_to_half (A.get arr adjusted_idx))
             | Ops.Int32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr adjusted_idx)
             | Ops.Uint32 -> Stdlib.Bytes.set_int32_le buf !pos (A.get arr adjusted_idx)
             | Ops.Single ->

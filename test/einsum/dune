@@ -142,9 +142,7 @@
  (alias runtest)
  (package neural_nets_lib)
  (action
-  (diff
-   "test_cse-cse_d_fwd.ll.expected"
-   "test_cse-cse_d_fwd.ll.actual")))
+  (diff "test_cse-cse_d_fwd.ll.expected" "test_cse-cse_d_fwd.ll.actual")))
 
 (test
  (name test_einsum_capture)

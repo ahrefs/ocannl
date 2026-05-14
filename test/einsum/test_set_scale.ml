@@ -63,10 +63,10 @@ let test_scale_invalid_factor () =
     Stdio.printf "ERROR: expected exception, got none\n"
   with Row.Shape_error (msg, _) -> Stdio.printf "got expected Shape_error: %s\n" msg
 
-(* set_scale used as a consistency assertion alongside einsum capture. propagate_shapes runs
-   eagerly during let%op construction, so by the time set_scale runs, i and k have been resolved
-   from the tensor input shapes (i = 4, k = 12). factor:3 is consistent (3*4 = 12), so this hits
-   the both-solved consistent branch silently. *)
+(* set_scale used as a consistency assertion alongside einsum capture. propagate_shapes runs eagerly
+   during let%op construction, so by the time set_scale runs, i and k have been resolved from the
+   tensor input shapes (i = 4, k = 12). factor:3 is consistent (3*4 = 12), so this hits the
+   both-solved consistent branch silently. *)
 let test_scale_consistent_with_einsum () =
   let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
@@ -85,15 +85,14 @@ let test_scale_consistent_with_einsum () =
     (Option.value_map k.var_ref.solved_dim ~default:"unresolved" ~f:Int.to_string)
 
 (* Both-unsolved Dim/Dim branch end-to-end: shape-free parameters leave their einsum captures with
-   var = `Dim _ but solved_dim = None (the +* with concrete-shape inputs resolves solved_dim
-   eagerly via update_delayed_var_refs). set_scale therefore reaches the both-unsolved Dim/Dim
-   branch and emits the Affine constraint into active_constraints. set_dim then pins the small
-   side, and forward_once runs the constraint solver, which must reduce
-     Dim_eq { Var v_k, Affine { stride=2; over=Var v_i; conv=None; stride_offset=0 } }
-   against Var v_i = 4 to derive Var v_k = 8. The asserted post-condition (k = 8) would fail
-   under any local mutation of the emitted constraint -- e.g. stride = 1 (would give k=4), the
-   wrong over variable (self-reference becomes unsat), or replacing Affine with plain Dim_eq
-   equality (would force k=i=4). *)
+   var = `Dim _ but solved_dim = None (the +* with concrete-shape inputs resolves solved_dim eagerly
+   via update_delayed_var_refs). set_scale therefore reaches the both-unsolved Dim/Dim branch and
+   emits the Affine constraint into active_constraints. set_dim then pins the small side, and
+   forward_once runs the constraint solver, which must reduce Dim_eq { Var v_k, Affine { stride=2;
+   over=Var v_i; conv=None; stride_offset=0 } } against Var v_i = 4 to derive Var v_k = 8. The
+   asserted post-condition (k = 8) would fail under any local mutation of the emitted constraint --
+   e.g. stride = 1 (would give k=4), the wrong over variable (self-reference becomes unsat), or
+   replacing Affine with plain Dim_eq equality (would force k=i=4). *)
 let test_scale_dim_dim_propagates_through_solver () =
   let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
@@ -111,10 +110,10 @@ let test_scale_dim_dim_propagates_through_solver () =
     (Option.value_map k.var_ref.solved_dim ~default:"unresolved" ~f:Int.to_string)
 
 (* Negative companion to the above: pin both sides to values inconsistent with the Affine
-   relationship (i = 8, k = 15, factor = 2 -> 2*8 = 16 != 15), then trigger inference. The
-   solver must surface a Shape_error. If the emitted constraint were a plain equality or a
-   different Affine shape, the solver would either silently accept or fail with a different
-   error -- the assertion on the first error line catches both. *)
+   relationship (i = 8, k = 15, factor = 2 -> 2*8 = 16 != 15), then trigger inference. The solver
+   must surface a Shape_error. If the emitted constraint were a plain equality or a different Affine
+   shape, the solver would either silently accept or fail with a different error -- the assertion on
+   the first error line catches both. *)
 let test_scale_dim_dim_mismatch_through_solver () =
   let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();
@@ -133,10 +132,9 @@ let test_scale_dim_dim_mismatch_through_solver () =
     let first_line = List.hd_exn (String.split_lines msg) in
     Stdio.printf "got expected Shape_error: %s\n" first_line
 
-(* Row-variable rejection: mirror the row capture pattern from
-   test/einsum/test_einsum_capture.ml (`"a..s..;..s..b=>ab" [ "s" ]`). propagate_shapes
-   binds `s` to `Row _`. set_scale must reject this with Shape_error rather than
-   routing through set_dim's Row arm. *)
+(* Row-variable rejection: mirror the row capture pattern from test/einsum/test_einsum_capture.ml
+   (`"a..s..;..s..b=>ab" [ "s" ]`). propagate_shapes binds `s` to `Row _`. set_scale must reject
+   this with Shape_error rather than routing through set_dim's Row arm. *)
 let test_scale_rejects_row_variable () =
   let open Nn_blocks.DSL_modules in
   Tensor.unsafe_reinitialize ();

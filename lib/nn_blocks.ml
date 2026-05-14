@@ -116,19 +116,18 @@ let%op softmax ~spec ?(temperature = 1.0) () =
 
 (** Strategy for positional encoding in attention / transformer blocks. *)
 type position_embedding =
-  | Learned_additive
-      (** Current default: learned parameter added to input embeddings. *)
+  | Learned_additive  (** Current default: learned parameter added to input embeddings. *)
   | Sinusoidal_additive of { enc_encoding : Tensor.t; dec_encoding : Tensor.t }
-      (** Fixed sinusoidal encoding added to input embeddings.
-          Use separate tensors for encoder and decoder when [d_enc <> d_dec]. For equal widths,
-          the same tensor can be passed for both. Build with {!sinusoidal_position_encoding}. *)
+      (** Fixed sinusoidal encoding added to input embeddings. Use separate tensors for encoder and
+          decoder when [d_enc <> d_dec]. For equal widths, the same tensor can be passed for both.
+          Build with {!sinusoidal_position_encoding}. *)
   | RoPE of { freqs : Tensor.t; positions : Tensor.t }
       (** Rotary embeddings applied to Q/K inside self-attention. No additive component. *)
   | No_pos_embed  (** No position information. *)
 
-(* PoPE (arXiv:2509.10534) deferred to #444.
-   PoPE maps d scalars → 2d reals (softplus magnitude × position phase), doubling dimensionality.
-   Requires decoupling projection width from head width in multi_head_attention. See #444. *)
+(* PoPE (arXiv:2509.10534) deferred to #444. PoPE maps d scalars → 2d reals (softplus magnitude ×
+   position phase), doubling dimensionality. Requires decoupling projection width from head width in
+   multi_head_attention. See #444. *)
 
 (** RoPE inverse frequencies: theta_k = base^(-2k/d) for k = 0..half_d-1.
     @param half_d Per-head key dimension divided by 2 (i.e. d_k / 2, NOT d_model / 2).
@@ -146,9 +145,9 @@ let position_indices ~seq_len () =
     ~f:(function [| pos |] -> Float.of_int pos | _ -> assert false)
     ()
 
-(** Sinusoidal positional encoding (Vaswani et al. 2017).
-    Non-learned, shape: batch_dims=[max_len], output_dims=[d_model].
-    Matches model width at the transformer input level, NOT per-head width. *)
+(** Sinusoidal positional encoding (Vaswani et al. 2017). Non-learned, shape: batch_dims=[max_len],
+    output_dims=[d_model]. Matches model width at the transformer input level, NOT per-head width.
+*)
 let sinusoidal_position_encoding ~d_model ~max_len () =
   NTDSL.init ~l:"sinusoidal_pe" ~prec:Ir.Ops.single ~b:[ max_len ] ~i:[] ~o:[ d_model ]
     ~f:(function
@@ -160,33 +159,31 @@ let sinusoidal_position_encoding ~d_model ~max_len () =
       | _ -> assert false)
     ()
 
-(** Apply RoPE rotation to tensor [x] whose last output axis has even size [d].
-    Rotates within the last output axis (per-head width [d]) without crossing
-    head boundaries. [freqs] has output=[d/2], [positions] has batch=[seq_len]. *)
+(** Apply RoPE rotation to tensor [x] whose last output axis has even size [d]. Rotates within the
+    last output axis (per-head width [d]) without crossing head boundaries. [freqs] has
+    output=[d/2], [positions] has batch=[seq_len]. *)
 let%op rope ~freqs ~positions x =
-  (* Compute angles (pos * theta_k) separately for cos/sin to avoid a framework issue
-     where a shared intermediate tensor loses its computation table entry. *)
+  (* Compute angles (pos * theta_k) separately for cos/sin to avoid a framework issue where a shared
+     intermediate tensor loses its computation table entry. *)
   let cos_a = cos (positions *. freqs) in
   let sin_a = sin (positions *. freqs) in
   (* Split last output axis into even/odd pairs *)
   let x_even = deinterleave_even x in
   let x_odd = deinterleave_odd x in
-  (* Pairwise rotation:
-     out_even = x_even * cos(angle) - x_odd * sin(angle)
-     out_odd  = x_even * sin(angle) + x_odd * cos(angle) *)
+  (* Pairwise rotation: out_even = x_even * cos(angle) - x_odd * sin(angle) out_odd = x_even *
+     sin(angle) + x_odd * cos(angle) *)
   let out_even = (x_even *. cos_a) - (x_odd *. sin_a) in
   let out_odd = (x_even *. sin_a) + (x_odd *. cos_a) in
   interleave out_even out_odd
 
 let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0)
-    ?(pos_embed = No_pos_embed) ()
-    ~train_step ?mask x =
-  (match pos_embed with RoPE _ -> assert Int.(d_k % 2 = 0) | _ -> ());
+    ?(pos_embed = No_pos_embed) () ~train_step ?mask x =
+  (match pos_embed with RoPE _ -> assert (Int.(d_k % 2 = 0)) | _ -> ());
   let q = { w_q } * x in
   let k = { w_k } * x in
   let v = { w_v } * x in
-  (* RoPE rotates within the last output axis (d, the per-head width).
-     The h axis (heads) is preserved — no rotation across head boundaries. *)
+  (* RoPE rotates within the last output axis (d, the per-head width). The h axis (heads) is
+     preserved — no rotation across head boundaries. *)
   let q, k =
     match pos_embed with
     | RoPE { freqs; positions } -> (rope ~freqs ~positions q, rope ~freqs ~positions k)
@@ -228,14 +225,14 @@ let%op transformer_encoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1
     let x1 = ln1 (input + mha ~train_step input) in
     ln2 (x1 + ffn x1)
 
-(** Decoder-only transformer block: masked self-attention + FFN with post-norm LayerNorm.
-    Like {!transformer_encoder_block} but accepts a [~mask] parameter for causal masking.
-    No cross-attention — suitable for autoregressive language models. *)
-let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5)
-    ?(dropout_rate = 0.0) ?(pos_embed = No_pos_embed) () =
+(** Decoder-only transformer block: masked self-attention + FFN with post-norm LayerNorm. Like
+    {!transformer_encoder_block} but accepts a [~mask] parameter for causal masking. No
+    cross-attention — suitable for autoregressive language models. *)
+let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?(dropout_rate = 0.0)
+    ?(pos_embed = No_pos_embed) () =
   let masked_mha =
-    multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v ~dropout_rate ~pos_embed
-      ()
+    multi_head_attention ~label:("masked_mha" :: label) ~num_heads ~d_k ~d_v ~dropout_rate
+      ~pos_embed ()
   in
   let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
@@ -253,8 +250,7 @@ let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout
           ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ~pos_embed ())
   in
-  fun ~train_step x ~mask ->
-    List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x ~mask)
+  fun ~train_step x ~mask -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x ~mask)
 
 (* Cross-attention does not apply RoPE — position encoding is for self-attention only. *)
 let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) () ~train_step
@@ -314,9 +310,7 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     ?(epsilon = 1e-5) ?(pos_embed = Learned_additive) () =
   let enc_att = [%oc d_enc / num_heads] in
   let dec_att = [%oc d_dec / num_heads] in
-  let attn_pos_embed =
-    match pos_embed with RoPE _ as pe -> pe | _ -> No_pos_embed
-  in
+  let attn_pos_embed = match pos_embed with RoPE _ as pe -> pe | _ -> No_pos_embed in
   let encoder =
     transformer_encoder ~label:("encoder" :: label) ~num_layers:num_encoder_layers ~num_heads
       ~d_k:enc_att ~d_v:enc_att ~d_ff ~epsilon ~pos_embed:attn_pos_embed ()
@@ -325,8 +319,8 @@ let%op transformer ~label ~num_encoder_layers ~num_decoder_layers ~num_heads ~d_
     transformer_decoder ~label:("decoder" :: label) ~num_layers:num_decoder_layers ~num_heads
       ~d_k:dec_att ~d_v:dec_att ~d_ff ~epsilon ~pos_embed:attn_pos_embed ()
   in
-  (* NOTE: { pos_encoding } and { pos_encoding_tgt } are learned inline params lifted by %op.
-     They are created unconditionally but only used when pos_embed = Learned_additive. *)
+  (* NOTE: { pos_encoding } and { pos_encoding_tgt } are learned inline params lifted by %op. They
+     are created unconditionally but only used when pos_embed = Learned_additive. *)
   let pos_encoding_tgt = if Int.(d_enc = d_dec) then pos_encoding else { pos_encoding_tgt } in
   fun ~train_step ~src ~tgt ~mask ->
     let enc_input = { src_embed; o = [ d_enc ] } * src in
@@ -467,14 +461,13 @@ let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x 
       (* During inference: use running statistics (simplified for now) *)
       (gamma *. normalized) + beta
 
-(** Batch normalization for MLP layers - normalizes across the batch axis only.
-    Unlike {!batch_norm2d} there are no spatial axes to reduce over; channel axes
-    are carried through unchanged via the [..c..] row variable.
+(** Batch normalization for MLP layers - normalizes across the batch axis only. Unlike
+    {!batch_norm2d} there are no spatial axes to reduce over; channel axes are carried through
+    unchanged via the [..c..] row variable.
 
-    See the FIXME on {!batch_norm2d}: running statistics are not implemented, so
-    [momentum] is ignored and inference falls back to the learned
-    [gamma]/[beta] parameters rather than population statistics. Acceptable for
-    tutorial examples; do not rely on inference correctness for
+    See the FIXME on {!batch_norm2d}: running statistics are not implemented, so [momentum] is
+    ignored and inference falls back to the learned [gamma]/[beta] parameters rather than population
+    statistics. Acceptable for tutorial examples; do not rely on inference correctness for
     distribution-shifted inputs. *)
 let%op batch_norm1d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () ~train_step x =
   let _ = momentum in

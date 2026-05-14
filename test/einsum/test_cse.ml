@@ -2,10 +2,9 @@ open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 
-(* Verifies CSE eliminates duplicate Local_scope computations when the same
-   virtualized tensor is consumed multiple times in one expression.
-   Uses a reduction (einsum) so the inlined computation involves a loop,
-   which simplify_llc preserves as a Local_scope rather than collapsing. *)
+(* Verifies CSE eliminates duplicate Local_scope computations when the same virtualized tensor is
+   consumed multiple times in one expression. Uses a reduction (einsum) so the inlined computation
+   involves a loop, which simplify_llc preserves as a Local_scope rather than collapsing. *)
 
 let () =
   Tensor.unsafe_reinitialize ();

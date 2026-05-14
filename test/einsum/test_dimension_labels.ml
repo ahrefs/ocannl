@@ -3,11 +3,18 @@ open Ocannl
 open Ocannl.Nn_blocks.DSL_modules
 
 let dummy_origin : Row.constraint_origin list =
-  [ { lhs_name = "test"; lhs_kind = `Output; rhs_name = "test"; rhs_kind = `Output; operation = None }
+  [
+    {
+      lhs_name = "test";
+      lhs_kind = `Output;
+      rhs_name = "test";
+      rhs_kind = `Output;
+      operation = None;
+    };
   ]
 
-(* Helper: get the label string for a dim_var from the environment using row_to_labels.
-   Returns the label or "" if unlabeled. *)
+(* Helper: get the label string for a dim_var from the environment using row_to_labels. Returns the
+   label or "" if unlabeled. *)
 let get_var_label env (v : Row.dim_var) : string =
   let prov = Row.empty_provenance in
   let row = { Row.dims = [ Row.Var v ]; bcast = Broadcastable; prov } in
@@ -95,10 +102,12 @@ let test_variable_mediated_conflicting () =
   try
     let v = Row.get_var ~name:"v" () in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"batch" (); origin = dummy_origin }
-      ; Row.Dim_eq
-          { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"features" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"batch" (); origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"features" (); origin = dummy_origin };
       ]
     in
     let _remaining, _env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
@@ -112,19 +121,20 @@ let test_variable_mediated_label_upgrade () =
   Stdio.printf "Test 5b: Variable-mediated: label upgrade verified in environment\n";
   Tensor.unsafe_reinitialize ();
   try
-    (* Var v is solved to unlabeled d=4, then unified with labeled d=4.
-       After the second unification, the environment should show the label. *)
+    (* Var v is solved to unlabeled d=4, then unified with labeled d=4. After the second
+       unification, the environment should show the label. *)
     let v = Row.get_var ~name:"v" () in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"batch" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~label:"batch" (); origin = dummy_origin };
       ]
     in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let label = get_var_label env v in
     Stdio.printf "  Var v label after upgrade: \"%s\"\n" label;
-    if String.equal label "batch" then
-      Stdio.printf "  PASS: variable label upgraded to \"batch\"\n"
+    if String.equal label "batch" then Stdio.printf "  PASS: variable label upgraded to \"batch\"\n"
     else Stdio.printf "  FAIL: expected label \"batch\", got \"%s\"\n" label
   with Row.Shape_error (msg, _) -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" msg
 
@@ -182,24 +192,25 @@ let test_concat_consistent_labels () =
   Stdio.printf "Test 9: Concat, consistent labels -- label preserved\n";
   Tensor.unsafe_reinitialize ();
   try
-    (* Concat collapse happens in s_dim_one when a variable inside the Concat is substituted.
-       Create a Concat with a Var component so that when the var is solved, s_dim_one
-       collapses the Concat and we can verify the label on the resulting Dim. *)
+    (* Concat collapse happens in s_dim_one when a variable inside the Concat is substituted. Create
+       a Concat with a Var component so that when the var is solved, s_dim_one collapses the Concat
+       and we can verify the label on the resulting Dim. *)
     let v_result = Row.get_var ~name:"result" () in
     let v_component = Row.get_var ~name:"comp" () in
-    let concat_dim =
-      Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 ~label:"x" () ]
-    in
+    let concat_dim = Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 ~label:"x" () ] in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin };
       ]
     in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let d = Row.get_dim_val env v_result in
     let label = get_var_label env v_result in
     Stdio.printf "  Solved to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 5) && String.equal label "x" then
       Stdio.printf "  PASS: concat preserved label \"x\" with d=5\n"
     else Stdio.printf "  FAIL: expected d=5, label=\"x\"\n"
@@ -211,12 +222,12 @@ let test_concat_conflicting_labels () =
   try
     let v_result = Row.get_var ~name:"result" () in
     let v_component = Row.get_var ~name:"comp" () in
-    let concat_dim =
-      Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 ~label:"y" () ]
-    in
+    let concat_dim = Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 ~label:"y" () ] in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin };
       ]
     in
     let _remaining, _env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
@@ -230,23 +241,24 @@ let test_concat_mixed_labeled_unlabeled () =
   Stdio.printf "Test 11: Concat, mix labeled/unlabeled -- label preserved\n";
   Tensor.unsafe_reinitialize ();
   try
-    (* Same as test 9 but one component is unlabeled — the label from the labeled component
-       should be preserved in the collapsed Dim. *)
+    (* Same as test 9 but one component is unlabeled — the label from the labeled component should
+       be preserved in the collapsed Dim. *)
     let v_result = Row.get_var ~name:"result" () in
     let v_component = Row.get_var ~name:"comp" () in
-    let concat_dim =
-      Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 () ]
-    in
+    let concat_dim = Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 () ] in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v_component; d2 = Row.get_dim ~d:2 ~label:"x" (); origin = dummy_origin };
       ]
     in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let d = Row.get_dim_val env v_result in
     let label = get_var_label env v_result in
     Stdio.printf "  Solved to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 5) && String.equal label "x" then
       Stdio.printf "  PASS: concat preserved label \"x\" from labeled component\n"
     else Stdio.printf "  FAIL: expected d=5, label=\"x\"\n"
@@ -263,15 +275,15 @@ let test_affine_matching_labels () =
         {
           stride = 1;
           over = Row.Var v_over;
-          conv =
-            Some
-              { dilation = 1; kernel = Row.get_dim ~d:3 ~label:"x" (); use_padding = false };
+          conv = Some { dilation = 1; kernel = Row.get_dim ~d:3 ~label:"x" (); use_padding = false };
           stride_offset = 0;
         }
     in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v_result; d2 = affine_dim; origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v_over; d2 = Row.get_dim ~d:4 ~label:"x" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v_result; d2 = affine_dim; origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v_over; d2 = Row.get_dim ~d:4 ~label:"x" (); origin = dummy_origin };
       ]
     in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
@@ -279,7 +291,8 @@ let test_affine_matching_labels () =
     let label = get_var_label env v_result in
     (* input_size = 1 * (4 - 1) + 3 = 6, label should be "x" *)
     Stdio.printf "  Solved to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 6) && String.equal label "x" then
       Stdio.printf "  PASS: affine preserved label \"x\" with d=6\n"
     else Stdio.printf "  FAIL: expected d=6, label=\"x\"\n"
@@ -296,15 +309,15 @@ let test_affine_conflicting_labels () =
         {
           stride = 1;
           over = Row.Var v_over;
-          conv =
-            Some
-              { dilation = 1; kernel = Row.get_dim ~d:3 ~label:"y" (); use_padding = false };
+          conv = Some { dilation = 1; kernel = Row.get_dim ~d:3 ~label:"y" (); use_padding = false };
           stride_offset = 0;
         }
     in
     let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v_result; d2 = affine_dim; origin = dummy_origin }
-      ; Row.Dim_eq { d1 = Row.Var v_over; d2 = Row.get_dim ~d:4 ~label:"x" (); origin = dummy_origin }
+      [
+        Row.Dim_eq { d1 = Row.Var v_result; d2 = affine_dim; origin = dummy_origin };
+        Row.Dim_eq
+          { d1 = Row.Var v_over; d2 = Row.get_dim ~d:4 ~label:"x" (); origin = dummy_origin };
       ]
     in
     let _remaining, _env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
@@ -324,13 +337,13 @@ let test_stride_noconv_forward () =
       Row.Affine
         { stride = 2; over = Row.get_dim ~d:4 ~label:"x" (); conv = None; stride_offset = 0 }
     in
-    let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v; d2 = affine_dim; origin = dummy_origin } ] in
+    let constraints = [ Row.Dim_eq { d1 = Row.Var v; d2 = affine_dim; origin = dummy_origin } ] in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let d = Row.get_dim_val env v in
     let label = get_var_label env v in
     Stdio.printf "  Solved to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 8) && String.equal label "x" then
       Stdio.printf "  PASS: stride forward propagated label \"x\"\n"
     else Stdio.printf "  FAIL: expected d=8, label=\"x\"\n"
@@ -340,19 +353,18 @@ let test_stride_noconv_reverse () =
   Stdio.printf "Test 15: Stride no-conv reverse -- label propagated\n";
   Tensor.unsafe_reinitialize ();
   try
-    (* Dim{d=8; label="x"} unified with Affine{stride=2; over=Var v}
-       should solve v to d=4 with label "x" propagated via get_dim *)
+    (* Dim{d=8; label="x"} unified with Affine{stride=2; over=Var v} should solve v to d=4 with
+       label "x" propagated via get_dim *)
     let v = Row.get_var ~name:"over" () in
-    let affine_dim =
-      Row.Affine { stride = 2; over = Row.Var v; conv = None; stride_offset = 0 }
-    in
+    let affine_dim = Row.Affine { stride = 2; over = Row.Var v; conv = None; stride_offset = 0 } in
     let target = Row.get_dim ~d:8 ~label:"x" () in
     let constraints = [ Row.Dim_eq { d1 = target; d2 = affine_dim; origin = dummy_origin } ] in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let d = Row.get_dim_val env v in
     let label = get_var_label env v in
     Stdio.printf "  Solved over to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 4) && String.equal label "x" then
       Stdio.printf "  PASS: stride reverse propagated label \"x\" to over\n"
     else Stdio.printf "  FAIL: expected d=4, label=\"x\"\n"
@@ -373,13 +385,13 @@ let test_conv_nopadding_forward () =
           stride_offset = 0;
         }
     in
-    let constraints =
-      [ Row.Dim_eq { d1 = Row.Var v; d2 = affine_dim; origin = dummy_origin } ] in
+    let constraints = [ Row.Dim_eq { d1 = Row.Var v; d2 = affine_dim; origin = dummy_origin } ] in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let d = Row.get_dim_val env v in
     let label = get_var_label env v in
     Stdio.printf "  Solved to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 6) && String.equal label "x" then
       Stdio.printf "  PASS: conv forward propagated label \"x\"\n"
     else Stdio.printf "  FAIL: expected d=6, label=\"x\"\n"
@@ -406,7 +418,8 @@ let test_conv_nopadding_reverse () =
     let d = Row.get_dim_val env v in
     let label = get_var_label env v in
     Stdio.printf "  Solved over to d=%s, label=\"%s\"\n"
-      (Option.value_map d ~default:"?" ~f:Int.to_string) label;
+      (Option.value_map d ~default:"?" ~f:Int.to_string)
+      label;
     if Option.equal Int.equal d (Some 4) && String.equal label "x" then
       Stdio.printf "  PASS: conv reverse propagated label \"x\" to over\n"
     else Stdio.printf "  FAIL: expected d=4, label=\"x\"\n"
@@ -415,19 +428,19 @@ let test_conv_nopadding_reverse () =
 let test_lub_conflicting_labels () =
   Stdio.printf "Test 18: LUB with conflicting labels -- strict equality raises\n";
   Tensor.unsafe_reinitialize ();
-  (* The dim-level inequality solver (solve_dim_ineq) checks labels strictly at the
-     Dim/Dim fast path before reaching the LUB computation. When two concrete dims
-     with same size but different labels meet through mutual Row_ineq constraints,
-     the strict check raises Shape_error. This is correct behavior: the LUB demotion
-     to d=1 only applies within the Bounds_dim path, not when both dims are already
-     solved. Verify that the error is raised. *)
+  (* The dim-level inequality solver (solve_dim_ineq) checks labels strictly at the Dim/Dim fast
+     path before reaching the LUB computation. When two concrete dims with same size but different
+     labels meet through mutual Row_ineq constraints, the strict check raises Shape_error. This is
+     correct behavior: the LUB demotion to d=1 only applies within the Bounds_dim path, not when
+     both dims are already solved. Verify that the error is raised. *)
   try
     let prov = Row.empty_provenance in
     let r1 = { Row.dims = [ Row.get_dim ~d:4 ~label:"x" () ]; bcast = Broadcastable; prov } in
     let r2 = { Row.dims = [ Row.get_dim ~d:4 ~label:"y" () ]; bcast = Broadcastable; prov } in
     let constraints =
-      [ Row.Row_ineq { cur = r1; subr = r2; origin = dummy_origin }
-      ; Row.Row_ineq { cur = r2; subr = r1; origin = dummy_origin }
+      [
+        Row.Row_ineq { cur = r1; subr = r2; origin = dummy_origin };
+        Row.Row_ineq { cur = r2; subr = r1; origin = dummy_origin };
       ]
     in
     let _remaining, _env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in

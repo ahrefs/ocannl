@@ -69,8 +69,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     match (tn, Map.find ctx.ctx_arrays tn) with
     | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
         (* No cross-stream reader synchronization needed: multi-streaming was removed
-           (gh-ocannl-341). Only one stream exists per device, so there are no
-           concurrent cross-stream readers to wait for before this host-to-device upload. *)
+           (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
+           cross-stream readers to wait for before this host-to-device upload. *)
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
@@ -117,11 +117,16 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                     device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                       ~src);
                   update_writer_event dst @@ Node tn;
-                  [%log "copying", Tn.debug_name tn, "from", Backend.get_name src.stream, "to", Backend.get_name dst.stream];
+                  [%log
+                    "copying",
+                    Tn.debug_name tn,
+                    "from",
+                    Backend.get_name src.stream,
+                    "to",
+                    Backend.get_name dst.stream];
                   true))
         | Copy ->
-            Backend.(
-              device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
+            Backend.(device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
             update_writer_event dst @@ Merge_buffer tn;
             [%log "copy into merge buffer", Tn.debug_name tn, "from", Backend.get_name src.stream];
             true)
@@ -150,7 +155,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                 ~src);
             update_writer_event dst @@ Node tn;
-            [%log "copying", Tn.debug_name tn, "from", Backend.get_name src.stream, "to", Backend.get_name dst.stream];
+            [%log
+              "copying",
+              Tn.debug_name tn,
+              "from",
+              Backend.get_name src.stream,
+              "to",
+              Backend.get_name dst.stream];
             { dst with ctx_arrays = Map.add_exn dst.ctx_arrays ~key:tn ~data:d_arr })
 
   type r = Backend.context routine [@@deriving sexp_of]
@@ -557,9 +568,7 @@ let%track5_sexp fresh_backend ?backend_name () =
   with
   | "multicore_cc" ->
       (module Make_device_backend_from_lowered (Schedulers.Multicore) (Cc_backend) : Backend)
-  | "sync_cc" ->
-      (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
+  | "sync_cc" -> (module Make_device_backend_from_lowered (Schedulers.Sync) (Cc_backend) : Backend)
   | "cuda" -> (module Raise_backend (Cuda_backend_impl.Fresh () : Lowered_backend) : Backend)
-  | "metal" ->
-      (module Raise_backend (Metal_backend_impl.Fresh () : Lowered_backend) : Backend)
+  | "metal" -> (module Raise_backend (Metal_backend_impl.Fresh () : Lowered_backend) : Backend)
   | backend -> invalid_arg [%string "Backends.fresh_backend: unknown backend %{backend}"]

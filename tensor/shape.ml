@@ -269,7 +269,8 @@ let einsum_slot_spec_to_dims_bio ~original_spec ~sh_id ~row_var_env ~dim_var_env
         let dims =
           List.map labels ~f:(fun label ->
               Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())))
+                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
+                     Row.get_var ~name:label ())))
         in
         Row.Concat dims
   in
@@ -293,14 +294,13 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
 
-(* For Block specs, compute invalid_vars: variables that are allowed to be 0.
-   A variable v is invalid if:
-   1. v appears in a component of a Concat dimension on one side
-   2. For ALL shapes on the other side, there EXISTS an axis such that for ALL components
-      of that axis, the complement of v's component has non-empty intersection.
-   This is a four-quantifier condition: ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ *)
-let compute_block_invalid_vars ~(this_side_rows : Row.t list)
-    ~(other_side_shapes : Row.t list list) : Row.dim_var_set =
+(* For Block specs, compute invalid_vars: variables that are allowed to be 0. A variable v is
+   invalid if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
+   the other side, there EXISTS an axis such that for ALL components of that axis, the complement of
+   v's component has non-empty intersection. This is a four-quantifier condition: ∀shapes ∃axis
+   ∀components: complement ∩ component ≠ ∅ *)
+let compute_block_invalid_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list)
+    : Row.dim_var_set =
   (* Extract all dims from rows (including beg_dims from bcast) *)
   let dims_of_rows rows =
     List.concat_map rows ~f:(fun (row : Row.t) ->
@@ -309,9 +309,8 @@ let compute_block_invalid_vars ~(this_side_rows : Row.t list)
         in
         row.dims @ dims_from_bcast)
   in
-  (* Get component var sets for each axis.
-     For non-Concat dims, there's one component with all vars of that dim.
-     For Concat dims, each element is a separate component. *)
+  (* Get component var sets for each axis. For non-Concat dims, there's one component with all vars
+     of that dim. For Concat dims, each element is a separate component. *)
   let axis_components_of_dim (dim : Row.dim) : Row.dim_var_set list =
     match dim with
     | Row.Concat dims -> List.map dims ~f:Row.vars_of_dim
@@ -322,8 +321,8 @@ let compute_block_invalid_vars ~(this_side_rows : Row.t list)
     List.map other_side_shapes ~f:(fun shape_rows ->
         List.map (dims_of_rows shape_rows) ~f:axis_components_of_dim)
   in
-  (* For each Concat on this side, find invalid vars.
-     Non-Concat dims cannot contribute invalid vars since their complement is empty. *)
+  (* For each Concat on this side, find invalid vars. Non-Concat dims cannot contribute invalid vars
+     since their complement is empty. *)
   let this_side_dims = dims_of_rows this_side_rows in
   List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
       match dim with
@@ -859,8 +858,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
           ls_lhs
       in
-      check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ] dim_var_env
-        row_var_env;
+      check_dim_row_var_name_clash ~spec
+        ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ]
+        dim_var_env row_var_env;
       (* Bind delayed_var_refs to the variables after they are created *)
       let extras_dim_refs =
         List.filter_map dim_refs ~f:(fun delayed_ref ->
@@ -1310,8 +1310,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       let rhs_results =
         List.mapi (List.zip_exn ls_rhses rhses) ~f:(fun i (ls_rhs, sh) ->
             let extras, proj_env, (b, inp, o) =
-              einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
-                ls_rhs
+              einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env
+                ~dim_var_env ls_rhs
             in
             (i, sh, extras, proj_env, b, inp, o))
       in
@@ -1356,7 +1356,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                         Rows_constr
                           {
                             r = [ Row.get_row_for_var Row.empty_provenance var ];
-                            constr = Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                            constr =
+                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
                             origin =
                               [
                                 {
@@ -1433,17 +1434,18 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                   };
               ])
       in
-      (* Compute invalid_vars: variables that are allowed to be 0 (dimension 0 is invalid).
-         A variable is invalid if it's in a Concat component whose complement covers an axis
-         on the other side. We check both directions: RHS->LHS and LHS->RHS.
-         The four-quantifier condition: ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ *)
+      (* Compute invalid_vars: variables that are allowed to be 0 (dimension 0 is invalid). A
+         variable is invalid if it's in a Concat component whose complement covers an axis on the
+         other side. We check both directions: RHS->LHS and LHS->RHS. The four-quantifier condition:
+         ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ *)
       let rhs_shapes : Row.t list list =
         List.map rhs_results ~f:(fun (_, _, _, _, b_rhs, i_rhs, o_rhs) -> [ b_rhs; i_rhs; o_rhs ])
       in
       let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
       (* LHS is a single shape, so wrap it in a singleton list for the shapes parameter *)
       let invalid_from_rhs =
-        compute_block_invalid_vars ~this_side_rows:(List.concat rhs_shapes) ~other_side_shapes:[ lhs_rows ]
+        compute_block_invalid_vars ~this_side_rows:(List.concat rhs_shapes)
+          ~other_side_shapes:[ lhs_rows ]
       in
       let invalid_from_lhs =
         compute_block_invalid_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes
@@ -1677,8 +1679,7 @@ let set_equal delayed_ref1 delayed_ref2 =
 let set_scale ~factor delayed_ref_large delayed_ref_small =
   if factor < 1 then
     raise
-    @@ Row.Shape_error
-         ("Shape.set_scale: factor must be >= 1, got " ^ Int.to_string factor, []);
+    @@ Row.Shape_error ("Shape.set_scale: factor must be >= 1, got " ^ Int.to_string factor, []);
   (* Row-variable guard: reject any ref whose var is `Row _, regardless of which side is solved.
      Without this, the solved-side branches below would forward to set_dim on a Row ref, which
      silently emits a Rows_constr Total_elems constraint -- out of scope for this API. *)
@@ -1709,8 +1710,8 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
         if d_large % factor <> 0 then
           raise
           @@ Row.Shape_error
-               ( "Shape.set_scale: solved dimension " ^ Int.to_string d_large ^ " for "
-                 ^ ref_label ^ " is not divisible by factor " ^ Int.to_string factor,
+               ( "Shape.set_scale: solved dimension " ^ Int.to_string d_large ^ " for " ^ ref_label
+                 ^ " is not divisible by factor " ^ Int.to_string factor,
                  [] );
         set_dim delayed_ref_small (d_large / factor)
     | delayed_ref_large, { var_ref = { solved_dim = Some d_small; _ }; _ } ->
@@ -1902,8 +1903,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, invalid_vars, ineqs) :
-      proj_axis_env * Row.dim_var_set * Row.constraint_ list =
+  let (proj_axis_env, invalid_vars, ineqs) : proj_axis_env * Row.dim_var_set * Row.constraint_ list
+      =
     get_inequalities ~for_projections:true update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
@@ -1979,12 +1980,10 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       (module Idx.Symbol)
       (Row.product_dim_iterators proj_env |> List.map ~f:(fun (p, d, s) -> (s, (p, d))))
   in
-  (* Build connected components from Concat indices.
-     Symbols that appear together in a Concat must be iterated together.
-     We use union-find to group symbols into connected components.
-     Include both product dimensions and Concat dimensions.
-     Note: Concat can appear either as Row.Concat dim or as a regular Dim whose
-     proj_id maps to Idx.Concat. *)
+  (* Build connected components from Concat indices. Symbols that appear together in a Concat must
+     be iterated together. We use union-find to group symbols into connected components. Include
+     both product dimensions and Concat dimensions. Note: Concat can appear either as Row.Concat dim
+     or as a regular Dim whose proj_id maps to Idx.Concat. *)
   let product_indices : Idx.axis_index list =
     List.filter_map all_dims ~f:(fun dim ->
         match dim with
@@ -2009,12 +2008,11 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   in
   let unique_by_iterator =
     let seen =
-      Set.of_list
-        (module Idx.Symbol)
-        (List.map unique_by_iterator ~f:(fun (_, _, s) -> s))
+      Set.of_list (module Idx.Symbol) (List.map unique_by_iterator ~f:(fun (_, _, s) -> s))
     in
     let missing_symbols =
-      concat_groups |> List.concat |> Utils.unique_keep_first ~equal:Idx.equal_symbol
+      concat_groups |> List.concat
+      |> Utils.unique_keep_first ~equal:Idx.equal_symbol
       |> List.filter ~f:(fun s -> not (Set.mem seen s))
     in
     let missing_entries =
@@ -2023,13 +2021,11 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     in
     unique_by_iterator @ missing_entries
   in
-  (* Union-find to group symbols that appear in the same Concat.
-     Symbols within the same Concat must be in the same iteration group so that
-     they are iterated SEQUENTIALLY (via unflat_lines), not NESTED.
-     For (a, b) ++^ "a; b => a^b", i2 and i3 should be in the same group:
-     - First iterate i2 (RHS[0] active)
-     - Then iterate i3 (RHS[1] active)
-     This is achieved by making them part of the same product_iterators entry. *)
+  (* Union-find to group symbols that appear in the same Concat. Symbols within the same Concat must
+     be in the same iteration group so that they are iterated SEQUENTIALLY (via unflat_lines), not
+     NESTED. For (a, b) ++^ "a; b => a^b", i2 and i3 should be in the same group: - First iterate i2
+     (RHS[0] active) - Then iterate i3 (RHS[1] active) This is achieved by making them part of the
+     same product_iterators entry. *)
   let symbol_classes : (Idx.symbol, Idx.symbol) Hashtbl.t = Hashtbl.create (module Idx.Symbol) in
   let find_repr sym =
     let rec loop s =
@@ -2049,9 +2045,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   in
   (* Union all symbols within each Concat group to make them iterate sequentially *)
   List.iter concat_groups ~f:(fun syms ->
-      match syms with
-      | [] -> ()
-      | first :: rest -> List.iter rest ~f:(fun s -> union first s));
+      match syms with [] -> () | first :: rest -> List.iter rest ~f:(fun s -> union first s));
   (* Group unique_by_iterator entries by their representative symbol *)
   let components : (Idx.symbol, (Row.proj_id * int * Idx.symbol) list) Hashtbl.t =
     Hashtbl.create (module Idx.Symbol)
@@ -2472,7 +2466,8 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
         let dims =
           List.map labels ~f:(fun label ->
               Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())))
+                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
+                     Row.get_var ~name:label ())))
         in
         Row.Concat dims
   in
@@ -2482,9 +2477,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
   result
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
-  let batch, input, output =
-    shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec
-  in
+  let batch, input, output = shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec in
   let result =
     {
       input;

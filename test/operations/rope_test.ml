@@ -14,9 +14,13 @@ let () =
   let%op roundtrip = interleave (deinterleave_even x_deint) (deinterleave_odd x_deint) in
   let _ctx = Ocannl.Train.forward_once ctx roundtrip in
   Stdio.printf "Original: ";
-  for i = 0 to 5 do Stdio.printf "%.0f " At.(x_deint.@{[| i |]}) done;
+  for i = 0 to 5 do
+    Stdio.printf "%.0f " At.(x_deint.@{[| i |]})
+  done;
   Stdio.printf "\nRoundtrip: ";
-  for i = 0 to 5 do Stdio.printf "%.0f " At.(roundtrip.@{[| i |]}) done;
+  for i = 0 to 5 do
+    Stdio.printf "%.0f " At.(roundtrip.@{[| i |]})
+  done;
   let ok = ref true in
   for i = 0 to 5 do
     if Float.(abs (At.(x_deint.@{[| i |]}) - At.(roundtrip.@{[| i |]})) > 1e-5) then ok := false
@@ -34,9 +38,7 @@ let () =
   let positions = Ocannl.Nn_blocks.position_indices ~seq_len () in
   let x =
     NTDSL.init ~l:"x" ~prec:Ir.Ops.single ~b:[ seq_len ] ~i:[] ~o:[ d_k ]
-      ~f:(function
-        | [| pos; i |] -> Float.of_int ((pos * d_k) + i + 1)
-        | _ -> assert false)
+      ~f:(function [| pos; i |] -> Float.of_int ((pos * d_k) + i + 1) | _ -> assert false)
       ()
   in
   let rotated = Ocannl.Nn_blocks.rope ~freqs ~positions x in
@@ -60,8 +62,10 @@ let () =
   let enc = Ocannl.Nn_blocks.sinusoidal_position_encoding ~d_model:8 ~max_len:4 () in
   let _ctx = Ocannl.Train.forward_once ctx enc in
   Stdio.printf "PE(0,0)=%.4f PE(0,1)=%.4f PE(1,0)=%.4f PE(1,1)=%.4f\n\n"
-    At.(enc.@{[| 0; 0 |]}) At.(enc.@{[| 0; 1 |]})
-    At.(enc.@{[| 1; 0 |]}) At.(enc.@{[| 1; 1 |]})
+    At.(enc.@{[| 0; 0 |]})
+    At.(enc.@{[| 0; 1 |]})
+    At.(enc.@{[| 1; 0 |]})
+    At.(enc.@{[| 1; 1 |]})
 
 (* === Test 4: RoPE with multi_head_attention === *)
 let () =
@@ -77,7 +81,8 @@ let () =
   let positions = Ocannl.Nn_blocks.position_indices ~seq_len () in
   let attn =
     Ocannl.Nn_blocks.multi_head_attention ~label:[ "rope_attn" ] ~num_heads ~d_k ~d_v:d_k
-      ~pos_embed:(RoPE { freqs; positions }) ()
+      ~pos_embed:(RoPE { freqs; positions })
+      ()
   in
   let x =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ 1; seq_len ] ~input_dims:[]
@@ -94,8 +99,8 @@ let () =
   Stdio.printf "RoPE attention output shape: %s\n\n"
     (Sexp.to_string_hum ([%sexp_of: Shape.t] out.Tensor.shape))
 
-(* PoPE test removed: PoPE requires doubling dimensionality (d → 2d),
-   deferred to follow-up — see TODO in nn_blocks.ml *)
+(* PoPE test removed: PoPE requires doubling dimensionality (d → 2d), deferred to follow-up — see
+   TODO in nn_blocks.ml *)
 
 (* === Test 5: Gradient flow through RoPE === *)
 let () =
@@ -110,7 +115,8 @@ let () =
   let positions = Ocannl.Nn_blocks.position_indices ~seq_len () in
   let attn =
     Ocannl.Nn_blocks.multi_head_attention ~label:[ "grad_attn" ] ~num_heads ~d_k ~d_v:d_k
-      ~pos_embed:(RoPE { freqs; positions }) ()
+      ~pos_embed:(RoPE { freqs; positions })
+      ()
   in
   let x =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ 1; seq_len ] ~input_dims:[]
@@ -122,13 +128,11 @@ let () =
   Stdio.printf "Loss: %.4f\n" At.(loss.@{[| 0 |]});
   Stdio.printf "freqs has grad: %b (expect false)\n" (Option.is_some freqs.Tensor.diff);
   Stdio.printf "positions has grad: %b (expect false)\n" (Option.is_some positions.Tensor.diff);
-  (* Verify that learnable params exist and have gradients allocated.
-     This proves the backward pass through RoPE successfully allocated gradients
-     for the attention weights (w_q, w_k, w_v, w_o). *)
+  (* Verify that learnable params exist and have gradients allocated. This proves the backward pass
+     through RoPE successfully allocated gradients for the attention weights (w_q, w_k, w_v,
+     w_o). *)
   let num_params = Set.length loss.Tensor.params in
-  let num_with_grad =
-    Set.count loss.Tensor.params ~f:(fun p -> Option.is_some p.Tensor.diff)
-  in
+  let num_with_grad = Set.count loss.Tensor.params ~f:(fun p -> Option.is_some p.Tensor.diff) in
   Stdio.printf "learnable params: %d, with grad: %d (expect >0)\n" num_params num_with_grad;
   (* Verify loss is finite and non-zero — backward pass completed without NaN/inf *)
   let loss_val = At.(loss.@{[| 0 |]}) in

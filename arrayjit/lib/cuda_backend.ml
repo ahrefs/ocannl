@@ -837,7 +837,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
        https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
     let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
       let procs = [| lowered |]
-    end)) in
+    end))
+    in
     let idx_params = Indexing.bound_symbols bindings in
     let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
     let cuda_includes =
@@ -866,7 +867,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let%diagn2_sexp compile_batch ~names bindings lowereds =
     let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
       let procs = Array.filter_opt lowereds
-    end)) in
+    end))
+    in
     let idx_params = Indexing.bound_symbols bindings in
     let kparams_and_docs =
       Array.map2_exn names lowereds

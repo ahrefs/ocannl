@@ -119,26 +119,25 @@ val set_equal : delayed_var_ref -> delayed_var_ref -> unit
 
 val set_scale : factor:int -> delayed_var_ref -> delayed_var_ref -> unit
 (** Asserts a multiplicative relation between two dimension variable references: the first ref
-    equals [factor] times the second. Mirrors {!set_equal} in spirit but expresses
-    non-convolutional scaling -- the motivating use case is hourglass-style networks where one
-    dimension is a constant multiple of another (e.g. an MLP hidden width that is twice the input
-    width).
+    equals [factor] times the second. Mirrors {!set_equal} in spirit but expresses non-convolutional
+    scaling -- the motivating use case is hourglass-style networks where one dimension is a constant
+    multiple of another (e.g. an MLP hidden width that is twice the input width).
 
     Concretely, if the first ref ends up bound to dimension [d_large] and the second to [d_small],
     this asserts [d_large = factor * d_small].
 
     Restrictions:
-    - Both refs must be (or resolve to) dimension variables. Row-variable and mixed dim/row
-      variants are not currently supported and raise [Row.Shape_error] regardless of which side is
-      solved (no silent routing through {!set_dim}'s row total-elements path).
+    - Both refs must be (or resolve to) dimension variables. Row-variable and mixed dim/row variants
+      are not currently supported and raise [Row.Shape_error] regardless of which side is solved (no
+      silent routing through {!set_dim}'s row total-elements path).
     - [factor] must be a positive integer ([>= 1]). [factor = 1] is accepted and behaves exactly
       like {!set_equal}; callers should prefer {!set_equal} in that case for clarity.
-    - Convolutional scaling (kernel/dilation/padding) is expressed via einsum convolution
-      notation, not via this function.
+    - Convolutional scaling (kernel/dilation/padding) is expressed via einsum convolution notation,
+      not via this function.
     - As with {!set_equal}, calling on two fresh refs from {!get_variable_ref} (both still
       [`Not_set_yet]) raises [Row.Shape_error]; use {!set_dim} on one side first, or capture both
-      refs through einsum notation (e.g. [+*]) so that shape propagation can bind them to
-      dimension variables before this call.
+      refs through einsum notation (e.g. [+*]) so that shape propagation can bind them to dimension
+      variables before this call.
 
     On a both-solved mismatch, on a one-solved-larger case where the solved dimension is not
     divisible by [factor], on insufficient information (both refs are [`Not_set_yet]), or when

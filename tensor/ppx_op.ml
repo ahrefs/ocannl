@@ -183,8 +183,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             (vbs, Ast_builder.Default.pexp_array ~loc [ e ])
       in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-      ( vbs1,
-        [%expr concat ?label:[%e opt_expr ~loc label] [%e spec] [%e rhses_expr]] )
+      (vbs1, [%expr concat ?label:[%e opt_expr ~loc label] [%e spec] [%e rhses_expr]])
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident "++^"; _ }; _ }]
         [%e? expr1]

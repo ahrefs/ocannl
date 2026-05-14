@@ -157,10 +157,10 @@ val eliminate_common_subexpressions : t -> t
     references to the first occurrence. Called internally by [optimize]; exposed for testing. *)
 
 val hoist_cross_statement_cse : t -> t
-(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
-    When two or more sibling statements share an alpha-equivalent [Local_scope] node, the
-    computation is extracted as a [Declare_local] + body preceding the first user, and all
-    occurrences are replaced with [Get_local]. *)
+(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope. When
+    two or more sibling statements share an alpha-equivalent [Local_scope] node, the computation is
+    extracted as a [Declare_local] + body preceding the first user, and all occurrences are replaced
+    with [Get_local]. *)
 
 val input_and_output_nodes : optimized -> (Set.M(Tnode).t * Set.M(Tnode).t) * Tnode.t option
 (** Inputs are the materialized read-only and read-before-write (within the code) non-constant

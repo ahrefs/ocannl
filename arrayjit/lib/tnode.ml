@@ -13,8 +13,7 @@ type memory_type =
   | Unset_hosted
   | Constant  (** The tensor node does not change after initialization. *)
   | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
-  | Changed_on_devices
-      (** The tensor node will only change on host via a [to_host] call. *)
+  | Changed_on_devices  (** The tensor node will only change on host via a [to_host] call. *)
   | Volatile
       (** The tensor node will only change on any device via a [from_host] call possibly followed by
           [device_to_device]. *)

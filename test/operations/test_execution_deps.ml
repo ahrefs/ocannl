@@ -4,8 +4,8 @@ open Ocannl
 open Operation.DSL_modules
 module IDX = Train.IDX
 
-(* Test 1: RAW dependency — sgd_routine reads gradients written by grad_routine.
-   Pattern from zero2hero_1of7_exec.ml simple_gradients_hosted. *)
+(* Test 1: RAW dependency — sgd_routine reads gradients written by grad_routine. Pattern from
+   zero2hero_1of7_exec.ml simple_gradients_hosted. *)
 let test_raw_dependency () =
   printf "=== Test 1: RAW dependency ===\n";
   Tensor.unsafe_reinitialize ();
@@ -97,12 +97,12 @@ let test_wrong_order_raises () =
   let grad_routine = Train.to_routine ctx IDX.empty grad in
   let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
   (* sgd depends on grad — running sgd first must fail *)
-  (try
-     ignore (Context.run ctx sgd_routine);
-     printf "Wrong order (sgd before grad): no error (BUG)\n"
-   with Failure msg ->
-     let is_enforcement = String.is_substring msg ~substring:"Context.run:" in
-     printf "Wrong order raises Failure from Context.run: %b\n" is_enforcement)
+  try
+    ignore (Context.run ctx sgd_routine);
+    printf "Wrong order (sgd before grad): no error (BUG)\n"
+  with Failure msg ->
+    let is_enforcement = String.is_substring msg ~substring:"Context.run:" in
+    printf "Wrong order raises Failure from Context.run: %b\n" is_enforcement
 
 (* Test 5: Re-execution pattern — grad -> sgd -> grad succeeds without reset *)
 let test_reexecution () =

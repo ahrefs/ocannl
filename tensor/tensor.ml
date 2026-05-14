@@ -96,7 +96,6 @@ let session_state =
 
 let bump_next_id id = session_state.next_id <- max session_state.next_id (id + 1)
 let get_next_id () = session_state.next_id
-
 let is_fwd_root t = Map.mem session_state.forward_roots t.id
 let remove_fwd_root t = session_state.forward_roots <- Map.remove session_state.forward_roots t.id
 let is_bprop_root t = Map.mem session_state.backprop_roots t.id
@@ -358,7 +357,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         | [ t1; t2; t3 ] -> Shape.Broadcast_tern (ternary_op, t1.shape, t2.shape, t3.shape)
         | _ ->
             (* Let's implement what we need when we need it. *)
-            assert false )
+            assert false)
   in
   let embedded_nodes = ref @@ Set.singleton (module Tn) v in
   let children =
@@ -373,7 +372,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
   (* Create a preliminary shape_update to get projections_debug and projections for op_asn. *)
   let preliminary_shape_update =
-    Shape.{ shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem = None }
+    Shape.
+      {
+        shape;
+        logic = shape_logic;
+        id = get_update_id ();
+        unsafe_projections = None;
+        neutral_elem = None;
+      }
   in
   Shape.propagate_shapes preliminary_shape_update;
   let projections_debug = Shape.logic_to_spec preliminary_shape_update.logic in
@@ -530,6 +536,7 @@ let%track7_sexp blockop ?op_label ~spec ~delayed_vars ~op_asn ~grad_asn ?grad_sp
     (Shape.make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes ?deduced
        ())
     rhses_list
+
 let%track7_sexp unop ?op_label ?transpose_op ~op_asn ~grad_asn ?grad_spec t1 ?(label = [])
     ?top_down_prec ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes
     ?deduced () : t =

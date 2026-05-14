@@ -668,7 +668,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let compile ~name bindings lowered =
     let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
       let procs = [| lowered |]
-    end)) in
+    end))
+    in
     let idx_params = Indexing.bound_symbols bindings in
     (* Add Metal address space qualifiers *)
     let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
@@ -691,7 +692,8 @@ using namespace metal;|} in
   let compile_batch ~names bindings lowereds =
     let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
       let procs = Array.filter_opt lowereds
-    end)) in
+    end))
+    in
     let idx_params = Indexing.bound_symbols bindings in
     let funcs_and_docs =
       Array.map2_exn names lowereds
@@ -720,8 +722,8 @@ using namespace metal;|} in
     }
 
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
-      ~(kparams : (string * kparam_source) list) ~lowered_bindings ~(ctx_arrays : buffer_ptr Tn.t_map)
-      : Task.t =
+      ~(kparams : (string * kparam_source) list) ~lowered_bindings
+      ~(ctx_arrays : buffer_ptr Tn.t_map) : Task.t =
     let stream = prior_context.stream in
     let device = stream.device.dev in
     let queue = stream.runner.queue in
@@ -756,7 +758,8 @@ using namespace metal;|} in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
             | Kparam_ptr tn ->
                 failwith
-                  [%string "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
+                  [%string
+                    "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in
@@ -819,7 +822,8 @@ using namespace metal;|} in
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, kparams) ->
               Option.map ctx_arrays_opts.(i) ~f:(fun ctx_arrays ->
-                  link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings ~ctx_arrays)))
+                  link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings
+                    ~ctx_arrays)))
     in
     (lowered_bindings, tasks)
 end

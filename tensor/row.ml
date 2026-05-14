@@ -441,22 +441,22 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | [ single ] -> single
       | res when keep_affine -> Concat res
       | _ ->
-          if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
+          if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then (
             let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
             let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
             let labels = List.filter_map solved_dims ~f:(fun s -> s.label) in
             let label = List.hd labels in
             (* All non-None labels must be consistent *)
-            (if
-               not
-                 (List.for_all labels ~f:(fun l ->
-                      Option.value ~default:true (Option.map label ~f:(String.equal l))))
-             then
-               raise
-               @@ Shape_error
-                    ( "concat: conflicting dimension labels",
-                      [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] ));
-            Dim { d = total_d; label; proj_id = None }
+            if
+              not
+                (List.for_all labels ~f:(fun l ->
+                     Option.value ~default:true (Option.map label ~f:(String.equal l))))
+            then
+              raise
+              @@ Shape_error
+                   ( "concat: conflicting dimension labels",
+                     [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] );
+            Dim { d = total_d; label; proj_id = None })
           else Concat dims)
   | Dim _ | Var _ -> in_
 
@@ -1626,8 +1626,8 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
            ("solved dimensions for axis: different labels", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; label = l1; _ }, Dim { d = d2; label = l2; _ }
     when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
-      (* When one side carries a label and the other doesn't, upgrade the variable
-         that resolved to the unlabeled dim so the label persists in future checks. *)
+      (* When one side carries a label and the other doesn't, upgrade the variable that resolved to
+         the unlabeled dim so the label persists in future checks. *)
       let env =
         match (l1, l2) with
         | None, (Some _ as label) | (Some _ as label), None ->
@@ -1636,8 +1636,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               | Some (Solved_dim (Dim ({ d; label = None; _ } as sd))) when d = d1 ->
                   {
                     env with
-                    dim_env =
-                      add_dim env.dim_env ~key:v ~data:(Solved_dim (Dim { sd with label }));
+                    dim_env = add_dim env.dim_env ~key:v ~data:(Solved_dim (Dim { sd with label }));
                   }
               | Some (Solved_dim (Var w)) -> upgrade_var w env
               | _ -> env
@@ -2067,7 +2066,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let r2 : row = value in
         let ineqs : constraint_ list ref = ref ineqs in
         let f in_ =
-          let more_ineqs, result = s_row_one_in_entry v ~value:(value : row) ~in_ in
+          let more_ineqs, result = s_row_one_in_entry v ~(value : row) ~in_ in
           ineqs := more_ineqs @ !ineqs;
           result
         in
@@ -2428,9 +2427,9 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
               when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal l1 l2) ->
                 ((if Option.is_some l1 then cur else lub2), [])
             | Dim _, Dim _ (* when d1 <> d2 or l1 <> l2 *) ->
-                (* Intentional broadcast semantics: conflicting labels (or different sizes)
-                   demote to d=1, meaning these axes are incompatible and should be broadcast.
-                   This is NOT a bug — do not tighten to raise Shape_error here. *)
+                (* Intentional broadcast semantics: conflicting labels (or different sizes) demote
+                   to d=1, meaning these axes are incompatible and should be broadcast. This is NOT
+                   a bug — do not tighten to raise Shape_error here. *)
                 let lub = get_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
             | Var _, _ | _, Var _ -> assert false
@@ -2492,9 +2491,11 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       (* Element-wise unification of concatenated dimensions *)
       let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) in
       (eqs, env)
-  | _, Concat dims when List.count dims ~f:(function Var v -> Set.mem env.invalid_vars v | _ -> false) >= List.length dims - 1 ->
-      (* Concat in subr position with all-but-one (or all) components being invalid vars:
-         preserve inequality so the solver can infer the variables *)
+  | _, Concat dims
+    when List.count dims ~f:(function Var v -> Set.mem env.invalid_vars v | _ -> false)
+         >= List.length dims - 1 ->
+      (* Concat in subr position with all-but-one (or all) components being invalid vars: preserve
+         inequality so the solver can infer the variables *)
       ([ Dim_ineq { cur; subr; from_ = Sexp.List []; origin } ], env)
   | Concat _, _ | _, Concat _ ->
       (* Defer to dimension equality for concat with non-concat *)
@@ -2845,9 +2846,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
           (* TODO: we lose connection here with the other bound if both have row variables. *)
           let lub_bcast = if lub_is_cur then r_cur.bcast else lub2.bcast in
           let lub_dims =
-            (* Row-level LUB: prefer generality for broadcasting.
-               Unlabeled d=1 is most general, conflicting labels demote to d=1.
-               This is intentional broadcast generalization, not a label-checking gap. *)
+            (* Row-level LUB: prefer generality for broadcasting. Unlabeled d=1 is most general,
+               conflicting labels demote to d=1. This is intentional broadcast generalization, not a
+               label-checking gap. *)
             List.map2_exn (take_from_end r_cur.dims lub_len) (take_from_end lub2.dims lub_len)
               ~f:(fun d1 d2 ->
                 match (d1, d2) with
@@ -3010,13 +3011,13 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
       (* The input dimension itself cannot be dim-1, and the over dimension doesn't become
          transitively terminal. *)
       []
-  | Concat dims ->
-      (* For concatenation, filter out dimension-0 components and if one remains, close it.
-         TODO: Consider guessing invalid_vars components to 0 at stage 6, but wait until needed. *)
+  | Concat dims -> (
+      (* For concatenation, filter out dimension-0 components and if one remains, close it. TODO:
+         Consider guessing invalid_vars components to 0 at stage 6, but wait until needed. *)
       let non_zero_dims = List.filter dims ~f:(function Dim { d = 0; _ } -> false | _ -> true) in
-      (match non_zero_dims with
-       | [ single ] -> close_dim_terminal ~stage ~is_param origin env single
-       | _ -> [])
+      match non_zero_dims with
+      | [ single ] -> close_dim_terminal ~stage ~is_param origin env single
+      | _ -> [])
 
 let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | _ -> false
 
@@ -3283,8 +3284,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
   let guess_dim () =
-    if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:56 ()
-    else get_dim ~d:1 ~proj_id:59 ()
+    if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:56 () else get_dim ~d:1 ~proj_id:59 ()
   in
   match (lub, constr) with
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
@@ -3301,8 +3301,7 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
       Some (Dim_eq { d1 = Var v; d2 = lub; origin })
   | None, At_least_dim d when is_stage7 stage ->
       Some (Dim_eq { d1 = Var v; d2 = get_dim ~d ~proj_id:58 (); origin })
-  | None, _ when is_stage7 stage ->
-      Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
+  | None, _ when is_stage7 stage -> Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | _ -> None
 
 let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; prov } as r : row) :
@@ -3314,12 +3313,12 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env ({ dims; bcast; pr
     | Affine { over; conv = Some { kernel; _ }; _ } ->
         finalize_upper_lower_bound over @ finalize_upper_lower_bound kernel
     | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
-    | Var v ->
+    | Var v -> (
         let guess_dim () =
           if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:61 ()
           else get_dim ~d:1 ~proj_id:62 ()
         in
-        (match find_dim env.dim_env v with
+        match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
             raise
             @@ Shape_error
@@ -4062,8 +4061,10 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
   let verify_when_solved2 = ref [] in
   let p_dims = ref [] in
   let iterated_vars = ref [] in
-  let p_concat_targets = ref [] in (* (target_pid, component proj_dims) for deferred Concat handling *)
-  let p_concat_components = ref @@ Set.empty (module Proj_id) in (* proj_ids that are Concat components *)
+  let p_concat_targets = ref [] in
+  (* (target_pid, component proj_dims) for deferred Concat handling *)
+  let p_concat_components = ref @@ Set.empty (module Proj_id) in
+  (* proj_ids that are Concat components *)
   let proj_classes = ref @@ Map.empty (module Proj_id) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
@@ -4088,8 +4089,8 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         | None -> c.target_id <- Some p);
         (* We will substitute variables in conv_input later *)
         p_conv_input := (p, conv_input) :: !p_conv_input
-    | Proj_eq (Solved idx, (Conv_input _ | Concat _ as conv_input))
-    | Proj_eq ((Conv_input _  | Concat _ as conv_input), Solved idx) ->
+    | Proj_eq (Solved idx, ((Conv_input _ | Concat _) as conv_input))
+    | Proj_eq (((Conv_input _ | Concat _) as conv_input), Solved idx) ->
         verify_when_solved1 := (idx, conv_input) :: !verify_when_solved1
     | Proj_eq
         ( (Conv_input { stride = stride1; over = over1; _ } as conv_input1),
@@ -4098,7 +4099,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
         loop (Proj_eq (over1, over2));
         if equal_proj conv_input1 conv_input2 then ()
         else verify_when_solved2 := (conv_input1, conv_input2) :: !verify_when_solved2
-    | Proj_eq ((Conv_input _ as conv_input1), (Conv_input _ | Concat _ as conv_input2))
+    | Proj_eq ((Conv_input _ as conv_input1), ((Conv_input _ | Concat _) as conv_input2))
     | Proj_eq ((Concat _ as conv_input1), (Conv_input _ as conv_input2)) ->
         (* Conv_input vs Conv_input/Concat - defer verification *)
         if equal_proj conv_input1 conv_input2 then ()
@@ -4179,7 +4180,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
       (module Proj_id)
       (Set.to_list !p_concat_components
       |> List.map ~f:(fun p ->
-             fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0))
+          fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0))
   in
   List.iter !p_solved ~f:(fun (p, idx) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
@@ -4219,8 +4220,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
                      [] )));
   List.iter concat_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      if not @@ Map.mem !product_dim repr then
-        product_dim := Map.set !product_dim ~key:repr ~data:d);
+      if not @@ Map.mem !product_dim repr then product_dim := Map.set !product_dim ~key:repr ~data:d);
   (* Create fresh iterators for product dimensions, EXCEPT for those that will get their index from
      Conv_input (they will be processed later). *)
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
@@ -4301,9 +4301,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
       in
       let syms =
         List.filter_map proj_dims ~f:(fun (pid, { d; _ }) ->
-            let repr, _ =
-              Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0
-            in
+            let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:pid ~rank:0 in
             match Map.find !projs repr with
             | Some (Idx.Iterator s) -> Some s
             | Some (Idx.Fixed_idx 0) when d = 0 -> None (* d=0 is invalid dimension, skip *)
@@ -4315,9 +4313,7 @@ let%debug4_sexp solve_proj_equations (eqs : proj_equation list)
                          "Concat component projection %{pid#Proj_id} (d=%{d#Int}) has no iterator"],
                        [] ))
       in
-      let expected_idx =
-        if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms
-      in
+      let expected_idx = if List.is_empty syms then Idx.Fixed_idx 0 else Idx.Concat syms in
       match Map.find !projs target_repr with
       | None -> projs := Map.set !projs ~key:target_repr ~data:expected_idx
       | Some existing_idx ->
@@ -4381,6 +4377,6 @@ let proj_to_iterator_exn proj_env p =
 let product_dim_iterators proj_env =
   Map.to_alist proj_env.product_dim
   |> List.filter_map ~f:(fun (p, d) ->
-         match Map.find proj_env.proj_to_index p with
-         | Some (Idx.Iterator s) -> Some (p, d, s)
-         | _ -> None)
+      match Map.find proj_env.proj_to_index p with
+      | Some (Idx.Iterator s) -> Some (p, d, s)
+      | _ -> None)

@@ -30,8 +30,8 @@ val auto : unit -> t
 
 val compile : t -> Ir.Assignments.comp -> Ir.Indexing.unit_bindings -> t * routine
 (** Compile assignments into an executable routine. Returns updated context and the compiled
-    routine. The returned context carries the updated compilation frontier for dependency
-    tracking; the input context is unchanged (see {!section:execution_deps}). *)
+    routine. The returned context carries the updated compilation frontier for dependency tracking;
+    the input context is unchanged (see {!section:execution_deps}). *)
 
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
@@ -43,10 +43,9 @@ val run : t -> routine -> t
     before which others based on tensor-node read/write hazards (RAW, WAR, WAW).
 
     Dependencies are scoped to compilation lineage: two routines compiled from the {i same}
-    [Context.t] are independent siblings, even if they access the same nodes. Only routines
-    compiled from the {i returned} (child) context of a prior [compile] call can depend on that
-    prior routine. This matches how [compile] advances backend state only in the returned context.
-*)
+    [Context.t] are independent siblings, even if they access the same nodes. Only routines compiled
+    from the {i returned} (child) context of a prior [compile] call can depend on that prior
+    routine. This matches how [compile] advances backend state only in the returned context. *)
 
 val routine_id : routine -> int
 (** A unique integer identifying the routine within its root context's lifetime. *)
@@ -55,9 +54,9 @@ val routine_name : routine -> string
 (** The name of the routine, derived from the backend compilation. *)
 
 val execution_deps : routine -> int list
-(** The routine IDs that must execute before this routine, derived from RAW, WAR, and WAW hazards
-    on tensor nodes at compile time. An empty list means the routine is independent of all
-    previously compiled routines in its lineage. *)
+(** The routine IDs that must execute before this routine, derived from RAW, WAR, and WAW hazards on
+    tensor nodes at compile time. An empty list means the routine is independent of all previously
+    compiled routines in its lineage. *)
 
 val can_run : t -> routine -> bool
 (** Whether all execution dependencies of the routine have been satisfied (i.e., all prerequisite

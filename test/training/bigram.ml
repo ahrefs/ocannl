@@ -11,15 +11,13 @@ module type Backend = Ir.Backend_intf.Backend
 
 (* Makemore progression — Part 1 (Bigram).
 
-   Corresponds to Karpathy's "Building makemore Part 1: bigrams". This file
-   implements the neural-network formulation directly (a single weight matrix
-   [w] producing logits via [exp (w * input + 1)], renormalized per-row to
-   probabilities). The earlier counts-only notebook step from the lecture is
-   intentionally omitted — the neural formulation already exercises the end-to-
-   end training + generation loop. Karpathy additionally adds a small
-   [0.01 * (W ** 2).mean ()] regularizer; we leave it out for clarity and the
-   loss thresholds below already accommodate the absence. See
-   [docs/makemore_tutorial.md] for the full progression. *)
+   Corresponds to Karpathy's "Building makemore Part 1: bigrams". This file implements the
+   neural-network formulation directly (a single weight matrix [w] producing logits via [exp (w *
+   input + 1)], renormalized per-row to probabilities). The earlier counts-only notebook step from
+   the lecture is intentionally omitted — the neural formulation already exercises the end-to- end
+   training + generation loop. Karpathy additionally adds a small [0.01 * (W ** 2).mean ()]
+   regularizer; we leave it out for clarity and the loss thresholds below already accommodate the
+   absence. See [docs/makemore_tutorial.md] for the full progression. *)
 
 let () =
   Utils.settings.fixed_state_for_init <- Some 13;

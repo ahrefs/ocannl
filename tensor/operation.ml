@@ -489,9 +489,9 @@ let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
            accum = Ir.Ops.Add;
            lhs = g;
            rhs = Asgns.Rev_sides { op; lhses };
-          projections = projections.Tensor.projections;
-          projections_debug = projections.Tensor.projections_debug;
-        }
+           projections = projections.Tensor.projections;
+           projections_debug = projections.Tensor.projections_debug;
+         }
   in
   Tensor.blockop ~op_label:"++^" ~spec ~delayed_vars:capture_dims ~op_asn ~grad_asn ?grad_spec rhses
 
@@ -838,10 +838,13 @@ struct
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
     let einmax1 ?label ?capture_dims spec t1 = einmax1 ?label ?capture_dims spec t1 ()
     let tropical ?label ?capture_dims spec t1 t2 = tropical ?label ?capture_dims spec t1 t2 ()
+
     let concat_sum ?label ?capture_dims ?negated spec rhses =
       concat_sum ?label ?capture_dims ?negated spec rhses ()
+
     let concat ?label ?capture_dims ?negated spec rhses =
       concat ?label ?capture_dims ?negated spec rhses ()
+
     let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()

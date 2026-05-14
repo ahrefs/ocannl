@@ -12,9 +12,7 @@ let () =
   Tensor.unsafe_reinitialize ();
 
   (* Create two input tensors with different sizes *)
-  let x1 =
-    PDSL.ndarray [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
-  in
+  let x1 = PDSL.ndarray [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let x2 = PDSL.ndarray [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
 
   (* Concatenate and apply sin for a nice differentiable function *)
@@ -54,12 +52,8 @@ let () =
   printf "\n=== Three-way Concatenation Forward and Backprop Graph Test ===\n\n%!";
   (* Create three input tensors with different sizes *)
   let x1_3 = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let x2_3 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
-  in
-  let x3_3 =
-    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
-  in
+  let x2_3 = PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
+  let x3_3 = PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
 
   (* Concatenate and apply sin *)
   let%op result3 = sin ((x1_3, x2_3, x3_3) ++^ "a; b; c => a^b^c") in
@@ -104,9 +98,7 @@ let () =
   (* One concatenated dimension is 1 to exercise Fixed_idx 0 behavior. *)
   let x1_u = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let x2_u = PDSL.ndarray [| 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] () in
-  let x3_u =
-    PDSL.ndarray [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
-  in
+  let x3_u = PDSL.ndarray [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
 
   let%op result_u = sin ((x1_u, x2_u, x3_u) ++^ "a; b; c => a^b^c") in
   let%op loss_u = result_u ++ "...|... => 0" in
@@ -153,9 +145,7 @@ let () =
   printf "\n=== Nested Concatenation Test ===\n\n%!";
   (* Concatenate results of concatenations: (a^b)^c *)
   let n1 = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let n2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
-  in
+  let n2 = PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let n3 = PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
 
   (* First concatenate n1 and n2, then concatenate with n3 *)
@@ -197,9 +187,7 @@ let () =
   printf "\n=== Boundary Unit Dim: First Component Dim 1 ===\n\n%!";
   (* First component has dim 1 (boundary position) *)
   let b1 = PDSL.ndarray [| 1.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] () in
-  let b2 =
-    PDSL.ndarray [| 2.0; 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
-  in
+  let b2 = PDSL.ndarray [| 2.0; 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let b3 = PDSL.ndarray [| 5.0; 6.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
 
   let%op result_b1 = sin ((b1, b2, b3) ++^ "a; b; c => a^b^c") in
@@ -236,9 +224,7 @@ let () =
   printf "\n=== Boundary Unit Dim: Last Component Dim 1 ===\n\n%!";
   (* Last component has dim 1 (boundary position) *)
   let l1 = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let l2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
-  in
+  let l2 = PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let l3 = PDSL.ndarray [| 6.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] () in
 
   let%op result_l = sin ((l1, l2, l3) ++^ "a; b; c => a^b^c") in

@@ -291,8 +291,7 @@ let%track4_sexp to_low_level code =
       Array.fold2_exn projections.product_space projections.product_iterators
         ~init:(Map.empty (module Indexing.Symbol))
         ~f:(fun acc ds its ->
-          List.fold2_exn ds its ~init:acc ~f:(fun acc d iter ->
-              Map.set acc ~key:iter ~data:d))
+          List.fold2_exn ds its ~init:acc ~f:(fun acc d iter -> Map.set acc ~key:iter ~data:d))
     in
     let concat_offset_for syms active =
       let _, offset =
@@ -307,8 +306,8 @@ let%track4_sexp to_low_level code =
       (* Create a substitution from product iterators to loop iterators. Fresh loop symbols are
          needed because product_iterators may be shared across different operations/tensors, but
          each lowered operation needs private loop symbols to avoid conflicts in low_level.ml's
-         symbol-to-tensor tracking.
-         Concat offsets are computed per Concat index using symbol order. *)
+         symbol-to-tensor tracking. Concat offsets are computed per Concat index using symbol
+         order. *)
       let exception Empty_block in
       let block_iters = Array.of_list_rev block_iters in
       let concat_syms_opt =
@@ -347,9 +346,9 @@ let%track4_sexp to_low_level code =
                   | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
             in
             Indexing.Affine { symbols; offset }
-        | Indexing.Concat syms ->
-            (* For Block lowering: find the active component (in block_iters) and resolve to it
-               with the appropriate offset based on Concat symbol order. *)
+        | Indexing.Concat syms -> (
+            (* For Block lowering: find the active component (in block_iters) and resolve to it with
+               the appropriate offset based on Concat symbol order. *)
             let active =
               List.find_mapi syms ~f:(fun _i s ->
                   if Array.mem ~equal:Indexing.equal_symbol block_iters s then
@@ -360,13 +359,14 @@ let%track4_sexp to_low_level code =
                     | _ -> None
                   else None)
             in
-            (match active with
+            match active with
             | Some (s', 0) -> Indexing.Iterator s'
             | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
             | None ->
                 raise
                 @@ Utils.User_error
-                     "Concat index could not be resolved to an active component during Block lowering")
+                     "Concat index could not be resolved to an active component during Block \
+                      lowering")
       in
       try
         let lhs_idcs : Indexing.axis_index array =
@@ -449,8 +449,8 @@ let%track4_sexp to_low_level code =
       let fetch_op = Constant neutral_value in
       Low_level.Seq (loop (Fetch { array = lhs; fetch_op; dims }), for_loops_with_resets)
     else for_loops_with_resets
-  and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections :
-      Low_level.t =
+  and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
+      =
     let projections : Indexing.projections = Lazy.force projections in
     let all_prod_iters =
       Array.to_list projections.product_iterators
@@ -466,15 +466,13 @@ let%track4_sexp to_low_level code =
     in
     let target_needs_init =
       Array.map target_projections ~f:(fun proj ->
-          initialize_neutral
-          && not (Indexing.is_surjective proj && Indexing.is_injective proj))
+          initialize_neutral && not (Indexing.is_surjective proj && Indexing.is_injective proj))
     in
     let iter_sizes =
       Array.fold2_exn projections.product_space projections.product_iterators
         ~init:(Map.empty (module Indexing.Symbol))
         ~f:(fun acc ds its ->
-          List.fold2_exn ds its ~init:acc ~f:(fun acc d iter ->
-              Map.set acc ~key:iter ~data:d))
+          List.fold2_exn ds its ~init:acc ~f:(fun acc d iter -> Map.set acc ~key:iter ~data:d))
     in
     let concat_offset_for syms active =
       let _, offset =
@@ -523,7 +521,7 @@ let%track4_sexp to_low_level code =
                   | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
             in
             Indexing.Affine { symbols; offset }
-        | Indexing.Concat syms ->
+        | Indexing.Concat syms -> (
             (* For Rev_sides lowering: find the active component and resolve with offset *)
             let active =
               List.find_mapi syms ~f:(fun _i s ->
@@ -535,18 +533,18 @@ let%track4_sexp to_low_level code =
                     | _ -> None
                   else None)
             in
-            (match active with
+            match active with
             | Some (s', 0) -> Indexing.Iterator s'
             | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
             | None ->
                 raise
                 @@ Utils.User_error
-                     "Concat index could not be resolved to an active component during Rev_sides lowering")
+                     "Concat index could not be resolved to an active component during Rev_sides \
+                      lowering")
       in
       let target_tn_exn = function
         | Node tn -> tn
-        | Merge_buffer _ ->
-            raise @@ Utils.User_error "Rev_sides cannot write to merge buffers"
+        | Merge_buffer _ -> raise @@ Utils.User_error "Rev_sides cannot write to merge buffers"
       in
       try
         let rhs_idcs : Indexing.axis_index array =
@@ -572,7 +570,8 @@ let%track4_sexp to_low_level code =
         let rhs2 = apply_op op [| rhs_ll |] in
         let target_tn = target_tn_exn target_buf in
         if initialize_neutral && target_can_skip.(i) then set target_tn lhs_idcs rhs2
-        else set target_tn lhs_idcs @@ apply_op (Ops.Binop accum) [| get target_buf lhs_idcs; rhs2 |]
+        else
+          set target_tn lhs_idcs @@ apply_op (Ops.Binop accum) [| get target_buf lhs_idcs; rhs2 |]
       with Empty_block -> Low_level.Noop
     in
     let rec for_loop block_iters rev_iters = function
@@ -616,14 +615,16 @@ let%track4_sexp to_low_level code =
               | Merge_buffer _ ->
                   raise @@ Utils.User_error "Rev_sides cannot initialize merge buffers"
             in
-            Some (Fetch { array; fetch_op = Constant neutral_value; dims = lazy projections.rhs_dims.(i) }))
+            Some
+              (Fetch
+                 { array; fetch_op = Constant neutral_value; dims = lazy projections.rhs_dims.(i) }))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets
     else Low_level.unflat_lines (List.map init_ops ~f:loop @ [ for_loops_with_resets ])
   and loop (code : t) : Low_level.t =
     match code with
-    | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } ->
+    | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } -> (
         let op, rhses =
           match rhs with
           | Unop { op; rhs } -> (Ops.Unop op, [| rhs |])
@@ -632,7 +633,7 @@ let%track4_sexp to_low_level code =
           | Block { op; rhses } -> (Ops.Unop op, rhses)
           | Rev_sides { op; lhses } -> (Ops.Unop op, lhses)
         in
-        (match rhs with
+        match rhs with
         | Rev_sides _ -> loop_accum_rev ~initialize_neutral ~accum ~op ~lhs ~lhses:rhses projections
         | _ -> loop_accum ~initialize_neutral ~accum ~op ~lhs ~rhses projections)
     | Set_vec_unop { op; lhs; rhs; projections; _ } ->

@@ -23,27 +23,26 @@ type backend_wrapper =
     }
       -> backend_wrapper
 
-(** Immutable compile-time frontier for execution dependency tracking.
-    Each context carries its own frontier; only the context returned by [compile]
-    receives the updated frontier. The original context is unchanged.
-    This ensures that sibling compiles (from the same context) produce independent routines. *)
 type compile_frontier = {
   last_writer : int Map.M(Tn).t;
       (** For each tnode, the routine_id of the most recent routine that writes it. *)
   last_readers : Set.M(Int).t Map.M(Tn).t;
       (** For each tnode, the set of routine_ids that read it since the last write. *)
 }
+(** Immutable compile-time frontier for execution dependency tracking. Each context carries its own
+    frontier; only the context returned by [compile] receives the updated frontier. The original
+    context is unchanged. This ensures that sibling compiles (from the same context) produce
+    independent routines. *)
 
-(** Shared mutable state for execution tracking, allocated once per root context.
-    Shared by reference across all contexts derived from the same root. *)
 type execution_ledger = {
   mutable next_id : int;
   routine_names : string Hashtbl.M(Int).t;
   mutable executed : Set.M(Int).t;
 }
+(** Shared mutable state for execution tracking, allocated once per root context. Shared by
+    reference across all contexts derived from the same root. *)
 
-let empty_frontier =
-  { last_writer = Map.empty (module Tn); last_readers = Map.empty (module Tn) }
+let empty_frontier = { last_writer = Map.empty (module Tn); last_readers = Map.empty (module Tn) }
 
 let create_ledger () =
   { next_id = 0; routine_names = Hashtbl.create (module Int); executed = Set.empty (module Int) }
@@ -74,7 +73,6 @@ let context r = r.context
 let routine_id r = r.routine_id
 let routine_name r = r.name
 let execution_deps r = Set.to_list r.execution_deps
-
 let can_run ctx routine = Set.is_subset routine.execution_deps ~of_:ctx.ledger.executed
 
 (** Create a context from a backend name *)
@@ -140,9 +138,9 @@ let compile ctx comp bindings =
   let id = ctx.ledger.next_id in
   ctx.ledger.next_id <- id + 1;
 
-  (* Use backend routine's precise access sets for dependency tracking.
-     backend_routine.inputs = materialized read-only and read-before-write nodes.
-     backend_routine.outputs = all materialized written-to nodes. *)
+  (* Use backend routine's precise access sets for dependency tracking. backend_routine.inputs =
+     materialized read-only and read-before-write nodes. backend_routine.outputs = all materialized
+     written-to nodes. *)
   let backend_inputs = backend_routine.inputs in
   let backend_outputs = backend_routine.outputs in
   let frontier = ctx.frontier in
@@ -229,8 +227,8 @@ let run ctx routine =
      let dep_names =
        Set.to_list missing_deps
        |> List.filter_map ~f:(fun dep_id ->
-              Option.map (Hashtbl.find ctx.ledger.routine_names dep_id) ~f:(fun n ->
-                  Printf.sprintf "%s (id=%d)" n dep_id))
+           Option.map (Hashtbl.find ctx.ledger.routine_names dep_id) ~f:(fun n ->
+               Printf.sprintf "%s (id=%d)" n dep_id))
        |> String.concat ~sep:", "
      in
      failwith

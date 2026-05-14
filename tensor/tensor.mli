@@ -249,8 +249,8 @@ val iter_embedded : f:(tn -> unit) -> t -> unit
 
 val bump_next_id : int -> unit
 (** [bump_next_id id] ensures the next allocated tensor ID will be strictly greater than [id].
-    Called after loading tensors from a checkpoint file to prevent ID collisions with
-    subsequently created tensors. *)
+    Called after loading tensors from a checkpoint file to prevent ID collisions with subsequently
+    created tensors. *)
 
 val get_next_id : unit -> int
 (** [get_next_id ()] returns the next tensor ID that will be allocated by the session. *)

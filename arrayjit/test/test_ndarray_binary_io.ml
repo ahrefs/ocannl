@@ -13,7 +13,7 @@ let test_round_trip_prec prec_name prec init_f =
     for j = 0 to 3 do
       idx.(0) <- i;
       idx.(1) <- j;
-      init_f nd1 idx (i * 4 + j)
+      init_f nd1 idx ((i * 4) + j)
     done
   done;
   (* Write payload to file *)
@@ -31,22 +31,18 @@ let test_round_trip_prec prec_name prec init_f =
 
 let test_padded () =
   let prec = Ops.single in
-  let padding =
-    Some ([| Ops.{ left = 1; right = 1 }; Ops.{ left = 0; right = 2 } |], Some 0.0)
-  in
+  let padding = Some ([| Ops.{ left = 1; right = 1 }; Ops.{ left = 0; right = 2 } |], Some 0.0) in
   (* Padded dims: 2+1+1=4 x 3+0+2=5, logical: 2x3 *)
   let dims = [| 4; 5 |] in
   let nd1 = Nd.create_array ~debug:"padded" prec ~dims ~padding in
-  let padding_arr =
-    [| Ops.{ left = 1; right = 1 }; Ops.{ left = 0; right = 2 } |]
-  in
+  let padding_arr = [| Ops.{ left = 1; right = 1 }; Ops.{ left = 0; right = 2 } |] in
   (* Set logical values *)
   let idx = Array.create ~len:2 0 in
   for i = 0 to 1 do
     for j = 0 to 2 do
       idx.(0) <- i;
       idx.(1) <- j;
-      Nd.set_from_float ~padding:padding_arr nd1 idx (Float.of_int (i * 3 + j + 1))
+      Nd.set_from_float ~padding:padding_arr nd1 idx (Float.of_int ((i * 3) + j + 1))
     done
   done;
   (* Write payload with padding *)
@@ -59,8 +55,7 @@ let test_padded () =
   Nd.read_payload_from_channel ~padding:padding_arr nd2 ic n_bytes;
   Stdlib.close_in ic;
   (* Compare logical payloads *)
-  if Nd.payloads_equal ~padding:padding_arr nd1 nd2 then
-    Stdio.printf "PASS: padded\n"
+  if Nd.payloads_equal ~padding:padding_arr nd1 nd2 then Stdio.printf "PASS: padded\n"
   else Stdio.printf "FAIL: padded\n"
 
 let () =
@@ -70,7 +65,7 @@ let () =
   test_round_trip_prec "Uint16" Ops.uint16 (fun nd idx i ->
       Nd.set_from_float nd idx (Float.of_int (i * 1000)));
   test_round_trip_prec "Int32" Ops.int32 (fun nd idx i ->
-      Nd.set_from_float nd idx (Float.of_int (i * 100000 - 500000)));
+      Nd.set_from_float nd idx (Float.of_int ((i * 100000) - 500000)));
   test_round_trip_prec "Uint32" Ops.uint32 (fun nd idx i ->
       Nd.set_from_float nd idx (Float.of_int (i * 100000)));
   test_round_trip_prec "Int64" Ops.int64 (fun nd idx i ->
@@ -89,7 +84,7 @@ let () =
       Nd.set_from_float nd idx (Float.of_int i *. 2.71828));
   (* Note: Uint4x32 uses Complex.t carrier with raw byte access *)
   test_round_trip_prec "Uint4x32" Ops.uint4x32 (fun nd idx i ->
-      Nd.set_from_float nd idx (Float.of_int (i * 7 + 3)));
+      Nd.set_from_float nd idx (Float.of_int ((i * 7) + 3)));
   (* Test padded tensor *)
   test_padded ();
   (* Clean up *)

@@ -24,9 +24,8 @@ let bos_idx = Dataprep.Names.char_index '.'
 
 (* === Data preparation === *)
 
-(** Convert a name to a fixed-length integer sequence.
-    "emma" -> [0; 5; 13; 13; 1; 0; 1; 1; ...] where 0='.' and 1=' ' (padding).
-    Returns (input_indices, target_indices) for teacher forcing. *)
+(** Convert a name to a fixed-length integer sequence. "emma" -> [0; 5; 13; 13; 1; 0; 1; 1; ...]
+    where 0='.' and 1=' ' (padding). Returns (input_indices, target_indices) for teacher forcing. *)
 let name_to_sequences name =
   let chars = '.' :: (String.to_list name @ [ '.' ]) in
   let len = List.length chars in
@@ -90,25 +89,23 @@ let () =
   let mask =
     NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ eff_seq_len ] ~i:[ eff_seq_len ] ~o:[]
       ~f:(function
-        | [| s; t |] -> if s >= t then 1. else 0.
-        | _ -> failwith "unexpected mask indices")
+        | [| s; t |] -> if s >= t then 1. else 0. | _ -> failwith "unexpected mask indices")
       ()
   in
 
-  (* === Model ===
-     Decoder-only transformer: masked self-attention + FFN with residual connections.
-     Layer norm is omitted for this small model to keep generated code compact and
-     avoid the gradient signal issue noted in fsm_transformer.ml.
-     Uses multi_head_attention with ~mask for causal masking. *)
+  (* === Model === Decoder-only transformer: masked self-attention + FFN with residual connections.
+     Layer norm is omitted for this small model to keep generated code compact and avoid the
+     gradient signal issue noted in fsm_transformer.ml. Uses multi_head_attention with ~mask for
+     causal masking. *)
   let open Nn_blocks in
   let mha = multi_head_attention ~label:[ "mha" ] ~num_heads ~d_k ~d_v () in
   let ffn = Nn_blocks.mlp ~label:[ "ffn" ] ~hid_dims:[ d_ff ] () in
   let%op build_model () =
-    fun ~train_step ~mask input ->
-      let embedded = ({ tok_embed; o = [ d_model ] } * input) + { pos_encoding } in
-      let x1 = embedded + mha ~train_step ~mask embedded in
-      let x2 = x1 + ffn x1 in
-      { w_out } * x2
+   fun ~train_step ~mask input ->
+    let embedded = ({ tok_embed; o = [ d_model ] } * input) + { pos_encoding } in
+    let x1 = embedded + mha ~train_step ~mask embedded in
+    let x2 = x1 + ffn x1 in
+    { w_out } * x2
   in
   let model = build_model () in
 
@@ -149,10 +146,9 @@ let () =
   let ctx = Train.init_params ctx bindings batch_loss in
   Train.set_on_host input_batch.value;
   Train.set_on_host target_batch.value;
-  (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25).
-     OCANNL's default uniform1 init produces all-positive weights; through the
-     transformer's Q*K^T attention scores this causes extreme values and exp overflow.
-     Same mitigation as fsm_transformer.ml. *)
+  (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25). OCANNL's default uniform1
+     init produces all-positive weights; through the transformer's Q*K^T attention scores this
+     causes extreme values and exp overflow. Same mitigation as fsm_transformer.ml. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
       Train.set_on_host tn;
@@ -170,9 +166,7 @@ let () =
   (* Compile inference routine *)
   Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_hosted;
   let infer_comp =
-    { infer_comp with
-      Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value
-    }
+    { infer_comp with Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
   in
   let ctx, infer_routine = Context.compile ctx infer_comp infer_bindings in
 
@@ -182,8 +176,7 @@ let () =
   counter_ref := 0;
   Train.set_on_host batch_loss.value;
 
-  (* === Training loop ===
-     Random baseline: ln(28) ≈ 3.33 per token, epoch sum ≈ 3.33 * n_batches.
+  (* === Training loop === Random baseline: ln(28) ≈ 3.33 per token, epoch sum ≈ 3.33 * n_batches.
      We check loss at first, middle, and last epochs. *)
   let epoch_loss_limit_first = 2.0 *. Float.of_int n_batches in
   let epoch_loss_limit_mid = 1.4 *. Float.of_int n_batches in
@@ -199,18 +192,17 @@ let () =
       epoch_loss := !epoch_loss +. batch_loss.@[0];
       Int.incr step_ref
     done;
-    if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then (
+    if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then
       let limit =
         if epoch = 0 then epoch_loss_limit_first
         else if epoch = epochs / 2 then epoch_loss_limit_mid
         else epoch_loss_limit_last
       in
-      printf "Epoch %d, loss below threshold=%b\n%!" epoch Float.(!epoch_loss < limit))
+      printf "Epoch %d, loss below threshold=%b\n%!" epoch Float.(!epoch_loss < limit)
   done;
 
-  (* === Autoregressive generation ===
-     Generate names token-by-token, sampling from the model's output distribution.
-     Uses the CDF-based sampling pattern from bigram_mlp.ml. *)
+  (* === Autoregressive generation === Generate names token-by-token, sampling from the model's
+     output distribution. Uses the CDF-based sampling pattern from bigram_mlp.ml. *)
   let set_one_hot_seq context =
     let flat = Array.create ~len:(1 * eff_seq_len * vocab_size) 0. in
     for t = 0 to eff_seq_len - 1 do
@@ -224,24 +216,23 @@ let () =
     let context = Array.create ~len:eff_seq_len pad_idx in
     context.(0) <- bos_idx;
     let rec aux pos =
-      if pos >= eff_seq_len then
+      if pos >= eff_seq_len then (
         (* Max length reached — extract what we have *)
         let name = Buffer.create 16 in
         for i = 1 to eff_seq_len - 1 do
           let c = List.nth_exn Dataprep.Names.letters_with_dot context.(i) in
           if not (Char.equal c '.' || Char.equal c ' ') then Buffer.add_char name c
         done;
-        Buffer.contents name
+        Buffer.contents name)
       else begin
         set_one_hot_seq context;
         Int.incr counter_ref;
         let _ctx = Context.run ctx infer_routine in
         let dice_value = dice.@[0] in
 
-        (* Compute softmax probabilities at position (pos-1) in the output
-           (the model predicts token at position pos given input up to pos-1). *)
-        let logits = Array.init vocab_size ~f:(fun v ->
-            infer_logits.@{[| 0; pos - 1; v |]}) in
+        (* Compute softmax probabilities at position (pos-1) in the output (the model predicts token
+           at position pos given input up to pos-1). *)
+        let logits = Array.init vocab_size ~f:(fun v -> infer_logits.@{[| 0; pos - 1; v |]}) in
         let max_logit = Array.fold logits ~init:Float.neg_infinity ~f:Float.max in
         let exp_logits = Array.map logits ~f:(fun l -> Float.exp (l -. max_logit)) in
         let sum_exp = Array.fold exp_logits ~init:0. ~f:( +. ) in
@@ -253,8 +244,7 @@ let () =
           if i >= max_i then i
           else
             let new_acc = acc +. probs.(i) in
-            if Float.(new_acc > dice_value) then i
-            else sample (i + 1) new_acc
+            if Float.(new_acc > dice_value) then i else sample (i + 1) new_acc
         in
         let sampled_idx = sample 0 0. in
         let sampled_char = List.nth_exn Dataprep.Names.letters_with_dot sampled_idx in

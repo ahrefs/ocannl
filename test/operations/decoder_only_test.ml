@@ -11,8 +11,8 @@ let () =
 
   Stdio.printf "Testing decoder_only (2-layer stack)\n";
 
-  (* decoder_only internally creates decoder_only_block instances,
-     so this exercises both functions. *)
+  (* decoder_only internally creates decoder_only_block instances, so this exercises both
+     functions. *)
   let stack =
     Ocannl.Nn_blocks.decoder_only ~label:[ "test_stack" ] ~num_layers:2 ~num_heads ~d_k:d_model
       ~d_v:d_model ~d_ff ()
@@ -26,8 +26,7 @@ let () =
   let mask =
     NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ seq_len ] ~i:[ seq_len ] ~o:[]
       ~f:(function
-        | [| s; t |] -> if s >= t then 1. else 0.
-        | _ -> failwith "unexpected mask indices")
+        | [| s; t |] -> if s >= t then 1. else 0. | _ -> failwith "unexpected mask indices")
       ()
   in
 

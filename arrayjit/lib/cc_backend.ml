@@ -326,7 +326,8 @@ end
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
   let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
     let procs = [| lowered |]
-  end)) in
+  end))
+  in
   let idx_params = Indexing.bound_symbols bindings in
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   let kparams, proc_doc = Syntax.compile_proc ~name idx_params lowered in
@@ -346,7 +347,8 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
     procedure option array =
   let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
     let procs = Array.filter_opt lowereds
-  end)) in
+  end))
+  in
   (* FIXME: do we really want all of them, or only the used ones? *)
   let idx_params = Indexing.bound_symbols bindings in
   let base_name =

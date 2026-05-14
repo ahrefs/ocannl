@@ -269,7 +269,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       | Indexing.Concat _syms ->
           (* Concat should be eliminated during lowering before we get here *)
           invalid_arg
-            "BUG: Concat index encountered during virtualization - should have been eliminated during lowering")
+            "BUG: Concat index encountered during virtualization - should have been eliminated \
+             during lowering")
   in
   let rec loop_proc ~first_visit env llc =
     let loop = loop_proc ~first_visit env in
@@ -308,9 +309,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
-        (* Track which tensor uses which symbol. When multiple tensors share a symbol
-           (e.g., in Block/concat lowering), mark both as complex to disable virtualization.
-           See TODO(#134): this prevents multiple virtual arrays from sharing for loops. *)
+        (* Track which tensor uses which symbol. When multiple tensors share a symbol (e.g., in
+           Block/concat lowering), mark both as complex to disable virtualization. See TODO(#134):
+           this prevents multiple virtual arrays from sharing for loops. *)
         let track_symbol s =
           match Hashtbl.find reverse_node_map s with
           | None -> Hashtbl.set reverse_node_map ~key:s ~data:tn
@@ -1221,9 +1222,9 @@ let simplify_llc llc =
   if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
   result
 
-(** Alpha-equivalence comparison for CSE: compare two [scalar_t] trees ignoring concrete
-    [scope_id] integers and fresh iterator symbols, but verifying cross-reference consistency
-    via renaming maps. *)
+(** Alpha-equivalence comparison for CSE: compare two [scalar_t] trees ignoring concrete [scope_id]
+    integers and fresh iterator symbols, but verifying cross-reference consistency via renaming
+    maps. *)
 let cse_equal_scalar s1 s2 =
   let scope_renaming = Hashtbl.create (module Int) in
   let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
@@ -1250,9 +1251,7 @@ let cse_equal_scalar s1 s2 =
     | Sub_axis, Sub_axis -> true
     | Affine { symbols = syms1; offset = o1 }, Affine { symbols = syms2; offset = o2 } ->
         Int.equal o1 o2
-        && List.equal
-             (fun (c1, s1) (c2, s2) -> Int.equal c1 c2 && sym_equal s1 s2)
-             syms1 syms2
+        && List.equal (fun (c1, s1) (c2, s2) -> Int.equal c1 c2 && sym_equal s1 s2) syms1 syms2
     | Concat ss1, Concat ss2 -> List.equal sym_equal ss1 ss2
     | _ -> false
   in
@@ -1263,25 +1262,22 @@ let cse_equal_scalar s1 s2 =
     | Seq (a1, a2), Seq (b1, b2) -> equal_t a1 b1 && equal_t a2 b2
     | ( For_loop { index = i1; from_ = f1; to_ = t1; body = bd1; trace_it = tr1 },
         For_loop { index = i2; from_ = f2; to_ = t2; body = bd2; trace_it = tr2 } ) ->
-        Int.equal f1 f2 && Int.equal t1 t2 && Bool.equal tr1 tr2
-        && sym_equal i1 i2
+        Int.equal f1 f2 && Int.equal t1 t2 && Bool.equal tr1 tr2 && sym_equal i1 i2
         && equal_t bd1 bd2
     | Zero_out tn1, Zero_out tn2 -> Tn.equal tn1 tn2
     | Set { tn = tn1; idcs = i1; llsc = s1; _ }, Set { tn = tn2; idcs = i2; llsc = s2; _ } ->
-        Tn.equal tn1 tn2
-        && Array.equal idx_equal i1 i2
-        && equal_scalar s1 s2
+        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2 && equal_scalar s1 s2
     | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
     | Declare_local id1, Declare_local id2 -> ids_equal id1 id2
     | _ -> false
   and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
     match (a, b) with
-    | Local_scope { id = id1; body = b1; orig_indices = oi1 },
-      Local_scope { id = id2; body = b2; orig_indices = oi2 } ->
-        Tn.equal id1.tn id2.tn
-        && Array.equal idx_equal oi1 oi2
-        && (Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
-            equal_t b1 b2)
+    | ( Local_scope { id = id1; body = b1; orig_indices = oi1 },
+        Local_scope { id = id2; body = b2; orig_indices = oi2 } ) ->
+        Tn.equal id1.tn id2.tn && Array.equal idx_equal oi1 oi2
+        &&
+        (Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
+         equal_t b1 b2)
     | Get_local id1, Get_local id2 -> ids_equal id1 id2
     | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
     | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
@@ -1300,9 +1296,9 @@ let cse_equal_scalar s1 s2 =
   in
   equal_scalar s1 s2
 
-(** Eliminates common subexpressions within each statement's scalar expression tree.
-    Replaces duplicate [Local_scope] nodes (structurally identical modulo [scope_id])
-    with [Get_local] references to the first occurrence. *)
+(** Eliminates common subexpressions within each statement's scalar expression tree. Replaces
+    duplicate [Local_scope] nodes (structurally identical modulo [scope_id]) with [Get_local]
+    references to the first occurrence. *)
 let eliminate_common_subexpressions llc =
   (* CSE operates within a single scalar expression tree per statement. *)
   let cse_scalar llsc =
@@ -1310,7 +1306,7 @@ let eliminate_common_subexpressions llc =
     let seen : (scalar_t * scope_id) list ref = ref [] in
     let rec loop_scalar (llsc : scalar_t) : scalar_t =
       match llsc with
-      | Local_scope { id; body; orig_indices } ->
+      | Local_scope { id; body; orig_indices } -> (
           (* Save seen list: inner definitions must not leak to sibling subtrees *)
           let saved_seen = !seen in
           (* First CSE within the body (bottom-up: inner scopes first) *)
@@ -1323,7 +1319,7 @@ let eliminate_common_subexpressions llc =
             List.find_map !seen ~f:(fun (prev_scalar, prev_id) ->
                 if cse_equal_scalar prev_scalar result then Some prev_id else None)
           in
-          (match found with
+          match found with
           | Some existing_id -> Get_local existing_id
           | None ->
               seen := (result, id) :: !seen;
@@ -1341,8 +1337,8 @@ let eliminate_common_subexpressions llc =
       | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
       | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
       | Set { tn; idcs; llsc; debug } ->
-          (* Each statement gets its own scope: codegen wraps in { } when local defs exist,
-             so sibling statements can't reference each other's Local_scope declarations. *)
+          (* Each statement gets its own scope: codegen wraps in { } when local defs exist, so
+             sibling statements can't reference each other's Local_scope declarations. *)
           let saved = !seen in
           let llsc = loop_scalar llsc in
           seen := saved;
@@ -1402,9 +1398,9 @@ let collect_local_scopes_in_stmt (stmt : t) : (scalar_t * scope_id) list =
   | Set_local (_, llsc) -> collect_local_scopes_in_scalar llsc
   | _ -> []
 
-(** Replace all [Local_scope] nodes alpha-equivalent to [target] with [Get_local replacement]
-    in a scalar expression tree. Also remaps [Get_local] nodes whose [scope_id] is in
-    [stale_ids] to point to [replacement], since their original [Local_scope] is being hoisted. *)
+(** Replace all [Local_scope] nodes alpha-equivalent to [target] with [Get_local replacement] in a
+    scalar expression tree. Also remaps [Get_local] nodes whose [scope_id] is in [stale_ids] to
+    point to [replacement], since their original [Local_scope] is being hoisted. *)
 let replace_local_scope_in_scalar ~target ~(replacement : scope_id) ~(stale_ids : scope_id list)
     (llsc : scalar_t) : scalar_t =
   let rec loop (llsc : scalar_t) : scalar_t =
@@ -1478,8 +1474,7 @@ let hoist_shared_locals (stmts : t list) : t list =
   (* Step 1: Collect all Local_scope candidates with their statement indices *)
   let candidates =
     List.concat_mapi stmts ~f:(fun stmt_idx stmt ->
-        List.map (collect_local_scopes_in_stmt stmt) ~f:(fun (scalar, id) ->
-            (stmt_idx, scalar, id)))
+        List.map (collect_local_scopes_in_stmt stmt) ~f:(fun (scalar, id) -> (stmt_idx, scalar, id)))
   in
   (* Step 2: Group by alpha-equivalence *)
   (* Each group is: (representative_scalar, representative_id, list of stmt indices,
@@ -1517,10 +1512,10 @@ let hoist_shared_locals (stmts : t list) : t list =
           | Local_scope { body; _ } -> reads_of_body body
           | _ -> Set.empty (module Tn)
         in
-        (* Check for writes between first_user and last_user that could invalidate hoisting.
-           Include writes from ALL statements (including user statements) from first_user up to
-           but not including last_user. User statements perform tensor writes after evaluating
-           their Local_scope, so earlier users' writes can affect what later users would read. *)
+        (* Check for writes between first_user and last_user that could invalidate hoisting. Include
+           writes from ALL statements (including user statements) from first_user up to but not
+           including last_user. User statements perform tensor writes after evaluating their
+           Local_scope, so earlier users' writes can affect what later users would read. *)
         let safe =
           let hazard_writes = ref (Set.empty (module Tn)) in
           for i = first_user to last_user - 1 do
@@ -1534,8 +1529,8 @@ let hoist_shared_locals (stmts : t list) : t list =
             match target_scalar with Local_scope { body; _ } -> body | _ -> assert false
           in
           (* Replace all occurrences in all user statements, also remapping stale Get_local
-             references that were created by intra-statement CSE pointing at Local_scope nodes
-             that are now being hoisted away. *)
+             references that were created by intra-statement CSE pointing at Local_scope nodes that
+             are now being hoisted away. *)
           List.iter user_indices ~f:(fun idx ->
               stmts.(idx) <-
                 replace_local_scope_in_stmt ~target:target_scalar ~replacement:canonical_id
@@ -1543,9 +1538,7 @@ let hoist_shared_locals (stmts : t list) : t list =
           (* Record insertion: Declare_local + body before first user *)
           insertions := (first_user, [ Declare_local canonical_id; body ]) :: !insertions));
     (* Apply insertions (sorted by position, last first to preserve indices) *)
-    let insertions =
-      List.sort !insertions ~compare:(fun (a, _) (b, _) -> Int.descending a b)
-    in
+    let insertions = List.sort !insertions ~compare:(fun (a, _) (b, _) -> Int.descending a b) in
     let result = Array.to_list stmts in
     let result =
       List.fold insertions ~init:result ~f:(fun acc (pos, prefix) ->
@@ -1555,10 +1548,10 @@ let hoist_shared_locals (stmts : t list) : t list =
     in
     result
 
-(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
-    When two or more sibling statements share an alpha-equivalent [Local_scope] node, the
-    computation is extracted as a [Declare_local] + body preceding the first user, and all
-    occurrences are replaced with [Get_local]. *)
+(** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope. When
+    two or more sibling statements share an alpha-equivalent [Local_scope] node, the computation is
+    extracted as a [Declare_local] + body preceding the first user, and all occurrences are replaced
+    with [Get_local]. *)
 let hoist_cross_statement_cse llc =
   let rec loop_proc (llc : t) : t =
     match llc with
@@ -1605,8 +1598,7 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
     virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc
   in
   let llc =
-    hoist_cross_statement_cse
-    @@ eliminate_common_subexpressions @@ simplify_llc
+    hoist_cross_statement_cse @@ eliminate_common_subexpressions @@ simplify_llc
     @@ cleanup_virtual_llc reverse_node_map ~static_indices
     @@ virtual_llc_result
   in

@@ -7,16 +7,22 @@ module LL = Ir.Low_level
 let () =
   (* Create tensor nodes using the real Tnode.create API *)
   let tn_src =
-    Tn.create (Tn.Default Ops.single) ~id:1 ~label:[ "src" ] ~unpadded_dims:(lazy [| 4 |])
-      ~padding:(lazy None) ()
+    Tn.create (Tn.Default Ops.single) ~id:1 ~label:[ "src" ]
+      ~unpadded_dims:(lazy [| 4 |])
+      ~padding:(lazy None)
+      ()
   in
   let tn_out1 =
-    Tn.create (Tn.Default Ops.single) ~id:2 ~label:[ "out1" ] ~unpadded_dims:(lazy [| 1 |])
-      ~padding:(lazy None) ()
+    Tn.create (Tn.Default Ops.single) ~id:2 ~label:[ "out1" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
   in
   let tn_out2 =
-    Tn.create (Tn.Default Ops.single) ~id:3 ~label:[ "out2" ] ~unpadded_dims:(lazy [| 1 |])
-      ~padding:(lazy None) ()
+    Tn.create (Tn.Default Ops.single) ~id:3 ~label:[ "out2" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
   in
 
   (* Build scope_id records directly (type exposed in .mli) *)
@@ -99,14 +105,13 @@ let () =
       merge_node = None;
     }
   in
-  let module Syntax =
-    Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
-      type buffer_ptr = unit Ctypes.ptr
+  let module Syntax = Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
+    type buffer_ptr = unit Ctypes.ptr
 
-      let use_host_memory = None
-      let procs = [| optimized |]
-      let full_printf_support = true
-    end))
+    let use_host_memory = None
+    let procs = [| optimized |]
+    let full_printf_support = true
+  end))
   in
   Utils.set_log_level 2;
   Utils.settings.debug_log_from_routines <- true;
