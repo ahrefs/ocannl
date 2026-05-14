@@ -1978,7 +1978,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let symbol_to_proj =
     Map.of_alist_exn
       (module Idx.Symbol)
-      (Row.product_dim_iterators proj_env |> List.map ~f:(fun (p, d, s) -> (s, (p, d))))
+      (Row.product_dim_iterators proj_env
+      |> Utils.unique_keep_first ~equal:(fun (_, _, s1) (_, _, s2) -> Idx.equal_symbol s1 s2)
+      |> List.map ~f:(fun (p, d, s) -> (s, (p, d))))
   in
   (* Build connected components from Concat indices. Symbols that appear together in a Concat must
      be iterated together. We use union-find to group symbols into connected components. Include
