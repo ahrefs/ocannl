@@ -1,0 +1,16 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+alloc_array Local         -> Private
+alloc_array Device_only   -> Private
+alloc_array On_device     -> Private
+alloc_array Hosted        -> Shared
+alloc_array Materialized  -> Shared
+alloc_array (no mode)     -> Shared
+alloc_zeros Device_only   -> Private
+alloc_buffer Hosted       -> Shared
+alloc_buffer Device_only  -> Private
+alloc_buffer reuse same-mode keeps ptr     -> true
+alloc_buffer reuse mismatched-mode is fresh -> true
+alloc_buffer reuse mismatched-mode storage  -> Private
+from_host/to_host private round-trip preserves values -> true
+alloc_zeros private buffer reads back zeros -> true

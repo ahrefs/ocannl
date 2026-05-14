@@ -103,7 +103,11 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | { Tn.array = (lazy (Some hosted)); _ }, None ->
         let dims = Lazy.force tn.dims in
         (* Use alloc_array since we're immediately copying from host *)
-        let dst = Backend.alloc_array (Lazy.force tn.prec) ~dims ctx.stream in
+        let dst =
+          Backend.alloc_array
+            ?mode:(Option.map tn.memory_mode ~f:fst)
+            (Lazy.force tn.prec) ~dims ctx.stream
+        in
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
         (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
@@ -213,7 +217,11 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         | None ->
             let dims = Lazy.force tn.dims in
             (* Use alloc_array since we're immediately copying from another device *)
-            let d_arr = Backend.alloc_array (Lazy.force tn.prec) ~dims dst.stream in
+            let d_arr =
+              Backend.alloc_array
+                ?mode:(Option.map tn.memory_mode ~f:fst)
+                (Lazy.force tn.prec) ~dims dst.stream
+            in
             Backend.(
               device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
                 ~src);
@@ -395,7 +403,10 @@ struct
             in
             if allocated_capacity < size_in_bytes then
               s.allocated_buffer <-
-                Some (alloc_buffer ?old_buffer:s.allocated_buffer ~size_in_bytes dst.stream);
+                Some
+                  (alloc_buffer ?old_buffer:s.allocated_buffer
+                     ?mode:(Option.map tn.Tnode.memory_mode ~f:fst)
+                     ~size_in_bytes dst.stream);
             let merge_ptr = (Option.value_exn ~here:[%here] s.allocated_buffer).ptr in
             s.merge_buffer := s.allocated_buffer;
             buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
@@ -489,10 +500,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           Utils.settings.automatic_host_transfers && Tn.known_constant key
           && match key.array with (lazy (Some _)) -> true | _ -> false
         in
+        let mode = Option.map key.memory_mode ~f:fst in
         let dst_ptr =
           if will_copy_from_host || node.Low_level.zero_initialized_by_code then
-            alloc_array (Lazy.force key.prec) ~dims stream
-          else alloc_zeros (Lazy.force key.prec) ~dims stream
+            alloc_array ?mode (Lazy.force key.prec) ~dims stream
+          else alloc_zeros ?mode (Lazy.force key.prec) ~dims stream
         in
         (if will_copy_from_host then
            match key.array with

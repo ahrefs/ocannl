@@ -50,11 +50,13 @@ module No_device_buffer_and_copying () :
     Stdlib.Gc.finalise finalize ptr;
     ptr
 
-  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (() : unit) : buffer_ptr =
+  let%track7_sexp alloc_array ?mode:_ (prec : Ops.prec) ~(dims : int array) (() : unit) :
+      buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     alloc_impl ~size_in_bytes
 
-  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (() : unit) : buffer_ptr =
+  let%track7_sexp alloc_zeros ?mode:_ (prec : Ops.prec) ~(dims : int array) (() : unit) :
+      buffer_ptr =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let ptr = alloc_impl ~size_in_bytes in
     (* Zero-initialize the allocated memory *)
@@ -65,7 +67,7 @@ module No_device_buffer_and_copying () :
        done);
     ptr
 
-  let%track7_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option)
+  let%track7_sexp alloc_buffer ?(old_buffer : buffer_ptr Backend_intf.buffer option) ?mode:_
       ~(size_in_bytes : int) (() : unit) : buffer =
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
@@ -302,10 +304,10 @@ module Alloc_buffer_ignore_stream
 struct
   include Device_types
 
-  let alloc_buffer ?old_buffer ~size_in_bytes _stream =
-    Backend.alloc_buffer ?old_buffer ~size_in_bytes ()
+  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _stream =
+    Backend.alloc_buffer ?old_buffer ?mode ~size_in_bytes ()
 
-  let alloc_array prec ~dims _stream = Backend.alloc_array prec ~dims ()
-  let alloc_zeros prec ~dims _stream = Backend.alloc_zeros prec ~dims ()
+  let alloc_array ?mode prec ~dims _stream = Backend.alloc_array ?mode prec ~dims ()
+  let alloc_zeros ?mode prec ~dims _stream = Backend.alloc_zeros ?mode prec ~dims ()
   let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
 end

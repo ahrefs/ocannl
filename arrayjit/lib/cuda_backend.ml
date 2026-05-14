@@ -59,7 +59,7 @@ module Alloc_buffer = struct
   include Device_stream
 
   (* It's not actually used, but it's required by the [Backend] interface. *)
-  let alloc_buffer ?old_buffer ~size_in_bytes stream =
+  let alloc_buffer ?old_buffer ?mode:_ ~size_in_bytes stream =
     match old_buffer with
     | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
     | Some { ptr; _ } ->
@@ -70,12 +70,12 @@ module Alloc_buffer = struct
         set_ctx stream.device.dev.primary_context;
         { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
 
-  let alloc_array prec ~dims stream =
+  let alloc_array ?mode:_ prec ~dims stream =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     Cu.Deviceptr.mem_alloc ~size_in_bytes
 
-  let alloc_zeros prec ~dims stream =
+  let alloc_zeros ?mode:_ prec ~dims stream =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     set_ctx stream.device.dev.primary_context;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in

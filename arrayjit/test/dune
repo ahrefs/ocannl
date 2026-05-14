@@ -48,3 +48,25 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
+
+; Built and run only on macOS, where the Metal backend (the `metal` package)
+; is available; skipped on other systems via `enabled_if`.
+(test
+ (name test_metal_storage_mode)
+ (package arrayjit)
+ (enabled_if
+  (= %{system} macosx))
+ (modules test_metal_storage_mode)
+ (deps ocannl_config)
+ (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
+
+; Exercises the real Metal allocator paths and private-buffer host transfers;
+; macOS-only, and requires a working Metal device at run time.
+(test
+ (name test_metal_alloc)
+ (package arrayjit)
+ (enabled_if
+  (= %{system} macosx))
+ (modules test_metal_alloc)
+ (deps ocannl_config)
+ (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))

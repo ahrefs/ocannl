@@ -28,9 +28,15 @@ module type Alloc_buffer = sig
 
   type stream
 
-  val alloc_buffer : ?old_buffer:buffer -> size_in_bytes:int -> stream -> buffer
-  val alloc_array : Ops.prec -> dims:int array -> stream -> buffer_ptr
-  val alloc_zeros : Ops.prec -> dims:int array -> stream -> buffer_ptr
+  (** The optional [?mode] argument carries the tnode's memory mode so that backends can pick a
+      storage mode that matches whether the CPU needs to access the buffer (used by the Metal
+      backend to select private vs. shared storage). Backends that do not care ignore it. *)
+
+  val alloc_buffer :
+    ?old_buffer:buffer -> ?mode:Tnode.memory_mode -> size_in_bytes:int -> stream -> buffer
+
+  val alloc_array : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> stream -> buffer_ptr
+  val alloc_zeros : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> stream -> buffer_ptr
   val free_buffer : (stream -> buffer_ptr -> unit) option
 end
 

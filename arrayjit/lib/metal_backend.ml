@@ -64,35 +64,71 @@ let track_allocation (buffer : Me.Buffer.t) =
   Stdlib.Gc.finalise (fun _ -> ignore (Atomic.fetch_and_add allocated_memory (-size))) buffer;
   ignore (Atomic.fetch_and_add allocated_memory size)
 
+(* Use Shared storage for unified memory, WriteCombined for CPU writes, Tracked hazards. Shared
+   buffers are accessible by both the CPU and the GPU. *)
+let shared_resource_options =
+  Me.ResourceOptions.(
+    storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_tracked)
+
+(* Private storage is GPU-only: the CPU cannot map it, so there is no CPU cache mode to set.
+   Choosing private for GPU-only buffers avoids CPU cache-coherency traffic and lets Metal pick a
+   GPU-friendly layout. *)
+let private_resource_options =
+  Me.ResourceOptions.(storage_mode_private + hazard_tracking_mode_tracked)
+
+(* GPU-only tnodes ([Local], [Device_only], [On_device]) never need CPU access, so their buffers
+   can use private storage. Every other mode -- [Hosted _], [Materialized], [Effectively_constant],
+   the partially-resolved [Never_virtual], and the [None] default -- may be read or written by the
+   CPU (host initialization, host read-back, or [use_host_memory] wrapping) and must stay shared.
+   [Virtual] tnodes are inlined and never reach the allocator; they map to shared defensively. *)
+let storage_mode_for_memory_mode : Tn.memory_mode option -> Me.Resource.StorageMode.t = function
+  | Some (Local | Device_only | On_device) -> Me.Resource.StorageMode.Private
+  | Some (Effectively_constant | Virtual | Never_virtual | Materialized | Hosted _) | None ->
+      Me.Resource.StorageMode.Shared
+
+let resource_options_for_mode (mode : Tn.memory_mode option) =
+  match storage_mode_for_memory_mode mode with
+  | Me.Resource.StorageMode.Private -> private_resource_options
+  | Shared | Managed | Memoryless -> shared_resource_options
+
 module Alloc_buffer = struct
   include Device_stream
 
-  let resource_options =
-    (* Use Shared storage for unified memory, WriteCombined for CPU writes, Tracked hazards *)
-    Me.ResourceOptions.(
-      storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_tracked)
-
-  let alloc_buffer ?old_buffer ~size_in_bytes (stream : stream) =
+  let alloc_buffer ?old_buffer ?mode ~size_in_bytes (stream : stream) =
     let device = stream.device.dev in
+    let requested_storage = storage_mode_for_memory_mode mode in
     match old_buffer with
-    | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
+    | Some ({ size_in_bytes = old_size; ptr; _ } as buffer)
+      when size_in_bytes <= old_size
+           && Poly.equal requested_storage
+                (Me.Resource.get_storage_mode (Me.Buffer.super ptr)) ->
+        (* Only reuse the old buffer when its storage mode matches the requested one: storage mode
+           is fixed at allocation time, so a shared buffer must not be handed back for a private
+           request, nor vice versa. *)
+        buffer
     | _ ->
         (* ARC should handle the old buffer *)
-        let new_buffer_obj = Me.Buffer.on_device device ~length:size_in_bytes resource_options in
+        let new_buffer_obj =
+          Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
+        in
         track_allocation new_buffer_obj;
         { ptr = new_buffer_obj; size_in_bytes }
 
-  let%track7_sexp alloc_array (prec : Ops.prec) ~(dims : int array) (stream : stream) =
+  let%track7_sexp alloc_array ?mode (prec : Ops.prec) ~(dims : int array) (stream : stream) =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let device = stream.device.dev in
-    let buffer = Me.Buffer.on_device device ~length:size_in_bytes resource_options in
+    let buffer =
+      Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
+    in
     track_allocation buffer;
     buffer
 
-  let%track7_sexp alloc_zeros (prec : Ops.prec) ~(dims : int array) (stream : stream) =
+  let%track7_sexp alloc_zeros ?mode (prec : Ops.prec) ~(dims : int array) (stream : stream) =
     let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
     let device = stream.device.dev in
-    let buffer = Me.Buffer.on_device device ~length:size_in_bytes resource_options in
+    let buffer =
+      Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
+    in
     track_allocation buffer;
     (* Zero initialize the buffer using a blit command encoder *)
     let command_buffer = Me.CommandBuffer.on_queue stream.runner.queue in
@@ -110,7 +146,8 @@ module Alloc_buffer = struct
 end
 
 (* Functor defining the backend *)
-module Fresh () : Ir.Backend_impl.Lowered_backend = struct
+module Fresh () :
+  Ir.Backend_impl.Lowered_backend with type buffer_ptr = Me.Buffer.t = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Alloc_buffer)
 
@@ -357,9 +394,9 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let opt_alloc_merge_buffer ~size_in_bytes stream : unit =
+  let opt_alloc_merge_buffer ?mode ~size_in_bytes stream : unit =
     stream.merge_buffer :=
-      Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ~size_in_bytes stream)
+      Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ?mode ~size_in_bytes stream)
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
@@ -378,7 +415,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
     | No, Some dst_ptr -> memcpy ~dst_ptr
     | Copy, _ ->
-        opt_alloc_merge_buffer ~size_in_bytes dst.stream;
+        (* The merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode
+           classification: a GPU-only [tn] gets a private merge buffer. *)
+        opt_alloc_merge_buffer
+          ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
+          ~size_in_bytes dst.stream;
         let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
         memcpy ~dst_ptr:buffer.ptr
 
