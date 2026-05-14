@@ -321,13 +321,20 @@ module C_syntax (B : C_syntax_config) = struct
             && not (Tn.is_virtual_force tn 337 || Tn.is_materialized_force tn 338)
         | None -> false)
 
-  let rec pp_ll ?(log_set_locals = true) (c : Low_level.t) : PPrint.document =
+  (* Tensor node ids whose [Zero_out] has already been encountered during the current [pp_ll]
+     traversal. Only the *first-touch* [Zero_out tn] is made redundant by the declaration's
+     [= {0}]; any later [Zero_out tn] (e.g. in [Zero_out tn; Set tn; Zero_out tn], or any
+     [Zero_out] reached inside a loop body) is a genuine re-zero and must still emit its loop.
+     Cleared per [compile_proc]. *)
+  let zero_out_seen : int Hash_set.t = Hash_set.create (module Int)
+
+  let rec pp_ll ?(log_set_locals = true) ?(in_loop = false) (c : Low_level.t) : PPrint.document =
     let open PPrint in
     match c with
     | Low_level.Noop -> empty
     | Seq (c1, c2) ->
-        let d1 = pp_ll ~log_set_locals c1 in
-        let d2 = pp_ll ~log_set_locals c2 in
+        let d1 = pp_ll ~log_set_locals ~in_loop c1 in
+        let d2 = pp_ll ~log_set_locals ~in_loop c2 in
         (* Avoid extra hardlines if one side is empty *)
         if PPrint.is_empty d1 then d2 else if PPrint.is_empty d2 then d1 else d1 ^^ hardline ^^ d2
     | For_loop { index = i; from_; to_; body; trace_it = _ } ->
@@ -337,7 +344,7 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space ^^ string "++" ^^ pp_symbol i
           ^^ string ")"
         in
-        let body_doc = ref (pp_ll ~log_set_locals body) in
+        let body_doc = ref (pp_ll ~log_set_locals ~in_loop:true body) in
         (if Utils.debug_log_from_routines () then
            let log_doc =
              let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
@@ -348,13 +355,18 @@ module C_syntax (B : C_syntax_config) = struct
            in
            body_doc := log_doc ^^ hardline ^^ !body_doc);
         group (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body_doc) ^^ hardline ^^ rbrace)
-    | Zero_out tn when zero_out_loop_redundant tn ->
-        (* The declaration already emits [= {0}] for this array. *)
-        empty
     | Zero_out tn ->
-        pp_ll ~log_set_locals
-          (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
-               Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
+        let first_touch = not (Hash_set.mem zero_out_seen tn.Tn.id) in
+        Hash_set.add zero_out_seen tn.Tn.id;
+        if first_touch && (not in_loop) && zero_out_loop_redundant tn then
+          (* First-touch, executed once at function scope: the declaration's [= {0}] already
+             covers it. A later [Zero_out tn], or one reached inside a loop, is a real re-zero
+             and falls through to emit the zeroing loop below. *)
+          empty
+        else
+          pp_ll ~log_set_locals ~in_loop
+            (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
+                 Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
     | Set { tn; idcs; llsc; debug } ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
@@ -592,7 +604,10 @@ module C_syntax (B : C_syntax_config) = struct
           string " = " ^^ string prefix ^^ string "0" ^^ string postfix
         in
         let decl = num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi in
-        let body_doc = pp_ll ~log_set_locals:false body in
+        (* A [Local_scope] body is a nested sub-computation; conservatively treat it like a loop
+           body so a [Zero_out] reached through it is never mistaken for the function-scope
+           first-touch that the declaration's [= {0}] covers. *)
+        let body_doc = pp_ll ~log_set_locals:false ~in_loop:true body in
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
@@ -828,6 +843,7 @@ module C_syntax (B : C_syntax_config) = struct
       (string * kparam_source) list * PPrint.document =
     let open PPrint in
     current_traced_store := Some traced_store;
+    Hash_set.clear zero_out_seen;
     let kparams : (string * kparam_source) list =
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ kparams ->

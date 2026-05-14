@@ -39,3 +39,12 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
+
+(test
+ (name test_zero_out_codegen)
+ (package arrayjit)
+ (modules test_zero_out_codegen)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base stdio arrayjit.ir))

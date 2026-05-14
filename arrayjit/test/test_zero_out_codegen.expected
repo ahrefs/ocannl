@@ -1,0 +1,20 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+ void zero_out_codegen(
+    ) {
+
+  /* Local declarations and initialization. */
+  float acc_b[2] = {0};
+  float acc_a[2] = {0};
+
+  /* Main logic. */
+  acc_a[0] = (float)(7);
+  for (uint32_t i2 = 0; i2 <= 1; ++i2) {
+    acc_a[i2] = (float)(0);
+  }
+  for (uint32_t i1 = 0; i1 <= 3; ++i1) {
+    for (uint32_t i3 = 0; i3 <= 1; ++i3) {
+      acc_b[i3] = (float)(0);
+    }
+  }
+}
