@@ -198,6 +198,16 @@ let is_surjective proj =
       let product_symbol_set =
         Set.of_list (module Symbol) (Array.to_list proj.product_iterators |> List.concat)
       in
+      (* Count only LHS axes that need coverage by iterator symbols. [Fixed_idx 0] on a
+         trivial (dim <= 1) axis is already covered: there is a single position and it is
+         written. Counting such axes would spuriously fail the symbol-count check below for
+         scalar / all-dims-1 tensors, falsely reporting them as non-surjective. *)
+      let non_trivial_lhs_count =
+        Array.foldi proj.project_lhs ~init:0 ~f:(fun i acc idx ->
+            match idx with
+            | Fixed_idx 0 when proj.lhs_dims.(i) <= 1 -> acc
+            | _ -> acc + 1)
+      in
 
       (* All lhs symbols must be from product iterators (no bound symbols) *)
       if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
@@ -234,11 +244,11 @@ let is_surjective proj =
         if not check_affine_surjective then false
         else
           (* Check that we have enough unique symbols to cover all LHS dimensions *)
-          Set.length lhs_symbol_set >= Array.length proj.project_lhs
+          Set.length lhs_symbol_set >= non_trivial_lhs_count
       else
         (* Simple case: only Iterator and Fixed_idx *)
         (* Need enough unique symbols to cover all dimensions *)
-        Set.length lhs_symbol_set >= Array.length proj.project_lhs
+        Set.length lhs_symbol_set >= non_trivial_lhs_count
 
 let is_injective proj =
   let all_product_iterators =

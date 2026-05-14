@@ -1,0 +1,11 @@
+
+out_fwd (): /* out fwd */
+  for i6 = 0 to 3 { n0<single>[i6] := i6; }
+  zero_out sparse<single>;
+  for i7 = 0 to 3 { sparse<single>[i7, 0] := n0<single>[i7]; }
+  for i8 = 0 to 3 { n2<single>[i8] := sparse<single>[i8, 2]; }
+  for i9 = 0 to 3 { n3<single>[i9] := sparse<single>[i9, 2]; }
+  for i10 = 0 to 3 {
+    out<single>[i10] := (n3<single>[i10] * n2<single>[i10]);
+  }
+  /* end */

@@ -124,6 +124,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name zero_out_local_decl)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules zero_out_local_decl)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Generate both ll files and actual files in one rule using no-infer
 
 (rule
@@ -161,6 +172,29 @@
     (copy
      build_files/d_fwd.%{read:config/ocannl_backend_extension.txt}
      top_down_prec.extension.actual)))))
+
+(rule
+ (targets
+  zero_out_local_decl-unoptimized.ll.actual
+  zero_out_local_decl.extension.actual)
+ (package neural_nets_lib)
+ (deps
+  config/ocannl_backend_extension.txt
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:zero_out_local_decl.exe}
+     "--ocannl_output_prec_in_ll_files=true"
+     "--ocannl_output_debug_files_in_build_directory=true")
+    (copy
+     build_files/out_fwd-unoptimized.ll
+     zero_out_local_decl-unoptimized.ll.actual)
+    (copy
+     build_files/out_fwd.%{read:config/ocannl_backend_extension.txt}
+     zero_out_local_decl.extension.actual)))))
 
 (rule
  (targets
@@ -211,6 +245,25 @@
   (diff
    "top_down_prec.%{read:config/ocannl_backend_extension.txt}.expected"
    "top_down_prec.extension.actual")))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "zero_out_local_decl-unoptimized.ll.expected"
+   "zero_out_local_decl-unoptimized.ll.actual")))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (deps
+  config/ocannl_backend_extension.txt
+  (env_var OCANNL_BACKEND))
+ (action
+  (diff
+   "zero_out_local_decl.%{read:config/ocannl_backend_extension.txt}.expected"
+   "zero_out_local_decl.extension.actual")))
 
 (rule
  (alias runtest)
