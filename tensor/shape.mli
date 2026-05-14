@@ -218,9 +218,10 @@ val make :
   t
 (** Creates a shape. [id] should be the id the associated tensor (if any). At most one of the pairs
     [batch_dims], [batch_axes] etc. should be given: if none, the corresponding row will be
-    inferred. [batch_axes] etc. provide labels for the dimensions of the corresponding axes. Note
-    that these are dimensions labels and not axis labels: they need not be unique for a row, are
-    inferred when provided, and must match whenever the axis sizes must match. *)
+    inferred. [batch_axes] etc. provide bases (semantic annotations) for the dimensions of the
+    corresponding axes. Note that these are dimension bases and not axis labels: they need not be
+    unique for a row, are inferred when provided, and must match whenever the axis sizes must
+    match. *)
 
 val to_string_hum : ?style:Row.print_style -> t -> string
 
@@ -298,8 +299,9 @@ val get_projections : update_step -> Ir.Indexing.projections
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array
 
-val to_labels : t -> string array
-(** Uses the matrix convention of putting the input axes last. *)
+val to_bases : t -> string array
+(** The per-axis dimension bases (semantic annotations), [""] for unbased axes. Uses the matrix
+    convention of putting the input axes last. *)
 
 val parse_n5_layout : string -> int array
 (** Parse a N5_layout priority string (e.g., "0,1,2") into display indices. Only supports integer

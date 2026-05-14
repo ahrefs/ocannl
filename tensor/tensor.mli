@@ -202,11 +202,12 @@ val term :
     the shape is as given by the ndarray, and [Padded] if the data is already padded as given, and
     the shape is as given by the ndarray. *)
 
-val number : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec -> float -> t
+val number : ?label:string list -> ?axis_basis:string -> ?grad_spec:grad_spec -> float -> t
 (** A number: a tensor with a single axis of one dimension, initialized to the given value.
-    [grad_spec] is by default [Prohibit_grad]. *)
+    [axis_basis] sets the dimension basis (semantic annotation) of that axis. [grad_spec] is by
+    default [Prohibit_grad]. *)
 
-val bits : ?label:string list -> ?axis_label:string -> ?grad_spec:grad_spec -> int64 -> t
+val bits : ?label:string list -> ?axis_basis:string -> ?grad_spec:grad_spec -> int64 -> t
 (** A number with exact bit representation: a tensor with a single axis of one dimension,
     initialized to the given int64 value. Useful for initializing uint4x32 tensors where exact bit
     patterns matter. [grad_spec] is by default [Prohibit_grad]. *)

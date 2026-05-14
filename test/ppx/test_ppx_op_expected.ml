@@ -47,8 +47,8 @@ let y =
        "hey4") () in
   let open! TDSL.O in
     (+) ?label:(Some ["y"])
-      (( * ) ?label:None hey4 (TDSL.number ?label:None ~axis_label:"q" 2.0))
-      (TDSL.number ?label:None ~axis_label:"p" 1.0)
+      (( * ) ?label:None hey4 (TDSL.number ?label:None ~axis_basis:"q" 2.0))
+      (TDSL.number ?label:None ~axis_basis:"p" 1.0)
 let z =
   let hey5 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
@@ -58,8 +58,8 @@ let z =
        "hey6") () in
   let open! TDSL.O in
     (+) ?label:(Some ["z"])
-      (( *. ) ?label:None (TDSL.number ?label:None ~axis_label:"q" 2.0) hey5)
-      (( *. ) ?label:None hey6 (TDSL.number ?label:None ~axis_label:"q" 1.0))
+      (( *. ) ?label:None (TDSL.number ?label:None ~axis_basis:"q" 2.0) hey5)
+      (( *. ) ?label:None hey6 (TDSL.number ?label:None ~axis_basis:"q" 1.0))
 let stride = 2
 and dilation = 3
 and use_padding = true

@@ -3,12 +3,12 @@ let test_print_styles () =
   Stdio.printf "Testing print_style functionality:\n\n";
 
   (* Create a solved dimension with all possible attributes *)
-  let solved_dim_full = { d = 28; label = Some "height"; proj_id = None } in
+  let solved_dim_full = { d = 28; basis = Some "height"; proj_id = None } in
 
   (* Create a dimension with projection by using fresh_row_proj *)
   let row_with_dim =
     {
-      dims = [ get_dim ~d:32 ~label:"width" () ];
+      dims = [ get_dim ~d:32 ~basis:"width" () ];
       bcast = Broadcastable;
       prov = provenance ~sh_id:1 ~kind:`Output;
     }
@@ -19,49 +19,48 @@ let test_print_styles () =
   in
 
   (* Create a solved dimension with minimal attributes *)
-  let solved_dim_minimal = { d = 64; label = None; proj_id = None } in
+  let solved_dim_minimal = { d = 64; basis = None; proj_id = None } in
 
   (* Create a variable dimension *)
-  let var_dim_labeled = get_var ~name:"channels" () in
-  let var_dim_unlabeled = get_var () in
+  let var_dim_named = get_var ~name:"channels" () in
+  let var_dim_unnamed = get_var () in
 
   Stdio.printf "=== Testing solved_dim_to_string ===\n";
-  Stdio.printf "Full attributes (d=28, padding=2, label=height, proj_id):\n";
-  Stdio.printf "  Only_labels: %s\n" (solved_dim_to_string Only_labels solved_dim_full);
+  Stdio.printf "Full attributes (d=28, padding=2, basis=height, proj_id):\n";
+  Stdio.printf "  Only_bases: %s\n" (solved_dim_to_string Only_bases solved_dim_full);
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_full);
   Stdio.printf "  Axis_number_and_size: %s\n"
     (solved_dim_to_string Axis_number_and_size solved_dim_full);
   Stdio.printf "  Projection_and_size: %s\n"
     (solved_dim_to_string Projection_and_size solved_dim_full);
 
-  Stdio.printf "\nMinimal attributes (d=64, no padding, no label, no proj_id):\n";
-  Stdio.printf "  Only_labels: %s\n" (solved_dim_to_string Only_labels solved_dim_minimal);
+  Stdio.printf "\nMinimal attributes (d=64, no padding, no basis, no proj_id):\n";
+  Stdio.printf "  Only_bases: %s\n" (solved_dim_to_string Only_bases solved_dim_minimal);
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_minimal);
   Stdio.printf "  Projection_and_size: %s\n"
     (solved_dim_to_string Projection_and_size solved_dim_minimal);
 
-  Stdio.printf "\nWith projection (d=32, label=width, proj_id):\n";
+  Stdio.printf "\nWith projection (d=32, basis=width, proj_id):\n";
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_with_proj);
   Stdio.printf "  Projection_and_size: %s\n"
     (solved_dim_to_string Projection_and_size solved_dim_with_proj);
 
   Stdio.printf "\n=== Testing dim_to_string ===\n";
   Stdio.printf "Solved dimensions:\n";
-  Stdio.printf "  Only_labels (full): %s\n" (dim_to_string Only_labels (Dim solved_dim_full));
+  Stdio.printf "  Only_bases (full): %s\n" (dim_to_string Only_bases (Dim solved_dim_full));
   Stdio.printf "  Axis_size (full): %s\n" (dim_to_string Axis_size (Dim solved_dim_full));
   Stdio.printf "  Projection_and_size (full): %s\n"
     (dim_to_string Projection_and_size (Dim solved_dim_full));
-  Stdio.printf "  Only_labels (minimal): %s\n" (dim_to_string Only_labels (Dim solved_dim_minimal));
+  Stdio.printf "  Only_bases (minimal): %s\n" (dim_to_string Only_bases (Dim solved_dim_minimal));
   Stdio.printf "  Axis_size (minimal): %s\n" (dim_to_string Axis_size (Dim solved_dim_minimal));
 
   Stdio.printf "\nVariable dimensions:\n";
-  Stdio.printf "  Only_labels (labeled var): %s\n" (dim_to_string Only_labels (Var var_dim_labeled));
-  Stdio.printf "  Axis_size (labeled var): %s\n" (dim_to_string Axis_size (Var var_dim_labeled));
-  Stdio.printf "  Projection_and_size (labeled var): %s\n"
-    (dim_to_string Projection_and_size (Var var_dim_labeled));
-  Stdio.printf "  Only_labels (unlabeled var): %s\n"
-    (dim_to_string Only_labels (Var var_dim_unlabeled));
-  Stdio.printf "  Axis_size (unlabeled var): %s\n" (dim_to_string Axis_size (Var var_dim_unlabeled))
+  Stdio.printf "  Only_bases (named var): %s\n" (dim_to_string Only_bases (Var var_dim_named));
+  Stdio.printf "  Axis_size (named var): %s\n" (dim_to_string Axis_size (Var var_dim_named));
+  Stdio.printf "  Projection_and_size (named var): %s\n"
+    (dim_to_string Projection_and_size (Var var_dim_named));
+  Stdio.printf "  Only_bases (unnamed var): %s\n" (dim_to_string Only_bases (Var var_dim_unnamed));
+  Stdio.printf "  Axis_size (unnamed var): %s\n" (dim_to_string Axis_size (Var var_dim_unnamed))
 
 let test_shape_to_string () =
   let open Ocannl in
@@ -74,7 +73,7 @@ let test_shape_to_string () =
   in
 
   Stdio.printf "Shape with batch=[1], input=[784], output=[10,5]:\n";
-  Stdio.printf "  Only_labels: %s\n" (Shape.to_string_hum ~style:Row.Only_labels shape);
+  Stdio.printf "  Only_bases: %s\n" (Shape.to_string_hum ~style:Row.Only_bases shape);
   Stdio.printf "  Axis_size: %s\n" (Shape.to_string_hum ~style:Row.Axis_size shape);
   Stdio.printf "  Axis_number_and_size: %s\n"
     (Shape.to_string_hum ~style:Row.Axis_number_and_size shape);

@@ -935,7 +935,7 @@ let translate ?ident_label (expr : expression) : result =
         in
         {
           default_result with
-          expr = [%expr NTDSL.number ~axis_label:[%e axis] [%e f]];
+          expr = [%expr NTDSL.number ~axis_basis:[%e axis] [%e f]];
           slot = Scalar;
         }
     | [%expr
@@ -946,7 +946,7 @@ let translate ?ident_label (expr : expression) : result =
         in
         {
           default_result with
-          expr = [%expr NTDSL.bits ~axis_label:[%e axis] [%e i]];
+          expr = [%expr NTDSL.bits ~axis_basis:[%e axis] [%e i]];
           slot = Scalar;
         }
     | [%expr
@@ -957,7 +957,7 @@ let translate ?ident_label (expr : expression) : result =
         in
         {
           default_result with
-          expr = [%expr NTDSL.number ~axis_label:[%e axis] (Float.of_int [%e i])];
+          expr = [%expr NTDSL.number ~axis_basis:[%e axis] (Float.of_int [%e i])];
           slot = Scalar;
         }
     | { pexp_desc = Pexp_record ((first_label, first_value) :: extra_args, None); _ } -> (
