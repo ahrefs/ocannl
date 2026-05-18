@@ -884,11 +884,11 @@ axes:</p>
 </ul>
 <p>For example, <code>[ (1, 2, 3); (4, 5, 6) ]</code> is a mathematical
 matrix converting 3D vectors into 2D vectors.</p>
-<p>OCANNL supports dimension labels. The syntax for number allows
-prefixing a number by a character that stands for the dimension label of
-the resulting output dimension 1. These labels can then propagate to
-specify labels of other dimensions in other tensors, via shape
-inference. Example:
+<p>OCANNL supports dimension bases (semantic annotations). The syntax
+for number allows prefixing a number by a character that stands for the
+dimension basis of the resulting output dimension 1. These bases can
+then propagate to specify bases of other dimensions in other tensors,
+via shape inference. Example:
 <code>let%op y = ({ hey } * &#39;q&#39; 2.0) + &#39;p&#39; 1.0 in ...</code></p>
 <h2 id="wildcard-bindings">Wildcard bindings</h2>
 <p>When an extension is over a wildcard (ignore result) binding:
