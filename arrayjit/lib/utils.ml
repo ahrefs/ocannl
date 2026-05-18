@@ -222,7 +222,11 @@ let clean_filename fname =
       ~f:(fun c -> if List.exists ~f:(equal_char c) [ '/'; '\\'; ':' ] then '-' else c)
       fname
   in
-  fname
+  (* Reject bare "."/".." (and the empty string): otherwise
+     filename_concat "build_files" cleaned can resolve to build_files/..
+     and the startup cleanup (clean_up_build_files_on_startup=true) would
+     recursively delete the parent directory. *)
+  match fname with "" | "." | ".." -> "_" | _ -> fname
 
 let build_file fname =
   let prefix = get_global_arg ~default:"" ~arg_name:"build_files_prefix" in
@@ -247,21 +251,36 @@ let diagn_log_file fname =
 
 let () =
   (* Cleanup needs to happen before get_local_debug_runtime (or any other code is run). *)
+  (* Use Unix.lstat to distinguish symlinks from real directories: Sys.is_directory
+     follows symlinks, so a symlink inside build_files/log_files pointing outside
+     the tree would cause recursion to delete unrelated files. We unlink the link
+     itself instead of descending. *)
+  let lstat_kind path =
+    try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None
+  in
   let rec remove_dir_if_exists dirname =
-    if Stdlib.Sys.file_exists dirname && Stdlib.Sys.is_directory dirname then
-      try
-        Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
-            let path = Stdlib.Filename.concat dirname fname in
-            if Stdlib.Sys.is_directory path then remove_dir_if_exists path
-            else Stdlib.Sys.remove path);
-        Stdlib.Sys.rmdir dirname
-      with exn ->
-        Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn)
-    else if Stdlib.Sys.file_exists dirname then
-      try Stdlib.Sys.remove dirname
-      with exn ->
-        Stdio.eprintf "Failed to delete file %s (expected a directory): %s\n%!" dirname
-          (Exn.to_string exn)
+    match lstat_kind dirname with
+    | None -> ()
+    | Some Unix.S_DIR ->
+        (try
+           Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
+               let path = Stdlib.Filename.concat dirname fname in
+               match lstat_kind path with
+               | Some Unix.S_DIR -> remove_dir_if_exists path
+               | Some _ | None ->
+                   (* Regular file, symlink (to file or dir), socket, etc.:
+                      unlink the entry, do not follow. *)
+                   (try Stdlib.Sys.remove path with Stdlib.Sys_error _ -> ()));
+           Stdlib.Sys.rmdir dirname
+         with exn ->
+           Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname
+             (Exn.to_string exn))
+    | Some _ ->
+        (* Symlink (even to a dir), regular file, etc.: unlink the entry. *)
+        (try Stdlib.Sys.remove dirname
+         with exn ->
+           Stdio.eprintf "Failed to delete %s (expected a directory): %s\n%!" dirname
+             (Exn.to_string exn))
   in
   let clean_up_log_files_on_startup =
     get_global_flag ~default:true ~arg_name:"clean_up_log_files_on_startup"
