@@ -8,6 +8,7 @@ let test_print_styles () =
   (* Create a dimension with projection by using fresh_row_proj *)
   let row_with_dim =
     {
+      beg_dims = [];
       dims = [ get_dim ~d:32 ~basis:"width" () ];
       bcast = Broadcastable;
       prov = provenance ~sh_id:1 ~kind:`Output;

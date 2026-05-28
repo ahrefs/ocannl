@@ -105,6 +105,14 @@
   (pps ppx_here ppx_ocannl ppx_expect)))
 
 (test
+ (name row_beg_dims_regression)
+ (package neural_nets_lib)
+ (modules row_beg_dims_regression)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here)))
+
+(test
  (name top_down_prec)
  (package neural_nets_lib)
  (deps
