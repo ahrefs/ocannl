@@ -7,7 +7,6 @@ Test 2: s_row_one composes beg_dims (closed value into open row)
 Test 3: closing preserves beg_dims (Row_var v -> Broadcastable)
   PASS
 Test 4: LUB merge symmetric on both flanks
-  No solved row for rho; remaining constraints: 0
-  PASS (informational)
+  PASS
 Test 5: monotonicity via re-firing (substitute into banked LUB)
   PASS: substitution succeeded (no retraction)

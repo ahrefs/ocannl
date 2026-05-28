@@ -110,8 +110,11 @@ let test_3_closing_preserves_beg_dims () =
    Second inequality: cur2 = { beg_dims=[Dim 3];        dims=[Dim 8; Dim 7]; Broadcastable }
                       subr = rho_row (same rho)
    Merged LUB should keep the shorter leading flank length (1) and shorter trailing flank length
-   (1). Conflicts on either side demote to broadcast-1; here Dim 5 (only on side 1) gets
-   trimmed off entirely (shorter wins), and Dim 8 likewise. *)
+   (1). Conflicts on either side demote to broadcast-1; here outer-left Dim 3 matches outer-left
+   Dim 3 → Dim 3; outer-right Dim 7 matches outer-right Dim 7 → Dim 7.
+
+   We then close at Stage7 to materialize the LUB as the solved row for rho and inspect the result
+   via subst_row. *)
 let test_4_lub_merge_symmetric () =
   Stdio.printf "Test 4: LUB merge symmetric on both flanks\n";
   let rho = Row.get_row_var () in
@@ -124,19 +127,28 @@ let test_4_lub_merge_symmetric () =
   in
   let ineq1 = Row.Row_ineq { cur = cur1; subr = rho_row; origin = dummy_origin } in
   let ineq2 = Row.Row_ineq { cur = cur2; subr = rho_row; origin = dummy_origin } in
+  (* Stage1 banks the LUB for rho without closing the row variable (Stage6+ catch-all would
+     otherwise reset rho to empty broadcastable before the LUB is built). *)
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env
   in
-  (* Check the banked LUB for rho. *)
-  match Row.get_row_from_env env rho with
-  | Some lub ->
-      Stdio.printf "  Banked LUB for rho: %s\n"
-        (Sexp.to_string_hum (Row.sexp_of_t lub))
-  | None -> (
-      let entry = Row.unsolved_constraints env in
-      Stdio.printf "  No solved row for rho; remaining constraints: %d\n"
-        (List.length entry));
-  Stdio.printf "  PASS (informational)\n"
+  (* Stage6 then closes rho via process_shape_row's [lub = Some lub] case, materializing the
+     banked LUB as the solved value. *)
+  let _remaining, env =
+    Row.solve_inequalities ~stage:Stage6 [ Row.Shape_row (rho_row, dummy_origin) ] env
+  in
+  let result = Row.subst_row env rho_row in
+  match result with
+  | {
+      beg_dims = [ Dim { d = 3; _ } ];
+      dims = [ Dim { d = 7; _ } ];
+      bcast = Broadcastable;
+      _;
+    } ->
+      Stdio.printf "  PASS\n"
+  | _ ->
+      Stdio.printf "  FAIL: expected {beg_dims=[Dim 3]; dims=[Dim 7]; Broadcastable}, got %s\n"
+        (Sexp.to_string_hum (Row.sexp_of_t result))
 
 (* Test 5: monotonicity via re-firing.
    First: solve b <= c with b = rho_row (open), c = {beg_dims=[Dim 4]; dims=[Dim 7]; Broadcastable}.

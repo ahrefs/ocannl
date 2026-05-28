@@ -2105,16 +2105,30 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                 in
                 (beg_dims_l = l beg_dims1, result, value)
           | Broadcastable ->
-              (* r2 is closed: its full sequence of axes is r2.beg_dims @ r2.dims. The pinned flanks
-                 of r1 must align outer-left / outer-right with this flat list, and v absorbs the
-                 middle. *)
+              (* r2 is closed with structural flanks beg_dims2/dims2. We match r1.beg_dims1
+                 outer-left and r1.dims1 outer-right against r2's flat axis list. The middle
+                 (axes absorbed by v) preserves r2's structural split: anything remaining in
+                 r2.beg_dims becomes value.beg_dims; anything remaining in r2.dims becomes
+                 value.dims. r1's flanks may spill over into r2's other flank if r1's flank
+                 length exceeds r2's matching flank length — handled below. *)
               let r2_flat = r2.beg_dims @ r2.dims in
               let r2_l = beg_dims2_l + dims2_l in
               if dims1_l + beg_dims1_l > r2_l then
                 raise @@ Shape_error ("Number of axes mismatch", [ Row_mismatch [ r1; r2 ] ])
               else
-                let dims =
-                  List.drop r2_flat beg_dims1_l |> Fn.flip drop_from_end dims1_l
+                let beg_overlap = min beg_dims1_l beg_dims2_l in
+                let end_overlap = min dims1_l dims2_l in
+                let beg_spill = beg_dims1_l - beg_overlap in
+                let end_spill = dims1_l - end_overlap in
+                let value_beg_dims =
+                  r2.beg_dims
+                  |> Fn.flip List.drop beg_overlap
+                  |> Fn.flip drop_from_end end_spill
+                in
+                let value_dims =
+                  r2.dims
+                  |> Fn.flip List.drop beg_spill
+                  |> Fn.flip drop_from_end end_overlap
                 in
                 let result =
                   List.zip_exn beg_dims1 (List.take r2_flat beg_dims1_l)
@@ -2123,7 +2137,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                       solve acc (Dim_eq { d1; d2; origin }))
                 in
                 let value : row =
-                  { beg_dims = []; dims; bcast = Broadcastable; prov }
+                  { beg_dims = value_beg_dims; dims = value_dims; bcast = Broadcastable; prov }
                 in
                 (true, result, value)
         in
