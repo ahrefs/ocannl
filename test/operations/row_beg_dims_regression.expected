@@ -1,0 +1,18 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Test 1: outer-left leading-flank alignment rejects size mismatch
+  PASS: got Shape_error: dimension comparison for axis: mismatch
+Test 2: s_row_one composes beg_dims (closed value into open row)
+  PASS
+Test 3: closing preserves beg_dims (Row_var v -> Broadcastable)
+  PASS
+Test 4: LUB merge symmetric on both flanks (matching outer axes)
+  PASS
+Test 4b: leading-flank conflict demotes to unbased Dim 1
+  PASS
+Test 4c: trailing-flank conflict demotes to unbased Dim 1
+  PASS
+Test 5b: monotonicity — incompatible substitution preserves banked facts
+  PASS: banked fact rejected the conflict at substitution time
+Test 5: monotonicity via re-firing — compatible substitution succeeds
+  PASS

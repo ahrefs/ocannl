@@ -17,7 +17,9 @@ let dummy_origin : Row.constraint_origin list =
    basis or "" if unbased. *)
 let get_var_basis env (v : Row.dim_var) : string =
   let prov = Row.empty_provenance in
-  let row = { Row.dims = [ Row.Var v ]; bcast = Broadcastable; prov } in
+  let row =
+    { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov }
+  in
   let bases = Row.row_to_bases env row in
   if Array.length bases > 0 then bases.(0) else ""
 
@@ -465,8 +467,22 @@ let test_lub_conflicting_bases () =
      are already solved. Verify that the error is raised. *)
   try
     let prov = Row.empty_provenance in
-    let r1 = { Row.dims = [ Row.get_dim ~d:4 ~basis:"x" () ]; bcast = Broadcastable; prov } in
-    let r2 = { Row.dims = [ Row.get_dim ~d:4 ~basis:"y" () ]; bcast = Broadcastable; prov } in
+    let r1 =
+      {
+        Row.beg_dims = [];
+        dims = [ Row.get_dim ~d:4 ~basis:"x" () ];
+        bcast = Broadcastable;
+        prov;
+      }
+    in
+    let r2 =
+      {
+        Row.beg_dims = [];
+        dims = [ Row.get_dim ~d:4 ~basis:"y" () ];
+        bcast = Broadcastable;
+        prov;
+      }
+    in
     let constraints =
       [
         Row.Row_ineq { cur = r1; subr = r2; origin = dummy_origin };

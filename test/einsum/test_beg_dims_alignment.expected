@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Test: einsum/shape spec parser places leading axes into Row.beg_dims
+  PASS
+Test: outer-left alignment rejects spec-derived mismatch
+  PASS: got Shape_error: dimension comparison for axis: mismatch
+Test: spec-derived leading flank survives downstream substitution
+  PASS

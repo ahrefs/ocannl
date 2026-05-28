@@ -65,12 +65,23 @@ val get_row_var : unit -> row_var
 (** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes.
 *)
 type bcast =
-  | Row_var of { v : row_var; beg_dims : dim list }
-      (** The row can be inferred to have more axes. *)
+  | Row_var of row_var
+      (** The row can be inferred to have more axes (between [t.beg_dims] and [t.dims]). *)
   | Broadcastable  (** The shape does not have more axes of this kind, but is "polymorphic". *)
 [@@deriving equal, hash, compare, sexp, variants]
 
-type t = { dims : dim list; bcast : bcast; prov : provenance }
+type t = {
+  beg_dims : dim list;
+      (** The outer-left anchored flank; the first dimensions of the row. May be non-empty for both
+          closed and open rows. *)
+  dims : dim list;
+      (** The outer-right anchored flank; the last dimensions of the row. May be non-empty for both
+          closed and open rows. *)
+  bcast : bcast;
+      (** [Row_var v] absorbs only the middle gap between [beg_dims] and [dims]; [Broadcastable]
+          means no rank-broadening slack between the two anchored flanks. *)
+  prov : provenance;
+}
 [@@deriving equal, hash, compare, sexp]
 
 val dims_basis_assoc : t -> (string * dim) list

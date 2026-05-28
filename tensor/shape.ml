@@ -193,11 +193,16 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
     Option.value_map v ~default:(Row.Broadcastable, beg_dims) ~f:(fun vname ->
         let v = Hashtbl.find_or_add row_var_env vname ~default:(fun () -> Row.get_row_var ()) in
         Row.add_used_in_spec_or_compose v;
-        (Row.Row_var { v; beg_dims }, []))
+        (Row.Row_var v, beg_dims))
   in
   let to_row kind v dims beg_dims =
     let bcast, beg_dims = to_bcast kind v beg_dims in
-    { Row.dims = beg_dims @ to_dim kind dims; bcast; prov = Row.provenance ~sh_id ~kind }
+    {
+      Row.beg_dims;
+      dims = to_dim kind dims;
+      bcast;
+      prov = Row.provenance ~sh_id ~kind;
+    }
   in
   let batch = to_row `Batch labels.bcast_batch b_dims beg_b_dims in
   let input = to_row `Input labels.bcast_input i_dims beg_i_dims in
@@ -289,10 +294,10 @@ let check_dim_row_var_name_clash ~spec ~error_trace dim_var_env row_var_env =
                error_trace ))
 
 let add_var_used_in_spec_or_compose row =
-  match row with Row.Row_var { v; _ } -> Row.add_used_in_spec_or_compose v | _ -> ()
+  match row with Row.Row_var v -> Row.add_used_in_spec_or_compose v | _ -> ()
 
 let add_var_used_in_pointwise row =
-  match row with Row.Row_var { v; _ } -> Row.add_used_in_pointwise v | _ -> ()
+  match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
 (* For Block specs, compute invalid_vars: variables that are allowed to be 0. A variable v is
    invalid if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
@@ -301,13 +306,9 @@ let add_var_used_in_pointwise row =
    ∀components: complement ∩ component ≠ ∅ *)
 let compute_block_invalid_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list)
     : Row.dim_var_set =
-  (* Extract all dims from rows (including beg_dims from bcast) *)
+  (* Extract all dims from rows (both flanks; bcast no longer carries beg_dims). *)
   let dims_of_rows rows =
-    List.concat_map rows ~f:(fun (row : Row.t) ->
-        let dims_from_bcast =
-          match row.bcast with Row.Row_var { beg_dims; _ } -> beg_dims | Row.Broadcastable -> []
-        in
-        row.dims @ dims_from_bcast)
+    List.concat_map rows ~f:(fun (row : Row.t) -> row.beg_dims @ row.dims)
   in
   (* Get component var sets for each axis. For non-Concat dims, there's one component with all vars
      of that dim. For Concat dims, each element is a separate component. *)
@@ -785,19 +786,13 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       (* Expand a batch row instead of reducing one because even if the dimensions are known, the
          equations are also needed for projection inference. *)
       let expanded_batch =
-        match cur_sh.batch.bcast with
-        | Broadcastable ->
-            {
-              dims = slice_var :: cur_sh.batch.dims;
-              bcast = cur_sh.batch.bcast;
-              prov = Row.provenance ~sh_id:cur_sh.id ~kind:`Batch;
-            }
-        | Row_var { v; beg_dims } ->
-            {
-              dims = cur_sh.batch.dims;
-              bcast = Row_var { v; beg_dims = slice_var :: beg_dims };
-              prov = Row.provenance ~sh_id:cur_sh.id ~kind:`Batch;
-            }
+        (* Slice axis is outer-anchored; prepend to beg_dims for both closed and open rows. *)
+        {
+          beg_dims = slice_var :: cur_sh.batch.beg_dims;
+          dims = cur_sh.batch.dims;
+          bcast = cur_sh.batch.bcast;
+          prov = Row.provenance ~sh_id:cur_sh.id ~kind:`Batch;
+        }
       in
       let get_origin kind =
         [
@@ -1828,7 +1823,10 @@ let fresh_proj_ids update =
     let tn_opt = Ir.Tnode.find ~id in
     let is_resolved = match tn_opt with Some tn -> Lazy.is_val tn.padding | None -> false in
     Option.iter row_padding ~f:(fun padding ->
-        Array.iter2_exn (Array.of_list row.Row.dims) padding ~f:(fun d p ->
+        Array.iter2_exn
+          (Array.of_list (row.Row.beg_dims @ row.Row.dims))
+          padding
+          ~f:(fun d p ->
             match d with
             | Row.Dim { proj_id = Some proj_id; _ } ->
                 if is_resolved then resolved_padding := (proj_id, p) :: !resolved_padding
@@ -1880,13 +1878,14 @@ let%debug4_sexp row_to_dims (row : Row.t) : int array =
     | Concat dims -> List.sum (module Int) dims ~f
   in
   match row with
-  | { bcast = Row_var { v; _ }; _ } ->
+  | { bcast = Row_var v; _ } ->
       raise
       @@ Row.Shape_error
            ( "Not enough shape information: unresolved row variable "
              ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
              [ Row_mismatch [ row ] ] )
-  | { dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map dims ~f
+  | { beg_dims; dims; bcast = Broadcastable; prov = _ } ->
+      Array.of_list_map (beg_dims @ dims) ~f
 
 let to_dims_impl (sh : t) : int array =
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
@@ -1953,7 +1952,10 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let proj_env : Row.proj_env =
     Row.solve_proj_equations ~resolved_padding ~inferred_padding:[] proj_eqs
   in
-  let dims_of (sh : t) = sh.batch.dims @ sh.output.dims @ sh.input.dims in
+  let dims_of (sh : t) =
+    sh.batch.beg_dims @ sh.batch.dims @ sh.output.beg_dims @ sh.output.dims
+    @ sh.input.beg_dims @ sh.input.dims
+  in
   let lhs = update_step.shape in
   let lhs_dims = to_dims_impl lhs in
   let rhs_dims = Array.of_list_map ~f:to_dims_impl rhs in
@@ -2075,7 +2077,15 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   in
   let indices_of_sh (sh : t) =
     Array.of_list_map ~f:(Row.get_dim_index proj_env)
-    @@ List.concat [ sh.batch.dims; sh.output.dims; sh.input.dims ]
+    @@ List.concat
+         [
+           sh.batch.beg_dims;
+           sh.batch.dims;
+           sh.output.beg_dims;
+           sh.output.dims;
+           sh.input.beg_dims;
+           sh.input.dims;
+         ]
   in
   (* Extract padding from proj_env and set the padding fields on shapes *)
   let update_padding old_padding new_padding =
@@ -2088,7 +2098,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     let paddings =
       (* Guard against insufficient shape information error. *)
       ignore (row_to_dims row);
-      List.mapi row.dims ~f:(fun i d ->
+      List.mapi (row.beg_dims @ row.dims) ~f:(fun i d ->
           update_padding
             (Option.map old_padding ~f:(fun p -> p.(i)))
             (Row.get_dim_padding proj_env d))
@@ -2156,31 +2166,32 @@ let apply_env_t env sh =
   sh.input <- Row.subst_row env sh.input;
   sh.output <- Row.subst_row env sh.output
 
-(** Computes the product of dimensions in a row. Returns [None] if any dimension is not yet resolved
-    (still a variable or unresolved affine). *)
-let rec compute_row_product env (row : Row.t) : int option =
-  match row.dims with
-  | [] -> Some 1
-  | dim :: rest -> (
-      let dim_val =
-        match dim with
-        | Row.Dim { d; _ } -> Some d
-        | Row.Var v -> Row.get_dim_val env v
-        | Row.Affine _ -> None (* TODO: handle affine/convolution input dimensions *)
-        | Row.Concat dims ->
-            (* For Concat, recursively compute the sum of all component dimensions *)
-            List.fold dims ~init:(Some 0) ~f:(fun acc d ->
-                match acc with
-                | None -> None
-                | Some sum -> (
-                    match d with
-                    | Row.Dim { d; _ } -> Some (sum + d)
-                    | Row.Var v -> Option.map (Row.get_dim_val env v) ~f:(fun d -> sum + d)
-                    | _ -> None))
-      in
-      match (dim_val, compute_row_product env { row with dims = rest }) with
-      | Some d, Some rest_product -> Some (d * rest_product)
-      | _ -> None)
+(** Computes the product of dimensions in a row (both flanks). Returns [None] if any dimension is
+    not yet resolved (still a variable or unresolved affine). *)
+let compute_row_product env (row : Row.t) : int option =
+  let rec product = function
+    | [] -> Some 1
+    | dim :: rest -> (
+        let dim_val =
+          match dim with
+          | Row.Dim { d; _ } -> Some d
+          | Row.Var v -> Row.get_dim_val env v
+          | Row.Affine _ -> None (* TODO: handle affine/convolution input dimensions *)
+          | Row.Concat dims ->
+              List.fold dims ~init:(Some 0) ~f:(fun acc d ->
+                  match acc with
+                  | None -> None
+                  | Some sum -> (
+                      match d with
+                      | Row.Dim { d; _ } -> Some (sum + d)
+                      | Row.Var v -> Option.map (Row.get_dim_val env v) ~f:(fun d -> sum + d)
+                      | _ -> None))
+        in
+        match (dim_val, product rest) with
+        | Some d, Some rest_product -> Some (d * rest_product)
+        | _ -> None)
+  in
+  product (row.beg_dims @ row.dims)
 
 (** Updates delayed variable references with inferred dimensions/row products from the environment.
     If [solved_dim] was previously set by [set_dim], we skip updating to preserve the user's
@@ -2281,7 +2292,8 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
     let get_padding_array row_opt row =
       match row_opt with
       | Some padding -> padding
-      | None -> Array.create ~len:(List.length row.Row.dims) no_padding
+      | None ->
+          Array.create ~len:(List.length (row.Row.beg_dims @ row.Row.dims)) no_padding
     in
     let has_any_padding : bool =
       Option.is_some sh.batch_padding || Option.is_some sh.output_padding
@@ -2342,10 +2354,16 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
         else get_dim ~d ()
   in
   let make_dims kind ds =
-    { dims = List.map ~f:(f kind) ds; bcast = Broadcastable; prov = provenance ~sh_id:id ~kind }
+    {
+      beg_dims = [];
+      dims = List.map ~f:(f kind) ds;
+      bcast = Broadcastable;
+      prov = provenance ~sh_id:id ~kind;
+    }
   in
   let make_axes kind ds =
     {
+      beg_dims = [];
       dims = List.map ~f:(fun (basis, d) -> get_dim ~d ~basis ()) ds;
       bcast = Broadcastable;
       prov = provenance ~sh_id:id ~kind;
@@ -2354,7 +2372,8 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   let make_unknown kind =
     {
       dims = [];
-      bcast = Row_var { v = get_row_var (); beg_dims = [] };
+      beg_dims = [];
+      bcast = Row_var (get_row_var ());
       prov = provenance ~sh_id:id ~kind;
     }
   in
@@ -2517,10 +2536,11 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   result
 
 let to_string_hum ?(style = Row.Axis_size) (sh : t) =
-  let n_outputs = List.length @@ sh.output.dims in
-  let n_batch = List.length @@ sh.batch.dims in
+  let n_outputs = List.length (sh.output.beg_dims @ sh.output.dims) in
+  let n_batch = List.length (sh.batch.beg_dims @ sh.batch.dims) in
   let dims_to_string kind =
-    let dims = (row_of_kind kind sh).dims in
+    let row = row_of_kind kind sh in
+    let dims = row.beg_dims @ row.dims in
     String.concat ~sep:","
     @@ List.mapi dims ~f:(fun i d ->
         let num =
@@ -2548,16 +2568,16 @@ let axis_keys_to_idcs (sh : t) : int axis_map =
       && Row.is_broadcastable sh.batch.bcast)
   then raise @@ Utils.User_error "Shape.axis_keys_to_idcs: shape not fully inferred";
   let b_dims =
-    (* Enumerate axes backwards. *)
-    Array.of_list_rev_mapi sh.batch.dims ~f:(fun i _ ->
+    (* Enumerate axes backwards across both flanks. *)
+    Array.of_list_rev_mapi (sh.batch.beg_dims @ sh.batch.dims) ~f:(fun i _ ->
         AxisKey.{ in_axes = `Batch; pos = i + 1; from_end = true })
   in
   let i_dims =
-    Array.of_list_rev_mapi sh.input.dims ~f:(fun i _ ->
+    Array.of_list_rev_mapi (sh.input.beg_dims @ sh.input.dims) ~f:(fun i _ ->
         AxisKey.{ in_axes = `Input; pos = i + 1; from_end = true })
   in
   let o_dims =
-    Array.of_list_rev_mapi sh.output.dims ~f:(fun i _ ->
+    Array.of_list_rev_mapi (sh.output.beg_dims @ sh.output.dims) ~f:(fun i _ ->
         AxisKey.{ in_axes = `Output; pos = i + 1; from_end = true })
   in
   let idcs = Array.concat [ i_dims; o_dims; b_dims ] in
@@ -2572,7 +2592,7 @@ let%debug5_sexp default_display_indices (sh : t) : int array =
     prio
   in
   let occu prio = occupied.(prio + 5) in
-  let num_input_axes = List.length sh.input.dims in
+  let num_input_axes = List.length (sh.input.beg_dims @ sh.input.dims) in
   let remaining =
     Stack.of_list
     @@ List.filter ~f:(Map.mem axes)
