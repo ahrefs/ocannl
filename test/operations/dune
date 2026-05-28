@@ -29,11 +29,8 @@
   (action
    (run %{dep:ocannl_read_config.exe} "--read=backend_extension"))))
 
-; Solution: Create intermediate targets that guarantee file generation
-; Step 1: Run the test and create a backend-specific sentinel file when done
-
 (rule
- (targets micrograd_demo-logs.done)
+ (target "backend-0-0.log.actual")
  (package neural_nets_lib)
  (deps
   ocannl_config
@@ -48,16 +45,6 @@
     "--ocannl_debug_log_to_stream_files=true"
     ; We have to clean up to avoid appending to results of a previous run
     "--ocannl_clean_up_log_files_on_startup=true")
-   (write-file %{targets} "completed\n"))))
-
-; Step 2: Process the log file, depending on the backend-specific sentinel
-
-(rule
- (deps micrograd_demo-logs.done)
- (target "backend-0-0.log.actual")
- (package neural_nets_lib)
- (action
-  (progn
    (run
     %{dep:../../tools/minised.exe}
     " = 0x[0-9a-fA-F]+"
