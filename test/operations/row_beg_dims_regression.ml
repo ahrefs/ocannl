@@ -80,18 +80,21 @@ let test_2_substitution_preserves_beg_dims () =
 
 (* Test 3: closing preserves beg_dims.
    r = { beg_dims = [Dim 7]; dims = []; bcast = Row_var rho }
-   Force closure at Stage6 via a Shape_row constraint (which closes row variables in stage 6).
-   After substitution, r must close to { beg_dims = [Dim 7]; dims = []; Broadcastable }. *)
+   Force closure at Stage7 via a Shape_row constraint (which closes row variables in stage 7).
+   After substitution, r must close to { beg_dims = [Dim 7]; dims = []; Broadcastable }.
+
+   This test guards the silent-erasure soundness risk: under the new layout, the bare row
+   variable closes to empty Broadcastable, and r's beg_dims is preserved through s_row_one's
+   uniform composition at substitution time. *)
 let test_3_closing_preserves_beg_dims () =
   Stdio.printf "Test 3: closing preserves beg_dims (Row_var v -> Broadcastable)\n";
   let rho = Row.get_row_var () in
   let r : Row.t =
     { beg_dims = [ dim 7 ]; dims = []; bcast = Row_var rho; prov }
   in
-  (* Stage6+ closure via Shape_row processing. *)
   let constraints = [ Row.Shape_row (r, dummy_origin) ] in
   let _remaining, env =
-    Row.solve_inequalities ~stage:Stage6 constraints Row.empty_env
+    Row.solve_inequalities ~stage:Stage7 constraints Row.empty_env
   in
   let result = Row.subst_row env r in
   match result with
