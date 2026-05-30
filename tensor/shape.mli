@@ -300,8 +300,13 @@ val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> str
 val default_display_indices : t -> int array
 
 val to_bases : t -> string array
-(** The per-axis dimension bases (semantic annotations), [""] for unbased axes. Uses the matrix
-    convention of putting the input axes last. *)
+(** The per-axis dimension bases (semantic annotations); the basis is total, so unannotated axes
+    read back as ["default"] and the broadcast bottom as ["bcast_if_1"]. Uses the matrix convention
+    of putting the input axes last. *)
+
+val to_bases_bio : t -> string array * string array * string array
+(** Per-kind dimension bases [(batch, input, output)], so callers can check which row a basis landed
+    on rather than only that it appears somewhere in the flattened {!to_bases} list. *)
 
 val parse_n5_layout : string -> int array
 (** Parse a N5_layout priority string (e.g., "0,1,2") into display indices. Only supports integer

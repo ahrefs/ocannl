@@ -2314,6 +2314,13 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
 let to_bases (sh : t) : string array =
   Array.concat_map ~f:(Row.row_to_bases !state) [| sh.batch; sh.output; sh.input |]
 
+(* Per-kind dimension bases, so callers can check which row/axis a basis landed on (not just that a
+   tag appears somewhere in the flattened list). Returns [(batch, input, output)]. *)
+let to_bases_bio (sh : t) : string array * string array * string array =
+  ( Row.row_to_bases !state sh.batch,
+    Row.row_to_bases !state sh.input,
+    Row.row_to_bases !state sh.output )
+
 let sexp_of_error_trace = function
   | Shape_mismatch ts -> Sexp.List (Sexp.Atom "Shape_mismatch" :: List.map ts ~f:sexp_of_t)
   | error_trace -> Row.sexp_of_error_trace error_trace

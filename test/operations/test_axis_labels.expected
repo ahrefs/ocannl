@@ -1,6 +1,7 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-output-list label: PASS (bases=[rgb] includes "rgb")
-input-tuple label: PASS (bases=[default,features] includes "features")
-batch-array label: PASS (bases=[examples,default] includes "examples")
-explicit bcast_if_1 label: PASS (bases=[bcast_if_1] includes "bcast_if_1")
+output-list label: PASS (batch=[] input=[] output=[rgb])
+input-tuple label: PASS (batch=[] input=[features] output=[default])
+batch-array label: PASS (batch=[examples] input=[] output=[default])
+explicit bcast_if_1 label: PASS (batch=[] input=[] output=[bcast_if_1])
+outer-of-two-output labelled: PASS (batch=[] input=[] output=[rows,default])
