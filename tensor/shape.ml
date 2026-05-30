@@ -411,7 +411,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_default_dim ~d ()) |> Array.to_list);
                  origin =
                    [
                      {
@@ -438,7 +438,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_default_dim ~d ()) |> Array.to_list);
                  origin =
                    [
                      {
@@ -485,7 +485,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    constr =
                      Exact
                        (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
-                       |> List.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()));
+                       |> List.map ~f:(fun d -> get_default_dim ~d ()));
                    origin =
                      [
                        {
@@ -2340,21 +2340,14 @@ let get_projections (update_step : update_step) : Idx.projections =
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =
   let open Row in
-  let known_no_batch =
-    match (batch_dims, batch_axes) with Some [], None -> true | None, Some [] -> true | _ -> false
-  in
-  let num_dim1_output = Option.to_list output_dims |> List.join |> List.count ~f:(fun d -> d = 1) in
-  let f kind d =
-    (* Provenance split at construction (brief §Technical-issue-1, surfacing §Technical-issue-3):
-       OCANNL pervasively relies on size-1 axes broadcasting (scalars, embedded ids, reductions,
-       per-head/per-channel units), so a frontend size-1 axis is by default the claim-free broadcast
-       bottom [1_(bcast_if_1)]. A size > 1 unannotated axis is an ordinary [default] atom that does
-       NOT silently fuse with a named basis. The exception is a lone size-1 output axis with a batch
-       flank (a per-example scalar prediction): it is an anchored [default] atom, not a broadcast
-       unit, which preserves hidden-dimension detection and dimension solving for that corner. *)
-    match kind with
-    | `Output when (not known_no_batch) && num_dim1_output = 1 && d = 1 -> get_default_dim ~d ()
-    | _ -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()
+  let f _kind d =
+    (* Provenance split at construction (brief §Technical-issue-1, AC#4): an unannotated user axis
+       is a [default] atom at every size, INCLUDING size 1 — an explicit user [1] does not stretch
+       (it flags a forgotten/hidden dimension rather than silently broadcasting). Only scalar
+       helpers, internal broadcast fill (e.g. [embed_self_id]), and rank-broadening synthesizers
+       mint the claim-free broadcast bottom [1_(bcast_if_1)], and they do so explicitly via
+       [~*_axes] / [get_bcast_dim], not through this default path. *)
+    get_default_dim ~d ()
   in
   let make_dims kind ds =
     {
@@ -2451,7 +2444,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
     | Label name ->
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
-    | Fixed_index d -> if d = 1 then Row.get_bcast_dim ~d () else Row.get_default_dim ~d ()
+    | Fixed_index d -> Row.get_default_dim ~d ()
     | Affine_spec { stride; over_label; conv; stride_offset } ->
         let stride_int =
           try Int.of_string stride

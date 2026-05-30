@@ -301,8 +301,13 @@ let () =
     let ga = Genarray.create Float32 c_layout [| 1; block_size; vocab_size |] in
     Bigarray.Genarray.fill ga 0.;
     let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
+    (* The leading batch axis is a single inference example that must broadcast against the training
+       batch (which [batch_norm1d]'s statistics were reduced over). Under the total-basis design an
+       explicit user size-1 axis is a non-stretching [default] atom; to opt into broadcasting we tag
+       it with the reserved [bcast_if_1] basis (the advertisable affordance). *)
     Tensor.term ~init_data:(Reshape nd) ~grad_spec:Prohibit_grad ~label:[ "infer_input" ]
-      ~batch_dims:[ 1; block_size ] ~input_dims:[] ~output_dims:[ vocab_size ] ()
+      ~batch_axes:[ (Row.bcast_if_1, 1); (Row.default_basis, block_size) ]
+      ~input_dims:[] ~output_dims:[ vocab_size ] ()
   in
   let counter_n, infer_bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_logits = logits ~train_step:None infer_input in

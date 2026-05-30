@@ -109,6 +109,23 @@ let test_variable_mediated_unbased_then_based () =
       Stdio.printf "  PASS: no silent upgrade; default conflicts with batch: %s\n" msg
     else Stdio.printf "  FAIL: wrong error message: %s\n" msg
 
+(* AC#4 / brief §Technical-issue-1 frontend regression: an EXPLICIT user size-1 output axis is
+   [1_default] (an atom), so it does NOT stretch to a larger named axis. Under the old [None]
+   wildcard this size-1 silently broadcast; now a user [1] meeting a [5_rgb] axis is a genuine
+   mismatch. (Only scalars / internal broadcast fill mint the stretchable [1_(bcast_if_1)].) *)
+let test_explicit_one_does_not_stretch () =
+  Stdio.printf "Test 4b: Explicit user 1_default does not stretch to a named larger axis -- raises\n";
+  Tensor.unsafe_reinitialize ();
+  try
+    let one = unbased_tensor [ 1 ] in
+    let five = based_tensor [ ("rgb", 5) ] in
+    let%op result = one + five in
+    let ctx = Train.forward_once (Context.auto ()) result in
+    ignore (ctx : Context.t);
+    Stdio.printf "  FAIL: should have raised (explicit 1_default must not broadcast to 5_rgb)\n"
+  with Row.Shape_error (msg, _) ->
+    Stdio.printf "  PASS: explicit user 1 did not stretch: %s\n" msg
+
 let test_variable_mediated_conflicting () =
   Stdio.printf "Test 5: Variable-mediated: unbased, based, then conflicting -- raises\n";
   Tensor.unsafe_reinitialize ();
@@ -519,6 +536,8 @@ let () =
   test_conflicting_bases_same_size ();
   Stdio.printf "\n";
   test_one_based_one_unbased ();
+  Stdio.printf "\n";
+  test_explicit_one_does_not_stretch ();
   Stdio.printf "\n";
   test_variable_mediated_unbased_then_based ();
   Stdio.printf "\n";

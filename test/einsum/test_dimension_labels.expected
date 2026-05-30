@@ -12,6 +12,9 @@ Test 2: Conflicting bases, same size -- raises
 Test 3: One based (batch), one unbased (default), same size -- now incompatible
   PASS: default no longer fuses with a named basis: solved dimensions for axis: different bases
 
+Test 4b: Explicit user 1_default does not stretch to a named larger axis -- raises
+  PASS: explicit user 1 did not stretch: solved dimensions for axis: different bases
+
 Test 4: Variable-mediated: unbased (default) first, based later -- now incompatible
   PASS: no silent upgrade; default conflicts with batch: solved dimensions for axis: different bases
 

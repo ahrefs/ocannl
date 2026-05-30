@@ -24,7 +24,7 @@ PE(0,0)=0.0000 PE(0,1)=1.0000 PE(1,0)=0.8415 PE(1,1)=0.5403
 RoPE attention output shape: ((batch
   ((beg_dims ())
    (dims
-    ((Dim ((d 1) (basis bcast_if_1) (proj_id ((Proj_id 95)))))
+    ((Dim ((d 1) (basis default) (proj_id ((Proj_id 95)))))
      (Dim ((d 4) (basis default) (proj_id ((Proj_id 96)))))))
    (bcast Broadcastable) (prov (((sh_id 110) (kind Batch))))))
  (input

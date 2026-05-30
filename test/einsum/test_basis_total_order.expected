@@ -15,6 +15,9 @@ Advertisable affordance: bcast_if_1 stretches at size 1, inert atom at size > 1
   PASS: 1_(bcast_if_1) ⊑ 7_xyz accepts (stretches)
   PASS: 5_(bcast_if_1) ⊑ 5_rgb rejects (inert atom, not bottom)
   PASS: 5_(bcast_if_1) ⊑ 5_(bcast_if_1) accepts (equal atom)
+Explicit user 1_default does not stretch; only 1_(bcast_if_1) does
+  PASS: 1_default ⊑ 5_default rejects (no stretch)
+  PASS: 1_default ⊑ 5_rgb rejects (no stretch)
+  PASS: 1_(bcast_if_1) ⊑ 5_default accepts (bottom stretches)
 Inequality no-propagation: the bottom records no basis claim
-  PASS: 1_(bcast_if_1) ⊑ 5_rgb accepted, recording nothing
-  PASS: 1_(bcast_if_1) ⊑ 5_xyz still accepts independently
+  PASS: v stays 1_(bcast_if_1) after v ⊑ 5_rgb; inequality recorded no basis

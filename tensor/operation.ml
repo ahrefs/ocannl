@@ -596,17 +596,21 @@ let slice (batch_idx : Idx.static_symbol) =
 
   Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~op_label:"@|"
 
+(* The embedded size-1 output axes below are internal broadcast fill (a scalar id / symbol that
+   must multiply into a value of any shape), so they mint the claim-free broadcast bottom
+   [1_(bcast_if_1)] explicitly — not [default] (which is reserved for unannotated user axes). *)
 let embed_symbol ?grad_spec ?(label = []) static_sym =
   Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label) ~batch_dims:[]
-    ~input_dims:[] ~output_dims:[ 1 ] ()
+    ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ] ()
 
 let embed_self_id ?grad_spec ?(label = []) () =
   Tensor.term ~fetch_op:Embed_self_id ?grad_spec ~label:("!@self_id" :: label) ~batch_dims:[]
-    ~input_dims:[] ~output_dims:[ 1 ] ()
+    ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ] ()
 
 let embed_dim ?grad_spec ?(label = []) variable_ref =
   Tensor.term ~fetch_op:(Embed_dim variable_ref.Shape.var_ref) ?grad_spec
-    ~label:("!@self_id" :: label) ~batch_dims:[] ~input_dims:[] ~output_dims:[ 1 ] ()
+    ~label:("!@self_id" :: label) ~batch_dims:[] ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ]
+    ()
 
 let uniform ?grad_spec () =
   uint4x32_to_prec_uniform ?grad_spec

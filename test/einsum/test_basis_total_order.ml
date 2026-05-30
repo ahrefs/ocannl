@@ -26,6 +26,12 @@ let report name ~expect actual =
   if Bool.equal expect actual then Stdio.printf "  PASS: %s\n" name
   else Stdio.printf "  FAIL: %s (expected %b, got %b)\n" name expect actual
 
+(* The basis a dim variable resolves to in [env] (or "" if unsolved/unnamed). *)
+let var_basis env v =
+  let row = { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov = Row.empty_provenance } in
+  let bases = Row.row_to_bases env row in
+  if Array.length bases > 0 then bases.(0) else ""
+
 (* AC#10 — transitivity: under the old [None] wildcard, [3_rgb ⊑ 3_default] and
    [3_default ⊑ 3_xyz] both held (the bridge) while [3_rgb ⊑ 3_xyz] did not — a non-transitive
    relation. With the total basis the bridge links themselves reject, so no chain relates two
@@ -63,30 +69,47 @@ let test_advertisable_affordance () =
   report "5_(bcast_if_1) ⊑ 5_(bcast_if_1) accepts (equal atom)" ~expect:true
     (leq ~sub:(d ~basis:Row.bcast_if_1 5) ~super:(d ~basis:Row.bcast_if_1 5))
 
-(* AC#8 — inequality records no basis update by design. Solving [1_(bcast_if_1) ⊑ 5_rgb] is
-   accepted but records nothing onto the (claim-free) bottom: there is no [None]-on-a-real-axis to
-   silently absorb a second, conflicting basis later. We exercise this by solving the bottom against
-   one named basis, then asserting that a SEPARATE bottom against a DIFFERENT named basis is equally
-   accepted independently — neither leaks a recorded tag into the other. *)
+(* AC#4 / brief §Technical-issue-1 — an explicit user size-1 axis ([1_default]) is an atom that
+   does NOT stretch, in contrast to the broadcast bottom [1_(bcast_if_1)]. This pins the provenance
+   split at the order level: only the bottom is below a larger axis. *)
+let test_explicit_one_does_not_stretch () =
+  Stdio.printf "Explicit user 1_default does not stretch; only 1_(bcast_if_1) does\n";
+  report "1_default ⊑ 5_default rejects (no stretch)" ~expect:false
+    (leq ~sub:(Row.get_default_dim ~d:1 ()) ~super:(Row.get_default_dim ~d:5 ()));
+  report "1_default ⊑ 5_rgb rejects (no stretch)" ~expect:false
+    (leq ~sub:(Row.get_default_dim ~d:1 ()) ~super:(d ~basis:"rgb" 5));
+  report "1_(bcast_if_1) ⊑ 5_default accepts (bottom stretches)" ~expect:true
+    (leq ~sub:(Row.get_bcast_dim ~d:1 ()) ~super:(Row.get_default_dim ~d:5 ()))
+
+(* AC#8 — the inequality path records NO basis update. A variable [v] solved to the bottom
+   [1_(bcast_if_1)], then constrained [v ⊑ 5_rgb] in the SAME environment, must still read back as
+   [bcast_if_1] — the inequality does not upgrade [v] to carry [rgb]. (Under the old [None] this
+   leak was latent: the inequality checked but never recorded, so a later conflicting basis could
+   slip through.) This assertion reuses the solved environment, so a propagating solver fails it. *)
 let test_inequality_no_propagation () =
   Stdio.printf "Inequality no-propagation: the bottom records no basis claim\n";
-  let env_after =
-    let ineq = Row.Dim_ineq { cur = d ~basis:"rgb" 5; subr = Row.get_bcast_dim ~d:1 ();
-                              from_ = Sexp.List []; origin = dummy_origin } in
-    try Some (snd (Row.solve_inequalities ~stage:Stage1 [ ineq ] Row.empty_env))
-    with Row.Shape_error _ -> None
+  let v = Row.get_var ~name:"v" () in
+  let constraints =
+    [
+      Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_bcast_dim ~d:1 (); origin = dummy_origin };
+      Row.Dim_ineq
+        { cur = d ~basis:"rgb" 5; subr = Row.Var v; from_ = Sexp.List []; origin = dummy_origin };
+    ]
   in
-  (match env_after with
-   | None -> Stdio.printf "  FAIL: 1_(bcast_if_1) ⊑ 5_rgb should be accepted\n"
-   | Some _ -> Stdio.printf "  PASS: 1_(bcast_if_1) ⊑ 5_rgb accepted, recording nothing\n");
-  (* A fresh, independent bottom still freely relates to a different named basis — proving no tag
-     was globally recorded onto the bottom by the previous solve. *)
-  report "1_(bcast_if_1) ⊑ 5_xyz still accepts independently" ~expect:true
-    (leq ~sub:(Row.get_bcast_dim ~d:1 ()) ~super:(d ~basis:"xyz" 5))
+  let basis =
+    try
+      let _, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
+      var_basis env v
+    with Row.Shape_error _ -> "<shape-error>"
+  in
+  if String.equal basis Row.bcast_if_1 then
+    Stdio.printf "  PASS: v stays 1_(bcast_if_1) after v ⊑ 5_rgb; inequality recorded no basis\n"
+  else Stdio.printf "  FAIL: inequality leaked a basis onto v (got %S, expected bcast_if_1)\n" basis
 
 let () =
   Stdio.printf "Testing total-basis broadcast order:\n\n";
   test_transitivity ();
   test_bottom_asymmetry ();
   test_advertisable_affordance ();
+  test_explicit_one_does_not_stretch ();
   test_inequality_no_propagation ()
