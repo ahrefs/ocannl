@@ -1,0 +1,206 @@
+---
+title: "Broadcasting Is an Order: Shape Inference for OCANNL from Scratch"
+author: "Łukasz Stafiniak and Claude (Anthropic)"
+---
+
+# Broadcasting Is an Order
+
+Most tensor code is half arithmetic and half shape juggling --- reshapes, unsqueezes, transposes, and the running mental arithmetic of which axis is where. OCANNL is built so you write the arithmetic and leave the shapes to inference, the way Hindley--Milner lets you write expressions and leave the types to inference: you state the computation, the shapes follow, and the notation stays about the mathematics. Catching a mismatch before any data flows is a real side benefit, but it is not the point --- checking shapes you have already written out by hand would need none of the machinery below. The machinery exists so that you do not write them.
+
+That is the promise; the cost is an inference problem that turns out to be more interesting than it looks. This post develops its core from scratch --- not the einsum surface syntax (that is a separate story), but the algebra underneath: what a shape *is*, what it means for one shape to be usable where another is expected, and how a constraint solver fills in the unknowns. Łukasz used to call this system "row polymorphism plus nominal subtyping." Both halves of that description are misleading, and saying precisely why turns out to be the fastest route into how the thing actually works.
+
+The short version of the thesis: **broadcasting is an order relation, and almost all of the machinery is the consequence of getting that order right.** The dimensions form a small lattice. Rows lift that lattice structurally. Rank-polymorphism --- the thing that lets a rank-2 tensor compose with a rank-3 one --- lives *in the order itself*, which is why the system needs no type schemes to get the polymorphism users expect. Let us build it up one layer at a time.
+
+## Dimensions
+
+Start with a single axis. A dimension is a positive integer size, optionally carrying a *basis* --- a semantic tag like `rgb` or `heads` that marks what the axis *means*, so that two axes with incompatible meanings refuse to be identified even when their sizes agree. Write a dimension as $n_b$ where $n \geq 1$ is the size and $b$ is either a basis tag or the absent basis $\emptyset$.
+
+The set of dimensions is
+$$
+D = \{\, 1_\emptyset \,\} \;\cup\; \{\, n_b \mid n \geq 1,\; b \in \mathcal{B} \,\}
+$$
+where $\mathcal{B}$ is the set of basis tags. One distinguished tag, $\texttt{default}$, is the basis the frontend supplies for any axis the user writes without naming one: a bare size like `256` becomes $256_{\texttt{default}}$. The element $1_\emptyset$ --- size one, *no* basis at all --- is the odd one out, and the rest of this section is largely about why it is the only unbased element.
+
+Broadcasting is the operation that lets a claim-free axis stand in for an axis of any size: a scalar added to a matrix is implicitly replicated to fill it. We capture exactly this as an order on $D$. Define $d_1 \sqsubseteq d_2$ ("$d_1$ broadcasts to $d_2$") to hold precisely when
+$$
+d_1 = 1_\emptyset \quad\text{or}\quad d_1 = d_2.
+$$
+That is the whole definition. The unbased unit broadcasts to anything; every dimension broadcasts to itself; nothing else is related.
+
+Two properties of this order matter for what comes later.
+
+First, $1_\emptyset$ is the unique bottom: $1_\emptyset \sqsubseteq d$ for every $d$, and it is the only element with that property. What makes it bottom is not its size but that it makes *no claim* --- it carries no basis, asserts nothing about what its axis means or even that the axis is really there, and so it fits anywhere. This is the genuine shape-content of a scalar: a learning rate must multiply into a parameter of any shape, so its axis-content has to be the one thing that broadcasts to everything. Claim-freeness, not size-1-ness, is what licenses broadcasting.
+
+The contrast that makes this vivid is three dimensions, all of size one:
+
+- $1_\emptyset$ --- claim-free, the bottom. Broadcasts to anything. This is what a scalar carries, and what rank-broadening inserts (below).
+- $1_{\texttt{default}}$ --- a unit axis the user wrote explicitly without naming a basis. It is a *claim*: "this axis exists and is one wide." Claims do not broadcast, so $1_{\texttt{default}}$ is an atom, exactly like $256_{\texttt{default}}$ is.
+- $1_{\texttt{mono}}$ --- a named unit, e.g. a single grayscale channel on an axis whose basis is color. Also an atom, and a particularly clear one: $1_{\texttt{mono}} \not\sqsubseteq 3_{\texttt{rgb}}$, because a real one-channel image silently widening into three color channels is almost certainly a bug to be flagged, not performed.
+
+The same goes within a single basis: $1_{\texttt{mono}} \not\sqsubseteq 3_{\texttt{mono}}$, and $1_{\texttt{default}} \not\sqsubseteq 3_{\texttt{default}}$ as well. Once an axis bears any basis at all --- even the anonymous $\texttt{default}$ --- its size is a claim, so it is a full atom that does not broadcast even to a larger size of its own kind.
+
+This is the load-bearing role of the basis, and it is what lets inference catch an **unspecified hidden dimension**. Because an explicit user unit is the atom $1_{\texttt{default}}$ rather than the claim-free bottom, when it meets an axis of unknown size that size is *resolved* --- the unknown is forced to $1$, the value the user actually wrote. A claim-free unit could not do this: it would broadcast to whatever the other axis turned out to be, leaving the unknown unresolved and silently conjuring an axis the user never specified.
+
+Second, $D$ under $\sqsubseteq$ is a **meet-semilattice with bottom but not a join-semilattice.** Any two dimensions have a greatest lower bound: $\mathrm{meet}(d, d) = d$, and $\mathrm{meet}(d_1, d_2) = 1_\emptyset$ when $d_1 \neq d_2$ --- two distinct atoms meet at the claim-free bottom, the only thing below both. But two distinct atoms have *no* upper bound at all. There is no dimension that both $3_{\texttt{default}}$ and $5_{\texttt{default}}$ broadcast to.
+
+## Rows
+
+A single tensor has many axes, grouped (in OCANNL) into three rows by role --- batch, input, output --- but the row structure is uniform across the three, so we develop one row in isolation.
+
+A row is a sequence of dimensions with a distinguished *marker* somewhere in the middle. Write it
+$$
+l \cdot \diamond \cdot r
+$$
+where $l$ and $r$ are finite sequences of dimensions (elements of $D^{*}$) --- $l$ the **leading flank**, $r$ the **trailing flank** --- and $\diamond$ is the marker. The flanks are anchored at the outer edges of the row --- $l$ at the front, $r$ at the back --- and the marker sits between them.
+
+We keep the marker explicit --- writing $[3]\cdot\diamond\cdot[4]$ rather than $[3,4]$ --- because the marker position carries meaning. It is the **broadcast point**: the place where a row of lower rank grows to meet a row of higher rank. Hiding it would hide the one structural fact the rest of the system turns on. (Later, when we introduce variables, the marker is also where an unknown stretch of axes can sit; for now it is purely the broadcast point, and there is nothing unknown about a row.)
+
+### The order on rows
+
+Take two rows $l_1\cdot\diamond\cdot r_1$ and $l_2\cdot\diamond\cdot r_2$. The smaller one may have lower rank; broadcasting makes up the difference by inserting unit axes *at the marker*. Concretely, $l_1\cdot\diamond\cdot r_1 \sqsubseteq l_2\cdot\diamond\cdot r_2$ holds when:
+
+1. the flanks fit, $|l_1| \leq |l_2|$ and $|r_1| \leq |r_2|$; and
+2. the **rank-broadened expansion** of the smaller row pointwise-broadcasts to the catenation of the larger.
+
+The expansion is the operational heart of the definition. Let $k = (|l_2| + |r_2|) - (|l_1| + |r_1|)$ be the rank difference. Insert $k$ unbased units at the marker of the smaller row:
+$$
+\widehat{l_1\cdot\diamond\cdot r_1} \;=\; l_1 \cdot \underbrace{1_\emptyset, \ldots, 1_\emptyset}_{k} \cdot r_1
+$$
+This is now a flat sequence of length $|l_2| + |r_2|$. The order holds iff it broadcasts pointwise to $l_2 \cdot r_2$:
+$$
+\widehat{l_1\cdot\diamond\cdot r_1}[i] \;\sqsubseteq\; (l_2 \cdot r_2)[i] \quad\text{for every } i.
+$$
+
+A worked instance. Does $[3]\cdot\diamond\cdot[4] \sqsubseteq [3]\cdot\diamond\cdot[5,4]$? (Bare sizes carry $\texttt{default}$, suppressed here for legibility; nothing below turns on it.) The smaller row has rank 2, the larger rank 3, so $k = 1$: insert one unit at the marker, giving the expansion $[3, 1_\emptyset, 4]$. Compare pointwise against $[3, 5, 4]$: we need $3 \sqsubseteq 3$ (yes, equal), $1_\emptyset \sqsubseteq 5$ (yes, the unit broadcasts), $4 \sqsubseteq 4$ (yes). It holds.
+
+Note that the inserted unit is the *claim-free* $1_\emptyset$, not $1_{\texttt{default}}$. Rank-broadening mints claim-free units, because an axis introduced solely to make up rank asserts nothing --- which is exactly why it broadcasts to whatever the larger row has there. This is the same $1_\emptyset$ a scalar carries; the marker is where it gets inserted.
+
+The marker is what makes this well-defined. Without it, "insert a unit to make up the rank" would have to choose *where* to insert, and the natural NumPy choice (prepend at the leading edge) would be wrong for OCANNL, which preserves both specified leading and trailing axes. The marker names the insertion point, so there is nothing to choose: rank growth happens at the marker, the flanks stay anchored, and the order is well-defined. OCANNL broadcasts *in the middle*.
+
+And the larger row's interior axes --- the $5$ in the example --- are essentially unconstrained by the inequality. Since $1_\emptyset \sqsubseteq d$ for every $d$, whatever sits opposite an inserted unit is automatically dominated. The interior of the larger row can be any sizes, any bases; broadcasting will reach them from units. This is a *consequence* of the dimension lattice, not a separate clause --- the kind of consolidation we are after.
+
+### Scalars and the empty row
+
+The smallest row is the empty one, $[]\cdot\diamond\cdot[]$ --- rank zero, no axes. It is the least element of the row order: rank-broaden it by $k$ and you get $k$ claim-free units, which broadcast up to any row of rank $k$, so $[]\cdot\diamond\cdot[]\sqsubseteq R$ for every row $R$. Nothing is below it, and it is below everything.
+
+This is the shape of a scalar. A learning rate, for instance, has no axes of its own --- it multiplies into a parameter of any shape, and what makes that possible is exactly that its row is below every other row in the broadcast order. So the empty row is not a syntactic curiosity; it is the actual home of a category of real tensors, and the bottom of the order needs to be reachable and well-behaved for them. We will see, when we get to inference, that scalars also *arrive* at the empty row through their use sites --- but that is a story for later.
+
+There is a near neighbor worth distinguishing, because the system deliberately keeps them apart. The one-axis row $[]\cdot\diamond\cdot[1_\emptyset]$ --- rank one, a single claim-free unit --- broadcasts to anything as well. But it is *not* the empty row: it has rank one, and the empty row has rank zero, and the order knows the difference. The empty row is strictly below it ($[]\cdot\diamond\cdot[] \sqsubseteq []\cdot\diamond\cdot[1_\emptyset]$, by inserting one unit; the reverse fails, since rank one cannot broadcast down to rank zero). We could imagine identifying the two --- they are interchangeable as broadcast *targets* --- but doing so would force the whole inference logic onto equivalence classes: least elements would be least-up-to-equivalence, and every comparison would carry the quotient around. Keeping them distinct is what lets inference stay a clean computation over terms. (Explicit scalar literals are seeded at $[]\cdot\diamond\cdot[1_\emptyset]$ by convention --- a fixed shape --- which is harmless precisely because nothing is left unknown for inference to drive anywhere.)
+
+This is a recurring discipline, and worth naming once: broadcast-equivalence is not term-equality, and the system stays simple by never collapsing along it.
+
+### Rank-polymorphism lives in the order
+
+The order relates rows *of different ranks*. A rank-2 row is genuinely $\sqsubseteq$ a compatible rank-3 row, with the rank gap absorbed by broadcast units at the marker. Rank-polymorphism --- the ability to use a lower-rank tensor where a higher-rank one is expected --- is therefore built into the order on fully-known rows, not added on top by a separate mechanism. This is what explains how the whole system gets away with being as simple as it is.
+
+This matters because it is exactly the capability that, in a conventional type system, would demand *polymorphism with type schemes*: universally quantified shapes, generalized at definition and instantiated at use. The rank-flexibility users expect is delivered by the order itself, with no quantifiers in sight. We will see, once variables and then the host language enter the picture, that the remaining pieces of what schemes provide are supplied without schemes too --- but the foundational piece, rank-flexibility, is already here, in the order on rows.
+
+## Terms and substitution
+
+So far everything has been an actual row: known flanks, a marker, definite dimensions. Inference, though, works with *unknowns* --- a program is elaborated into terms that mention variables, and solving determines them. A variable is a logical device for talking about a row we do not yet know; it is not itself a row. Here are the terms:
+$$
+\begin{aligned}
+\text{dim term} \quad t &::= \alpha \;\mid\; n_b \\
+\text{row term} \quad R &::= \rho \;\mid\; l\cdot\diamond\cdot r \;\mid\; l\cdot\langle\rho\rangle\cdot r
+\end{aligned}
+$$
+with $\alpha$ a dimension variable, $\rho$ a row variable, and flanks $l, r$ now sequences of dim terms. The third row-term form is new: $l\cdot\langle\rho\rangle\cdot r$ is an **open** row term, where the marker carries a row variable $\rho$ standing for an unknown stretch of axes between the flanks. (A plain $l\cdot\diamond\cdot r$ with variable-free flanks is just a row, as before.) The variable sits at the marker because the marker is where unknown axes, like broadcast units, belong: the flanks are the part we know, the marker is the part we do not.
+
+**Substitution** is how a variable becomes known. A substitution $\sigma$ maps each dimension variable to a dimension and each row variable to a row. Application $\sigma(t)$ is structural on dimensions and flanks; the one rule that carries content is substitution at an open marker. If $\sigma(\rho) = l'\cdot\diamond\cdot r'$, then
+$$
+\sigma(l\cdot\langle\rho\rangle\cdot r) \;=\; (l \cdot l') \cdot \diamond \cdot (r' \cdot r).
+$$
+The value's leading flank $l'$ joins the host's leading flank on its *inner* side (so the host's $l$ stays outermost-leading); the value's trailing flank $r'$ joins the host's on its inner side; the marker closes. This is **context composition**: an open row term is a sequence with a hole, $\sigma(\rho)$ fills it, and filling splices the value's flanks between the host's. If the value is itself open, $\sigma(\rho) = l'\cdot\langle\rho'\rangle\cdot r'$, the result keeps the hole: $(l\cdot l')\cdot\langle\rho'\rangle\cdot(r'\cdot r)$.
+
+The splice direction is forced, not chosen. The host's leading flank $l$ is anchored at the outer-leading edge; nothing the variable becomes can displace it, because the variable sits *between* the flanks by construction. So whatever $\rho$ expands to lands inside $l$, never to its left; the same argument pins $r$ at the outer-trailing edge. This is the term-level reflection of "broadcasting in the middle": the marker is the only place axes can be inserted, whether by the order's broadcast units or by a variable's instantiation.
+
+This also pins down what variables are *for*. Rank-polymorphism, recall, was already handled by the order --- a variable adds nothing there. What a variable adds is the orthogonal ability to leave a region of a row *unknown* and have it determined by other constraints: to absorb not just broadcast units but arbitrary, specific axes discovered elsewhere in the program. The order handles "this rank-2 row fits in a rank-3 hole." Variables handle "this row has some axes here, to be discovered." Two capabilities, two mechanisms, cleanly separated --- and the variables stay monomorphic, plain existentials solved once, never quantified.
+
+Which raises the question schemes would have answered: if a variable is solved once, how does one *operator* serve many call sites at many shapes? The answer sits outside the formalism, in the host language. Tensor operators are ordinary OCaml functions, and each application re-runs the construction of the tensor expression, emitting the operator's constraints afresh with newly allocated variables. That fresh allocation is what scheme instantiation would have done --- it just happens at the level of OCaml function application rather than inside the shape logic. The polymorphism is real at the use site (the same `attention` works at any batch rank), realized by evaluation rather than by a generalization rule: a poor man's type scheme, built for free by writing operators as functions.
+
+The trade has a cost worth naming. Because operators are typed only at their applications, never at their definitions, an operator's constraints are re-derived on every call rather than checked once against a scheme, and a shape error *inside* an operator surfaces at call sites rather than at the definition. The first is a performance cost: inference cost becomes proportional to the size of the expanded tensor graph rather than the original tensor expression. The second is a diagnostic cost, mitigated by provenance tracking that points a failure back to the offending specification. Neither is fatal, and the payoff is a formalism small enough to reason about: type-theoretic apparatus traded for host-language apparatus that was there anyway.
+
+Finally, substitutions carry their own order, separate from the broadcast orders on dimensions and rows. We use the **pure substitution order**: $\sigma_1 \leq \sigma_2$ iff there is some $u$ with $u \circ \sigma_1 = \sigma_2$. Reading: $\sigma_2$ is reached from $\sigma_1$ by further substitution --- by *committing* more variables. This is the order in which "principal" will be defined.
+
+## Constraints
+
+Inference reduces a program to a set of constraints over these terms. Atomic constraints come in two relations over each sort:
+$$
+t_1 = t_2, \qquad t_1 \sqsubseteq t_2, \qquad R_1 = R_2, \qquad R_1 \sqsubseteq R_2.
+$$
+A program elaborates to a set $\Phi$ of these. The two relations have distinct origins and distinct meanings:
+
+- **Equality** constraints come from operations that demand exact matching --- einsum contractions, where an axis labeled `k` in the spec must be the very same axis as the one at the corresponding position in the operand. No broadcasting is permitted; the template binds the operand axis exactly.
+- **Inequality** constraints come from operations that permit broadcasting --- pointwise arithmetic, composition --- where a smaller operand may broadcast up to a larger. We orient them so that $R_{\text{sub}} \sqsubseteq R_{\text{super}}$: the sub-tensor (the operand that may be broadcast) is below, the super-tensor (the result it must fit) is above.
+
+A substitution $\sigma$ **models** $\Phi$, written $\sigma \models \Phi$, when *every* extension of $\sigma$ that grounds the remaining free variables makes $\sigma(\Phi)$ a true variable-free statement: each equality a syntactic identity of rows, each inequality a true instance of the row order. The free variables in $\sigma(\Phi)$ are universally quantified --- $\sigma$ can leave some variables free and still model $\Phi$, provided the constraints hold for any value those variables might later take. (The payoff: the principal solution will leave free exactly the variables the constraints do not force, and that "leaving free" has a precise meaning --- not "unspecified," but "compatible with every grounding.")
+
+The goal of the solver is a **principal model**: a $\sigma_\star$ with $\sigma_\star \models \Phi$ such that every other model $\sigma \models \Phi$ satisfies $\sigma_\star \leq \sigma$. Under the pure substitution order, $\sigma_\star \leq \sigma$ means $\sigma = u \circ \sigma_\star$ for some $u$: every other model is reached from $\sigma_\star$ by further substitution. So $\sigma_\star$ is the *least committed* of the satisfying substitutions --- it binds exactly those variables the constraints force, and any other valid choice is reached by committing more. Principality is what makes inference *predictable*: there is a single least-committed solution, not a grab-bag of incomparable ones, so the user receives a clear answer to "which variables did the constraints determine, and which were free?".
+
+There is one place where the principal substitution alone is not the final answer, worth flagging now because it shapes the algorithm to come. Runtime tensor allocation needs *determinate* shapes, so every variable must be bound before the answer is usable --- yet the principal substitution typically leaves many free. A two-phase structure handles this: *solving* computes the principal substitution; *closing* then commits the still-free variables, in a direction that depends on whether they belong to a leaf or an interior shape. The phases interleave --- solve, close leaves, solve again, close interiors --- because committing a leaf creates new facts that another round of solving can propagate. The next sections give the solving algorithm and its handling of the two lattices' characteristic asymmetry, then the closing policy, where the directional rules are spelled out.
+
+## The algorithm: solving by variable elimination
+
+Inference runs as a set of rewrite rules over a pair $(\Phi, E)$: the unsolved constraints $\Phi$ and an environment $E$ that records what is known about each variable. A variable's entry is either *solved* (bound to a term, and substituted away everywhere it occurs) or *bounded* (carrying accumulated bounds and adjacency to other variables). Each rule consumes a constraint, possibly updates $E$, and possibly emits further constraints; the process runs to fixpoint. Two global facts make this terminate and converge: a variable is *solved at most once* and then substituted out (so the supply of unsolved variables only shrinks), and the rules only ever *add* commitments, never retract them, so bounds tighten monotonically as work proceeds. We state the interesting rules and let the routine ones (reflexivity, checks between two variable-free terms) go without comment.
+
+### Dimension equality
+
+Equality is ordinary first-order unification. $n_b = n_b$ discharges; a clash of sizes, or of two distinct bases, fails; a variable against a term solves the variable and substitutes the term --- size, basis, and all. (The formalization treats the claim-free bottom as the basis $1_\emptyset$ and every other axis as carrying a definite basis; the implementation spells the bottom's tag `broadcastable_when_1`, a name that states its own rule.)
+
+### Dimension inequality: an asymmetry that *is* the lattice
+
+The inequality rules are where the meet-semilattice-with-no-joins shape of the dimension order becomes visible as solver behavior. The two directions are not symmetric, and the asymmetry is forced by the order, not chosen.
+
+A **lower bound solves immediately.** Confronted with $\alpha \sqsupseteq d$ for a non-bottom $d$ --- the variable must be *at least* $d$ --- there is nothing to defer: $d$ has no proper superiors, so the variable is forced to $d$ and we emit $\alpha = d$. A lower bound at an atom is not a bound to remember; it is an equation. (The sole non-solving case is $\alpha \sqsupseteq 1_\emptyset$, which says nothing, since everything is $\sqsupseteq$ the bottom.)
+
+An **upper bound is recorded, not solved.** Confronted with $\alpha \sqsubseteq d$ --- the variable is *at most* $d$ --- the variable is left open, with $d$ remembered as its least upper bound. It cannot be solved yet: $\alpha$ could still turn out to be $1_\emptyset$ (which is $\sqsubseteq d$) or $d$ itself, and only later constraints decide. So upper bounds accumulate; lower bounds discharge.
+
+And here is the payoff. Suppose a second, *incompatible* upper bound arrives: $\alpha \sqsubseteq d'$ with $d' \neq d$. The variable must now be below both $d$ and $d'$ --- below their meet. But two distinct atoms meet at the bottom: $\mathrm{meet}(d, d') = 1_\emptyset$. So the LUB collapses, and the variable is solved to $1_\emptyset$. Read back into shapes: an axis pushed toward two incompatible sizes does not raise an error --- it broadcasts, becoming the claim-free unit, which is exactly what should fit under both. This is deliberate broadcast semantics: the same fact as "$3$ and $5$ have no common broadcast target," now resolving an axis instead of rejecting the program.
+
+### Row equality and inequality: lifting the order through the marker
+
+Row constraints reduce to dimension constraints by aligning the flanks and recursing, with the row variable absorbing the rest. Both row relations align the flanks at their **outer edges**: leading flanks compared left-to-right from the front, trailing flanks compared right-to-left from the back, exactly as the row order's expansion prescribed. Equality (from einsum, no broadcasting) demands the aligned dimensions match; inequality (from pointwise and compose, broadcasting allowed) emits a dimension *inequality* per aligned pair and lets the dimension rules above take over.
+
+The structurally interesting case is a row inequality $\text{sub} \sqsubseteq \text{super}$ where the smaller side is open, $l\cdot\langle\rho\rangle\cdot r$, and the larger side supplies more axes than the flanks consume. The per-axis inequalities fire on the overlapping flank portions; what remains of the larger row --- its interior, after the outer-matched prefix and suffix are stripped --- becomes the **least upper bound recorded on $\rho$**. This is the bipartite cut: the larger row's material is partitioned into *matched flank* (constrained pointwise, against the outer edges) and *interior residue* (handed to the row variable as its LUB). There is no third part and no choice of where to cut, because the flanks anchor at the outer edges and the marker is the only interior --- the same "broadcasting in the middle" that made the row order well-defined now makes the cut unique.
+
+When instead the *larger* side has too few axes to accommodate the smaller side's known flanks --- the inequality $\text{sub} \sqsubseteq \text{super}$ requires that super provide at least $|l| + |r|$ axes, but super has fewer than that --- the asymmetry between the two sides becomes the deciding factor. If super is itself open, carrying its own row variable, that variable can be made to stand for a wider row, and the rule does exactly that: it substitutes super's variable by a fresh template with enough additional axes (themselves fresh dimension variables, under a fresh row variable spliced in at the marker) to bring super up to the required rank. The emitted equality solves super's old variable to this template, the work recurses, and because the variable is now solved-and-substituted it never regrows. (The implementation memoizes templates so that re-deriving the same deficit reuses the same fresh variables rather than minting alpha-variants that equality would only have to reconcile later; this is an efficiency measure with no effect on the result, which is principal up to renaming of fresh variables.)
+
+If super is *closed* and still too short --- no row variable to grow, no broadcasting that could make up the difference on the smaller side either, since the smaller side's known flank-axes already exceed super's rank --- it is a genuine rank mismatch, and the inequality fails.
+
+### What the formalism leaves out
+
+The implementation carries machinery the formal account abstracts over. Some of it changes only *how* the answer is reached, not which answer: the solver runs in numbered stages triggered on demand rather than as a single fixpoint, with heuristics for *when* to guess an underdetermined variable, cycle-breaking that stops a guess from making a pending size constraint unsatisfiable, the template memoization just mentioned, and provenance records that point a failed constraint back to its source spec. The rest genuinely extends the constraint language past pure broadcasting --- per-axis size and total-element constraints (the latter carrying stride coefficients), affine dimensions for strided and convolutional indexing, and axis concatenation and splitting --- each a new constraint form layered on the same solver. A separate pass, projection inference, then re-solves with freshened ids so that axes forced equal in size are not thereby forced to share an array index. None of this is in the algebra above; all of it rests on it.
+
+## The closing policy
+
+The principal substitution from solving binds exactly the variables the constraints force. Most are forced --- interior tensors whose shapes are pinned by their components --- but the rest survive into closing, and the runtime needs them committed before any tensor can be allocated. Closing therefore picks a direction for each remaining variable, and the direction depends on whether the variable belongs to a leaf or an interior shape.
+
+**Leaf variables commit upward**, to the largest shape their accumulated upper bounds permit. This is the engine of from-usage inference: a data tensor's shape is pinned by how it is consumed (a matmul fixing a feature width, an external fact fixing the row count), and closing commits the tensor upward to exactly that. The same upward closing gives a parameter its shape from the surrounding computation, with no annotation on the weight itself. A leaf goes up because a leaf has no other source of shape information --- its uses are all the constraint there is.
+
+Closing a leaf is not a passive read: it instantiates the leaf's variable, which in turn populates the inequalities that variable participated in with new ground values, which can constrain interior variables that solving left free. So closing the leaves is followed by *another round of solving*, propagating the now-determinate leaf shapes through the constraint set.
+
+**Interior variables that remain free after that second round commit downward**, to the bottom of their respective orders. A free interior variable at this point means no path through the constraints ever forced its shape; the smallest fitting commitment is correct, since nothing is asking for more. So an unforced interior row variable becomes the empty row, an unforced interior dimension variable becomes $1_\emptyset$, and the substitution is now total.
+
+Inside each direction, the per-variable rule is uniform across dimension and row variables. Upward closing on a leaf needs an accumulated upper bound to close *to*; that bound is built piecewise out of the inequalities the leaf participated in, and at any axis position where no use ever supplied a ground value, the bound has a **hole**. Holes are common --- a bound only carries information at the positions where the bounding shape is itself known, and in from-usage inference most shapes are pinned incrementally, so at closing time a leaf is typically known in places and holey in others. Holes get a fallback, and this is the one place the leaf's *kind* matters. For an ordinary leaf the fallback is the least value: a dimension hole guesses to $1$, a row hole closes to no-further-axes (the empty row). For a **parameter** the fallback is an *error* --- "you forgot to specify the hidden dimension" --- because a learnable weight whose shape nothing determined is almost certainly a construction mistake, and silently defaulting it to $1$ would bury the bug rather than report it. The parameter distinction is semantic (set when the tensor is built as a parameter, a subset of the syntactic leaves) and it changes behavior only at the holes.
+
+This finally places the scalar precisely. A learning rate is a leaf used at many conflicting sites; its accumulated upper bounds meet downward (by the lattice's meet-of-distinct-atoms-is-bottom rule), and wherever no known use reached it, the hole fallback applies --- both roads lead to the small shape, the first by meet-to-bottom, the second by guess-to-$1$/empty.
+
+Literals are a separate matter, and they do *not* grow: when a scalar or tensor literal is written through the syntax extension, parsing supplies its precise shape directly, so there is no underdetermined variable for closing to resolve upward. The upward-closing path is reached only by shapes left *deliberately* unpinned --- and that is a feature, not an accident. To sum out an axis, for instance, one can multiply by a vector of ones whose length should match the axis being reduced; writing that vector through the ordinary OCaml constructor rather than the syntax extension declines the parser's precision, leaves the length a variable, and lets inference close it up to the axis it meets. The vector is never materialized: the inlining optimization folds it into the reduction at code-generation time, so the shape-polymorphic helper costs nothing at runtime. Upward closing plus inlining is thus the mechanism behind a deliberate idiom --- "a constant whose shape the context decides" --- not a wart to apologize for. (The price, paid only when one opts into it, is that an unpinned constant with a single undemanding use can close to a larger shape than it strictly needs; inlining is what makes that price zero.)
+
+## From the algebra to what you write
+
+None of the machinery above is what an OCANNL user sees. They write einsum specifications and ordinary-looking arithmetic, and the constraints are generated behind two syntax extensions, `%op` (for tensors) and `%cd` (for assignments). It is worth closing the loop --- showing how the surface notation produces the constraint language, because the design choices in the algebra were made to serve the notation.
+
+**Three rows, not one.** Recall that a shape is not one row but three, written `batch | input -> output`. The split is not enforced semantics --- an einsum spec may move an axis between kinds --- but it is not idle either: because each kind is its own row, a shape carries *three* row variables, and a specification can leave one kind polymorphic while pinning a particular axis in another. Consider the spec `... b | ... -> ...` --- locating a single batch axis `b` while permitting arbitrary further batch axes to its left (the leading `...` is a row variable at the leading edge of the batch row; in the materialized tensor, what appears to `b`'s right is the input and output axes, by row concatenation, not more batch axes), and leaving the input and output rows entirely polymorphic (their own `...` marks). One axis pinned by role, one axis-kind partly-polymorphic, two axis-kinds fully polymorphic, all in one shape. That partial-polymorphism stance is exactly what an outer training loop or a data-parallel wrapper wants from an operator: extra batch axes can be added without touching the rest. The three `...` marks have to be written explicitly --- an omitted kind defaults to *empty*, not polymorphic, so a spec says only what the user opts into rather than implicitly permitting more --- but that opt-in is the syntactic reflex of the three independent row variables underneath. Collapsing the three kinds into one row would make every `...` all-or-nothing and forfeit precisely that. The input/output split also gives tensor multiplication the reading of function composition --- `*` contracts one tensor's input axes against another's output axes --- so matrix multiplication needs no spec at all, and the common cases stay wordless.
+
+**Specs generate constraints.** An einsum operation emits *equalities*: the axes labeled alike must coincide, exactly, no broadcasting --- which is why einsum is the equality path of the solver. Pointwise and compose operations emit *inequalities*, the broadcast path. The ellipsis `...` and named row variables `..d..` are precisely the row variables of the formalism; a label that captures a dimension (the `["h"; "d"]` after a spec) binds the solved dimension to an OCaml value, so an inferred size can be reused for scaling or for setting another axis.
+
+**Precision by default, inference on request.** A literal written through the extension gets its exact shape from parsing. Inline parameter and data declarations --- the `{ w }` record syntax --- introduce leaves whose shapes are left to inference and resolved by the closing policy: a parameter takes its shape from how it is used, erroring only if nothing pins it (the forgotten-hidden-dimension case). And the escape hatch matters as much as the defaults: dropping out of the extension to a plain OCaml constructor *declines* the parser's precision, which is how one writes a shape-polymorphic helper like a ones-vector whose length the context decides. The `()` unit parameter marks the boundary between configuration (plain OCaml, preserved) and tensor arguments (transformed); its primary job is controlling parameter sharing, so that a layer's learnable weights are minted once and reused across calls rather than freshly allocated on every application --- `let layer = make () in ...`. The code that runs between the unit and the tensor inputs --- including parameter creation and any input-independent sub-tensors --- emits its constraints once and is reused; only the body that consumes the tensor inputs runs again on each application. That re-derivation of the body *is* the system's polymorphism, supplied by OCaml rather than by type schemes, as we saw; the unit idiom is what lets the user say "this part stays fixed, that part runs again."
+
+## What the rename bought
+
+We began by retiring "row polymorphism plus nominal subtyping," and the replacement is now earned rather than asserted. The system is **broadcast-aware contextual sequence constraints**: *sequences* of axes, carried in rows; *contextual*, because an open row term is a one-hole context and substitution is context composition; *broadcast-aware*, because the order on those sequences is the broadcast order --- with $1_\emptyset$ as its bottom and the absent joins above the atoms turning what would be errors into a missing join the system handles by other means. Each word of the old name was wrong in an instructive way --- "nominal" hid that the order reads off values not names, "subtyping" oversold one particular coercion order as the general thing, "row polymorphism" imported record intuitions (unordered fields, a rest-variable at one end) that the ordered, two-flanked rows violate.
+
+What the formalization revealed is that almost everything reduces to one small order theory applied twice. The dimension lattice --- bottom $1_\emptyset$, incomparable atoms above it, meets that collapse to the bottom and joins that simply do not exist --- is the whole story of per-axis broadcasting, and its missing joins *are* the broadcast errors. Rows lift that same order structurally, with the marker naming where rank grows so that broadcasting happens in the middle and the order stays well-defined. Inference is principal solving by variable elimination, with the lattice's asymmetry (lower bounds solve, upper bounds defer and collapse) falling straight out of "no joins above the atoms." The one place the picture inverts --- leaves closed upward to their largest fitting shape --- is not a second algebra but a closing phase, justified by the fact that a leaf has no below to be pressured from, and it is exactly what lets a weight or a data tensor have its shape inferred from use.
+
+OCANNL is open source, at [`github.com/ahrefs/ocannl`](https://github.com/ahrefs/ocannl).

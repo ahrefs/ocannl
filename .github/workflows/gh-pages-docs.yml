@@ -44,6 +44,9 @@ jobs:
       - name: Shapes and Einsum slides
         run: slipshow compile docs/slides-shapes_and_einsum.md -o docs/html/shapes_and_einsum.html
 
+      - name: Blog on shape semantics
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/broacast-aware-shape-inference.md -o docs/html/broadcast-aware-shape-inference.html
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
