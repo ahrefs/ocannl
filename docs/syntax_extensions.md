@@ -324,7 +324,17 @@ N-dimensional array literals combine the list, tuple and array syntaxes to stric
 
 For example, `[ (1, 2, 3); (4, 5, 6) ]` is a mathematical matrix converting 3D vectors into 2D vectors.
 
-OCANNL supports dimension bases (semantic annotations). A type-annotation on a numeric literal sets the dimension basis (a multi-character tag, e.g. `rgb`) of the resulting output dimension 1. These bases can then propagate to specify bases of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * (2.0 : q)) + (1.0 : p) in ...`. Only a bare type-constructor name is read as the basis. (This replaces an older `'q' 2.0` char-literal form, which could not carry multi-character tags.) Unannotated axes carry the reserved `default` basis (an atom that does not fuse with a named basis), and the reserved `bcast_if_1` basis is the claim-free broadcast bottom that a size-1 axis stretches from.
+OCANNL supports dimension bases (semantic annotations on dimension *values*, a multi-character tag such as `rgb` or `heads`). You label an axis by writing an OCaml type-annotation on the axis *container* inside a tensor literal — the annotation names that axis's basis:
+
+- `([ 1.; 2.; 3. ] : rgb)` labels the **output** (list) axis as `rgb`.
+- `((1., 2., 3.) : features)` labels the **input** (tuple) axis as `features`.
+- `([| ...; ... |] : examples)` labels the **batch** (array) axis as `examples`.
+
+Annotations compose with nesting: in `[ ((1., 2.) : feat) ]` the inner tuple labels the input axis `feat` while the enclosing output list is unannotated. Only a bare type-constructor name is read as the basis (qualified, parameterised, tuple, arrow and variant types are ignored). These bases then propagate to specify bases of other dimensions in other tensors, via shape inference.
+
+As a convenience, the same annotation on a bare numeric literal labels the size-1 output axis of the resulting scalar: `(2.0 : q)` is shorthand for `([ 2.0 ] : q)`.
+
+(This replaces an older `'q' 2.0` char-literal form, which could not carry multi-character tags.) Unannotated axes carry the reserved `default` basis (an atom that does not fuse with a named basis, so an unlabelled axis will not silently merge with a labelled one), and the reserved `bcast_if_1` basis is the claim-free broadcast bottom that a size-1 axis stretches from — write it explicitly (e.g. `([ 1. ] : bcast_if_1)`) when you *want* a size-1 axis to broadcast. Example: `let%op y = ({ hey } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in ...`.
 
 ## Wildcard bindings
 
