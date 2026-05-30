@@ -57,12 +57,12 @@ let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
       @@ Location.error_extensionf ~loc
            "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
-      let edims dims = Ast_builder.Default.elist ~loc dims in
-      let input_dims_expr = edims input_dims in
-      let output_dims_expr = edims output_dims in
+      (* Threads tensor-literal axis labels through to <kind>_axes when present. *)
+      let input_name, input_expr = axes_or_dims_named ~loc ~kind:"input" input_dims in
+      let output_name, output_expr = axes_or_dims_named ~loc ~kind:"output" output_dims in
       let extra_args =
-        ({ txt = Lident "input_dims"; loc }, input_dims_expr)
-        :: ({ txt = Lident "output_dims"; loc }, output_dims_expr)
+        ({ txt = Lident input_name; loc }, input_expr)
+        :: ({ txt = Lident output_name; loc }, output_expr)
         :: extra_args
       in
       make_p ~no_grad ~opt_label ~loc ~values ~extra_args name
@@ -360,7 +360,17 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
   | { pexp_desc = Pexp_array _; _ }
-  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }
+  (* A tensor literal whose outermost axis container carries an axis-label annotation,
+     e.g. [([ 1.; 2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
+  | {
+      pexp_desc =
+        Pexp_constraint
+          ( ( { pexp_desc = Pexp_array _; _ }
+            | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ),
+            _ );
+      _;
+    } ->
       (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as

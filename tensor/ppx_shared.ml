@@ -15,30 +15,45 @@ let rec collect_list accu = function
       List.rev (error_expr :: accu)
 
 let dim_spec_to_string = function
-  | `Input_dims dim -> "input (tuple) of dim " ^ Int.to_string dim
-  | `Output_dims dim -> "output (list) of dim " ^ Int.to_string dim
-  | `Batch_dims dim -> "batch (array) of dim " ^ Int.to_string dim
+  | `Input_dims (dim, _) -> "input (tuple) of dim " ^ Int.to_string dim
+  | `Output_dims (dim, _) -> "output (list) of dim " ^ Int.to_string dim
+  | `Batch_dims (dim, _) -> "batch (array) of dim " ^ Int.to_string dim
+
+(* Extract a tensor-literal axis-label basis from a type annotation: only a bare type-constructor
+   name (e.g. [rgb], [heads]) is a label; anything else (qualified / parameterised / arrow / tuple
+   / variant) is not, and the annotation is ignored. *)
+let axis_basis_of_type (typ : core_type) : string option =
+  match typ.ptyp_desc with Ptyp_constr ({ txt = Lident b; _ }, []) -> Some b | _ -> None
 
 let ndarray_constant expr =
   let loc = expr.pexp_loc in
-  (* Traverse the backbone of the ndarray to collect the dimensions. *)
-  let rec loop_dims accu = function
+  (* Traverse the backbone of the ndarray to collect the dimensions and any per-axis basis labels.
+     A [(container : tag)] type-annotation labels that axis's dimension basis: [([…] : rgb)] for an
+     output (list) axis, [((…) : feat)] for an input (tuple) axis, [([|…|] : batch)] for a batch
+     (array) axis. [?basis] carries the label of the container currently being matched. *)
+  let rec loop_dims ?basis accu = function
+    | { pexp_desc = Pexp_constraint (inner, typ); _ } ->
+        loop_dims ?basis:(axis_basis_of_type typ) accu inner
     | { pexp_desc = Pexp_tuple (exp :: _ as exps); _ } ->
-        loop_dims (`Input_dims (List.length exps) :: accu) exp
+        loop_dims (`Input_dims (List.length exps, basis) :: accu) exp
     | { pexp_desc = Pexp_array (exp :: _ as exps); _ } ->
-        loop_dims (`Batch_dims (List.length exps) :: accu) exp
-    | { pexp_desc = Pexp_tuple []; _ } -> `Input_dims 0 :: accu
-    | { pexp_desc = Pexp_array []; _ } -> `Batch_dims 0 :: accu
+        loop_dims (`Batch_dims (List.length exps, basis) :: accu) exp
+    | { pexp_desc = Pexp_tuple []; _ } -> `Input_dims (0, basis) :: accu
+    | { pexp_desc = Pexp_array []; _ } -> `Batch_dims (0, basis) :: accu
     | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } as expr -> (
         let exps = collect_list [] expr in
         match exps with
-        | exp :: _ -> loop_dims (`Output_dims (List.length exps) :: accu) exp
-        | [] -> `Output_dims 0 :: accu)
+        | exp :: _ -> loop_dims (`Output_dims (List.length exps, basis) :: accu) exp
+        | [] -> `Output_dims (0, basis) :: accu)
     | _ -> accu
   in
   let dims_spec = Array.of_list_rev @@ loop_dims [] expr in
   let open Ast_builder.Default in
   let rec loop_values depth accu expr =
+    (* See through an axis-label type-annotation to the container it wraps. *)
+    match expr with
+    | { pexp_desc = Pexp_constraint (inner, _); _ } -> loop_values depth accu inner
+    | _ ->
     if depth >= Array.length dims_spec then
       match expr with
       | { pexp_desc = Pexp_constant (Pconst_float _); _ } -> expr :: accu
@@ -64,36 +79,36 @@ let ndarray_constant expr =
       match expr with
       | { pexp_desc = Pexp_tuple exps; _ } -> (
           match dims_spec.(depth) with
-          | `Input_dims dim when dim = List.length exps ->
+          | `Input_dims (dim, _) when dim = List.length exps ->
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
                    "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Input_dims (List.length exps))
+                   (dim_spec_to_string @@ `Input_dims (List.length exps, None))
                    (dim_spec_to_string dim_spec))
               :: accu)
       | { pexp_desc = Pexp_array exps; _ } -> (
           match dims_spec.(depth) with
-          | `Batch_dims dim when dim = List.length exps ->
+          | `Batch_dims (dim, _) when dim = List.length exps ->
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
                    "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Batch_dims (List.length exps))
+                   (dim_spec_to_string @@ `Batch_dims (List.length exps, None))
                    (dim_spec_to_string dim_spec))
               :: accu)
       | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } -> (
           let exps = collect_list [] expr in
           match dims_spec.(depth) with
-          | `Output_dims dim when dim = List.length exps ->
+          | `Output_dims (dim, _) when dim = List.length exps ->
               List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
           | dim_spec ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
                    "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Output_dims (List.length exps))
+                   (dim_spec_to_string @@ `Output_dims (List.length exps, None))
                    (dim_spec_to_string dim_spec))
               :: accu)
       | { pexp_loc = loc; _ } ->
@@ -104,12 +119,13 @@ let ndarray_constant expr =
   in
   let result = loop_values 0 [] expr in
   let values = { expr with pexp_desc = Pexp_array (List.rev result) } in
+  (* Each kind's axes are returned as [(dim_expr, basis option)] pairs (outer-to-inner order). *)
   let batch_dims, output_dims, input_dims =
     Array.fold dims_spec ~init:([], [], [])
       ~f:(fun (batch_dims, output_dims, input_dims) -> function
-      | `Input_dims dim -> (batch_dims, output_dims, eint ~loc dim :: input_dims)
-      | `Output_dims dim -> (batch_dims, eint ~loc dim :: output_dims, input_dims)
-      | `Batch_dims dim -> (eint ~loc dim :: batch_dims, output_dims, input_dims))
+      | `Input_dims (dim, basis) -> (batch_dims, output_dims, (eint ~loc dim, basis) :: input_dims)
+      | `Output_dims (dim, basis) -> (batch_dims, (eint ~loc dim, basis) :: output_dims, input_dims)
+      | `Batch_dims (dim, basis) -> ((eint ~loc dim, basis) :: batch_dims, output_dims, input_dims))
   in
   (values, List.rev batch_dims, List.rev output_dims, List.rev input_dims)
 
@@ -611,10 +627,28 @@ let translate_str translate ({ pstr_desc; pstr_loc = loc; _ } as str) =
 let str_expander_with_punning translate ~loc ~path (payload : structure_item list) =
   flatten_str ~loc ~path @@ List.map payload ~f:(translate_str translate)
 
+(* Build the [(arg-name, expr)] for one axis kind from its [(dim_expr, basis option)] pairs. If any
+   axis carries a tensor-literal basis label, emit [<kind>_axes = [(basis, dim); …]] (unlabelled
+   axes in that kind take the reserved ["default"] tag); otherwise [<kind>_dims = [dim; …]]. *)
+let axes_or_dims_named ~loc ~kind (pairs : (expression * string option) list) : string * expression
+    =
+  let open Ast_builder.Default in
+  if List.exists pairs ~f:(fun (_, b) -> Option.is_some b) then
+    let axes =
+      List.map pairs ~f:(fun (dim, b) ->
+          let basis = Option.value b ~default:"default" in
+          [%expr [%e estring ~loc basis], [%e dim]])
+    in
+    (kind ^ "_axes", elist ~loc axes)
+  else (kind ^ "_dims", elist ~loc (List.map pairs ~f:fst))
+
+let axes_or_dims_arg ~loc ~kind pairs : Ppxlib.arg_label * expression =
+  let name, expr = axes_or_dims_named ~loc ~kind pairs in
+  (Labelled name, expr)
+
 let ndarray_op ?axis_labels ?label ~ndarray_fn expr =
   let loc = expr.pexp_loc in
-  let values, batch_dims, output_dims, input_dims = ndarray_constant expr in
-  let edims dims = Ast_builder.Default.elist ~loc dims in
+  let values, batch, output, input = ndarray_constant expr in
   let w_val = [%expr [%e ndarray_fn] [%e values]] in
   let op =
     match (axis_labels, label) with
@@ -624,9 +658,13 @@ let ndarray_op ?axis_labels ?label ~ndarray_fn expr =
     | Some axis_labels, Some label ->
         [%expr [%e w_val] ~axis_labels:[%e axis_labels] ~label:[%e label]]
   in
-  [%expr
-    [%e op] ~batch_dims:[%e edims batch_dims] ~input_dims:[%e edims input_dims]
-      ~output_dims:[%e edims output_dims] ()]
+  Ast_builder.Default.pexp_apply ~loc op
+    [
+      axes_or_dims_arg ~loc ~kind:"batch" batch;
+      axes_or_dims_arg ~loc ~kind:"input" input;
+      axes_or_dims_arg ~loc ~kind:"output" output;
+      (Nolabel, [%expr ()]);
+    ]
 
 let collect_capture_labels ~loc head rest =
   let capture_labels = head :: collect_list [] rest in
