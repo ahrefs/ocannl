@@ -88,26 +88,36 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
       (no_vbs, [%expr TDSL.bits [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
       (no_vbs, [%expr TDSL.number (Float.of_int [%e expr])])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  (* Axis-labelled constant literals: a type-annotation on a numeric literal sets the output
+     dimension basis (semantic tag) of the resulting size-1 axis, e.g. [(2.0 : rgb)], [(1.0 : p)].
+     This replaces the old char-literal form (['q' 2.0]), which could not carry multi-character
+     tags. Only a bare type constructor name is accepted as the basis. *)
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_float _); _ } as f),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] [%e f]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       (no_vbs, [%expr TDSL.bits ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] [%e i]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_integer _); _ } as i),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       ( no_vbs,
         [%expr
           TDSL.number ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] (Float.of_int [%e i])]

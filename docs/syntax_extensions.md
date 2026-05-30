@@ -324,7 +324,7 @@ N-dimensional array literals combine the list, tuple and array syntaxes to stric
 
 For example, `[ (1, 2, 3); (4, 5, 6) ]` is a mathematical matrix converting 3D vectors into 2D vectors.
 
-OCANNL supports dimension bases (semantic annotations). The syntax for number allows prefixing a number by a character that stands for the dimension basis of the resulting output dimension 1. These bases can then propagate to specify bases of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * 'q' 2.0) + 'p' 1.0 in ...`
+OCANNL supports dimension bases (semantic annotations). A type-annotation on a numeric literal sets the dimension basis (a multi-character tag, e.g. `rgb`) of the resulting output dimension 1. These bases can then propagate to specify bases of other dimensions in other tensors, via shape inference. Example: `let%op y = ({ hey } * (2.0 : q)) + (1.0 : p) in ...`. Only a bare type-constructor name is read as the basis. (This replaces an older `'q' 2.0` char-literal form, which could not carry multi-character tags.) Unannotated axes carry the reserved `default` basis (an atom that does not fuse with a named basis), and the reserved `bcast_if_1` basis is the claim-free broadcast bottom that a size-1 axis stretches from.
 
 ## Wildcard bindings
 
