@@ -32,23 +32,26 @@ let y2 =
         (( *. ) ?label:None x1 hey3) x2
 let a =
   let open! TDSL.O in
-    ((TDSL.ndarray
-        [|(Float.of_int 1);(Float.of_int 2);(Float.of_int 3);(Float.of_int 4);(
-          Float.of_int 5);(Float.of_int 6)|]) ~label:["a"]) ~batch_dims:[]
+    (TDSL.ndarray
+       [|(Float.of_int 1);(Float.of_int 2);(Float.of_int 3);(Float.of_int 4);(
+         Float.of_int 5);(Float.of_int 6)|]) ~label:["a"] ~batch_dims:[]
       ~input_dims:[3] ~output_dims:[2] ()
 let b =
   let open! TDSL.O in
-    ((TDSL.ndarray
-        [|(Float.of_int 7);(Float.of_int 8);(Float.of_int 9);(Float.of_int 10)|])
-       ~label:["b"]) ~batch_dims:[2] ~input_dims:[] ~output_dims:[2] ()
+    (TDSL.ndarray
+       [|(Float.of_int 7);(Float.of_int 8);(Float.of_int 9);(Float.of_int 10)|])
+      ~label:["b"] ~batch_dims:[2] ~input_dims:[] ~output_dims:[2] ()
 let y =
   let hey4 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
        "hey4") () in
   let open! TDSL.O in
     (+) ?label:(Some ["y"])
-      (( * ) ?label:None hey4 (TDSL.number ?label:None ~axis_basis:"q" 2.0))
-      (TDSL.number ?label:None ~axis_basis:"p" 1.0)
+      (( * ) ?label:None hey4
+         (TDSL.ndarray [|2.0|] ~batch_dims:[] ~input_dims:[]
+            ~output_axes:[("q", 1)] ()))
+      (TDSL.ndarray [|1.0|] ~batch_dims:[] ~input_dims:[]
+         ~output_axes:[("p", 1)] ())
 let z =
   let hey5 =
     (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
@@ -58,8 +61,13 @@ let z =
        "hey6") () in
   let open! TDSL.O in
     (+) ?label:(Some ["z"])
-      (( *. ) ?label:None (TDSL.number ?label:None ~axis_basis:"q" 2.0) hey5)
-      (( *. ) ?label:None hey6 (TDSL.number ?label:None ~axis_basis:"q" 1.0))
+      (( *. ) ?label:None
+         (TDSL.ndarray [|2.0|] ~batch_dims:[] ~input_dims:[]
+            ~output_axes:[("q", 1)] ())
+         hey5)
+      (( *. ) ?label:None hey6
+         (TDSL.ndarray [|1.0|] ~batch_dims:[] ~input_dims:[]
+            ~output_axes:[("q", 1)] ()))
 let stride = 2
 and dilation = 3
 and use_padding = true

@@ -15,8 +15,9 @@ A tensor shape in OCANNL is composed of three rows of axes: batch, input and out
 A row is a sequence of axes of a single kind: batch, input, or output. The shape type incorporates information relevant to inference, in particular shape variables: both for individual axes (`dim` variables), and for extending a row with more axes (`row` variables). Currently, all rows are (independently) broadcastable: can be broadcasted to a larger number of axes. However, in OCANNL the broadcasting can happen "in the middle", with not only the given trailing axes fixed, but also with the given leading axes fixed. (TODO: clarify here the precise logic as it is implemented, I'm not sure this description is correct.)
 
 ```ocaml
-type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
-(** A single axis in a shape. *)
+type solved_dim = { d : int; basis : string; proj_id : proj_id option }
+(** A single axis in a shape. [basis] is total: unannotated user axes carry the reserved
+    ["default"] tag, and the claim-free broadcast bottom carries the reserved ["bcast_if_1"] tag. *)
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
 (** Convolution parameters. *)
@@ -50,7 +51,7 @@ The actual implementation is split into the `Row` module, which handles multi-ro
 
 OCANNL uses three distinct label-like mechanisms in its shape system. It is important to understand which is which:
 
-1. **Dimension basis (units)**: stored as `basis : string option` on `solved_dim`. These are semantic annotations on dimension *values* -- e.g., `"rgb"` on a dimension of size 3 means "this axis represents three RGB channels." Two dimensions that must agree in size must also agree on basis (if both are based). Bases need not be unique within a row and are inferred during shape inference. They do not name the axis itself. See `Row.solved_dim` in `tensor/row.ml`.
+1. **Dimension basis (units)**: stored as a total `basis : string` on `solved_dim`. These are semantic annotations on dimension *values* -- e.g., `"rgb"` on a dimension of size 3 means "this axis represents three RGB channels." Two dimensions that must agree in size must also agree on basis. The basis is total: an unannotated user axis carries the reserved `"default"` tag (an ordinary atom, incompatible with named bases), and the claim-free broadcast bottom carries the reserved `"bcast_if_1"` tag (a size-1 axis with this tag broadcasts to any size; at sizes > 1 it is an inert atom). The broadcast order is then a flat partial order with `1_(bcast_if_1)` as bottom. Bases need not be unique within a row and are inferred during shape inference. They do not name the axis itself. See `Row.solved_dim` in `tensor/row.ml`.
 
 2. **Einsum pseudo-labels**: the single- or multi-character identifiers used in einsum notation (e.g., `i`, `j`, `k` in `"ij;jk=>ik"`). These are local to the notation -- they identify which axes correspond to each other within a single einsum spec but do not persist on the resulting tensor. See `Einsum_types.axis_spec` in `tensor/einsum_types.ml`.
 

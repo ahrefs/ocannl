@@ -57,12 +57,12 @@ let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
       @@ Location.error_extensionf ~loc
            "ppx_ocannl param cannot have batch dims: define a constant or remove the array syntax."
     else
-      let edims dims = Ast_builder.Default.elist ~loc dims in
-      let input_dims_expr = edims input_dims in
-      let output_dims_expr = edims output_dims in
+      (* Threads tensor-literal axis labels through to <kind>_axes when present. *)
+      let input_name, input_expr = axes_or_dims_named ~loc ~kind:"input" input_dims in
+      let output_name, output_expr = axes_or_dims_named ~loc ~kind:"output" output_dims in
       let extra_args =
-        ({ txt = Lident "input_dims"; loc }, input_dims_expr)
-        :: ({ txt = Lident "output_dims"; loc }, output_dims_expr)
+        ({ txt = Lident input_name; loc }, input_expr)
+        :: ({ txt = Lident output_name; loc }, output_expr)
         :: extra_args
       in
       make_p ~no_grad ~opt_label ~loc ~values ~extra_args name
@@ -88,26 +88,36 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
       (no_vbs, [%expr TDSL.bits [%e expr]])
   | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
       (no_vbs, [%expr TDSL.number (Float.of_int [%e expr])])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  (* Axis-labelled constant literals: a type-annotation on a numeric literal sets the output
+     dimension basis (semantic tag) of the resulting size-1 axis, e.g. [(2.0 : rgb)], [(1.0 : p)].
+     This replaces the old char-literal form (['q' 2.0]), which could not carry multi-character
+     tags. Only a bare type constructor name is accepted as the basis. *)
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_float _); _ } as f),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       (no_vbs, [%expr TDSL.number ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] [%e f]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       (no_vbs, [%expr TDSL.bits ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] [%e i]])
-  | [%expr
-      [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-        [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-      let axis =
-        Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-      in
+  | {
+   pexp_desc =
+     Pexp_constraint
+       ( ({ pexp_desc = Pexp_constant (Pconst_integer _); _ } as i),
+         { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+   _;
+  } ->
+      let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
       ( no_vbs,
         [%expr
           TDSL.number ?label:[%e opt_expr ~loc label] ~axis_basis:[%e axis] (Float.of_int [%e i])]
@@ -350,7 +360,17 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
   | { pexp_desc = Pexp_array _; _ }
-  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }
+  (* A tensor literal whose outermost axis container carries an axis-label annotation,
+     e.g. [([ 1.; 2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
+  | {
+      pexp_desc =
+        Pexp_constraint
+          ( ( { pexp_desc = Pexp_array _; _ }
+            | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ),
+            _ );
+      _;
+    } ->
       (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as

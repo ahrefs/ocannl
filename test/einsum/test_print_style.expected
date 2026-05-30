@@ -10,9 +10,13 @@ Full attributes (d=28, padding=2, basis=height, proj_id):
   Projection_and_size: height=28
 
 Minimal attributes (d=64, no padding, no basis, no proj_id):
-  Only_bases: _
+  Only_bases: default
   Axis_size: 64
   Projection_and_size: 64
+
+Broadcast bottom (d=1, basis=bcast_if_1):
+  Only_bases: bcast_if_1
+  Axis_size: 1
 
 With projection (d=32, basis=width, proj_id):
   Axis_size: width=32
@@ -23,7 +27,7 @@ Solved dimensions:
   Only_bases (full): height
   Axis_size (full): height=28
   Projection_and_size (full): height=28
-  Only_bases (minimal): _
+  Only_bases (minimal): default
   Axis_size (minimal): 64
 
 Variable dimensions:
@@ -35,7 +39,7 @@ Variable dimensions:
 
 === Testing Shape.to_string_hum ===
 Shape with batch=[1], input=[784], output=[10,5]:
-  Only_bases: _|_->_,_
+  Only_bases: default|default->default,default
   Axis_size: 1|784->10,5
   Axis_number_and_size: 0:1|3:784->1:10,2:5
   Projection_and_size: 1|784->10,5

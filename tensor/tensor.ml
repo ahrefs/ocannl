@@ -580,13 +580,14 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
 let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c : t =
-  (* Note: no dimension basis by default so that we do not conflict with user-provided bases. *)
+  (* Note: broadcastable scalar basis ([bcast_if_1], the broadcast bottom) by default, so a scalar
+     constant broadcasts into a parameter of any shape rather than fusing as a fixed atom. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_basis with
-    | None -> t ~output_dims:[ 1 ] ()
+    | None -> t ~output_axes:[ (Row.bcast_if_1, 1) ] ()
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -602,7 +603,7 @@ let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : 
   let t = term ~label ~grad_spec ~batch_dims:[] ~input_dims:[] ~fetch_op in
   let t =
     match axis_basis with
-    | None -> t ~output_dims:[ 1 ] ()
+    | None -> t ~output_axes:[ (Row.bcast_if_1, 1) ] ()
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant 24;
@@ -808,7 +809,11 @@ let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_
     let id = Int.to_string t.id in
     let children = if single_node then [] else List.map ~f:to_dag t.children in
     let indices = Shape.default_display_indices t.shape in
-    let labels = Shape.to_bases t.shape in
+    (* Reserved (claim-free) tags ([default] / [bcast_if_1]) are not user-meaningful axis names;
+       display them as blank, as the old [None] basis was displayed. *)
+    let labels =
+      Array.map (Shape.to_bases t.shape) ~f:(fun l -> if Row.is_reserved_basis l then "" else l)
+    in
     let where_located a = Tn.(debug_memory_mode a.memory_mode) in
     let txt =
       if with_id then "#" ^ id ^ " " ^ Tn.label t.value (* ^ " DEBUG: " ^ where_located t.value *)
@@ -936,7 +941,11 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     assert (String.is_prefix label ~prefix:"grad");
     label
   in
-  let labels = Shape.to_bases t.shape in
+  (* Reserved (claim-free) tags display as blank (see [to_dag]); also keeps [Label_layout] matching
+     and [needs_spec] behaving as they did under the old [None] basis. *)
+  let labels =
+    Array.map (Shape.to_bases t.shape) ~f:(fun l -> if Row.is_reserved_basis l then "" else l)
+  in
   let indices =
     match style with
     | `Default -> Shape.default_display_indices sh
@@ -960,8 +969,10 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     | `Inline -> [||]
   in
   let needs_spec =
-    Array.exists ~f:(Fn.non String.is_empty) labels
-    || Shape.(List.exists ~f:Row.(equal_dim @@ get_dim ~d:1 ()) sh.input.dims)
+    (* [labels] already blanks reserved (claim-free) tags, so a non-empty label is a real named
+       basis that warrants showing the spec — as under the old [None] basis. *)
+    Array.exists labels ~f:(Fn.non String.is_empty)
+    || Shape.(List.exists ~f:Row.(equal_dim @@ get_default_dim ~d:1 ()) sh.input.dims)
   in
   let axes_spec =
     if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_bases sh) else None

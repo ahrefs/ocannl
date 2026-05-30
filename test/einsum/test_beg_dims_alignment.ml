@@ -92,8 +92,8 @@ let test_spec_outer_left_mismatch () =
   let cur =
     {
       Row.beg_dims =
-        [ Row.get_dim ~d:5 (); Row.get_dim ~d:2 () ];
-      dims = [ Row.get_dim ~d:4 () ];
+        [ Row.get_default_dim ~d:5 (); Row.get_default_dim ~d:2 () ];
+      dims = [ Row.get_default_dim ~d:4 () ];
       bcast = Broadcastable;
       prov;
     }
@@ -101,8 +101,8 @@ let test_spec_outer_left_mismatch () =
   let rho = Row.get_row_var () in
   let subr =
     {
-      Row.beg_dims = [ Row.get_dim ~d:2 () ];
-      dims = [ Row.get_dim ~d:4 () ];
+      Row.beg_dims = [ Row.get_default_dim ~d:2 () ];
+      dims = [ Row.get_default_dim ~d:4 () ];
       bcast = Row_var rho;
       prov;
     }
@@ -136,7 +136,7 @@ let test_spec_substitution_preserves_leading () =
   let value : Row.t =
     {
       beg_dims = [];
-      dims = [ Row.get_dim ~d:4 () ];
+      dims = [ Row.get_default_dim ~d:4 () ];
       bcast = Broadcastable;
       prov;
     }

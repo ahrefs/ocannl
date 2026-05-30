@@ -927,34 +927,43 @@ let translate ?ident_label (expr : expression) : result =
         { default_result with expr = [%expr NTDSL.bits [%e expr]]; slot = Scalar }
     | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
         { default_result with expr = [%expr NTDSL.number (Float.of_int [%e expr])]; slot = Scalar }
-    | [%expr
-        [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-          [%e? { pexp_desc = Pexp_constant (Pconst_float _); _ } as f]] ->
-        let axis =
-          Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-        in
+    (* Axis-labelled constant literals (see ppx_op.ml): a type-annotation on a numeric literal sets
+       the output dimension basis of its size-1 axis, e.g. [(2.0 : rgb)]. Replaces the old
+       char-literal form (['q' 2.0]). Only a bare type constructor name is accepted as the basis. *)
+    | {
+     pexp_desc =
+       Pexp_constraint
+         ( ({ pexp_desc = Pexp_constant (Pconst_float _); _ } as f),
+           { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+     _;
+    } ->
+        let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
         {
           default_result with
           expr = [%expr NTDSL.number ~axis_basis:[%e axis] [%e f]];
           slot = Scalar;
         }
-    | [%expr
-        [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-          [%e? { pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i]] ->
-        let axis =
-          Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-        in
+    | {
+     pexp_desc =
+       Pexp_constraint
+         ( ({ pexp_desc = Pexp_constant (Pconst_integer (_, Some ('L' | 'l'))); _ } as i),
+           { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+     _;
+    } ->
+        let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
         {
           default_result with
           expr = [%expr NTDSL.bits ~axis_basis:[%e axis] [%e i]];
           slot = Scalar;
         }
-    | [%expr
-        [%e? { pexp_desc = Pexp_constant (Pconst_char ch); pexp_loc; _ }]
-          [%e? { pexp_desc = Pexp_constant (Pconst_integer _); _ } as i]] ->
-        let axis =
-          Ast_helper.Exp.constant ~loc:pexp_loc (Pconst_string (String.of_char ch, pexp_loc, None))
-        in
+    | {
+     pexp_desc =
+       Pexp_constraint
+         ( ({ pexp_desc = Pexp_constant (Pconst_integer _); _ } as i),
+           { ptyp_desc = Ptyp_constr ({ txt = Lident basis; _ }, []); ptyp_loc; _ } );
+     _;
+    } ->
+        let axis = Ast_helper.Exp.constant ~loc:ptyp_loc (Pconst_string (basis, ptyp_loc, None)) in
         {
           default_result with
           expr = [%expr NTDSL.number ~axis_basis:[%e axis] (Float.of_int [%e i])];
@@ -1029,7 +1038,16 @@ let translate ?ident_label (expr : expression) : result =
                       simple identifier";
             })
     | { pexp_desc = Pexp_array _; _ }
-    | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
+    | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }
+    (* Tensor literal whose outermost axis container carries an axis-label annotation. *)
+    | {
+        pexp_desc =
+          Pexp_constraint
+            ( ( { pexp_desc = Pexp_array _; _ }
+              | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ),
+              _ );
+        _;
+      } ->
         { default_result with expr = ndarray_op ~ndarray_fn:[%expr NTDSL.ndarray] expr }
     | { pexp_desc = Pexp_ident { txt = Lident "lhs"; _ }; _ } ->
         { default_result with typ = Array; slot = LHS }

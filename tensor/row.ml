@@ -60,7 +60,16 @@ let proj_map_empty = Map.empty (module Proj_id)
 let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
 
-type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
+(* The reserved basis tag of the claim-free broadcast bottom: an axis with this tag broadcasts to
+   any size while it remains size 1, and is an ordinary fixed axis otherwise. The bottom of the
+   broadcast order is precisely [1_(bcast_if_1)]. Scalars and rank-broadening fill carry it. *)
+let bcast_if_1 = "bcast_if_1"
+
+(* The default basis tag the frontend supplies for any axis the user writes without naming a basis.
+   It is an ordinary atom, incompatible with other named bases (including [bcast_if_1]). *)
+let default_basis = "default"
+
+type solved_dim = { d : int; basis : string; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
@@ -76,7 +85,7 @@ and dim =
 let equal_dim d1 d2 =
   match (d1, d2) with
   | Dim { d = d1; basis = b1; proj_id = _ }, Dim { d = d2; basis = b2; proj_id = _ } ->
-      d1 = d2 && Option.equal String.equal b1 b2
+      d1 = d2 && String.equal b1 b2
   | _ -> equal_dim d1 d2
 
 let uid = ref 0
@@ -85,9 +94,31 @@ let get_var ?name () : dim_var =
   Int.incr uid;
   { id = !uid; name }
 
-let get_dim ~d ?basis ?proj_id () =
+(* [basis] is required (Option A totality): every minted dimension carries a tag so the compiler
+   surfaces every construction site and forces a provenance decision. Use [get_bcast_dim] for the
+   broadcast bottom (scalars, rank-broadening) and [get_default_dim] for unannotated user/derived
+   atoms. *)
+let get_dim ~d ~basis ?proj_id () =
   let proj_id = Option.map ~f:(fun p -> Proj_id.Proj_id p) proj_id in
   Dim { d; basis; proj_id }
+
+(* Mint the claim-free broadcast bottom (or, at sizes > 1, an inert [bcast_if_1] atom). *)
+let get_bcast_dim ~d ?proj_id () = get_dim ~d ~basis:bcast_if_1 ?proj_id ()
+
+(* Mint an unannotated user/derived atom. *)
+let get_default_dim ~d ?proj_id () = get_dim ~d ~basis:default_basis ?proj_id ()
+
+(* The reserved tags ([default], [bcast_if_1]) carry no naming claim. *)
+let is_reserved_basis b = String.equal b default_basis || String.equal b bcast_if_1
+
+(* Combine the bases of two dimensions fused into one derived dimension (e.g. a convolution's
+   stride and kernel). A named tag wins over a reserved (claim-free) tag; two distinct named tags
+   are a conflict handled by [on_conflict]. *)
+let merge_derived_basis ~on_conflict b1 b2 =
+  if String.equal b1 b2 then b1
+  else if is_reserved_basis b1 then b2
+  else if is_reserved_basis b2 then b1
+  else on_conflict ()
 
 let effective_kernel_span ~dilation ~kernel_size =
   (* The effective kernel span with dilation is: 1 + (kernel_size - 1) * dilation This is the actual
@@ -107,31 +138,22 @@ let dim_hashtbl () = Hashtbl.create (module Dim_var)
 type print_style = Only_bases | Axis_size | Axis_number_and_size | Projection_and_size
 [@@deriving equal, compare, sexp]
 
+(* Basis is total now: [Only_bases] prints the actual tag (including [default] and [bcast_if_1]) so
+   the provenance split is inspectable. In size-oriented styles the reserved (claim-free) tags
+   ([default] and [bcast_if_1]) — the display analog of the old blank [None] — print bare to keep
+   the common shape display readable; only user-meaningful named tags print their [tag=] prefix. *)
+let basis_size_prefix basis = if is_reserved_basis basis then "" else basis ^ "="
+
 let solved_dim_to_string style { d; basis; proj_id } =
   match style with
-  | Only_bases -> ( match basis with None -> "_" | Some b -> b)
-  | Axis_size | Axis_number_and_size -> (
-      let basis_prefix = match basis with None -> "" | Some b -> b ^ "=" in
-      match proj_id with
-      | None -> basis_prefix ^ Int.to_string d
-      | Some _ -> basis_prefix ^ Int.to_string d)
+  | Only_bases -> basis
+  | Axis_size | Axis_number_and_size -> basis_size_prefix basis ^ Int.to_string d
   | Projection_and_size ->
-      let basis_part = match basis with None -> "" | Some b -> b ^ "=" in
       let size_part = Int.to_string d in
       let proj_part = match proj_id with None -> "" | Some pid -> "p" ^ Proj_id.to_string pid in
-      basis_part ^ size_part ^ proj_part
+      basis_size_prefix basis ^ size_part ^ proj_part
 
 let rec dim_to_string style = function
-  | Dim { basis = None; _ } when equal_print_style style Only_bases -> "_"
-  | Dim { basis = Some b; _ } when equal_print_style style Only_bases -> b
-  | Dim { d; basis = None; proj_id = None } when equal_print_style style Axis_size ->
-      Int.to_string d
-  | Dim { d; basis = Some b; proj_id = None } when equal_print_style style Axis_size ->
-      [%string "%{b}=%{d#Int}"]
-  | Dim { d; basis = None; proj_id = None } when equal_print_style style Axis_size ->
-      Int.to_string d
-  | Dim { d; basis = Some b; proj_id = None } when equal_print_style style Axis_size ->
-      [%string "%{b}=%{d#Int}"]
   | Dim solved_dim -> solved_dim_to_string style solved_dim
   | Var { id; name = Some n } -> [%string "$%{id#Int}:%{n}"]
   | Var { id; name = None } -> "$" ^ Int.to_string id
@@ -409,13 +431,11 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           (* input_size = stride * (output_size - 1) + effective_kernel_span *)
           let span = effective_kernel_span ~dilation ~kernel_size:k.d in
           let basis =
-            match (s.basis, k.basis) with
-            | Some b1, Some b2 when not (String.equal b1 b2) ->
+            merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
                 raise
                 @@ Shape_error
                      ( "convolution: conflicting dimension bases between stride and kernel",
-                       [ Dim_mismatch [ Dim s; Dim k ] ] )
-            | b1, b2 -> Option.first_some b1 b2
+                       [ Dim_mismatch [ Dim s; Dim k ] ] ))
           in
           Dim { d = (stride * (s.d - 1)) + span; basis; proj_id = None }
       | Affine
@@ -426,13 +446,11 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
             stride_offset = _;
           } ->
           let basis =
-            match (s.basis, k.basis) with
-            | Some b1, Some b2 when not (String.equal b1 b2) ->
+            merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
                 raise
                 @@ Shape_error
                      ( "convolution: conflicting dimension bases between stride and kernel",
-                       [ Dim_mismatch [ Dim s; Dim k ] ] )
-            | b1, b2 -> Option.first_some b1 b2
+                       [ Dim_mismatch [ Dim s; Dim k ] ] ))
           in
           Dim { d = s.d * stride; basis; proj_id = None }
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
@@ -443,25 +461,30 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       (* Filter out zero-dimension components *)
       let dims = List.filter dims ~f:(function Dim { d = 0; _ } -> false | _ -> true) in
       match dims with
-      | [] -> Dim { d = 0; basis = None; proj_id = None }
+      | [] -> Dim { d = 0; basis = default_basis; proj_id = None }
       | [ single ] -> single
       | res when keep_affine -> Concat res
       | _ ->
           if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then (
             let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
             let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
-            let bases = List.filter_map solved_dims ~f:(fun s -> s.basis) in
-            let basis = List.hd bases in
-            (* All non-None bases must be consistent *)
-            if
-              not
-                (List.for_all bases ~f:(fun b ->
-                     Option.value ~default:true (Option.map basis ~f:(String.equal b))))
-            then
-              raise
-              @@ Shape_error
-                   ( "concat: conflicting dimension bases",
-                     [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] );
+            (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must
+               agree, and the concatenated axis takes that common named tag (else [default]). *)
+            let named_bases =
+              List.filter_map solved_dims ~f:(fun s ->
+                  if is_reserved_basis s.basis then None else Some s.basis)
+              |> List.dedup_and_sort ~compare:String.compare
+            in
+            let basis =
+              match named_bases with
+              | [] -> default_basis
+              | [ b ] -> b
+              | _ ->
+                  raise
+                  @@ Shape_error
+                       ( "concat: conflicting dimension bases",
+                         [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] )
+            in
             Dim { d = total_d; basis; proj_id = None })
           else Concat dims)
   | Dim _ | Var _ -> in_
@@ -558,7 +581,7 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
           (* So var = n * denom / coeff *)
           if n * denom % coeff_val = 0 then
             Some
-              ( [ Dim_eq { d1 = Var var; d2 = get_dim ~d:(n * denom / coeff_val) (); origin } ],
+              ( [ Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(n * denom / coeff_val) (); origin } ],
                 constr1 )
           else
             (* n * denom is not divisible by coeff - this is a mismatch *)
@@ -661,12 +684,12 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
             | None -> elems_mismatch n1 n2
             | Some v ->
                 if quotient <= 0 then elems_mismatch n1 n2;
-                [ Dim_eq { d1 = Var v; d2 = get_dim ~d:quotient (); origin } ])
+                [ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:quotient (); origin } ])
           else if quotient <= 0 && Option.is_none num_var then elems_mismatch n1 n2
           else if quotient = 1 && Option.is_none num_var then
             (* The difference variables must all be 1 *)
             List.map diff_vars ~f:(fun v ->
-                Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:42 (); origin })
+                Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:42 (); origin })
           else
             (* The product of difference variables equals the quotient *)
             let r =
@@ -790,22 +813,22 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                   (* reminder is 1: equate all variables on both sides to 1 *)
                   let divided_by_eqs =
                     List.map divided_by ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:43 (); origin })
+                        Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:43 (); origin })
                   in
                   let exact_vars_eqs =
                     List.map vars ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:44 (); origin })
+                        Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:44 (); origin })
                   in
                   Some (divided_by_eqs @ exact_vars_eqs, Exact dims)
                 else if List.is_empty divided_by && List.length vars = 1 && reminder > 0 then
                   (* divided_by is empty and there is only one dim variable in Exact dims *)
                   let v = List.hd_exn vars in
-                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ], Exact dims)
                 else if List.is_empty vars && List.length divided_by = 1 && reminder > 0 then
                   (* Exact dims contain only known dimensions and divided_by has exactly one
                      variable *)
                   let v = List.hd_exn divided_by in
-                  Some ([ Dim_eq { d1 = Var v; d2 = get_dim ~d:reminder (); origin } ], Exact dims)
+                  Some ([ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ], Exact dims)
                 else None
           | Strided_var { coeff; var; denom } ->
               if known_product = 0 then
@@ -816,7 +839,7 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                 let coeff_val = Utils.safe_force coeff in
                 if known_product * denom % coeff_val = 0 then
                   let d = known_product * denom / coeff_val in
-                  Some ([ Dim_eq { d1 = Var var; d2 = get_dim ~d (); origin } ], Exact dims)
+                  Some ([ Dim_eq { d1 = Var var; d2 = get_default_dim ~d (); origin } ], Exact dims)
                 else elems_mismatch numerator (Num_elems known_product)
               else if
                 late
@@ -1405,7 +1428,7 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
                   (* Equate all product vars to d=1 and add Total_elems 1 for each row var *)
                   let var_eqs =
                     List.map all_product_vars ~f:(fun v ->
-                        Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:45 (); origin })
+                        Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:45 (); origin })
                   in
                   let row_constrs =
                     List.map row_vars ~f:(fun (v, id) ->
@@ -1545,7 +1568,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
         let (d : int), _ = Option.value_exn (collect_factors dims) in
         let coeff : int = Utils.safe_force coeff in
         if denom * d % coeff = 0 then
-          (Dim_eq { d1 = Var var; d2 = get_dim ~d:(denom * d / coeff) (); origin } :: extras, env)
+          (Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(denom * d / coeff) (); origin } :: extras, env)
         else
           raise
           @@ Shape_error
@@ -1573,10 +1596,10 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
                    ( "apply_row_constraint: Total_elems constraint failed, shape is too small",
                      [ Row_mismatch [ r ] ] )
           | Num_elems n, [ v ], [] | Num_elems n, [], [ v ] ->
-              (Dim_eq { d1 = Var v; d2 = get_dim ~d:n (); origin } :: extras, env)
+              (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:n (); origin } :: extras, env)
           | Num_elems 1, vs1, vs2 ->
               ( List.map
-                  ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:46 (); origin })
+                  ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:46 (); origin })
                   (vs1 @ vs2)
                 @ extras,
                 env )
@@ -1584,7 +1607,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
             when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
               (* Total = (coeff * v / denom) / v = coeff / denom *)
               if Utils.safe_force coeff % denom = 0 then
-                ( Dim_eq { d1 = Var v; d2 = get_dim ~d:(Utils.safe_force coeff / denom) (); origin }
+                ( Dim_eq { d1 = Var v; d2 = get_default_dim ~d:(Utils.safe_force coeff / denom) (); origin }
                   :: extras,
                   env )
               else if
@@ -1667,32 +1690,15 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
 let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
-  | Dim { basis = Some b1; _ }, Dim { basis = Some b2; _ } when not (String.equal b1 b2) ->
+  | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
       raise
       @@ Shape_error
            ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
-  | Dim { d = d1; basis = b1; _ }, Dim { d = d2; basis = b2; _ }
-    when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal b1 b2) ->
-      (* When one side carries a basis and the other doesn't, upgrade the variable that resolved to
-         the unbased dim so the basis persists in future checks. *)
-      let env =
-        match (b1, b2) with
-        | None, (Some _ as basis) | (Some _ as basis), None ->
-            let rec upgrade_var v env =
-              match find_dim env.dim_env v with
-              | Some (Solved_dim (Dim ({ d; basis = None; _ } as sd))) when d = d1 ->
-                  {
-                    env with
-                    dim_env = add_dim env.dim_env ~key:v ~data:(Solved_dim (Dim { sd with basis }));
-                  }
-              | Some (Solved_dim (Var w)) -> upgrade_var w env
-              | _ -> env
-            in
-            let env = match fst eq with Var v -> upgrade_var v env | _ -> env in
-            let env = match snd eq with Var v -> upgrade_var v env | _ -> env in
-            env
-        | _ -> env
-      in
+  | Dim { d = d1; basis = _; _ }, Dim { d = d2; basis = _; _ } when d1 = d2 ->
+      (* Basis is total now: equality of two solved dims requires both equal size and equal tag
+         (the preceding arm already rejected unequal tags). There is no unspecified ([None]) side
+         to propagate a basis onto, so the old upgrade-var pass is gone — variable solving records
+         the already-total [Dim] exactly. *)
       ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   | ( Affine { stride = 1; over; conv = Some { use_padding = true; _ } | None; stride_offset = _ },
@@ -1730,12 +1736,12 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ }, dim
   | dim, Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      unify_dim ~stage origin (get_dim ~d:(stride * s.d) ?basis:s.basis (), dim) env
+      unify_dim ~stage origin (get_dim ~d:(stride * s.d) ~basis:s.basis (), dim) env
   | Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
       if s.d >= 0 && s.d % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:(s.d / stride) ?basis:s.basis (), over) env
+        unify_dim ~stage origin (get_dim ~d:(s.d / stride) ~basis:s.basis (), over) env
       else
         raise
         @@ Shape_error
@@ -1750,15 +1756,13 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       (* input_size = stride * (output_size - 1) + effective_kernel_span *)
       let span = effective_kernel_span ~dilation ~kernel_size:k.d in
       let basis =
-        match (s.basis, k.basis) with
-        | Some b1, Some b2 when not (String.equal b1 b2) ->
+        merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
             raise
             @@ Shape_error
                  ( "convolution: conflicting dimension bases between stride and kernel",
-                   [ Dim_mismatch [ Dim s; Dim k ] ] )
-        | b1, b2 -> Option.first_some b1 b2
+                   [ Dim_mismatch [ Dim s; Dim k ] ] ))
       in
-      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) ?basis (), dim) env
+      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) ~basis (), dim) env
   | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
     ->
@@ -1766,17 +1770,15 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          + effective_kernel_span output_size = (input_size - effective_kernel_span) / stride + 1 *)
       let span : int = effective_kernel_span ~dilation ~kernel_size:k.d in
       let basis =
-        match (s.basis, k.basis) with
-        | Some b1, Some b2 when not (String.equal b1 b2) ->
+        merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
             raise
             @@ Shape_error
                  ( "convolution: conflicting dimension bases between stride and kernel",
-                   [ Dim_mismatch [ Dim s; Dim k ] ] )
-        | b1, b2 -> Option.first_some b1 b2
+                   [ Dim_mismatch [ Dim s; Dim k ] ] ))
       in
       let numerator : int = s.d - span in
       if numerator >= 0 && numerator % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((numerator / stride) + 1) ?basis (), over) env
+        unify_dim ~stage origin (get_dim ~d:((numerator / stride) + 1) ~basis (), over) env
       else
         raise
         @@ Shape_error
@@ -1792,7 +1794,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          effective_kernel_span effective_kernel_span = input_size - stride * (output_size - 1) *)
       let span = i.d - (stride * (s.d - 1)) in
       match kernel_size_of_span ~dilation ~span with
-      | Some k -> unify_dim ~stage origin (Var v, get_dim ~d:k ()) env
+      | Some k -> unify_dim ~stage origin (Var v, get_default_dim ~d:k ()) env
       | None ->
           raise
           @@ Shape_error
@@ -1843,7 +1845,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           Some
             {
               dilation = 1;
-              kernel = Dim { d = helper_kernel_size; basis = None; proj_id = None };
+              kernel = Dim { d = helper_kernel_size; basis = default_basis; proj_id = None };
               use_padding = false;
             }
         in
@@ -1861,7 +1863,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           Some
             {
               dilation = 1;
-              kernel = Dim { d = helper_kernel_size; basis = None; proj_id = None };
+              kernel = Dim { d = helper_kernel_size; basis = default_basis; proj_id = None };
               use_padding = false;
             }
         in
@@ -1903,7 +1905,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           Some
             {
               dilation = 1;
-              kernel = Dim { d = helper_kernel_size; basis = None; proj_id = None };
+              kernel = Dim { d = helper_kernel_size; basis = default_basis; proj_id = None };
               use_padding = false;
             }
         in
@@ -1920,7 +1922,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           Some
             {
               dilation = 1;
-              kernel = Dim { d = helper_kernel_size; basis = None; proj_id = None };
+              kernel = Dim { d = helper_kernel_size; basis = default_basis; proj_id = None };
               use_padding = false;
             }
         in
@@ -2234,17 +2236,24 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
         | Some (Solved_dim (Concat _)) -> false (* Concat dimensions can't be cyclic *)
         | Some (Bounds_dim { cur = curs; _ }) -> cyclic ~subr_v ~curs)
   in
+  (* The relation enforced here is [subr ⊑ cur] (subr the lower bound, cur the upper). The broadcast
+     order is now a flat partial order: [subr ⊑ cur] iff they are equal as dims (same size AND same
+     tag) or [subr = 1_(bcast_if_1)] (the claim-free bottom, below everything). There is no longer a
+     wildcard that matches any same-size dim. Inequality records no basis update by design: every
+     dimension carries a concrete tag at construction time, so there is no unspecified ([None]) side
+     to propagate onto — the leak that was latent under [None] is closed by construction. *)
   match (cur, subr) with
   | cur, subr when equal_dim cur subr -> ([], env)
-  | Dim { basis = Some b1; _ }, Dim { basis = Some b2; _ } when not (String.equal b1 b2) ->
+  | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 ->
+      (* subr is the bottom: [bottom ⊑ cur] for every cur. Accept, record nothing. *)
+      ([], env)
+  | (Dim { d = 1; basis; _ } as cur), _ when String.equal basis bcast_if_1 ->
+      (* cur (the upper bound) is the bottom: [subr ⊑ bottom] only by equality — force it. *)
+      ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
+  | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
       raise
       @@ Shape_error
            ("dimension comparison for axis: different bases", [ Dim_mismatch [ cur; subr ] ])
-  | Dim { d = d1; basis = b1; _ }, Dim { d = d2; basis = b2; _ }
-    when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal b1 b2) ->
-      ([], env)
-  | _, Dim { d = 1; basis = None; _ } -> ([], env)
-  | (Dim { d = 1; basis = None; _ } as cur), _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Affine _, _ | _, Affine _ -> ([ Dim_eq { d1 = subr; d2 = cur; origin } ], env)
   | Var cur_v, Var subr_v -> (
       match (find_dim env.dim_env cur_v, find_dim env.dim_env subr_v) with
@@ -2506,14 +2515,15 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
           let origin = merge_origins origin origin2 in
           let lub, lub_forcing =
             match (cur, lub2) with
-            | Dim { d = d1; basis = b1; _ }, Dim { d = d2; basis = b2; _ }
-              when d1 = d2 && Option.value ~default:true (Option.map2 ~f:String.equal b1 b2) ->
-                ((if Option.is_some b1 then cur else lub2), [])
-            | Dim _, Dim _ (* when d1 <> d2 or b1 <> b2 *) ->
+            | Dim _, Dim _ when equal_dim cur lub2 ->
+                (* Same size and same tag: keep the existing bound. (Basis is total now, so there
+                   is no wildcard "one side unspecified, prefer the other" case to handle here.) *)
+                (cur, [])
+            | Dim _, Dim _ (* different size or different basis *) ->
                 (* Intentional broadcast semantics: conflicting bases (or different sizes) demote
-                   to d=1, meaning these axes are incompatible and should be broadcast. This is NOT
-                   a bug — do not tighten to raise Shape_error here. *)
-                let lub = get_dim ~d:1 ~proj_id:47 () in
+                   to the broadcast bottom 1_(bcast_if_1), meaning these axes are incompatible and
+                   should be broadcast. This is NOT a bug — do not tighten to raise Shape_error. *)
+                let lub = get_bcast_dim ~d:1 ~proj_id:47 () in
                 (lub, [ Dim_eq { d1 = subr; d2 = lub; origin } ])
             | Var _, _ | _, Var _ -> assert false
             | Affine _, _ | _, Affine _ -> assert false
@@ -2928,19 +2938,17 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                origin = origin2;
              }) -> (
           let origin = merge_origins origin origin2 in
-          (* Row-level LUB: prefer generality for broadcasting. Unbased d=1 is most general,
-             conflicting bases demote to d=1. This is intentional broadcast generalization, not a
-             basis-checking gap. The same meet applies on both flanks. *)
+          (* Row-level LUB: prefer generality for broadcasting. The broadcast bottom
+             [1_(bcast_if_1)] is most general; conflicting sizes or conflicting (named) bases demote
+             to that bottom. This is intentional broadcast generalization, not a basis-checking gap.
+             The same meet applies on both flanks. *)
           let meet_dim d1 d2 =
             match (d1, d2) with
-            | Dim { d = 1; basis = None; _ }, _ -> d1
-            | _, Dim { d = 1; basis = None; _ } -> d2
-            | Dim { d = 1; basis = Some _; _ }, Dim { basis = None; _ } -> d2
-            | Dim { basis = None; _ }, Dim { d = 1; basis = Some _; _ } -> d1
-            | Dim { d = d1; _ }, Dim { d = d2; _ } when d1 <> d2 -> get_dim ~d:1 ~proj_id:48 ()
-            | Dim { basis = Some b1; _ }, Dim { basis = Some b2; _ }
-              when not (String.equal b1 b2) ->
-                get_dim ~d:1 ~proj_id:63 ()
+            | Dim { d = 1; basis; _ }, _ when String.equal basis bcast_if_1 -> d1
+            | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 -> d2
+            | Dim { d = n1; _ }, Dim { d = n2; _ } when n1 <> n2 -> get_bcast_dim ~d:1 ~proj_id:48 ()
+            | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
+                get_bcast_dim ~d:1 ~proj_id:63 ()
             | ( Affine
                   {
                     stride;
@@ -2958,7 +2966,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                     stride_offset = _;
                   } )
               when stride * s.d <> s'.d ->
-                get_dim ~d:1 ~proj_id:49 ()
+                get_bcast_dim ~d:1 ~proj_id:49 ()
             | ( Affine
                   {
                     stride;
@@ -2969,7 +2977,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                 Dim s' )
               when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d
                    <> s'.d ->
-                get_dim ~d:1 ~proj_id:50 ()
+                get_bcast_dim ~d:1 ~proj_id:50 ()
             | ( Dim s',
                 Affine
                   {
@@ -2980,7 +2988,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                   } )
               when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d
                    <> s'.d ->
-                get_dim ~d:1 ~proj_id:50 ()
+                get_bcast_dim ~d:1 ~proj_id:50 ()
             | ( Affine
                   {
                     stride = stride1;
@@ -2996,7 +3004,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                     stride_offset = _;
                   } )
               when stride1 * s1.d <> stride2 * s2.d ->
-                get_dim ~d:1 ~proj_id:51 ()
+                get_bcast_dim ~d:1 ~proj_id:51 ()
             | ( Affine
                   {
                     stride = stride1;
@@ -3015,7 +3023,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(cur : t) ~(subr : t) en
                    + effective_kernel_span ~dilation:dilation1 ~kernel_size:k1.d
                    <> (stride2 * (s2.d - 1))
                       + effective_kernel_span ~dilation:dilation2 ~kernel_size:k2.d ->
-                get_dim ~d:1 ~proj_id:52 ()
+                get_bcast_dim ~d:1 ~proj_id:52 ()
             | Var _, _ -> d1
             | _, Var _ -> d2
             | _, Dim _ -> d2
@@ -3117,7 +3125,7 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
           else
             let guess_d = if Set.mem env.invalid_vars v then 0 else 1 in
-            [ Dim_eq { d1 = dim; d2 = get_dim ~d:guess_d ~proj_id:53 (); origin } ]
+            [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ]
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Affine _ ->
@@ -3268,11 +3276,11 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
           | Num_elems 1, vs, _ when is_stage5_up stage ->
               ( no_further_axes ~guess:false ()
                 :: List.map vs ~f:(fun v ->
-                    let d2 = get_dim ~d:1 ~proj_id:54 () in
+                    let d2 = get_bcast_dim ~d:1 ~proj_id:54 () in
                     Dim_eq { d1 = Var v; d2; origin }),
                 env )
           | Num_elems d, [], None when d <> 1 && is_stage3_up stage ->
-              let dim = get_dim ~d ~proj_id:55 () in
+              let dim = get_default_dim ~d ~proj_id:55 () in
               ( [
                   Row_eq
                     {
@@ -3283,7 +3291,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                 ],
                 env )
           | Num_elems d, [], Some { dims; _ } when d <> 1 && last_dim_is dims (( = ) d) ->
-              let dim = get_dim ~d ~proj_id:56 () in
+              let dim = get_default_dim ~d ~proj_id:56 () in
               ( [
                   Row_eq
                     {
@@ -3309,7 +3317,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                   | ineq -> ([ ineq ], env))
           | Num_elems d, [ dv ], None when is_stage4_up stage ->
               ( no_further_axes ~guess:true ()
-                :: [ Dim_eq { d1 = Var dv; d2 = get_dim ~d (); origin } ],
+                :: [ Dim_eq { d1 = Var dv; d2 = get_default_dim ~d (); origin } ],
                 env )
           | Num_elems d, [ v ], Some ({ dims; _ } as r2)
             when last_dim_is dims (fun d2 -> d % d2 = 0) ->
@@ -3318,15 +3326,15 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                 if d = d2 && is_stage5_up stage then no_further_axes ~guess:false ()
                 else Row_eq { r1; r2; origin }
               in
-              (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_dim ~d:(d / d2) (); origin } ], env)
+              (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:(d / d2) (); origin } ], env)
           | Strided_var { coeff; var; denom }, [], None
             when is_stage5_up stage
                  && (Utils.safe_force coeff > denom || denom % Utils.safe_force coeff <> 0) ->
               let coeff = Utils.safe_force coeff in
               let gcd = Utils.gcd coeff denom in
               let d = denom / gcd in
-              let d2 = get_dim ~d () in
-              let d3 = get_dim ~d:(coeff / gcd) () in
+              let d2 = get_default_dim ~d () in
+              let d3 = get_default_dim ~d:(coeff / gcd) () in
               (* opt_row_error (); *)
               ( [
                   Dim_eq { d1 = Var var; d2; origin };
@@ -3340,7 +3348,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                 env )
           | Strided_var { coeff; var; denom }, [], _
             when is_stage6_up stage && denom % Utils.safe_force coeff = 0 ->
-              let d2 = get_dim ~d:(denom / Utils.safe_force coeff) () in
+              let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
               if dim_var_is_in_param var env then
                 raise
                 @@ Shape_error
@@ -3376,7 +3384,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(lub : row option) (
                               };
                             origin;
                           };
-                        Dim_eq { d1 = Var var; d2 = get_dim ~d:var_value (); origin };
+                        Dim_eq { d1 = Var var; d2 = get_default_dim ~d:var_value (); origin };
                       ],
                       env )
               | _ -> keep_constr ())
@@ -3457,7 +3465,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
   let guess_dim () =
-    if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:56 () else get_dim ~d:1 ~proj_id:59 ()
+    if Set.mem env.invalid_vars v then get_default_dim ~d:0 ~proj_id:56 () else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
   match (lub, constr) with
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
@@ -3468,12 +3476,12 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
   | Some _, At_least_dim 1 ->
       (* Direct access at 0 is a strong heuristic for dimension 1 axis (e.g. result of a
          reduction). *)
-      if is_stage7 stage then Some (Dim_eq { d1 = Var v; d2 = get_dim ~d:1 ~proj_id:57 (); origin })
+      if is_stage7 stage then Some (Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:57 (); origin })
       else None
   | Some lub, (At_least_dim _ | Unconstrained_dim) when is_stage6_up stage ->
       Some (Dim_eq { d1 = Var v; d2 = lub; origin })
   | None, At_least_dim d when is_stage7 stage ->
-      Some (Dim_eq { d1 = Var v; d2 = get_dim ~d ~proj_id:58 (); origin })
+      Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d ~proj_id:58 (); origin })
   | None, _ when is_stage7 stage -> Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | _ -> None
 
@@ -3488,8 +3496,8 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
     | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
     | Var v -> (
         let guess_dim () =
-          if Set.mem env.invalid_vars v then get_dim ~d:0 ~proj_id:61 ()
-          else get_dim ~d:1 ~proj_id:62 ()
+          if Set.mem env.invalid_vars v then get_default_dim ~d:0 ~proj_id:61 ()
+          else get_bcast_dim ~d:1 ~proj_id:62 ()
         in
         match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
@@ -3723,8 +3731,9 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
 
 let rec row_to_bases env =
   let rec f = function
-    | Dim { basis = Some b; _ } -> b
-    | Dim { basis = None; _ } -> ""
+    (* Basis is total: return the actual tag (including [default] and [bcast_if_1]) so the
+       provenance split is visible to callers. *)
+    | Dim { basis = b; _ } -> b
     | Var v -> (
         match find_dim env.dim_env v with
         | None | Some (Bounds_dim _) -> Option.value v.name ~default:""
@@ -3850,7 +3859,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         raise
         @@ Shape_error
              ( "to_proj: Dim without proj_id (d=" ^ Int.to_string d ^ ", basis="
-               ^ Option.value basis ~default:"None"
+               ^ basis
                ^ ")",
                [] )
     | Affine { stride; over; conv = None; stride_offset } ->
@@ -3895,7 +3904,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
             raise
             @@ Shape_error
                  ( "to_proj (subst): Dim without proj_id (d=" ^ Int.to_string d ^ ", basis="
-                   ^ Option.value basis ~default:"None"
+                   ^ basis
                    ^ ")",
                    [] )
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)
