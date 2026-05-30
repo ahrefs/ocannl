@@ -3,7 +3,7 @@ let test_print_styles () =
   Stdio.printf "Testing print_style functionality:\n\n";
 
   (* Create a solved dimension with all possible attributes *)
-  let solved_dim_full = { d = 28; basis = Some "height"; proj_id = None } in
+  let solved_dim_full = { d = 28; basis = "height"; proj_id = None } in
 
   (* Create a dimension with projection by using fresh_row_proj *)
   let row_with_dim =
@@ -19,8 +19,13 @@ let test_print_styles () =
     match row_with_proj.dims with [ Dim sd ] -> sd | _ -> failwith "Expected single dimension"
   in
 
-  (* Create a solved dimension with minimal attributes *)
-  let solved_dim_minimal = { d = 64; basis = None; proj_id = None } in
+  (* Create a solved dimension with minimal attributes (the unannotated [default] tag, the
+     totality analog of the old [None]). *)
+  let solved_dim_minimal = { d = 64; basis = default_basis; proj_id = None } in
+
+  (* The reserved broadcast-bottom tag is visible in Only_bases but prints bare (no prefix) in
+     size-oriented styles, like the unannotated [default]. *)
+  let solved_dim_bcast = { d = 1; basis = bcast_if_1; proj_id = None } in
 
   (* Create a variable dimension *)
   let var_dim_named = get_var ~name:"channels" () in
@@ -40,6 +45,10 @@ let test_print_styles () =
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_minimal);
   Stdio.printf "  Projection_and_size: %s\n"
     (solved_dim_to_string Projection_and_size solved_dim_minimal);
+
+  Stdio.printf "\nBroadcast bottom (d=1, basis=bcast_if_1):\n";
+  Stdio.printf "  Only_bases: %s\n" (solved_dim_to_string Only_bases solved_dim_bcast);
+  Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_bcast);
 
   Stdio.printf "\nWith projection (d=32, basis=width, proj_id):\n";
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_with_proj);

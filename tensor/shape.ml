@@ -411,7 +411,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()) |> Array.to_list);
                  origin =
                    [
                      {
@@ -438,7 +438,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()) |> Array.to_list);
                  origin =
                    [
                      {
@@ -485,7 +485,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    constr =
                      Exact
                        (Lazy.force tn.dims |> Array.to_list |> List.tl_exn
-                       |> List.map ~f:(fun d -> get_dim ~d ()));
+                       |> List.map ~f:(fun d -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()));
                    origin =
                      [
                        {
@@ -811,7 +811,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         |> List.map ~f:(fun range ->
             Dim_eq
               {
-                d1 = get_dim ~d:range ();
+                d1 = get_default_dim ~d:range ();
                 d2 = slice_var;
                 origin =
                   [
@@ -869,7 +869,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                     Dim_eq
                       {
                         d1 = Row.Var var;
-                        d2 = Row.get_dim ~d:solved_dim ();
+                        d2 = Row.get_default_dim ~d:solved_dim ();
                         origin =
                           [
                             {
@@ -1097,7 +1097,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                     Dim_eq
                       {
                         d1 = Row.Var var;
-                        d2 = Row.get_dim ~d:solved_dim ();
+                        d2 = Row.get_default_dim ~d:solved_dim ();
                         origin =
                           [
                             {
@@ -1329,7 +1329,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                     Dim_eq
                       {
                         d1 = Row.Var var;
-                        d2 = Row.get_dim ~d:solved_dim ();
+                        d2 = Row.get_default_dim ~d:solved_dim ();
                         origin =
                           [
                             {
@@ -1531,7 +1531,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
       raise
       @@ Row.Shape_error
            ( "Cannot set dimension for variable reference with label " ^ ref_label,
-             [ Row.Dim_mismatch [ Row.get_dim ~d:dim2 (); Row.get_dim ~d:dim () ] ] )
+             [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ] )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet } ->
       delayed_var_ref.var_ref.solved_dim <- Some dim
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var } ->
@@ -1540,7 +1540,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
         Row.Dim_eq
           {
             d1 = Row.Var dim_var;
-            d2 = Row.get_dim ~d:dim ();
+            d2 = Row.get_default_dim ~d:dim ();
             origin =
               [
                 {
@@ -1585,7 +1585,7 @@ let set_equal delayed_ref1 delayed_ref2 =
         raise
         @@ Row.Shape_error
              ( "Cannot set equal dimensions for variable references with different values",
-               [ Row.Dim_mismatch [ Row.get_dim ~d:dim1 (); Row.get_dim ~d:dim2 () ] ] )
+               [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim1 (); Row.get_default_dim ~d:dim2 () ] ] )
   | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
       (* First is solved, second is not - set the second to match the first *)
       set_dim delayed_ref2 dim
@@ -1699,7 +1699,7 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
                ( "Shape.set_scale: dimensions do not satisfy d_large = factor * d_small",
                  [
                    Row.Dim_mismatch
-                     [ Row.get_dim ~d:d_large (); Row.get_dim ~d:(factor * d_small) () ];
+                     [ Row.get_default_dim ~d:d_large (); Row.get_default_dim ~d:(factor * d_small) () ];
                  ] )
     | { var_ref = { solved_dim = Some d_large; ref_label; _ }; _ }, delayed_ref_small ->
         if d_large % factor <> 0 then
@@ -2345,13 +2345,16 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   in
   let num_dim1_output = Option.to_list output_dims |> List.join |> List.count ~f:(fun d -> d = 1) in
   let f kind d =
+    (* Provenance split at construction (brief §Technical-issue-1, surfacing §Technical-issue-3):
+       OCANNL pervasively relies on size-1 axes broadcasting (scalars, embedded ids, reductions,
+       per-head/per-channel units), so a frontend size-1 axis is by default the claim-free broadcast
+       bottom [1_(bcast_if_1)]. A size > 1 unannotated axis is an ordinary [default] atom that does
+       NOT silently fuse with a named basis. The exception is a lone size-1 output axis with a batch
+       flank (a per-example scalar prediction): it is an anchored [default] atom, not a broadcast
+       unit, which preserves hidden-dimension detection and dimension solving for that corner. *)
     match kind with
-    | `Batch | `Input -> get_dim ~d ()
-    | `Output ->
-        if (not known_no_batch) && num_dim1_output = 1 && d = 1 then
-          let basis = debug_name ^ "_output" in
-          get_dim ~d ~basis ()
-        else get_dim ~d ()
+    | `Output when (not known_no_batch) && num_dim1_output = 1 && d = 1 -> get_default_dim ~d ()
+    | _ -> if d = 1 then get_bcast_dim ~d () else get_default_dim ~d ()
   in
   let make_dims kind ds =
     {
@@ -2444,11 +2447,11 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
           | _ -> invalid_arg "shape_spec_to_dims_bio: too many '='"
         in
         (* This is not a dimension basis i.e. unit! *)
-        try Row.get_dim ~d:(Int.of_string dim) ()
+        try Row.get_default_dim ~d:(Int.of_string dim) ()
         with _ -> invalid_arg "shape_spec_to_dims_bio: int expected after '='")
     | Label name ->
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
-    | Fixed_index d -> Row.get_dim ~d ()
+    | Fixed_index d -> if d = 1 then Row.get_bcast_dim ~d () else Row.get_default_dim ~d ()
     | Affine_spec { stride; over_label; conv; stride_offset } ->
         let stride_int =
           try Int.of_string stride

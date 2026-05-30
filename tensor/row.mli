@@ -19,12 +19,27 @@ val dim_map_empty : 'a dim_map
 val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
 
-type solved_dim = { d : int; basis : string option; proj_id : proj_id option }
+val bcast_if_1 : string
+(** The reserved basis tag of the claim-free broadcast bottom. An axis tagged [bcast_if_1]
+    broadcasts to any size while it remains size 1 ([1_(bcast_if_1)] is the bottom of the broadcast
+    order), and is an ordinary inert atom at sizes > 1. Scalars and rank-broadening fill carry it;
+    a user may also write it deliberately as an explicit stretch-when-1 affordance. *)
+
+val default_basis : string
+(** The basis tag the frontend supplies for any axis the user writes without naming a basis. It is
+    an ordinary atom, incompatible with every other named basis (including [bcast_if_1]). *)
+
+val is_reserved_basis : string -> bool
+(** Whether a basis tag is one of the reserved (claim-free) tags [default_basis] / [bcast_if_1],
+    i.e. carries no user-meaningful naming claim. *)
+
+type solved_dim = { d : int; basis : string; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
-(** A single axis in a shape. [basis] is an optional semantic annotation on the dimension (e.g.
-    ["rgb"] on a size-3 axis); two dimensions that must agree in size must also agree on a non-None
-    [basis]. [proj_id] is used for projection inference, and abused for provenance tracking during
-    shape inference. *)
+(** A single axis in a shape. [basis] is the (total) semantic annotation on the dimension (e.g.
+    ["rgb"] on a size-3 axis); two dimensions that must agree in size must also agree on [basis].
+    Unannotated user axes carry [default_basis]; the broadcast bottom carries [bcast_if_1].
+    [proj_id] is used for projection inference, and abused for provenance tracking during shape
+    inference. *)
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
 [@@deriving equal, hash, compare, sexp]
@@ -42,7 +57,16 @@ and dim =
   | Concat of dim list  (** Concatenation of multiple dimensions into a single axis. *)
 [@@deriving equal, hash, compare, sexp]
 
-val get_dim : d:int -> ?basis:string -> ?proj_id:int -> unit -> dim
+val get_dim : d:int -> basis:string -> ?proj_id:int -> unit -> dim
+(** Mint a dimension with an explicit (required) basis tag. *)
+
+val get_bcast_dim : d:int -> ?proj_id:int -> unit -> dim
+(** Mint the claim-free broadcast bottom [d_(bcast_if_1)] (at [d = 1] the bottom of the broadcast
+    order; at sizes > 1 an inert atom). Use at scalar / rank-broadening / LUB-demotion sites. *)
+
+val get_default_dim : d:int -> ?proj_id:int -> unit -> dim
+(** Mint an unannotated user/derived atom [d_(default)]. *)
+
 val dim_to_int_exn : dim -> int
 val vars_of_dim : dim -> dim_var_set
 

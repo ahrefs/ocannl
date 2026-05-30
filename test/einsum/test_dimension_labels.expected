@@ -9,19 +9,18 @@ Test 1: Same basis, same size -- succeeds
 Test 2: Conflicting bases, same size -- raises
   PASS: got expected Shape_error: solved dimensions for axis: different bases
 
-Test 3: One based, one unbased, same size -- compatible
-  Result bases: [batch]
-  PASS: based + unbased compatible
+Test 3: One based (batch), one unbased (default), same size -- now incompatible
+  PASS: default no longer fuses with a named basis: solved dimensions for axis: different bases
 
-Test 4: Variable-mediated: unbased first, based later -- compatible
-  PASS: variable-mediated unbased then based
+Test 4: Variable-mediated: unbased (default) first, based later -- now incompatible
+  PASS: no silent upgrade; default conflicts with batch: solved dimensions for axis: different bases
 
 Test 5: Variable-mediated: unbased, based, then conflicting -- raises
   PASS: got expected Shape_error: solved dimensions for axis: different bases
 
-Test 5b: Variable-mediated: basis upgrade verified in environment
-  Var v basis after upgrade: "batch"
-  PASS: variable basis upgraded to "batch"
+Test 5b: Variable solving records the total Dim's tag exactly
+  Var v basis after solving: "batch"
+  PASS: variable solved-dim tag recorded as "batch"
 
 Test 6: Shape.to_bases after inference
   Bases: [batch]

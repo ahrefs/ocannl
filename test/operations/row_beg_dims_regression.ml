@@ -24,7 +24,7 @@ let dummy_origin : Row.constraint_origin list =
   ]
 
 let prov = Row.empty_provenance
-let dim ?basis d = Row.get_dim ~d ?basis ()
+let dim ?(basis = Row.default_basis) d = Row.get_dim ~d ~basis ()
 
 (* Test 1: outer-left alignment.
    cur  = { beg_dims = [Dim 5; Dim 2]; dims = [Dim 4]; bcast = Broadcastable }
@@ -170,15 +170,16 @@ let test_4b_lub_leading_conflict_demotes_to_one () =
   let result = Row.subst_row env rho_row in
   match result with
   | {
-      beg_dims = [ Dim { d = 1; basis = None; _ } ];
+      beg_dims = [ Dim { d = 1; basis; _ } ];
       dims = [ Dim { d = 7; _ } ];
       bcast = Broadcastable;
       _;
-    } ->
+    }
+    when String.equal basis Row.bcast_if_1 ->
       Stdio.printf "  PASS\n"
   | _ ->
       Stdio.printf
-        "  FAIL: expected leading flank demoted to unbased Dim 1; got %s\n"
+        "  FAIL: expected leading flank demoted to broadcast-bottom Dim 1; got %s\n"
         (Sexp.to_string_hum (Row.sexp_of_t result))
 
 (* Test 4c: trailing-flank CONFLICT demotes to unbased Dim 1.
@@ -208,14 +209,15 @@ let test_4c_lub_trailing_conflict_demotes_to_one () =
   match result with
   | {
       beg_dims = [ Dim { d = 3; _ } ];
-      dims = [ Dim { d = 1; basis = None; _ } ];
+      dims = [ Dim { d = 1; basis; _ } ];
       bcast = Broadcastable;
       _;
-    } ->
+    }
+    when String.equal basis Row.bcast_if_1 ->
       Stdio.printf "  PASS\n"
   | _ ->
       Stdio.printf
-        "  FAIL: expected trailing flank demoted to unbased Dim 1; got %s\n"
+        "  FAIL: expected trailing flank demoted to broadcast-bottom Dim 1; got %s\n"
         (Sexp.to_string_hum (Row.sexp_of_t result))
 
 (* Test 5: monotonicity via re-firing (success case).
@@ -308,7 +310,7 @@ let test_5b_monotonicity_negative_mutation () =
         let mentions_four_or_one_demotion =
           let dims_have d =
             List.exists (result.beg_dims @ result.dims) ~f:(function
-              | Row.Dim { d = d'; basis = None; _ } -> d' = d
+              | Row.Dim { d = d'; _ } -> d' = d
               | _ -> false)
           in
           dims_have 4 || dims_have 1

@@ -13,8 +13,9 @@ let dummy_origin : Row.constraint_origin list =
     };
   ]
 
-(* Helper: get the basis string for a dim_var from the environment using row_to_bases. Returns the
-   basis or "" if unbased. *)
+(* Helper: get the basis string for a dim_var from the environment using row_to_bases. Basis is
+   total now, so an unsolved variable yields its name (or "") and a solved dim yields its tag
+   (including [default] / [bcast_if_1]). *)
 let get_var_basis env (v : Row.dim_var) : string =
   let prov = Row.empty_provenance in
   let row =
@@ -69,8 +70,12 @@ let test_conflicting_bases_same_size () =
       Stdio.printf "  PASS: got expected Shape_error: %s\n" msg
     else Stdio.printf "  FAIL: wrong error message: %s\n" msg
 
+(* AC#5 frontend strictness: an unannotated ([default]) axis no longer silently fuses with a named
+   ([batch]) axis of the same size. This previously "passed" via the [None] wildcard; under the
+   total basis it is a genuine shape error (an axis you did not tag should not fuse with a tagged
+   one). *)
 let test_one_based_one_unbased () =
-  Stdio.printf "Test 3: One based, one unbased, same size -- compatible\n";
+  Stdio.printf "Test 3: One based (batch), one unbased (default), same size -- now incompatible\n";
   Tensor.unsafe_reinitialize ();
   try
     let t1 = based_tensor [ ("batch", 4) ] in
@@ -78,14 +83,17 @@ let test_one_based_one_unbased () =
     let%op result = t1 + t2 in
     let ctx = Train.forward_once (Context.auto ()) result in
     ignore (ctx : Context.t);
-    let bases = Shape.to_bases result.shape in
-    let basis_str = String.concat_array ~sep:"," bases in
-    Stdio.printf "  Result bases: [%s]\n" basis_str;
-    Stdio.printf "  PASS: based + unbased compatible\n"
-  with Row.Shape_error (msg, _) -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" msg
+    Stdio.printf "  FAIL: should have raised Shape_error (default must not fuse with batch)\n"
+  with Row.Shape_error (msg, _) ->
+    if String.is_substring msg ~substring:"bases" then
+      Stdio.printf "  PASS: default no longer fuses with a named basis: %s\n" msg
+    else Stdio.printf "  FAIL: wrong error message: %s\n" msg
 
+(* Variable-mediated dual of Test 3: a variable solved to a [default] dim then meeting a named dim
+   no longer silently upgrades (the old [unify_dim] basis propagation is gone — see brief
+   §Technical-issue-6); it conflicts. *)
 let test_variable_mediated_unbased_then_based () =
-  Stdio.printf "Test 4: Variable-mediated: unbased first, based later -- compatible\n";
+  Stdio.printf "Test 4: Variable-mediated: unbased (default) first, based later -- now incompatible\n";
   Tensor.unsafe_reinitialize ();
   try
     let%cd x = { x } in
@@ -95,8 +103,11 @@ let test_variable_mediated_unbased_then_based () =
     let%cd result = step1 + based in
     let ctx = Train.forward_once (Context.auto ()) result in
     ignore (ctx : Context.t);
-    Stdio.printf "  PASS: variable-mediated unbased then based\n"
-  with Row.Shape_error (msg, _) -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" msg
+    Stdio.printf "  FAIL: should have raised Shape_error (no silent basis upgrade)\n"
+  with Row.Shape_error (msg, _) ->
+    if String.is_substring msg ~substring:"bases" then
+      Stdio.printf "  PASS: no silent upgrade; default conflicts with batch: %s\n" msg
+    else Stdio.printf "  FAIL: wrong error message: %s\n" msg
 
 let test_variable_mediated_conflicting () =
   Stdio.printf "Test 5: Variable-mediated: unbased, based, then conflicting -- raises\n";
@@ -105,7 +116,7 @@ let test_variable_mediated_conflicting () =
     let v = Row.get_var ~name:"v" () in
     let constraints =
       [
-        Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin };
+        Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_default_dim ~d:4 (); origin = dummy_origin };
         Row.Dim_eq
           { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~basis:"batch" (); origin = dummy_origin };
         Row.Dim_eq
@@ -120,23 +131,24 @@ let test_variable_mediated_conflicting () =
     else Stdio.printf "  FAIL: wrong error message: %s\n" msg
 
 let test_variable_mediated_basis_upgrade () =
-  Stdio.printf "Test 5b: Variable-mediated: basis upgrade verified in environment\n";
+  Stdio.printf "Test 5b: Variable solving records the total Dim's tag exactly\n";
   Tensor.unsafe_reinitialize ();
   try
-    (* Var v is solved to unbased d=4, then unified with based d=4. After the second unification,
-       the environment should show the basis. *)
+    (* Var v is solved directly to a based d=4. Variable solving records the already-total [Dim]
+       exactly, so the environment shows its tag. (There is no "upgrade from unspecified" anymore —
+       see brief §Technical-issue-6; that path was removed with the [None] wildcard.) *)
     let v = Row.get_var ~name:"v" () in
     let constraints =
       [
-        Row.Dim_eq { d1 = Row.Var v; d2 = Row.get_dim ~d:4 (); origin = dummy_origin };
         Row.Dim_eq
           { d1 = Row.Var v; d2 = Row.get_dim ~d:4 ~basis:"batch" (); origin = dummy_origin };
       ]
     in
     let _remaining, env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
     let basis = get_var_basis env v in
-    Stdio.printf "  Var v basis after upgrade: \"%s\"\n" basis;
-    if String.equal basis "batch" then Stdio.printf "  PASS: variable basis upgraded to \"batch\"\n"
+    Stdio.printf "  Var v basis after solving: \"%s\"\n" basis;
+    if String.equal basis "batch" then
+      Stdio.printf "  PASS: variable solved-dim tag recorded as \"batch\"\n"
     else Stdio.printf "  FAIL: expected basis \"batch\", got \"%s\"\n" basis
   with Row.Shape_error (msg, _) -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" msg
 
@@ -277,7 +289,7 @@ let test_concat_mixed_based_unbased () =
        preserved in the collapsed Dim. *)
     let v_result = Row.get_var ~name:"result" () in
     let v_component = Row.get_var ~name:"comp" () in
-    let concat_dim = Row.Concat [ Row.Var v_component; Row.get_dim ~d:3 () ] in
+    let concat_dim = Row.Concat [ Row.Var v_component; Row.get_default_dim ~d:3 () ] in
     let constraints =
       [
         Row.Dim_eq { d1 = Row.Var v_result; d2 = concat_dim; origin = dummy_origin };
@@ -413,7 +425,7 @@ let test_conv_nopadding_forward () =
         {
           stride = 1;
           over = Row.get_dim ~d:4 ~basis:"x" ();
-          conv = Some { dilation = 1; kernel = Row.get_dim ~d:3 (); use_padding = false };
+          conv = Some { dilation = 1; kernel = Row.get_default_dim ~d:3 (); use_padding = false };
           stride_offset = 0;
         }
     in
@@ -440,7 +452,7 @@ let test_conv_nopadding_reverse () =
         {
           stride = 1;
           over = Row.Var v;
-          conv = Some { dilation = 1; kernel = Row.get_dim ~d:3 (); use_padding = false };
+          conv = Some { dilation = 1; kernel = Row.get_default_dim ~d:3 (); use_padding = false };
           stride_offset = 0;
         }
     in
