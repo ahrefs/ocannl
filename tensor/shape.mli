@@ -231,7 +231,7 @@ val unsafe_reinitialize : unit -> unit
 (** {2 Internal-ish API.} *)
 
 val set_terminal : is_param:bool -> t -> unit
-(** Mark the shape as terminal, so that its rows can be closed to Least Upper Bounds (LUBs). This
+(** Mark the shape as terminal, so that its rows can be closed to Greatest Lower Bounds (GLBs). This
     function is only intended for parameters shapes, which would otherwise not be terminal because
     of the initialization expressions of the parameters. *)
 
@@ -301,7 +301,7 @@ val default_display_indices : t -> int array
 
 val to_bases : t -> string array
 (** The per-axis dimension bases (semantic annotations); the basis is total, so unannotated axes
-    read back as ["default"] and the broadcast bottom as ["bcast_if_1"]. Uses the matrix convention
+    read back as ["default"] and the broadcast top as ["bcast_if_1"]. Uses the matrix convention
     of putting the input axes last. *)
 
 val to_bases_bio : t -> string array * string array * string array

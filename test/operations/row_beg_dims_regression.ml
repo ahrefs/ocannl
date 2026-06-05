@@ -6,7 +6,7 @@
     1. Outer-left alignment in solve_row_ineq.
     2. s_row_one composes beg_dims faithfully.
     3. Closing preserves beg_dims via substitution.
-    4. LUB merge symmetric on both flanks.
+    4. GLB merge symmetric on both flanks.
     5. Monotonicity via re-firing. *)
 
 open! Base
@@ -27,20 +27,20 @@ let prov = Row.empty_provenance
 let dim ?(basis = Row.default_basis) d = Row.get_dim ~d ~basis ()
 
 (* Test 1: outer-left alignment.
-   cur  = { beg_dims = [Dim 5; Dim 2]; dims = [Dim 4]; bcast = Broadcastable }
-   subr = { beg_dims = [Dim 2];        dims = [Dim 4]; bcast = Row_var rho }
-   cur >= subr must FAIL: outer-left aligns subr's leading Dim 2 with cur's leading Dim 5,
+   res  = { beg_dims = [Dim 5; Dim 2]; dims = [Dim 4]; bcast = Broadcastable }
+   opnd = { beg_dims = [Dim 2];        dims = [Dim 4]; bcast = Row_var rho }
+   res ⊑ opnd must FAIL: outer-left aligns opnd's leading Dim 2 with res's leading Dim 5,
    which is incompatible. *)
 let test_1_outer_left_alignment () =
   Stdio.printf "Test 1: outer-left leading-flank alignment rejects size mismatch\n";
-  let cur : Row.t =
+  let res : Row.t =
     { beg_dims = [ dim 5; dim 2 ]; dims = [ dim 4 ]; bcast = Broadcastable; prov }
   in
   let rho = Row.get_row_var () in
-  let subr : Row.t =
+  let opnd : Row.t =
     { beg_dims = [ dim 2 ]; dims = [ dim 4 ]; bcast = Row_var rho; prov }
   in
-  let ineq = Row.Row_ineq { cur; subr; origin = dummy_origin } in
+  let ineq = Row.Row_ineq { res; opnd; origin = dummy_origin } in
   try
     let _remaining, _env =
       Row.solve_inequalities ~stage:Stage1 [ ineq ] Row.empty_env
@@ -104,26 +104,26 @@ let test_3_closing_preserves_beg_dims () =
       Stdio.printf "  FAIL: got %s\n"
         (Sexp.to_string_hum (Row.sexp_of_t result))
 
-(* Test 4: LUB merge symmetric across both flanks.
-   First inequality:  cur1 = { beg_dims=[Dim 3; Dim 5]; dims=[Dim 7]; Broadcastable }
-                      subr = rho_row (open)
-   Second inequality: cur2 = { beg_dims=[Dim 3];        dims=[Dim 8; Dim 7]; Broadcastable }
-                      subr = rho_row (same rho)
-   Merged LUB should keep the shorter leading flank length (1) and shorter trailing flank length
+(* Test 4: GLB merge symmetric across both flanks.
+   First inequality:  res1 = { beg_dims=[Dim 3; Dim 5]; dims=[Dim 7]; Broadcastable }
+                      opnd = rho_row (open)
+   Second inequality: res2 = { beg_dims=[Dim 3];        dims=[Dim 8; Dim 7]; Broadcastable }
+                      opnd = rho_row (same rho)
+   Merged GLB should keep the shorter leading flank length (1) and shorter trailing flank length
    (1). Outer-left Dim 3 matches outer-left Dim 3 → Dim 3; outer-right Dim 7 matches outer-right
    Dim 7 → Dim 7. *)
-let test_4_lub_merge_symmetric () =
-  Stdio.printf "Test 4: LUB merge symmetric on both flanks (matching outer axes)\n";
+let test_4_glb_merge_symmetric () =
+  Stdio.printf "Test 4: GLB merge symmetric on both flanks (matching outer axes)\n";
   let rho = Row.get_row_var () in
   let rho_row : Row.t = { beg_dims = []; dims = []; bcast = Row_var rho; prov } in
-  let cur1 : Row.t =
+  let res1 : Row.t =
     { beg_dims = [ dim 3; dim 5 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let cur2 : Row.t =
+  let res2 : Row.t =
     { beg_dims = [ dim 3 ]; dims = [ dim 8; dim 7 ]; bcast = Broadcastable; prov }
   in
-  let ineq1 = Row.Row_ineq { cur = cur1; subr = rho_row; origin = dummy_origin } in
-  let ineq2 = Row.Row_ineq { cur = cur2; subr = rho_row; origin = dummy_origin } in
+  let ineq1 = Row.Row_ineq { res = res1; opnd = rho_row; origin = dummy_origin } in
+  let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env
   in
@@ -147,20 +147,20 @@ let test_4_lub_merge_symmetric () =
    Two upper bounds on the same rho with different leading-flank values (Dim 3 vs Dim 5) at the
    same outer-left position. The merge must demote to an unbased Dim 1. Trailing flank stays
    compatible (Dim 7 in both). A regression that removed the leading-flank conflict case from
-   meet_dim would leave one of the original axes (Dim 3 or Dim 5) in beg_dims and this assertion
+   join_dim would leave one of the original axes (Dim 3 or Dim 5) in beg_dims and this assertion
    would fail. *)
-let test_4b_lub_leading_conflict_demotes_to_one () =
+let test_4b_glb_leading_conflict_demotes_to_one () =
   Stdio.printf "Test 4b: leading-flank conflict demotes to unbased Dim 1\n";
   let rho = Row.get_row_var () in
   let rho_row : Row.t = { beg_dims = []; dims = []; bcast = Row_var rho; prov } in
-  let cur1 : Row.t =
+  let res1 : Row.t =
     { beg_dims = [ dim 3 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let cur2 : Row.t =
+  let res2 : Row.t =
     { beg_dims = [ dim 5 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let ineq1 = Row.Row_ineq { cur = cur1; subr = rho_row; origin = dummy_origin } in
-  let ineq2 = Row.Row_ineq { cur = cur2; subr = rho_row; origin = dummy_origin } in
+  let ineq1 = Row.Row_ineq { res = res1; opnd = rho_row; origin = dummy_origin } in
+  let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env
   in
@@ -179,26 +179,26 @@ let test_4b_lub_leading_conflict_demotes_to_one () =
       Stdio.printf "  PASS\n"
   | _ ->
       Stdio.printf
-        "  FAIL: expected leading flank demoted to broadcast-bottom Dim 1; got %s\n"
+        "  FAIL: expected leading flank demoted to broadcast-top Dim 1; got %s\n"
         (Sexp.to_string_hum (Row.sexp_of_t result))
 
 (* Test 4c: trailing-flank CONFLICT demotes to unbased Dim 1.
    Mirror of Test 4b: same leading flank (Dim 3), different trailing-flank values (Dim 7 vs
    Dim 11). The merge must demote the trailing flank to an unbased Dim 1. A regression that
-   removed the trailing-flank conflict case from meet_dim would leave one of the originals
+   removed the trailing-flank conflict case from join_dim would leave one of the originals
    (Dim 7 or Dim 11) and this assertion would fail. *)
-let test_4c_lub_trailing_conflict_demotes_to_one () =
+let test_4c_glb_trailing_conflict_demotes_to_one () =
   Stdio.printf "Test 4c: trailing-flank conflict demotes to unbased Dim 1\n";
   let rho = Row.get_row_var () in
   let rho_row : Row.t = { beg_dims = []; dims = []; bcast = Row_var rho; prov } in
-  let cur1 : Row.t =
+  let res1 : Row.t =
     { beg_dims = [ dim 3 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let cur2 : Row.t =
+  let res2 : Row.t =
     { beg_dims = [ dim 3 ]; dims = [ dim 11 ]; bcast = Broadcastable; prov }
   in
-  let ineq1 = Row.Row_ineq { cur = cur1; subr = rho_row; origin = dummy_origin } in
-  let ineq2 = Row.Row_ineq { cur = cur2; subr = rho_row; origin = dummy_origin } in
+  let ineq1 = Row.Row_ineq { res = res1; opnd = rho_row; origin = dummy_origin } in
+  let ineq2 = Row.Row_ineq { res = res2; opnd = rho_row; origin = dummy_origin } in
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq1; ineq2 ] Row.empty_env
   in
@@ -217,12 +217,12 @@ let test_4c_lub_trailing_conflict_demotes_to_one () =
       Stdio.printf "  PASS\n"
   | _ ->
       Stdio.printf
-        "  FAIL: expected trailing flank demoted to broadcast-bottom Dim 1; got %s\n"
+        "  FAIL: expected trailing flank demoted to broadcast-top Dim 1; got %s\n"
         (Sexp.to_string_hum (Row.sexp_of_t result))
 
 (* Test 5: monotonicity via re-firing (success case).
-   First: solve cur ≥ b with b = rho_row, c = {beg_dims=[Dim 4]; dims=[Dim 7]; Broadcastable}.
-   The LUB c is banked for rho.
+   First: solve res ⊑ b with b = rho_row, c = {beg_dims=[Dim 4]; dims=[Dim 7]; Broadcastable}.
+   The GLB c is banked for rho.
    Then: substitute rho := {beg_dims=[Dim 4]; dims=[]; bcast=Row_var rho'}. The leading Dim 4 of
    the substituted row aligns outer-left against the banked Dim 4 and the inequality holds. *)
 let test_5_monotonicity_via_refiring () =
@@ -233,7 +233,7 @@ let test_5_monotonicity_via_refiring () =
   let c : Row.t =
     { beg_dims = [ dim 4 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let ineq = Row.Row_ineq { cur = c; subr = b; origin = dummy_origin } in
+  let ineq = Row.Row_ineq { res = c; opnd = b; origin = dummy_origin } in
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq ] Row.empty_env
   in
@@ -249,18 +249,18 @@ let test_5_monotonicity_via_refiring () =
     Stdio.printf "  FAIL: substitution should not retract; got Shape_error: %s\n" msg
 
 (* Test 5b: monotonicity via re-firing (negative mutation).
-   Same setup as Test 5 but the substituted leading axis CONFLICTS with the banked LUB's leading
-   axis (banked Dim 4 vs substituted Dim 5). After substitution, the banked LUB must still be
+   Same setup as Test 5 but the substituted leading axis CONFLICTS with the banked GLB's leading
+   axis (banked Dim 4 vs substituted Dim 5). After substitution, the banked GLB must still be
    enforced — re-firing via the substituted row should expose the conflict either at substitution
-   time or when the row variable is closed against its LUB. We attempt to close rho' (the new
+   time or when the row variable is closed against its GLB. We attempt to close rho' (the new
    row variable) and check that subst_row of rho's row reflects either:
    (a) an explicit Shape_error during solving (the banked fact is retained and rejects the bad
        substitution), or
-   (b) a substituted result that has not silently lost the LUB constraint — i.e., the closed row
-       must contain the LUB's Dim 4 somewhere; a regression that dropped the banked fact would
+   (b) a substituted result that has not silently lost the GLB constraint — i.e., the closed row
+       must contain the GLB's Dim 4 somewhere; a regression that dropped the banked fact would
        produce a clean Dim 5 with no trace of Dim 4.
 
-   This guards against the "ignored/dropped banked LUB" regression flagged by the reviewer. *)
+   This guards against the "ignored/dropped banked GLB" regression flagged by the reviewer. *)
 let test_5b_monotonicity_negative_mutation () =
   Stdio.printf "Test 5b: monotonicity — incompatible substitution preserves banked facts\n";
   let rho = Row.get_row_var () in
@@ -269,11 +269,11 @@ let test_5b_monotonicity_negative_mutation () =
   let c : Row.t =
     { beg_dims = [ dim 4 ]; dims = [ dim 7 ]; bcast = Broadcastable; prov }
   in
-  let ineq = Row.Row_ineq { cur = c; subr = b; origin = dummy_origin } in
+  let ineq = Row.Row_ineq { res = c; opnd = b; origin = dummy_origin } in
   let _remaining, env =
     Row.solve_inequalities ~stage:Stage1 [ ineq ] Row.empty_env
   in
-  (* Mutation: substitute rho with a row whose leading Dim 5 CONFLICTS with the banked LUB's
+  (* Mutation: substitute rho with a row whose leading Dim 5 CONFLICTS with the banked GLB's
      leading Dim 4. *)
   let subst : Row.t =
     { beg_dims = [ dim 5 ]; dims = []; bcast = Row_var rho'; prov }
@@ -291,7 +291,7 @@ let test_5b_monotonicity_negative_mutation () =
   if raised_during_subst then
     Stdio.printf "  PASS: banked fact rejected the conflict at substitution time\n"
   else
-    (* Force closure and check that the result reflects the banked LUB (must contain Dim 4) or
+    (* Force closure and check that the result reflects the banked GLB (must contain Dim 4) or
        raises during close. *)
     let closed =
       try
@@ -329,8 +329,8 @@ let () =
   test_1_outer_left_alignment ();
   test_2_substitution_preserves_beg_dims ();
   test_3_closing_preserves_beg_dims ();
-  test_4_lub_merge_symmetric ();
-  test_4b_lub_leading_conflict_demotes_to_one ();
-  test_4c_lub_trailing_conflict_demotes_to_one ();
+  test_4_glb_merge_symmetric ();
+  test_4b_glb_leading_conflict_demotes_to_one ();
+  test_4c_glb_trailing_conflict_demotes_to_one ();
   test_5b_monotonicity_negative_mutation ();
   test_5_monotonicity_via_refiring ()

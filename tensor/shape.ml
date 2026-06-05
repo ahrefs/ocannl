@@ -509,20 +509,20 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       @@ [
            Row_ineq
              {
-               cur = cur_sh.batch;
-               subr = sh.batch;
+               res = cur_sh.batch;
+               opnd = sh.batch;
                origin = [ get_origin `Batch sh `Batch "transpose" ];
              };
            Row_ineq
              {
-               cur = cur_sh.input;
-               subr = sh.output;
+               res = cur_sh.input;
+               opnd = sh.output;
                origin = [ get_origin `Input sh `Output "transpose" ];
              };
            Row_ineq
              {
-               cur = cur_sh.output;
-               subr = sh.input;
+               res = cur_sh.output;
+               opnd = sh.input;
                origin = [ get_origin `Output sh `Input "transpose" ];
              };
          ]
@@ -534,20 +534,20 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       @@ [
            Row_ineq
              {
-               cur = cur_sh.batch;
-               subr = sh.batch;
+               res = cur_sh.batch;
+               opnd = sh.batch;
                origin = [ get_origin `Batch sh `Batch "pointwise_unary" ];
              };
            Row_ineq
              {
-               cur = cur_sh.input;
-               subr = sh.input;
+               res = cur_sh.input;
+               opnd = sh.input;
                origin = [ get_origin `Input sh `Input "pointwise_unary" ];
              };
            Row_ineq
              {
-               cur = cur_sh.output;
-               subr = sh.output;
+               res = cur_sh.output;
+               opnd = sh.output;
                origin = [ get_origin `Output sh `Output "pointwise_unary" ];
              };
          ]
@@ -569,32 +569,32 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                      operation = Some "compose";
                    };
                  ];
-               cur = sh1.input;
-               subr = sh2.output;
+               res = sh1.input;
+               opnd = sh2.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh1 `Batch "compose" ];
-               cur = cur_sh.batch;
-               subr = sh1.batch;
+               res = cur_sh.batch;
+               opnd = sh1.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh2 `Batch "compose" ];
-               cur = cur_sh.batch;
-               subr = sh2.batch;
+               res = cur_sh.batch;
+               opnd = sh2.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh2 `Input "compose" ];
-               cur = cur_sh.input;
-               subr = sh2.input;
+               res = cur_sh.input;
+               opnd = sh2.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh1 `Output "compose" ];
-               cur = cur_sh.output;
-               subr = sh1.output;
+               res = cur_sh.output;
+               opnd = sh1.output;
              };
          ]
   | Broadcast (Pointwise_bin, sh1, sh2) ->
@@ -608,38 +608,38 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
            Row_ineq
              {
                origin = [ get_origin `Batch sh1 `Batch "pointwise_binary" ];
-               cur = cur_sh.batch;
-               subr = sh1.batch;
+               res = cur_sh.batch;
+               opnd = sh1.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh2 `Batch "pointwise_binary" ];
-               cur = cur_sh.batch;
-               subr = sh2.batch;
+               res = cur_sh.batch;
+               opnd = sh2.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh1 `Input "pointwise_binary" ];
-               cur = cur_sh.input;
-               subr = sh1.input;
+               res = cur_sh.input;
+               opnd = sh1.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh2 `Input "pointwise_binary" ];
-               cur = cur_sh.input;
-               subr = sh2.input;
+               res = cur_sh.input;
+               opnd = sh2.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh1 `Output "pointwise_binary" ];
-               cur = cur_sh.output;
-               subr = sh1.output;
+               res = cur_sh.output;
+               opnd = sh1.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh2 `Output "pointwise_binary" ];
-               cur = cur_sh.output;
-               subr = sh2.output;
+               res = cur_sh.output;
+               opnd = sh2.output;
              };
          ]
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
@@ -661,50 +661,50 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                      operation = Some "compose_accumulate";
                    };
                  ];
-               cur = sh1.input;
-               subr = sh2.output;
+               res = sh1.input;
+               opnd = sh2.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh1 `Batch "compose_accumulate" ];
-               cur = cur_sh.batch;
-               subr = sh1.batch;
+               res = cur_sh.batch;
+               opnd = sh1.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh2 `Batch "compose_accumulate" ];
-               cur = cur_sh.batch;
-               subr = sh2.batch;
+               res = cur_sh.batch;
+               opnd = sh2.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh2 `Input "compose_accumulate" ];
-               cur = cur_sh.input;
-               subr = sh2.input;
+               res = cur_sh.input;
+               opnd = sh2.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh1 `Output "compose_accumulate" ];
-               cur = cur_sh.output;
-               subr = sh1.output;
+               res = cur_sh.output;
+               opnd = sh1.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh3 `Batch "compose_accumulate" ];
-               cur = cur_sh.batch;
-               subr = sh3.batch;
+               res = cur_sh.batch;
+               opnd = sh3.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh3 `Input "compose_accumulate" ];
-               cur = cur_sh.input;
-               subr = sh3.input;
+               res = cur_sh.input;
+               opnd = sh3.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh3 `Output "compose_accumulate" ];
-               cur = cur_sh.output;
-               subr = sh3.output;
+               res = cur_sh.output;
+               opnd = sh3.output;
              };
          ]
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
@@ -720,56 +720,56 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
            Row_ineq
              {
                origin = [ get_origin `Batch sh1 `Batch "pointwise_ternary" ];
-               cur = cur_sh.batch;
-               subr = sh1.batch;
+               res = cur_sh.batch;
+               opnd = sh1.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh2 `Batch "pointwise_ternary" ];
-               cur = cur_sh.batch;
-               subr = sh2.batch;
+               res = cur_sh.batch;
+               opnd = sh2.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Batch sh3 `Batch "pointwise_ternary" ];
-               cur = cur_sh.batch;
-               subr = sh3.batch;
+               res = cur_sh.batch;
+               opnd = sh3.batch;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh1 `Input "pointwise_ternary" ];
-               cur = cur_sh.input;
-               subr = sh1.input;
+               res = cur_sh.input;
+               opnd = sh1.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh2 `Input "pointwise_ternary" ];
-               cur = cur_sh.input;
-               subr = sh2.input;
+               res = cur_sh.input;
+               opnd = sh2.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Input sh3 `Input "pointwise_ternary" ];
-               cur = cur_sh.input;
-               subr = sh3.input;
+               res = cur_sh.input;
+               opnd = sh3.input;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh1 `Output "pointwise_ternary" ];
-               cur = cur_sh.output;
-               subr = sh1.output;
+               res = cur_sh.output;
+               opnd = sh1.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh2 `Output "pointwise_ternary" ];
-               cur = cur_sh.output;
-               subr = sh2.output;
+               res = cur_sh.output;
+               opnd = sh2.output;
              };
            Row_ineq
              {
                origin = [ get_origin `Output sh3 `Output "pointwise_ternary" ];
-               cur = cur_sh.output;
-               subr = sh3.output;
+               res = cur_sh.output;
+               opnd = sh3.output;
              };
          ]
   | Broadcast (Defined_by_cd_logic, _, _)
@@ -2352,7 +2352,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
        is a [default] atom at every size, INCLUDING size 1 — an explicit user [1] does not stretch
        (it flags a forgotten/hidden dimension rather than silently broadcasting). Only scalar
        helpers, internal broadcast fill (e.g. [embed_self_id]), and rank-broadening synthesizers
-       mint the claim-free broadcast bottom [1_(bcast_if_1)], and they do so explicitly via
+       mint the claim-free broadcast top [1_(bcast_if_1)], and they do so explicitly via
        [~*_axes] / [get_bcast_dim], not through this default path. *)
     get_default_dim ~d ()
   in

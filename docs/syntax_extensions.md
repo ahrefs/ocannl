@@ -334,7 +334,7 @@ Annotations compose with nesting: in `[ ((1., 2.) : feat) ]` the inner tuple lab
 
 As a convenience, the same annotation on a bare numeric literal labels the size-1 output axis of the resulting scalar: `(2.0 : q)` is shorthand for `([ 2.0 ] : q)`.
 
-(This replaces an older `'q' 2.0` char-literal form, which could not carry multi-character tags.) Unannotated axes carry the reserved `default` basis (an atom that does not fuse with a named basis, so an unlabelled axis will not silently merge with a labelled one), and the reserved `bcast_if_1` basis is the claim-free broadcast bottom that a size-1 axis stretches from — write it explicitly (e.g. `([ 1. ] : bcast_if_1)`) when you *want* a size-1 axis to broadcast. Example: `let%op y = ({ hey } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in ...`.
+(This replaces an older `'q' 2.0` char-literal form, which could not carry multi-character tags.) Unannotated axes carry the reserved `default` basis (an atom that does not fuse with a named basis, so an unlabelled axis will not silently merge with a labelled one), and the reserved `bcast_if_1` basis is the claim-free broadcast top that a size-1 axis stretches from — write it explicitly (e.g. `([ 1. ] : bcast_if_1)`) when you *want* a size-1 axis to broadcast. Example: `let%op y = ({ hey } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in ...`.
 
 ## Wildcard bindings
 

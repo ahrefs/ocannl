@@ -79,7 +79,7 @@ Test 17: Conv no-padding reverse -- basis propagated
   Solved over to d=4, basis="x"
   PASS: conv reverse propagated basis "x" to over
 
-Test 18: LUB with conflicting bases -- strict equality raises
+Test 18: GLB with conflicting bases -- strict equality raises
   PASS: conflicting bases in mutual inequality correctly raises: dimension comparison for axis: different bases
 
 === Done ===

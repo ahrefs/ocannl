@@ -23,7 +23,7 @@ let test_print_styles () =
      totality analog of the old [None]). *)
   let solved_dim_minimal = { d = 64; basis = default_basis; proj_id = None } in
 
-  (* The reserved broadcast-bottom tag is visible in Only_bases but prints bare (no prefix) in
+  (* The reserved broadcast-top tag is visible in Only_bases but prints bare (no prefix) in
      size-oriented styles, like the unannotated [default]. *)
   let solved_dim_bcast = { d = 1; basis = bcast_if_1; proj_id = None } in
 
@@ -46,7 +46,7 @@ let test_print_styles () =
   Stdio.printf "  Projection_and_size: %s\n"
     (solved_dim_to_string Projection_and_size solved_dim_minimal);
 
-  Stdio.printf "\nBroadcast bottom (d=1, basis=bcast_if_1):\n";
+  Stdio.printf "\nBroadcast top (d=1, basis=bcast_if_1):\n";
   Stdio.printf "  Only_bases: %s\n" (solved_dim_to_string Only_bases solved_dim_bcast);
   Stdio.printf "  Axis_size: %s\n" (solved_dim_to_string Axis_size solved_dim_bcast);
 

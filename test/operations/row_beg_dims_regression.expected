@@ -6,7 +6,7 @@ Test 2: s_row_one composes beg_dims (closed value into open row)
   PASS
 Test 3: closing preserves beg_dims (Row_var v -> Broadcastable)
   PASS
-Test 4: LUB merge symmetric on both flanks (matching outer axes)
+Test 4: GLB merge symmetric on both flanks (matching outer axes)
   PASS
 Test 4b: leading-flank conflict demotes to unbased Dim 1
   PASS

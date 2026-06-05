@@ -76,14 +76,14 @@ Key points:
 - `%op` inline params without brackets use shape inference; brackets `[...]` fix shape and values.
 - Einsum capture requires a literal string: `x ++ "a,b" ["a"]` works; `let s = ... in x ++ s ["a"]` does not.
 - Einsum labels: `"abc"` means 3 axes; `"abc,"` means a single axis named `abc` (comma = multi-char mode).
-- `0.5 + 0.5` creates an inferred-shape constant that adapts to usage (LUB when known, otherwise
-  guessed minimal); a lone `1.0` is a fixed scalar dimension and won’t grow with context.
+- `0.5 + 0.5` creates an inferred-shape constant that adapts to usage (GLB when known, otherwise
+  guessed to the broadcast unit); a lone `1.0` is a fixed scalar dimension and won’t grow with context.
 - Use `_rhs1/_rhs2/_lhs` suffixes in %cd for intermediate tensors when projection slots matter.
 
 ## Shape & Projection Inference
 - Shapes have three rows: batch | input -> output (input is rightmost in underlying arrays).
 - Broadcasting can occur with fixed head/tail axes (row variables).
-- finish_inference closes unsolved dims (LUB or 1/broadcast); derive_projections re-solves with
+- finish_inference closes unsolved dims (GLB or 1/broadcast); derive_projections re-solves with
   fresh projection ids per op to avoid contamination.
 - Generalized einsum `~logic:"...=>..."` supports convolutions, striding, and concatenation `^`.
 
