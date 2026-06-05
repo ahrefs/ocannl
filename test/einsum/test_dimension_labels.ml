@@ -486,13 +486,13 @@ let test_conv_nopadding_reverse () =
     else Stdio.printf "  FAIL: expected d=4, basis=\"x\"\n"
   with Row.Shape_error (msg, _) -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" msg
 
-let test_lub_conflicting_bases () =
-  Stdio.printf "Test 18: LUB with conflicting bases -- strict equality raises\n";
+let test_glb_conflicting_bases () =
+  Stdio.printf "Test 18: GLB with conflicting bases -- strict equality raises\n";
   Tensor.unsafe_reinitialize ();
   (* The dim-level inequality solver (solve_dim_ineq) checks bases strictly at the Dim/Dim fast path
-     before reaching the LUB computation. When two concrete dims with same size but different bases
+     before reaching the GLB computation. When two concrete dims with same size but different bases
      meet through mutual Row_ineq constraints, the strict check raises Shape_error. This is correct
-     behavior: the LUB demotion to d=1 only applies within the Bounds_dim path, not when both dims
+     behavior: the GLB demotion to d=1 only applies within the Bounds_dim path, not when both dims
      are already solved. Verify that the error is raised. *)
   try
     let prov = Row.empty_provenance in
@@ -514,8 +514,8 @@ let test_lub_conflicting_bases () =
     in
     let constraints =
       [
-        Row.Row_ineq { cur = r1; subr = r2; origin = dummy_origin };
-        Row.Row_ineq { cur = r2; subr = r1; origin = dummy_origin };
+        Row.Row_ineq { res = r1; opnd = r2; origin = dummy_origin };
+        Row.Row_ineq { res = r2; opnd = r1; origin = dummy_origin };
       ]
     in
     let _remaining, _env = Row.solve_inequalities ~stage:Stage1 constraints Row.empty_env in
@@ -573,6 +573,6 @@ let () =
   Stdio.printf "\n";
   test_conv_nopadding_reverse ();
   Stdio.printf "\n";
-  test_lub_conflicting_bases ();
+  test_glb_conflicting_bases ();
   Stdio.printf "\n";
   Stdio.printf "=== Done ===\n"

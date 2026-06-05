@@ -20,8 +20,8 @@ val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
 
 val bcast_if_1 : string
-(** The reserved basis tag of the claim-free broadcast bottom. An axis tagged [bcast_if_1]
-    broadcasts to any size while it remains size 1 ([1_(bcast_if_1)] is the bottom of the broadcast
+(** The reserved basis tag of the claim-free broadcast top. An axis tagged [bcast_if_1]
+    broadcasts to any size while it remains size 1 ([1_(bcast_if_1)] is the top of the broadcast
     order), and is an ordinary inert atom at sizes > 1. Scalars and rank-broadening fill carry it;
     a user may also write it deliberately as an explicit stretch-when-1 affordance. *)
 
@@ -37,7 +37,7 @@ type solved_dim = { d : int; basis : string; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 (** A single axis in a shape. [basis] is the (total) semantic annotation on the dimension (e.g.
     ["rgb"] on a size-3 axis); two dimensions that must agree in size must also agree on [basis].
-    Unannotated user axes carry [default_basis]; the broadcast bottom carries [bcast_if_1].
+    Unannotated user axes carry [default_basis]; the broadcast top carries [bcast_if_1].
     [proj_id] is used for projection inference, and abused for provenance tracking during shape
     inference. *)
 
@@ -61,8 +61,8 @@ val get_dim : d:int -> basis:string -> ?proj_id:int -> unit -> dim
 (** Mint a dimension with an explicit (required) basis tag. *)
 
 val get_bcast_dim : d:int -> ?proj_id:int -> unit -> dim
-(** Mint the claim-free broadcast bottom [d_(bcast_if_1)] (at [d = 1] the bottom of the broadcast
-    order; at sizes > 1 an inert atom). Use at scalar / rank-broadening / LUB-demotion sites. *)
+(** Mint the claim-free broadcast top [d_(bcast_if_1)] (at [d = 1] the top of the broadcast
+    order; at sizes > 1 an inert atom). Use at scalar / rank-broadening / GLB-demotion sites. *)
 
 val get_default_dim : d:int -> ?proj_id:int -> unit -> dim
 (** Mint an unannotated user/derived atom [d_(default)]. *)
@@ -141,8 +141,8 @@ type constraint_origin = {
 }
 [@@deriving sexp_of]
 
-(** An entry implements inequalities [cur >= v >= subr] and/or an equality [v = solved]. [cur] and
-    [subr] must be sorted using the [@@deriving compare] comparison. *)
+(** An entry implements inequalities [res ⊑ v ⊑ opnd] and/or an equality [v = solved]. [res] and
+    [opnd] must be sorted using the [@@deriving compare] comparison. *)
 type dim_entry =
   | Solved_dim of dim
   | Bounds_dim of {
@@ -150,9 +150,9 @@ type dim_entry =
       has_uniq_constr_unless : dim_var_set option;
           (** If set, the variable should not be guessed 1 unless a variable from the set is also
               prevented from being guessed 1. *)
-      cur : dim_var list;
-      subr : dim_var list;
-      lub : dim option;
+      res : dim_var list;
+      opnd : dim_var list;
+      glb : dim option;
       constr : dim_constraint;
       origin : constraint_origin list;
     }
@@ -162,9 +162,9 @@ type row_entry =
   | Solved_row of t
   | Bounds_row of {
       is_in_param : bool;
-      cur : row_var list;
-      subr : row_var list;
-      lub : t option;
+      res : row_var list;
+      opnd : row_var list;
+      glb : t option;
       constr : row_constraint;
       origin : constraint_origin list;
     }
@@ -173,8 +173,8 @@ type row_entry =
 type constraint_ =
   | Dim_eq of { d1 : dim; d2 : dim; origin : constraint_origin list }
   | Row_eq of { r1 : t; r2 : t; origin : constraint_origin list }
-  | Dim_ineq of { cur : dim; subr : dim; from_ : Sexp.t; origin : constraint_origin list }
-  | Row_ineq of { cur : t; subr : t; origin : constraint_origin list }
+  | Dim_ineq of { res : dim; opnd : dim; from_ : Sexp.t; origin : constraint_origin list }
+  | Row_ineq of { res : t; opnd : t; origin : constraint_origin list }
   | Dim_constr of { d : dim; constr : dim_constraint; origin : constraint_origin list }
   | Rows_constr of { r : t list; constr : row_constraint; origin : constraint_origin list }
       (** The constraint applies to the concatenation of the rows. Note: broadcasting does not

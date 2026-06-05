@@ -89,7 +89,7 @@ let test_spec_outer_left_mismatch () =
   Stdio.printf "Test: outer-left alignment rejects spec-derived mismatch\n";
   Tensor.unsafe_reinitialize ();
   let prov = Row.empty_provenance in
-  let cur =
+  let res =
     {
       Row.beg_dims =
         [ Row.get_default_dim ~d:5 (); Row.get_default_dim ~d:2 () ];
@@ -99,7 +99,7 @@ let test_spec_outer_left_mismatch () =
     }
   in
   let rho = Row.get_row_var () in
-  let subr =
+  let opnd =
     {
       Row.beg_dims = [ Row.get_default_dim ~d:2 () ];
       dims = [ Row.get_default_dim ~d:4 () ];
@@ -107,7 +107,7 @@ let test_spec_outer_left_mismatch () =
       prov;
     }
   in
-  let ineq = Row.Row_ineq { cur; subr; origin = dummy_origin } in
+  let ineq = Row.Row_ineq { res; opnd; origin = dummy_origin } in
   try
     let _remaining, _env =
       Row.solve_inequalities ~stage:Stage1 [ ineq ] Row.empty_env

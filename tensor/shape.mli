@@ -301,7 +301,7 @@ val default_display_indices : t -> int array
 
 val to_bases : t -> string array
 (** The per-axis dimension bases (semantic annotations); the basis is total, so unannotated axes
-    read back as ["default"] and the broadcast bottom as ["bcast_if_1"]. Uses the matrix convention
+    read back as ["default"] and the broadcast top as ["bcast_if_1"]. Uses the matrix convention
     of putting the input axes last. *)
 
 val to_bases_bio : t -> string array * string array * string array

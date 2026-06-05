@@ -3,21 +3,21 @@ Found 0, in the config file
 Testing total-basis broadcast order:
 
 Transitivity: bridging through default no longer relates rgb and xyz
-  PASS: 3_rgb ⊑ 3_default rejects
-  PASS: 3_default ⊑ 3_xyz rejects
-  PASS: 3_rgb ⊑ 3_xyz rejects
+  PASS: 3_default ⊑ 3_rgb rejects
+  PASS: 3_xyz ⊑ 3_default rejects
+  PASS: 3_xyz ⊑ 3_rgb rejects
   PASS: 3_rgb ⊑ 3_rgb accepts
-Bottom asymmetry: 1_(bcast_if_1) broadcasts, 1_default does not
-  PASS: 1_(bcast_if_1) ⊑ 5_rgb accepts
-  PASS: 1_default ⊑ 5_rgb rejects
-  PASS: 1_(bcast_if_1) ⊑ 5_default accepts
+Top asymmetry: 1_(bcast_if_1) broadcasts, 1_default does not
+  PASS: 5_rgb ⊑ 1_(bcast_if_1) accepts
+  PASS: 5_rgb ⊑ 1_default rejects
+  PASS: 5_default ⊑ 1_(bcast_if_1) accepts
 Advertisable affordance: bcast_if_1 stretches at size 1, inert atom at size > 1
-  PASS: 1_(bcast_if_1) ⊑ 7_xyz accepts (stretches)
-  PASS: 5_(bcast_if_1) ⊑ 5_rgb rejects (inert atom, not bottom)
+  PASS: 7_xyz ⊑ 1_(bcast_if_1) accepts (stretches)
+  PASS: 5_rgb ⊑ 5_(bcast_if_1) rejects (inert atom, not top)
   PASS: 5_(bcast_if_1) ⊑ 5_(bcast_if_1) accepts (equal atom)
 Explicit user 1_default does not stretch; only 1_(bcast_if_1) does
-  PASS: 1_default ⊑ 5_default rejects (no stretch)
-  PASS: 1_default ⊑ 5_rgb rejects (no stretch)
-  PASS: 1_(bcast_if_1) ⊑ 5_default accepts (bottom stretches)
-Inequality no-propagation: the bottom records no basis claim
-  PASS: v stays 1_(bcast_if_1) after v ⊑ 5_rgb; inequality recorded no basis
+  PASS: 5_default ⊑ 1_default rejects (no stretch)
+  PASS: 5_rgb ⊑ 1_default rejects (no stretch)
+  PASS: 5_default ⊑ 1_(bcast_if_1) accepts (top stretches)
+Inequality no-propagation: the top records no basis claim
+  PASS: v stays 1_(bcast_if_1) after 5_rgb ⊑ v; inequality recorded no basis

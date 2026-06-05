@@ -14,7 +14,7 @@ Minimal attributes (d=64, no padding, no basis, no proj_id):
   Axis_size: 64
   Projection_and_size: 64
 
-Broadcast bottom (d=1, basis=bcast_if_1):
+Broadcast top (d=1, basis=bcast_if_1):
   Only_bases: bcast_if_1
   Axis_size: 1
 

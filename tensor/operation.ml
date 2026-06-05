@@ -597,7 +597,7 @@ let slice (batch_idx : Idx.static_symbol) =
   Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~op_label:"@|"
 
 (* The embedded size-1 output axes below are internal broadcast fill (a scalar id / symbol that
-   must multiply into a value of any shape), so they mint the claim-free broadcast bottom
+   must multiply into a value of any shape), so they mint the claim-free broadcast top
    [1_(bcast_if_1)] explicitly — not [default] (which is reserved for unannotated user axes). *)
 let embed_symbol ?grad_spec ?(label = []) static_sym =
   Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label) ~batch_dims:[]

@@ -580,7 +580,7 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
 let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c : t =
-  (* Note: broadcastable scalar basis ([bcast_if_1], the broadcast bottom) by default, so a scalar
+  (* Note: broadcastable scalar basis ([bcast_if_1], the broadcast top) by default, so a scalar
      constant broadcasts into a parameter of any shape rather than fusing as a fixed atom. *)
   let label = float_to_label c :: label in
   let fetch_op = Ir.Assignments.Constant c in
