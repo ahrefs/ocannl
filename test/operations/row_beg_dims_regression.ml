@@ -147,7 +147,7 @@ let test_4_glb_merge_symmetric () =
    Two upper bounds on the same rho with different leading-flank values (Dim 3 vs Dim 5) at the
    same outer-left position. The merge must demote to an unbased Dim 1. Trailing flank stays
    compatible (Dim 7 in both). A regression that removed the leading-flank conflict case from
-   meet_dim would leave one of the original axes (Dim 3 or Dim 5) in beg_dims and this assertion
+   join_dim would leave one of the original axes (Dim 3 or Dim 5) in beg_dims and this assertion
    would fail. *)
 let test_4b_glb_leading_conflict_demotes_to_one () =
   Stdio.printf "Test 4b: leading-flank conflict demotes to unbased Dim 1\n";
@@ -185,7 +185,7 @@ let test_4b_glb_leading_conflict_demotes_to_one () =
 (* Test 4c: trailing-flank CONFLICT demotes to unbased Dim 1.
    Mirror of Test 4b: same leading flank (Dim 3), different trailing-flank values (Dim 7 vs
    Dim 11). The merge must demote the trailing flank to an unbased Dim 1. A regression that
-   removed the trailing-flank conflict case from meet_dim would leave one of the originals
+   removed the trailing-flank conflict case from join_dim would leave one of the originals
    (Dim 7 or Dim 11) and this assertion would fail. *)
 let test_4c_glb_trailing_conflict_demotes_to_one () =
   Stdio.printf "Test 4c: trailing-flank conflict demotes to unbased Dim 1\n";

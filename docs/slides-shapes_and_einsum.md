@@ -374,7 +374,7 @@ let scores =
 > 1. **Collect constraints** from tensor operations
 > 2. **Propagate shapes** bottom-up and top-down  
 > 3. **Solve inequalities** (dim-1 broadcasts to any size)
-> 4. **Substitute variables** with least upper bounds
+> 4. **Substitute variables** with greatest lower bounds
 
 {pause}
 

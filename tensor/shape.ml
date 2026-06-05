@@ -2352,7 +2352,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
        is a [default] atom at every size, INCLUDING size 1 — an explicit user [1] does not stretch
        (it flags a forgotten/hidden dimension rather than silently broadcasting). Only scalar
        helpers, internal broadcast fill (e.g. [embed_self_id]), and rank-broadening synthesizers
-       mint the claim-free broadcast bottom [1_(bcast_if_1)], and they do so explicitly via
+       mint the claim-free broadcast top [1_(bcast_if_1)], and they do so explicitly via
        [~*_axes] / [get_bcast_dim], not through this default path. *)
     get_default_dim ~d ()
   in

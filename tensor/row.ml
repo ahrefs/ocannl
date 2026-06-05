@@ -2939,11 +2939,11 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                origin = origin2;
              }) -> (
           let origin = merge_origins origin origin2 in
-          (* Row-level GLB: prefer generality for broadcasting. The broadcast top
-             [1_(bcast_if_1)] is most general; conflicting sizes or conflicting (named) bases demote
-             to that top. This is intentional broadcast generalization, not a basis-checking gap.
-             The same meet applies on both flanks. *)
-          let meet_dim d1 d2 =
+          (* Row-level bound merge: prefer generality for broadcasting. The broadcast top
+             [1_(bcast_if_1)] is most general; conflicting sizes or conflicting (named) bases
+             generalize to that top — the deliberate-broadcast case (incompatible caps join to the
+             top), not a basis-checking gap. The same join applies on both flanks. *)
+          let join_dim d1 d2 =
             match (d1, d2) with
             | Dim { d = 1; basis; _ }, _ when String.equal basis bcast_if_1 -> d1
             | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 -> d2
@@ -3047,13 +3047,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
             List.map2_exn
               (List.take r_res.beg_dims glb_beg_len)
               (List.take glb2.beg_dims glb_beg_len)
-              ~f:meet_dim
+              ~f:join_dim
           in
           let glb_dims =
             List.map2_exn
               (take_from_end r_res.dims glb_len)
               (take_from_end glb2.dims glb_len)
-              ~f:meet_dim
+              ~f:join_dim
           in
           let glb =
             { beg_dims = glb_beg_dims; dims = glb_dims; bcast = glb_bcast; prov = glb_prov }
@@ -3489,12 +3489,12 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
 let%track5_sexp process_shape_row ~(stage : stage) origin env
     ({ beg_dims; dims; bcast; prov } as r : row) : constraint_ list * _ =
   let final = is_stage7 stage in
-  let rec finalize_upper_lower_bound = function
+  let rec finalize_dim_bounds = function
     | Dim _ -> []
-    | Affine { over; conv = None; _ } -> finalize_upper_lower_bound over
+    | Affine { over; conv = None; _ } -> finalize_dim_bounds over
     | Affine { over; conv = Some { kernel; _ }; _ } ->
-        finalize_upper_lower_bound over @ finalize_upper_lower_bound kernel
-    | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
+        finalize_dim_bounds over @ finalize_dim_bounds kernel
+    | Concat dims -> List.concat_map dims ~f:finalize_dim_bounds
     | Var v -> (
         let guess_dim () =
           if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:61 ()
@@ -3522,7 +3522,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
     | Concat dims -> List.exists dims ~f:has_dim_var
     | Var _ -> true
   in
-  let process_dims dims = List.concat_map dims ~f:finalize_upper_lower_bound in
+  let process_dims dims = List.concat_map dims ~f:finalize_dim_bounds in
   match bcast with
   | Broadcastable ->
       let keep =
