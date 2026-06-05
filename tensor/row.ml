@@ -301,13 +301,13 @@ let sexp_of_row_env env = Utils.Tree_map.sexp_of_t sexp_of_row_var sexp_of_row_e
 let find_row env var = Utils.Tree_map.find ~compare:compare_row_var ~key:var env
 let add_row env ~key ~data = Utils.Tree_map.add ~compare:compare_row_var ~key ~data env
 
-type environment = { dim_env : dim_env; row_env : row_env; invalid_vars : dim_var_set }
+type environment = { dim_env : dim_env; row_env : row_env; discardable_vars : dim_var_set }
 [@@deriving sexp_of]
 (** The environment is only in resolved wrt. variables that are solved: [v -> Solved ...] do not
     appear elsewhere in the environment. In particular, per-dim and per-row constraints might not
     have been applied.
 
-    [invalid_vars] are here for convenience -- see {!get_inequalities}. *)
+    [discardable_vars] are here for convenience -- see {!get_inequalities}. *)
 
 let get_dim_val env var =
   match find_dim env.dim_env var with Some (Solved_dim (Dim { d; _ })) -> Some d | _ -> None
@@ -1958,7 +1958,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               dim_env = add_dim dim_env ~key:v ~data:(Solved_dim dim2);
               row_env =
                 Utils.Tree_map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
-              invalid_vars = env.invalid_vars;
+              discardable_vars = env.discardable_vars;
             }
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim { is_in_param = _; cur; subr; lub; constr; origin = origin1; _ } as in_)
@@ -1982,7 +1982,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               dim_env = add_dim dim_env ~key:v ~data:(Solved_dim dim2);
               row_env =
                 Utils.Tree_map.mapi env.row_env ~f:(s_dim_one_in_row_entry stage v ~value:dim2);
-              invalid_vars = env.invalid_vars;
+              discardable_vars = env.discardable_vars;
             }
       in
       ineqs := !ineqs_from_reapply_rows_constr @ !ineqs;
@@ -2585,9 +2585,9 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(cur : dim) ~(subr : dim
       let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) in
       (eqs, env)
   | _, Concat dims
-    when List.count dims ~f:(function Var v -> Set.mem env.invalid_vars v | _ -> false)
+    when List.count dims ~f:(function Var v -> Set.mem env.discardable_vars v | _ -> false)
          >= List.length dims - 1 ->
-      (* Concat in subr position with all-but-one (or all) components being invalid vars: preserve
+      (* Concat in subr position with all-but-one (or all) components being discardable vars: preserve
          inequality so the solver can infer the variables *)
       ([ Dim_ineq { cur; subr; from_ = Sexp.List []; origin } ], env)
   | Concat _, _ | _, Concat _ ->
@@ -3116,7 +3116,7 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
           (Bounds_dim
              { is_in_param; has_uniq_constr_unless; lub = None; constr = Unconstrained_dim; _ })
         when is_stage5_up stage ->
-          (* Check if we can guess this variable to 1 (or 0 for invalid_vars) *)
+          (* Check if we can guess this variable to 1 (or 0 for discardable_vars) *)
           if not (can_guess_dim_to_one env has_uniq_constr_unless) then
             [ Terminal_dim (is_param, dim, origin) ]
           else if is_param || is_in_param then
@@ -3124,7 +3124,7 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
           else
-            let guess_d = if Set.mem env.invalid_vars v then 0 else 1 in
+            let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
             [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ]
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
@@ -3134,7 +3134,7 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
       []
   | Concat dims -> (
       (* For concatenation, filter out dimension-0 components and if one remains, close it. TODO:
-         Consider guessing invalid_vars components to 0 at stage 6, but wait until needed. *)
+         Consider guessing discardable_vars components to 0 at stage 6, but wait until needed. *)
       let non_zero_dims = List.filter dims ~f:(function Dim { d = 0; _ } -> false | _ -> true) in
       match non_zero_dims with
       | [ single ] -> close_dim_terminal ~stage ~is_param origin env single
@@ -3465,7 +3465,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~lub constr =
   let guess_dim () =
-    if Set.mem env.invalid_vars v then get_default_dim ~d:0 ~proj_id:56 () else get_bcast_dim ~d:1 ~proj_id:59 ()
+    if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:56 () else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
   match (lub, constr) with
   | Some (Dim { d; _ } as lub), At_least_dim d2 when d2 > d ->
@@ -3496,7 +3496,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
     | Concat dims -> List.concat_map dims ~f:finalize_upper_lower_bound
     | Var v -> (
         let guess_dim () =
-          if Set.mem env.invalid_vars v then get_default_dim ~d:0 ~proj_id:61 ()
+          if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:61 ()
           else get_bcast_dim ~d:1 ~proj_id:62 ()
         in
         match find_dim env.dim_env v with
@@ -3574,7 +3574,7 @@ let empty_env =
   {
     dim_env = Utils.Tree_map.empty;
     row_env = Utils.Tree_map.empty;
-    invalid_vars = dim_var_set_empty;
+    discardable_vars = dim_var_set_empty;
   }
 
 let update_dim_is_param d is_p env =
@@ -3635,9 +3635,9 @@ let update_row_is_param r is_p env =
     | _ -> env
 
 let%debug4_sexp solve_inequalities ~(stage : stage)
-    ?(invalid_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
+    ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
-  let env = { env with invalid_vars = Set.union invalid_vars env.invalid_vars } in
+  let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
   let rec solve ineqs (env : environment) : constraint_ list * _ =
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
@@ -3798,7 +3798,7 @@ let populate_dim_proj_in_solved env =
   {
     dim_env = Utils.Tree_map.map env.dim_env ~f:f_dim;
     row_env = Utils.Tree_map.map env.row_env ~f:f_row;
-    invalid_vars = env.invalid_vars;
+    discardable_vars = env.discardable_vars;
   }
 
 (* let update_proj_classes pid1 pid2 proj_classes = Utils.union_add ~equal:Int.equal proj_classes

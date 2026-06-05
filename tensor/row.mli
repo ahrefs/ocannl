@@ -230,11 +230,11 @@ val unsolved_constraints : environment -> constraint_ list
 
 val solve_inequalities :
   stage:stage ->
-  ?invalid_vars:dim_var_set ->
+  ?discardable_vars:dim_var_set ->
   constraint_ list ->
   environment ->
   constraint_ list * environment
-(** [invalid_vars] are safe to guess dimension = 0, they do not participate in projections for the
+(** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for the
     update step the constraints were derived for. *)
 
 val row_to_bases : environment -> t -> string array

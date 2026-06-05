@@ -299,12 +299,12 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
-(* For Block specs, compute invalid_vars: variables that are allowed to be 0. A variable v is
-   invalid if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
+(* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
+   discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
    the other side, there EXISTS an axis such that for ALL components of that axis, the complement of
    v's component has non-empty intersection. This is a four-quantifier condition: ∀shapes ∃axis
    ∀components: complement ∩ component ≠ ∅ *)
-let compute_block_invalid_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list)
+let compute_block_discardable_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list)
     : Row.dim_var_set =
   (* Extract all dims from rows (both flanks; bcast no longer carries beg_dims). *)
   let dims_of_rows rows =
@@ -322,7 +322,7 @@ let compute_block_invalid_vars ~(this_side_rows : Row.t list) ~(other_side_shape
     List.map other_side_shapes ~f:(fun shape_rows ->
         List.map (dims_of_rows shape_rows) ~f:axis_components_of_dim)
   in
-  (* For each Concat on this side, find invalid vars. Non-Concat dims cannot contribute invalid vars
+  (* For each Concat on this side, find discardable vars. Non-Concat dims cannot contribute discardable vars
      since their complement is empty. *)
   let this_side_dims = dims_of_rows this_side_rows in
   List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
@@ -1429,8 +1429,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                   };
               ])
       in
-      (* Compute invalid_vars: variables that are allowed to be 0 (dimension 0 is invalid). A
-         variable is invalid if it's in a Concat component whose complement covers an axis on the
+      (* Compute discardable_vars: variables that are allowed to be 0 (dimension 0 is otherwise an invalid size). A
+         variable is discardable if it's in a Concat component whose complement covers an axis on the
          other side. We check both directions: RHS->LHS and LHS->RHS. The four-quantifier condition:
          ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ *)
       let rhs_shapes : Row.t list list =
@@ -1438,16 +1438,16 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
       (* LHS is a single shape, so wrap it in a singleton list for the shapes parameter *)
-      let invalid_from_rhs =
-        compute_block_invalid_vars ~this_side_rows:(List.concat rhs_shapes)
+      let discardable_from_rhs =
+        compute_block_discardable_vars ~this_side_rows:(List.concat rhs_shapes)
           ~other_side_shapes:[ lhs_rows ]
       in
-      let invalid_from_lhs =
-        compute_block_invalid_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes
+      let discardable_from_lhs =
+        compute_block_discardable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes
       in
-      let invalid_vars = Set.union invalid_from_rhs invalid_from_lhs in
+      let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
       ( proj_env,
-        invalid_vars,
+        discardable_vars,
         extras_dim_refs @ extras_lhs @ rhs_constraints
         @ [
             Row_eq
@@ -1902,7 +1902,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, invalid_vars, ineqs) : proj_axis_env * Row.dim_var_set * Row.constraint_ list
+  let (proj_axis_env, discardable_vars, ineqs) : proj_axis_env * Row.dim_var_set * Row.constraint_ list
       =
     get_inequalities ~for_projections:true update_step
   in
@@ -1911,7 +1911,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
      substituted-out at this point, the global state is already an empty env, but in principle we
      want to only find a local solution to not contaminate projections across operations. *)
   let unsolved, local_env =
-    Row.solve_inequalities ~stage:Stage1 ~invalid_vars ineqs Row.empty_env
+    Row.solve_inequalities ~stage:Stage1 ~discardable_vars ineqs Row.empty_env
   in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
@@ -2235,10 +2235,10 @@ let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
      does). *)
   iter_shapes update_step ~f:(apply_env_t !state);
-  let _, invalid_vars, ineqs = get_inequalities update_step in
+  let _, discardable_vars, ineqs = get_inequalities update_step in
   active_update_steps := update_step :: !active_update_steps;
   active_constraints := ineqs @ !active_constraints;
-  let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~invalid_vars ineqs !state in
+  let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ineqs !state in
   let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
   apply_env_step env update_step;
   state := env
