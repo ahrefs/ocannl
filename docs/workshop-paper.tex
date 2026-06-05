@@ -327,7 +327,7 @@ Row variables in OCANNL interact with broadcasting: a row variable can unify
 with zero or more axes, and dim-1 axes introduced by broadcasting count as
 legitimate axes. The inference system resolves row variables progressively:
 first unifying what is determined by constraints, then closing remaining
-variables to their least upper bounds or to ``no further axes'' at later
+variables to their greatest lower bounds or to ``no further axes'' at later
 stages.
 
 \subsection{Dimension Units}
@@ -376,8 +376,8 @@ Shape inference maintains a global environment mapping dimension variables
 and row variables to their current knowledge:
 
 \begin{lstlisting}[language={},basicstyle=\small\ttfamily]
-dim_var (@$\mapsto$@) Solved(dim) | Bounds(lub, constraints, ordering)
-row_var (@$\mapsto$@) Solved(row) | Bounds(lub, constraints, ordering)
+dim_var (@$\mapsto$@) Solved(dim) | Bounds(glb, constraints, ordering)
+row_var (@$\mapsto$@) Solved(row) | Bounds(glb, constraints, ordering)
 \end{lstlisting}
 
 \noindent The constraint language includes:
@@ -417,20 +417,20 @@ projections are needed):
 \item \textbf{Stage~2}: Force precision-related coefficients (byte sizes of
   numeric types).
 \item \textbf{Stage~3}: Close row variables in \emph{terminal} (leaf) shapes
-  to their least upper bounds (LUBs). Terminal shapes are closed first
+  to their greatest lower bounds (GLBs). Terminal shapes are closed first
   because their shapes can only be determined by downstream constraints (they
   can always be broadcast), unlike composite shapes which are forced ``from
   below'' by their components.
 \item \textbf{Stage~4}: Close terminal dimension variables with multiple
-  lower bounds to their LUBs. Resolve \code{Total\_elems} constraints where
+  upper bounds to their GLBs. Resolve \code{Total\_elems} constraints where
   row variables have been eliminated.
 \item \textbf{Stage~5}: Guess remaining terminal dimension variables to~1
   (the broadcasting identity), unless prevented by \code{Total\_elems}
   constraints. Resolve remaining row constraints heuristically.
-\item \textbf{Stage~6}: Extend LUB processing to non-terminal shapes. Set
+\item \textbf{Stage~6}: Extend GLB processing to non-terminal shapes. Set
   remaining row variables to ``no further axes.''
 \item \textbf{Stage~7}: Close all remaining dimension variables to their
-  lower bounds or to~1.
+  upper bounds or to~1.
 \end{enumerate}
 
 The terminal-first strategy (Stages 3--5 before 6--7) reflects an asymmetry:

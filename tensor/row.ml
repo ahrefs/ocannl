@@ -375,7 +375,7 @@ let sexp_of_error_trace = function
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
-type source = Direct | Equation | Cur | Subr [@@deriving equal, sexp]
+type source = Direct | Equation | Res | Opnd [@@deriving equal, sexp]
 
 (* Utility for merging origin lists - interleave and limit *)
 let rec interleave l1 l2 =
@@ -927,8 +927,8 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
         | Some (Solved_dim _) -> assert false
         | Some (Bounds_dim bounds) -> (
             match (source, constr) with
-            (* If source is [Cur], then [constr] (target) is [Subr]. *)
-            | Cur, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
+            (* If source is [Res], then [constr] (target) is [Opnd]. *)
+            | Res, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
             | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
     | Concat _dims, At_least_dim _d_min ->
         (* FIXME: reconsider if we can make progress *)
@@ -2311,9 +2311,9 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
           let from_glb =
             Option.to_list glb1 |> List.map ~f:(fun res -> Dim_ineq { res; opnd; from_; origin })
           in
-          let from_constr1, constr1 = apply_dim_constraint ~source:Subr ~stage opnd constr1 env in
+          let from_constr1, constr1 = apply_dim_constraint ~source:Opnd ~stage opnd constr1 env in
           let from_constr2, constr2 =
-            apply_dim_constraint ~source:Cur ~stage res Unconstrained_dim env
+            apply_dim_constraint ~source:Res ~stage res Unconstrained_dim env
           in
           ( from_constr1 @ from_constr2 @ from_glb,
             {
@@ -2389,9 +2389,9 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                }) ) ->
           let origin = merge_origins origin origin2 in
           let from_constr1, constr1 =
-            apply_dim_constraint ~source:Subr ~stage opnd Unconstrained_dim env
+            apply_dim_constraint ~source:Opnd ~stage opnd Unconstrained_dim env
           in
-          let from_constr2, constr2 = apply_dim_constraint ~source:Cur ~stage res constr2 env in
+          let from_constr2, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
           ( from_constr2 @ from_constr1,
             {
               env with
@@ -2449,8 +2449,8 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
           let from_glb =
             Option.to_list glb1 |> List.map ~f:(fun res -> Dim_ineq { res; opnd; from_; origin })
           in
-          let from_constr1, constr1 = apply_dim_constraint ~source:Subr ~stage opnd constr1 env in
-          let from_constr2, constr2 = apply_dim_constraint ~source:Cur ~stage res constr2 env in
+          let from_constr1, constr1 = apply_dim_constraint ~source:Opnd ~stage opnd constr1 env in
+          let from_constr2, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
           ( from_constr1 @ from_constr2 @ from_glb,
             {
               env with
@@ -2530,7 +2530,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
             | Affine _, _ | _, Affine _ -> assert false
             | Concat _, _ | _, Concat _ -> assert false
           in
-          let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage res constr2 env in
+          let from_constr, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
           ( from_constr @ glb_forcing,
             {
               env with
@@ -2561,7 +2561,7 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
              } as in_) ->
           let origin = merge_origins origin origin2 in
           let from_ = [%sexp_of: dim_var * dim_entry] (opnd_v, drop_origin in_) in
-          let from_constr, constr2 = apply_dim_constraint ~source:Cur ~stage res constr2 env in
+          let from_constr, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
           ( from_constr
             @ List.map opnd2 ~f:(fun opnd_v -> Dim_ineq { res; opnd = Var opnd_v; from_; origin }),
             {
