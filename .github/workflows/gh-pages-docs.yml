@@ -45,7 +45,19 @@ jobs:
         run: slipshow compile docs/slides-shapes_and_einsum.md -o docs/html/shapes_and_einsum.html
 
       - name: Blog on shape semantics
-        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/broacast-aware-shape-inference.md -o docs/html/broadcast-aware-shape-inference.html
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/broadcast-aware-shape-inference.md -o docs/html/broadcast-aware-shape-inference.html
+
+      - name: Blog on shape vs index
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/a-shape-is-not-its-index.md -o docs/html/a-shape-is-not-its-index.html
+
+      - name: Blog on contraction
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/contraction-is-emergent.md -o docs/html/contraction-is-emergent.html
+
+      - name: Blog on convolution
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/convolution-is-a-contraction.md -o docs/html/convolution-is-a-contraction.html
+
+      - name: Blog on split and concatenation
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/split-and-concatenation.md -o docs/html/split-and-concatenation.html
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
