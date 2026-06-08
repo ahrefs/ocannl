@@ -176,4 +176,14 @@ let () =
   let _ctx = Train.forward_once ctx called_stack in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default called_stack;
 
+  (* --- Test 15: Empty operand array raises Invalid_argument --- *)
+  (* The callable API guards against an empty rhs array (which the PPX list/array/tuple syntax
+     cannot produce, but a direct caller can), since it would otherwise generate a malformed
+     concat spec. *)
+  printf "\n--- Test 15: Empty stack rhses raises ---\n%!";
+  (try
+     let (_ : Tensor.t) = TDSL.O.stack `Output [||] in
+     printf "ERROR: expected Invalid_argument, got a tensor\n%!"
+   with Invalid_argument msg -> printf "raised Invalid_argument: %s\n%!" msg);
+
   printf "\n=== Block Tensor Literal Tests Complete ===\n%!"

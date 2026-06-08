@@ -573,7 +573,7 @@ The tensor literal syntax is generalized to support block tensor construction: w
 | `[ ; ]` | Output | `[ta; tb]` stacks along a new output axis |
 | `[| ; |]` | Batch | `[|ta; tb|]` stacks along a new batch axis |
 
-For example, `[ta; tb]` desugars to `stack `Output [| ta; tb |]`, which generates:
+For example, `[ta; tb]` desugars to ``stack `Output [| ta; tb |]``, which generates:
 1. An unsqueeze einsum spec introducing a new size-1 output axis per component: `...|...->... => ...|...->0,...`, applied to each operand via `einsum1`.
 2. A concat spec joining the expanded operands along that axis: `...|...-> bt0,...; ...|...-> bt1,... => ...|...-> bt0^bt1,...`, applied via `concat`.
 
@@ -584,7 +584,7 @@ For example, `[ta; tb]` desugars to `stack `Output [| ta; tb |]`, which generate
 - All components must have the same trailing shape (stacking requires shape compatibility).
 - Single-element block tensors like `[ta]` act as unsqueeze (add a size-1 leading axis).
 - Tuple syntax `(ta, tb)` only works at the top level of a `%op` expression. Tuples inside function arguments (e.g., `f (ta, tb)`) are preserved as regular OCaml tuples.
-- The named operation is also callable directly: `TDSL.O.stack `Output [| ta; tb |]` (and the `NTDSL` / `PDSL` variants).
+- The named operation is also callable directly: ``TDSL.O.stack `Output [| ta; tb |]`` (and the `NTDSL` / `PDSL` variants).
 - **Known limitation:** nested block matrices `[[ta; tb]; [tc; td]]` (rank+2 via two concat levels) are not yet supported by the shape solver; only single-level stacking works currently.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
