@@ -1482,7 +1482,7 @@ let reads_of_body (body : t) : Set.M(Tn).t =
     performed *inside* a sibling loop sitting between two users of a hoisted [Local_scope]. A
     non-recursive version reported no writes for such a loop, which could permit an unsound hoist
     above it (later users would then read the pre-loop value). Recursing can only enlarge the hazard
-    set, so it only ever narrows what is hoisted — safe by construction. [Set_local] writes a
+    set, so it only ever narrows what is hoisted -- safe by construction. [Set_local] writes a
     [scope_id] local rather than a materialized [Tn], so it contributes nothing here. *)
 let writes_of_stmt (stmt : t) : Set.M(Tn).t =
   let acc = ref (Set.empty (module Tn)) in
