@@ -237,9 +237,9 @@ let%op concat_matrices a b =
 let%op get_prefix x = x ++^ "a^b => a"  (* size of 'a' inferred from context *)
 let%op get_suffix x = x ++^ "a^b => b"  (* size of 'b' inferred from context *)
 
-(* Block tensor construction (upcoming syntax) *)
-let%op block_matrix () =
-  [[a; b]; [c; d]]  (* Creates 2x2 block matrix from components *)
+(* Block tensor construction: stacks components along a new leading axis *)
+let%op stacked () =
+  [a; b]  (* Stacks a, b along a new output axis (result rank = operand rank + 1) *)
 ```
 
 The `^` operator is fundamentally an indexing-level operation—it creates an axis that iterates over its components in sequence. This enables:
