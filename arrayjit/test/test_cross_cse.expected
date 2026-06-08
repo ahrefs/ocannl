@@ -1,47 +1,58 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-=== Before hoist (to_doc) ===
+=== Scenario B: diagonal vs off-diagonal (must NOT merge, both orders) ===
+[B.off-first] declares=0 local_scopes=2 get_locals=0 hoisted=false expected=false -> OK
+[B.diag-first] declares=0 local_scopes=2 get_locals=0 hoisted=false expected=false -> OK
 
-out1[0] := v100_src { for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); } };
-  out2[0] := v200_src { for i2 = 0 to 3 { v200_src := (v200_src + src[i2]); } };
+=== Scenario C: legitimate renamed pair (must merge) ===
+[C.renamed-pair] declares=1 local_scopes=0 get_locals=2 hoisted=true expected=true -> OK
 
-=== After hoist (to_doc) ===
+=== Scenario D: For_loop write hazard blocks hoist (must NOT merge) ===
+[D.forloop-hazard] declares=0 local_scopes=2 get_locals=0 hoisted=false expected=false -> OK
 
-declare v100_src;
-  for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); }
-  out1[0] := v100_src;
-  out2[0] := v100_src;
+=== Scenario A: legitimate hoist (to_doc, before) ===
 
-=== After hoist (to_doc_cstyle) ===
+out1[0] := v700_src { for i12 = 0 to 3 { v700_src := (v700_src + src[i12]); } };
+  out2[0] := v800_src { for i13 = 0 to 3 { v800_src := (v800_src + src[i13]); } };
 
-declare v100_src;
-  for i1 = 0 to 3 { v100_src := (v100_src + src[i1]); }
-  out1[0] := v100_src;
-  out2[0] := v100_src;
+[A.legit-hoist] declares=1 local_scopes=0 get_locals=3 hoisted=true expected=true -> OK
+=== Scenario A: legitimate hoist (to_doc, after) ===
 
-=== After hoist (c_syntax pp_ll) ===
-float v100_src = (float)(0);
-for (uint32_t i1 = 0; i1 <= 3; ++i1) {
-  if (log_file_name && log_file) fprintf(log_file, "index i1 = %d\n", i1);
+declare v700_src;
+  for i12 = 0 to 3 { v700_src := (v700_src + src[i12]); }
+  out1[0] := v700_src;
+  out2[0] := v700_src;
+
+=== Scenario A: legitimate hoist (to_doc_cstyle, after) ===
+
+declare v700_src;
+  for i12 = 0 to 3 { v700_src := (v700_src + src[i12]); }
+  out1[0] := v700_src;
+  out2[0] := v700_src;
+
+=== Scenario A: legitimate hoist (c_syntax pp_ll, after) ===
+float v700_src = (float)(0);
+for (uint32_t i12 = 0; i12 <= 3; ++i12) {
+  if (log_file_name && log_file) fprintf(log_file, "index i12 = %d\n", i12);
   {
-    float new_set_local_v = (v100_src + src[i1]);
-    if (log_file_name && log_file) fprintf(log_file, "# local v100_src := (v100_src + src[i1])\n");
-    if (log_file_name && log_file) fprintf(log_file, "v100_src{=%g} = %g = (v100_src{=%g} + src[%u]{=%g})\n", v100_src, new_set_local_v, v100_src, i1, src[i1]);
+    float new_set_local_v = (v700_src + src[i12]);
+    if (log_file_name && log_file) fprintf(log_file, "# local v700_src := (v700_src + src[i12])\n");
+    if (log_file_name && log_file) fprintf(log_file, "v700_src{=%g} = %g = (v700_src{=%g} + src[%u]{=%g})\n", v700_src, new_set_local_v, v700_src, i12, src[i12]);
     fflush(log_file);
-    v100_src = new_set_local_v;
+    v700_src = new_set_local_v;
   }
 }
 {
-  float new_set_v = v100_src;
-  if (log_file_name && log_file) fprintf(log_file, "# out1[0] := v100_src;\n");
-  if (log_file_name && log_file) fprintf(log_file, "out1[%u]{=%g} = %g = v100_src{=%g}\n", 0, out1[0], new_set_v, v100_src);
+  float new_set_v = v700_src;
+  if (log_file_name && log_file) fprintf(log_file, "# out1[0] := v700_src;\n");
+  if (log_file_name && log_file) fprintf(log_file, "out1[%u]{=%g} = %g = v700_src{=%g}\n", 0, out1[0], new_set_v, v700_src);
   fflush(log_file);
   out1[0] = new_set_v;
 }
 {
-  float new_set_v = v100_src;
-  if (log_file_name && log_file) fprintf(log_file, "# out2[0] := v100_src;\n");
-  if (log_file_name && log_file) fprintf(log_file, "out2[%u]{=%g} = %g = v100_src{=%g}\n", 0, out2[0], new_set_v, v100_src);
+  float new_set_v = v700_src;
+  if (log_file_name && log_file) fprintf(log_file, "# out2[0] := v700_src;\n");
+  if (log_file_name && log_file) fprintf(log_file, "out2[%u]{=%g} = %g = v700_src{=%g}\n", 0, out2[0], new_set_v, v700_src);
   fflush(log_file);
   out2[0] = new_set_v;
 }
