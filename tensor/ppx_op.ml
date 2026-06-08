@@ -486,11 +486,14 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             | _ -> (
                 (* After unit or no unit: transform *)
                 match arg_expr.pexp_desc with
-                | Pexp_tuple _ ->
-                    (* Preserve tuple arguments to avoid block tensor misinterpretation: a tuple
-                       passed as a function argument is regular OCaml tuple grouping, not an
-                       input-axis stack (which is only the top-level tuple form). *)
-                    (no_vbs, (arg_label, arg_expr))
+                | Pexp_tuple elems ->
+                    (* A tuple passed as a function argument is regular OCaml tuple grouping, not an
+                       input-axis block-tensor stack (that is only the top-level tuple form). Keep
+                       the tuple structure, but still translate each element so %op content inside
+                       it (operators, inline params, numeric literals) is expanded rather than left
+                       as raw OCaml. *)
+                    let vbss, elems = List.unzip (List.map elems ~f:loop) in
+                    (reduce_vbss vbss, (arg_label, { arg_expr with pexp_desc = Pexp_tuple elems }))
                 | _ ->
                     let vbs, e = loop arg_expr in
                     (vbs, (arg_label, e))))

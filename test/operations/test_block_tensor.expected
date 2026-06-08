@@ -257,4 +257,15 @@ HERE: test/operations/test_block_tensor.ml:177:21
 --- Test 15: Empty stack rhses raises ---
 raised Invalid_argument: Operation.stack: empty rhses
 
+--- Test 16: Tuple arg element translated ([%oc fst] (x1 + x2, x1)) ---
+HERE: test/operations/test_block_tensor.ml:198:21
+┌───────────────────────────────────────────┐
+│[100]: sin_tuple_elem_translated shape 0:3 │
+│┌┬────────────────────────────┐            │
+│││axis 0                      │            │
+│├┼────────────────────────────┤            │
+│││ -9.58e-1  6.56e-1  4.12e-1 │            │
+│└┴────────────────────────────┘            │
+└───────────────────────────────────────────┘
+
 === Block Tensor Literal Tests Complete ===

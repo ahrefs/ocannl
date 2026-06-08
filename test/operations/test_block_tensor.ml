@@ -186,4 +186,15 @@ let () =
      printf "ERROR: expected Invalid_argument, got a tensor\n%!"
    with Invalid_argument msg -> printf "raised Invalid_argument: %s\n%!" msg);
 
+  (* --- Test 16: Tuple-argument elements are still translated --- *)
+  (* Regression for the tuple-in-apply path: a tuple passed as a function argument keeps its
+     structure (not an input-axis stack), but its elements must still be translated as %op
+     expressions. Here [x1 + x2] must become a tensor add; if the element were left as raw OCaml
+     this would not even compile (no [+] for Tensor.t). *)
+  printf "\n--- Test 16: Tuple arg element translated ([%%oc fst] (x1 + x2, x1)) ---\n%!";
+  let%op tuple_elem_translated = sin ([%oc fst] (x1 + x2, x1)) in
+  Train.set_hosted tuple_elem_translated.value;
+  let _ctx = Train.forward_once ctx tuple_elem_translated in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default tuple_elem_translated;
+
   printf "\n=== Block Tensor Literal Tests Complete ===\n%!"
