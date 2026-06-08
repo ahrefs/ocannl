@@ -1226,22 +1226,38 @@ let simplify_llc llc =
     integers and fresh iterator symbols, but verifying cross-reference consistency via renaming
     maps. *)
 let cse_equal_scalar s1 s2 =
+  (* The renaming maps must be partial bijections, not just functions: alpha-equivalence requires an
+     injective correspondence between bound variables. We therefore keep a reverse map alongside each
+     forward map and reject when a target is already claimed by a different source (Bug 1: a
+     forward-only map judged [t[i;j]] equal to [t[i;i]]). The maps are persistent for the whole
+     comparison (no scope push/pop on entering [For_loop] / [Local_scope] binders): [Indexing.get_symbol]
+     and [get_scope] are global counters, so symbols and scope ids are globally unique and no binder
+     shadows another within a single tree. If the IR ever starts reusing symbol/scope ids, this
+     assumption breaks and the maps would need scoping. *)
   let scope_renaming = Hashtbl.create (module Int) in
+  let scope_renaming_rev = Hashtbl.create (module Int) in
   let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
+  let sym_renaming_rev = Hashtbl.create (module Indexing.Symbol) in
   let ids_equal (id1 : scope_id) (id2 : scope_id) =
     Tn.equal id1.tn id2.tn
     &&
-    match Hashtbl.find scope_renaming id1.scope_id with
-    | Some mapped -> Int.equal mapped id2.scope_id
-    | None ->
+    match
+      (Hashtbl.find scope_renaming id1.scope_id, Hashtbl.find scope_renaming_rev id2.scope_id)
+    with
+    | Some mapped, _ -> Int.equal mapped id2.scope_id
+    | None, Some _ -> false (* id2 already claimed by a different source scope id *)
+    | None, None ->
         Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
+        Hashtbl.set scope_renaming_rev ~key:id2.scope_id ~data:id1.scope_id;
         true
   in
   let sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
-    match Hashtbl.find sym_renaming s1 with
-    | Some mapped -> Indexing.equal_symbol mapped s2
-    | None ->
+    match (Hashtbl.find sym_renaming s1, Hashtbl.find sym_renaming_rev s2) with
+    | Some mapped, _ -> Indexing.equal_symbol mapped s2
+    | None, Some _ -> false (* s2 already claimed by a different source symbol *)
+    | None, None ->
         Hashtbl.set sym_renaming ~key:s1 ~data:s2;
+        Hashtbl.set sym_renaming_rev ~key:s2 ~data:s1;
         true
   in
   let idx_equal (i1 : Indexing.axis_index) (i2 : Indexing.axis_index) =
@@ -1274,10 +1290,9 @@ let cse_equal_scalar s1 s2 =
     match (a, b) with
     | ( Local_scope { id = id1; body = b1; orig_indices = oi1 },
         Local_scope { id = id2; body = b2; orig_indices = oi2 } ) ->
-        Tn.equal id1.tn id2.tn && Array.equal idx_equal oi1 oi2
-        &&
-        (Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
-         equal_t b1 b2)
+        (* Record the binder mapping through the checked path (Bug 3) before comparing the body, so
+           the binder and its nested [Set_local] / [Get_local] uses all agree via [ids_equal]. *)
+        ids_equal id1 id2 && Array.equal idx_equal oi1 oi2 && equal_t b1 b2
     | Get_local id1, Get_local id2 -> ids_equal id1 id2
     | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
     | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
@@ -1460,13 +1475,29 @@ let reads_of_body (body : t) : Set.M(Tn).t =
   loop_proc body;
   !acc
 
-(** Collect all tensor nodes written by a statement. *)
+(** Collect all tensor nodes written by a statement, recursing into [Seq] and [For_loop] bodies.
+
+    The recursion into [For_loop] is load-bearing for hoisting safety (Bug 2): [flat_lines] keeps
+    [For_loop] opaque, so [hoist_shared_locals]'s hazard check relies on this function to see writes
+    performed *inside* a sibling loop sitting between two users of a hoisted [Local_scope]. A
+    non-recursive version reported no writes for such a loop, which could permit an unsound hoist
+    above it (later users would then read the pre-loop value). Recursing can only enlarge the hazard
+    set, so it only ever narrows what is hoisted -- safe by construction. [Set_local] writes a
+    [scope_id] local rather than a materialized [Tn], so it contributes nothing here. *)
 let writes_of_stmt (stmt : t) : Set.M(Tn).t =
-  match stmt with
-  | Set { tn; _ } -> Set.singleton (module Tn) tn
-  | Set_from_vec { tn; _ } -> Set.singleton (module Tn) tn
-  | Zero_out tn -> Set.singleton (module Tn) tn
-  | _ -> Set.empty (module Tn)
+  let acc = ref (Set.empty (module Tn)) in
+  let rec loop (s : t) =
+    match s with
+    | Set { tn; _ } | Set_from_vec { tn; _ } -> acc := Set.add !acc tn
+    | Zero_out tn -> acc := Set.add !acc tn
+    | Seq (a, b) ->
+        loop a;
+        loop b
+    | For_loop { body; _ } -> loop body
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Set_local _ -> ()
+  in
+  loop stmt;
+  !acc
 
 (** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
     Operates on a flat list of sibling statements. *)
