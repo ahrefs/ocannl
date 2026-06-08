@@ -497,6 +497,39 @@ let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
 
 let concat = concat_sum
 
+(** The axis kind along which {!stack} introduces the fresh leading axis. *)
+type stack_axis = [ `Output | `Batch | `Input ]
+
+(** Stack [rhses] along a fresh leading axis of kind [axis] (result rank = operand rank + 1, true
+    stacking rather than concatenation along an existing axis). Each operand is unsqueezed with a
+    size-1 axis via {!einsum1}, then the unsqueezed intermediates are concatenated along that new
+    axis via {!concat}. The expansion and concatenation einsum specs are generated on the fly from
+    the operand count. *)
+let stack (axis : stack_axis) ?grad_spec rhses =
+  if Array.length rhses = 0 then invalid_arg "Operation.stack: empty rhses";
+  let unsqueeze_spec =
+    match axis with
+    | `Output -> "...|...->... => ...|...->0,..."
+    | `Input -> "...|...->... => ...|0,...->..."
+    | `Batch -> "...|...->... => 0,...|...->..."
+  in
+  let labels = List.init (Array.length rhses) ~f:(fun i -> "bt" ^ Int.to_string i) in
+  let concat_parts = String.concat ~sep:"^" labels in
+  let concat_spec =
+    match axis with
+    | `Output ->
+        String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|...-> " ^ l ^ ",..."))
+        ^ " => ...|...-> " ^ concat_parts ^ ",..."
+    | `Input ->
+        String.concat ~sep:"; " (List.map labels ~f:(fun l -> "...|" ^ l ^ ",...->..."))
+        ^ " => ...|" ^ concat_parts ^ ",...->..."
+    | `Batch ->
+        String.concat ~sep:"; " (List.map labels ~f:(fun l -> l ^ ",...|...->..."))
+        ^ " => " ^ concat_parts ^ ",...|...->..."
+  in
+  let unsqueezed = Array.map rhses ~f:(fun e -> einsum1 unsqueeze_spec ?grad_spec e ()) in
+  concat concat_spec ?grad_spec unsqueezed
+
 module NDO_before_einmax1 = struct
   let ( + ) ?label t1 t2 = add ?label ~grad_spec:Prohibit_grad t1 t2 ()
   let where ?label t1 t2 t3 = where ?label ~grad_spec:Prohibit_grad t1 t2 t3 ()
@@ -743,6 +776,7 @@ struct
   let tropical = tropical ~grad_spec
   let concat_sum ?capture_dims ?negated spec = concat_sum ?capture_dims ?negated spec ~grad_spec
   let concat ?capture_dims ?negated spec = concat ?capture_dims ?negated spec ~grad_spec
+  let stack axis rhses = stack axis rhses ~grad_spec
   let offsets = offsets ~grad_spec
   let range = range ~grad_spec
   let range_of_shape = range_of_shape ~grad_spec
@@ -849,6 +883,8 @@ struct
 
     let concat ?label ?capture_dims ?negated spec rhses =
       concat ?label ?capture_dims ?negated spec rhses ()
+
+    let stack ?label axis rhses = stack axis rhses ?label ()
 
     let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()

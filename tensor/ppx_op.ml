@@ -70,6 +70,45 @@ let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
+(* First-leaf heuristic for disambiguating numeric tensor literals (ndarray constants) from block
+   tensor literals (stacking): if the first leaf reached by descending through tuples, lists, and
+   arrays is a numeric constant, the whole literal is an ndarray constant; otherwise it is a block
+   tensor whose components are tensor expressions. *)
+let rec is_ndarray_constant_expr expr =
+  match expr.pexp_desc with
+  | Pexp_constant (Pconst_float _) | Pexp_constant (Pconst_integer _) -> true
+  (* Descend through axis-basis annotations, e.g. [((1., 2., 3.) : features)], so numeric literals
+     carrying a dimension-basis tag stay on the ndarray path rather than being read as a stack. *)
+  | Pexp_constraint (e, _) -> is_ndarray_constant_expr e
+  | Pexp_tuple (e :: _) | Pexp_array (e :: _) -> is_ndarray_constant_expr e
+  | Pexp_construct ({ txt = Lident "::"; _ }, _) -> (
+      match collect_list [] expr with e :: _ -> is_ndarray_constant_expr e | [] -> true)
+  | Pexp_construct ({ txt = Lident "[]"; _ }, _) -> true
+  | Pexp_array [] -> true
+  | _ -> false
+
+(* Desugars a block tensor literal into a call to the named [stack] operation (which composes
+   [einsum1] unsqueeze + [concat] along a fresh leading axis). [axis_kind] selects the axis the new
+   dimension is inserted into: list -> output, array -> batch, top-level tuple -> input. *)
+let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
+  match elems with
+  | [] ->
+      ( no_vbs,
+        Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc
+             "ppx_ocannl %%op: block tensor requires at least one component" )
+  | _ ->
+      let vbss, translated = List.unzip (List.map elems ~f:loop) in
+      let rhses_array = Ast_builder.Default.pexp_array ~loc translated in
+      let axis_expr =
+        match axis_kind with
+        | `Output -> [%expr `Output]
+        | `Input -> [%expr `Input]
+        | `Batch -> [%expr `Batch]
+      in
+      ( reduce_vbss vbss,
+        [%expr stack ?label:[%e opt_expr ~loc label] [%e axis_expr] [%e rhses_array]] )
+
 let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label in
@@ -359,8 +398,18 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
                  "ppx_ocannl %%op: record field label must be a simple identifier" ))
-  | { pexp_desc = Pexp_array _; _ }
-  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ }
+  (* List [a; b]: numeric first leaf -> ndarray constant; otherwise block tensor stacking along a
+     new output axis. *)
+  | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } as list_expr ->
+      if is_ndarray_constant_expr list_expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] list_expr)
+      else translate_block_tensor ~loc ~loop ~label ~opt_label `Output (collect_list [] list_expr)
+  (* Array [|a; b|]: numeric first leaf -> ndarray constant; otherwise block tensor stacking along a
+     new batch axis. *)
+  | { pexp_desc = Pexp_array elems; _ } as arr_expr ->
+      if is_ndarray_constant_expr arr_expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] arr_expr)
+      else translate_block_tensor ~loc ~loop ~label ~opt_label `Batch elems
   (* A tensor literal whose outermost axis container carries an axis-label annotation,
      e.g. [([ 1.; 2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
   | {
@@ -383,6 +432,13 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
+  (* Top-level 2+ tuple (a, b): numeric first leaf -> ndarray constant; otherwise block tensor
+     stacking along a new input axis. Restricted to top level so that tuples used as operator
+     argument grouping or function arguments retain their existing meaning. *)
+  | { pexp_desc = Pexp_tuple elems; _ } when is_toplevel && List.length elems >= 2 ->
+      if is_ndarray_constant_expr expr then
+        (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
+      else translate_block_tensor ~loc ~loop ~label ~opt_label `Input elems
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
     when Hashtbl.mem binary_ops op_ident ->
@@ -427,10 +483,20 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))
-            | _ ->
+            | _ -> (
                 (* After unit or no unit: transform *)
-                let vbs, e = loop arg_expr in
-                (vbs, (arg_label, e)))
+                match arg_expr.pexp_desc with
+                | Pexp_tuple elems ->
+                    (* A tuple passed as a function argument is regular OCaml tuple grouping, not an
+                       input-axis block-tensor stack (that is only the top-level tuple form). Keep
+                       the tuple structure, but still translate each element so %op content inside
+                       it (operators, inline params, numeric literals) is expanded rather than left
+                       as raw OCaml. *)
+                    let vbss, elems = List.unzip (List.map elems ~f:loop) in
+                    (reduce_vbss vbss, (arg_label, { arg_expr with pexp_desc = Pexp_tuple elems }))
+                | _ ->
+                    let vbs, e = loop arg_expr in
+                    (vbs, (arg_label, e))))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
       (all_vbs, Ast_builder.Default.pexp_apply ~loc e_fn processed_args)

@@ -224,18 +224,18 @@ let%op skip_first_3 x = x ++^ "3^rest => rest"
 
 {pause up=concat-example}
 
-{#block-tensors .block title="Block Tensor Construction (upcoming)"}
-> The tensor literal syntax generalizes to block tensors:
+{#block-tensors .block title="Block Tensor Construction"}
+> The tensor literal syntax generalizes to block tensors (stacking along a new leading axis, result rank = operand rank + 1):
 >
 > | Syntax | Axis | Example |
 > |--------|------|---------|
-> | `[ ; ]` | Output | `[a; b]` - concat on output axis |
-> | `( , )` | Input | `(a, b)` - concat on input axis |
-> | `[| ; |]` | Batch | `[|a; b|]` - concat on batch axis |
+> | `[ ; ]` | Output | `[a; b]` - stack on new output axis |
+> | `( , )` | Input | `(a, b)` - stack on new input axis |
+> | `[| ; |]` | Batch | `[|a; b|]` - stack on new batch axis |
 >
 > ```ocaml
-> (* 2x2 block matrix *)
-> let%op block = [[a; b]; [c; d]]
+> (* Stack two tensors along a new output axis *)
+> let%op block = [a; b]
 > ```
 
 {pause}
