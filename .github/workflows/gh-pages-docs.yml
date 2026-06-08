@@ -59,6 +59,9 @@ jobs:
       - name: Blog on split and concatenation
         run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/split-and-concatenation.md -o docs/html/split-and-concatenation.html
 
+      - name: Blog contexts and compilation
+        run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/a-tensor-is-not-its-storage.md -o docs/html/a-tensor-is-not-its-storage.html
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:

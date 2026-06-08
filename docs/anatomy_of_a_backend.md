@@ -1,5 +1,7 @@
 # The Anatomy of an OCANNL Backend
 
+NOTE: this is an *outdated* design, it will be significantly affected by: removing of streams, and removing of hosted tensors.
+
 <!-- TOC -->
 
 - [The Anatomy of an OCANNL Backend](#the-anatomy-of-an-ocannl-backend)
