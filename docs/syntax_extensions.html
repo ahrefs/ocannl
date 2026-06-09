@@ -884,12 +884,38 @@ axes:</p>
 </ul>
 <p>For example, <code>[ (1, 2, 3); (4, 5, 6) ]</code> is a mathematical
 matrix converting 3D vectors into 2D vectors.</p>
-<p>OCANNL supports dimension bases (semantic annotations). The syntax
-for number allows prefixing a number by a character that stands for the
-dimension basis of the resulting output dimension 1. These bases can
+<p>OCANNL supports dimension bases (semantic annotations on dimension
+<em>values</em>, a multi-character tag such as <code>rgb</code> or
+<code>heads</code>). You label an axis by writing an OCaml
+type-annotation on the axis <em>container</em> inside a tensor literal —
+the annotation names that axis’s basis:</p>
+<ul>
+<li><code>([ 1.; 2.; 3. ] : rgb)</code> labels the
+<strong>output</strong> (list) axis as <code>rgb</code>.</li>
+<li><code>((1., 2., 3.) : features)</code> labels the
+<strong>input</strong> (tuple) axis as <code>features</code>.</li>
+<li><code>([| ...; ... |] : examples)</code> labels the
+<strong>batch</strong> (array) axis as <code>examples</code>.</li>
+</ul>
+<p>Annotations compose with nesting: in
+<code>[ ((1., 2.) : feat) ]</code> the inner tuple labels the input axis
+<code>feat</code> while the enclosing output list is unannotated. Only a
+bare type-constructor name is read as the basis (qualified,
+parameterised, tuple, arrow and variant types are ignored). These bases
 then propagate to specify bases of other dimensions in other tensors,
-via shape inference. Example:
-<code>let%op y = ({ hey } * &#39;q&#39; 2.0) + &#39;p&#39; 1.0 in ...</code></p>
+via shape inference.</p>
+<p>As a convenience, the same annotation on a bare numeric literal
+labels the size-1 output axis of the resulting scalar:
+<code>(2.0 : q)</code> is shorthand for <code>([ 2.0 ] : q)</code>.</p>
+<p>(This replaces an older <code>&#39;q&#39; 2.0</code> char-literal form, which
+could not carry multi-character tags.) Unannotated axes carry the
+reserved <code>default</code> basis (an atom that does not fuse with a
+named basis, so an unlabelled axis will not silently merge with a
+labelled one), and the reserved <code>bcast_if_1</code> basis is the
+claim-free broadcast top that a size-1 axis stretches from — write it
+explicitly (e.g. <code>([ 1. ] : bcast_if_1)</code>) when you
+<em>want</em> a size-1 axis to broadcast. Example:
+<code>let%op y = ({ hey } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in ...</code>.</p>
 <h2 id="wildcard-bindings">Wildcard bindings</h2>
 <p>When an extension is over a wildcard (ignore result) binding:
 <code>let%cd _ = ...</code> and <code>let%op _ = ...</code>, the

@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="Łukasz Stafiniak and Claude (Anthropic)" />
+  <title>A Tensor Is Not Its Storage: Identity, Views, and Contexts in OCANNL</title>
+  <style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">body {
+max-width: 1000px;
+margin: 0 auto;
+padding: 20px;
+}</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">A Tensor Is Not Its Storage: Identity, Views, and
+Contexts in OCANNL</h1>
+<p class="author">Łukasz Stafiniak and Claude (Anthropic)</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#a-tensor-is-not-its-storage" id="toc-a-tensor-is-not-its-storage">A Tensor Is Not Its Storage</a>
+<ul>
+<li><a href="#the-eager-bargain" id="toc-the-eager-bargain">The eager
+bargain</a></li>
+<li><a href="#the-compilers-quiet-functionalization" id="toc-the-compilers-quiet-functionalization">The compiler’s quiet
+functionalization</a></li>
+<li><a href="#the-session-was-a-context" id="toc-the-session-was-a-context">The session was a context</a></li>
+<li><a href="#arrays-without-aliasing" id="toc-arrays-without-aliasing">Arrays without aliasing</a></li>
+<li><a href="#movement-as-loops" id="toc-movement-as-loops">Movement as
+loops</a></li>
+<li><a href="#a-node-is-an-identity" id="toc-a-node-is-an-identity">A
+node is an identity</a></li>
+<li><a href="#refusing-the-view" id="toc-refusing-the-view">Refusing the
+view</a></li>
+<li><a href="#no-host-to-fall-back-to" id="toc-no-host-to-fall-back-to">No host to fall back to</a></li>
+<li><a href="#one-identity-many-buffers" id="toc-one-identity-many-buffers">One identity, many buffers</a></li>
+<li><a href="#staged-on-purpose" id="toc-staged-on-purpose">Staged, on
+purpose</a></li>
+<li><a href="#closer-to-a-compiler" id="toc-closer-to-a-compiler">Closer
+to a compiler</a></li>
+<li><a href="#a-discipline-of-removal" id="toc-a-discipline-of-removal">A discipline of removal</a></li>
+<li><a href="#the-conjunction" id="toc-the-conjunction">The
+conjunction</a></li>
+</ul></li>
+</ul>
+</nav>
+<section id="a-tensor-is-not-its-storage" class="level1">
+<h1>A Tensor Is Not Its Storage</h1>
+<p>Ask where the numbers in a tensor live, and the oldest answer is the
+simplest: in the tensor. A NumPy array <em>is</em> a block of memory
+together with a way of reading it — a shape, a set of strides, an offset
+— and the array object is a handle on that block. The library’s whole
+vocabulary follows from the identification. A view is the same block
+read through different strides, so <code>a.T</code> and
+<code>a[::2]</code> alias the original and writing through one changes
+the other. The host buffer is the ground truth; everything is a window
+onto it. Identity, storage, and location collapse into a single thing:
+the array is its memory, the memory is on the host, and to look at the
+array is to read that memory.</p>
+<p>Almost every array framework built since is, in one way or another, a
+retreat from that collapse. They disagree about <em>which</em>
+identification to give up and <em>when</em>, and the disagreements trace
+out a small number of axes: whether storage is primary or something a
+compiler decides; whether a tensor can alias another’s storage and write
+through it; whether there is a host-resident ground truth or only device
+buffers you copy out of; whether one logical tensor can be backed by
+many physical buffers at once; and whether you build a program and then
+run it, or run each operation as you write it. The frameworks are points
+in that space. Before placing OCANNL in it, it helps to walk the field
+and let the axes draw themselves.</p>
+<section id="the-eager-bargain" class="level2">
+<h2>The eager bargain</h2>
+<p>PyTorch, used eagerly, keeps most of NumPy’s arrangement and adds
+autograd and a device. A tensor is a storage plus a view onto it — size,
+stride, offset — and the movement operations return views that share
+storage: <code>x.t()</code>, <code>x[:, 0]</code>,
+<code>x.expand(...)</code> hand back a new tensor reading the same
+buffer. Storage is primary and allocated eagerly: every operation that
+is not a view produces a fresh buffer the moment it runs. To see numbers
+you read the storage; to move to the host you copy.</p>
+<p>The view, here, is doing two jobs at once, and it is worth separating
+them because the rest of this essay turns on the separation. The first
+job is avoiding a copy: a transpose is a stride permutation, not a data
+movement. The second is <em>aliasing</em>: because the view shares
+storage, writing through it mutates the base, and that shared mutable
+state is, very often, the actual reason the view was taken. The two jobs
+are bundled into one object, and the bundling is the source of PyTorch’s
+most familiar papercut — whether a given operation returns a view or a
+copy, and therefore whether a later in-place write is seen through an
+old name, is not always decidable at the call site. The convenience of
+aliasing and the convenience of not copying come wrapped together, and
+you cannot have the second without inheriting the hazards of the
+first.</p>
+</section>
+<section id="the-compilers-quiet-functionalization" class="level2">
+<h2>The compiler’s quiet functionalization</h2>
+<p>The interesting thing about PyTorch is that under
+<code>torch.compile</code> it stops believing its own eager model. The
+compiler traces a functional graph, and to do that it runs a pass called
+<em>functionalization</em> that removes views and mutations outright: a
+view operation becomes a <code>view_copy</code>, an in-place mutation is
+lifted into a pure operation followed by a trailing <code>copy_</code>
+that reapplies the change to the original buffer, and outputs that were
+supposed to alias an input are regenerated afterwards by replaying the
+view off the base. Inside compilation, in other words, PyTorch converts
+itself into a model with <em>no</em> aliasing and lets the backend
+decide what actually gets materialized and fused — and then it has to
+stitch the eager aliasing contract back on at the boundary, reapplying
+input mutations and re-deriving aliased outputs so that compiled code
+behaves like the eager code it replaced.</p>
+<p>Two axes fall out of this. Storage stops being primary the moment you
+compile: whether an intermediate is a real buffer or fused away is the
+compiler’s call, not a consequence of an op having run. And the two jobs
+of a view turn out to be separable after all — the compiler keeps the
+no-copy benefit through fusion while throwing the aliasing away — at the
+cost of a reconciliation layer whose job is to make the functional
+interior agree with the aliased surface. The friction of that layer is
+exactly the price of having started from aliasing and needing to get
+back to it.</p>
+</section>
+<section id="the-session-was-a-context" class="level2">
+<h2>The session was a context</h2>
+<p>TensorFlow’s first version made the opposite opening bet and, in
+doing so, anticipated a structure we will need. In TF1 a tensor was not
+a value at all; it was a symbolic node in a static dataflow graph, a
+description with no numbers attached. Numbers appeared only when you ran
+the graph inside a <code>Session</code>, feeding inputs through a
+<code>feed_dict</code> and fetching outputs back to the host. The
+Session held the buffers and the variable state; the graph node was an
+identity that the Session resolved to storage. That is, almost exactly,
+“a tensor is an identity that resolves to storage given a context” — the
+very idea this essay is about — arrived at a decade ago, and earlier
+still in spirit in the DistBelief system that preceded it.</p>
+<p>TF1 is remembered as painful anyway, and the reasons are instructive
+because they are about <em>how</em> it staged rather than <em>that</em>
+it staged. There was a single global mutable default graph to corrupt;
+variable scopes and reuse were a puzzle; dependencies you wanted
+enforced had to be declared by hand with control-dependency blocks; and
+an error in how you wired an op surfaced far away, at
+<code>session.run</code>, rather than where you wrote it. TF2’s answer
+was to abandon the staging entirely in the common case: tensors became
+eager and value-like by default, NumPy-style, with
+<code>tf.function</code> available to trace a graph back when you wanted
+performance. The industry’s verdict, repeated a few years later when
+PyTorch added <code>torch.compile</code>, was not “staging is wrong” but
+“default to eager for the iteration loop and add staging back for
+speed.” Both major frameworks ended up <em>bimodal</em>: eager by
+default, with an opt-in compiler that re-introduces the whole-program
+staged view the serious performance path always wanted.</p>
+</section>
+<section id="arrays-without-aliasing" class="level2">
+<h2>Arrays without aliasing</h2>
+<p>JAX is the framework that gives up aliasing on principle. Its arrays
+are immutable; there are no views in the mutable sense, and an indexed
+update <code>x.at[i].set(v)</code> returns a new array rather than
+writing through. You request buffer reuse explicitly, by donating
+arguments, instead of relying on aliasing to get it. A computation is
+traced to a functional intermediate and handed to XLA, which fuses and
+decides what is materialized and in what layout — so storage is firmly
+derived, a compiler’s decision, never the consequence of an eager op.
+And JAX has the first clean instance of an axis NumPy never needed:
+under its sharding mechanisms a single logical array is backed by
+buffers spread across many devices, with the collective communication to
+keep them consistent inserted by the compiler. One identity, many
+physical buffers.</p>
+<p>This makes JAX the closest philosophical relative to where we are
+going. It refuses mutable aliasing, it lets the compiler own
+materialization, and it admits that a tensor’s identity can outrun any
+single buffer. Two things distinguish it from OCANNL, and naming them
+now sharpens the later contrast. JAX’s multiplicity is an
+<em>annotation</em> — a sharding spec on an array — and the combination
+across buffers is <em>synthesized</em> by the compiler as collectives;
+and it is homogeneous, the buffers living on devices of one platform.
+Keep those two qualifiers in view: multiplicity-as-annotation with
+automatic collectives, on one kind of device.</p>
+</section>
+<section id="movement-as-loops" class="level2">
+<h2>Movement as loops</h2>
+<p>tinygrad is the most recent and, for our purposes, the most striking
+point, because it has just moved toward the representation OCANNL was
+built on. Historically, tinygrad expressed the movement operations —
+reshape, permute, expand, pad, shrink, flip — through a
+<code>ShapeTracker</code>, a stack of stride/offset/mask records that
+compose movement without copying, the lazy analogue of PyTorch’s view
+metadata. Its 0.12.0 release, in January 2026, replaced that machinery
+with a scheme called rangeify. The six movement operations are now
+expressed as manipulations of <em>ranges</em> — loops — created early on
+the operation graph, and fusion is decided by whether two operations
+share the same ranges: same ranges, and they collapse into one inner
+loop; different ranges, and they stay separate. tinygrad’s own framing
+is that a shape is a declarative constraint while a range is an
+imperative statement of how the device should loop, and that once ranges
+exist on the graph they can express more than fusion — multiple devices,
+gradient accumulation, multi-step training all become things you say by
+manipulating ranges, with the stated goal of writing an entire training
+run as a tiny graph.</p>
+<p>Two axes complete the map. Movement can be carried as standing stride
+metadata resolved late, or expressed as loop structure created early and
+fused on coincidence — and tinygrad has now crossed from the first to
+the second. And ranges, once they exist, invite a further idea: that a
+device or a mesh is itself an <em>axis</em>, and that placement and
+accumulation are things you say by binding ranges to devices rather than
+by a separate distribution layer. Hold onto both; OCANNL sits on one of
+them by long-standing design and is being pulled toward the other.</p>
+<p>The field, then, has drawn its own coordinate system. Is storage
+primary or derived? Does a tensor alias and write through another’s
+storage, and if not, what carries the no-copy job and what carries the
+ordering that aliasing implied? Is there a host-resident ground truth, a
+device buffer you copy out of, or neither? Can one identity be many
+buffers, and is that multiplicity an annotation or a runtime fact,
+homogeneous or heterogeneous, combined automatically or explicitly? Is
+movement stride metadata or loop structure? And do you run eagerly,
+stage everything, or keep two modes? OCANNL is a single, fairly extreme
+set of answers to those questions, and the rest of this essay is those
+answers.</p>
+</section>
+<section id="a-node-is-an-identity" class="level2">
+<h2>A node is an identity</h2>
+<p>In OCANNL a tensor node carries no numbers. It is an identity — at
+bottom a unique integer with an inferred shape and precision — and
+whether that identity has storage anywhere, and where, is not a property
+of the node but of a <em>context</em>. The cleanest statement of this is
+the type a context resolves through, reduced to its essential field:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>ctx_arrays : &#39;buffer_ptr <span class="dt">Map</span>.M(Tnode).t</span></code></pre></div>
+<p><em>Storage is a derived artifact of an identity together with a
+context, not something the identity contains</em> — the single inversion
+the rest of the design falls out of. To find a node’s storage you do not
+look inside it; you look it up.</p>
+<p>Read that way, OCANNL’s notions of where a node lives are
+cardinalities of the resolution rather than separate features. A
+<strong>virtual</strong> node resolves to nothing — it has no buffer in
+any context, because its computation is inlined into its consumers
+before any backend sees it. A <strong>materialized</strong> node
+resolves to one buffer, in the context that computes it. And a node may
+resolve to <em>many</em> buffers across many contexts at once — the same
+identity backed independently on two machines — which is the case that
+turns first-class contexts from a convenience into the central feature.
+Virtual is the zero, materialization the one, distribution the many; one
+relation at three multiplicities.</p>
+</section>
+<section id="refusing-the-view" class="level2">
+<h2>Refusing the view</h2>
+<p>OCANNL has no first-class views. There is no node that aliases
+another’s storage through a reindexing, no movement-operation vocabulary
+at all; structure is expressed through index maps inferred from shapes,
+in the manner the earlier posts in this series developed. The reflexive
+worry is that without views you must copy on every transpose and slice
+and broadcast. The worry dissolves once the view’s two bundled jobs are
+pulled apart, because OCANNL gives each to a different mechanism, and
+the separation — not a workaround for it — is the point.</p>
+<p>The no-copy job goes to inlining. A virtual node has no buffer; each
+site that reads it has the node’s computation substituted in, with the
+read’s indices threaded through, so that when the computation is just a
+reindexed read of some source — which is what a transpose, a slice, a
+broadcast <em>is</em> — the consumer reads the source directly at
+transformed indices and no intermediate buffer is allocated. What makes
+this more than a re-description of views is the machinery. A view’s
+strides and offset are an affine map from logical indices to buffer
+positions, and composing views composes those affine maps; OCANNL’s
+inliner, substituting a virtual node into a consumer, composes the
+node’s index map with the consumer’s — multiplying coefficients through
+nested affine terms, folding fixed indices into offsets. That
+composition <em>is</em> stride algebra. The difference from a view is
+when and where it runs: a view carries the affine metadata at runtime
+and re-interprets it on every access, while OCANNL performs the
+composition once at compile time and specializes it away, leaving
+generated code that contains the final transformed access and no trace
+of the intermediate.</p>
+<p>Because the mechanism is “inline a computation” rather than “compose
+strides,” it reaches strictly further than a view can. A strided view
+can only express an affine reindexing of an existing buffer. A virtual
+node can carry computation. A diagonal — the same loop symbol at two
+index positions — is a virtual node, where a stride view manages it only
+through fragile overlapping strides. A convolution window, the affine
+index naming two loop variables at once that an earlier post folded into
+ordinary contraction, inlines through the same path. A one-hot encoding,
+which reindexes nothing but computes per cell whether an offset equals
+an indexed class, is a virtual node too: multiplied against an embedding
+table, the optimizer recognizes that summing <em>(k equals index) times
+table[k]</em> over <em>k</em> is just <em>table[index]</em>, and the
+dense matrix is never built. None of these is a view in any framework
+that has views, and all of them are the same kind of object here — an
+identity that resolves to no storage, recovered by inlining its
+computation. Views are the affine special case of a more general thing,
+and OCANNL keeps only the general thing. (The plain reindexings are
+routine today; the harder cases just named — the diagonal, the one-hot
+collapse — are work in progress at varying stages.)</p>
+<p>The other job of a view — aliasing, and the ordering it silently
+enforced — cannot ride on inlining, because inlining is about reading
+and aliasing is about writing, and a virtual node has nowhere to write.
+The asymmetry is the second half of the decomposition. Aliasing did two
+things at once: it let two names share a buffer, and it thereby fixed an
+order, since a write through one name had to precede a read through the
+other. OCANNL separates them. Sharing, when wanted, is the multiplicity
+of an identity, below. Ordering is a compile-time analysis: as routines
+are compiled in a lineage, OCANNL records the read-after-write,
+write-after-read, and write-after-write hazards between them and builds
+a hazard graph that execution enforces, refusing to run a routine before
+its prerequisites. This is precisely the information that mutable
+aliasing leaves implicit and bug-prone inside storage; here it is an
+explicit graph over identities, scoped to the compilation lineage so
+that independently compiled routines are independent rather than
+accidentally ordered. Reading therefore generalizes across the whole
+storage lattice — a node can be read whether it is materialized (read
+the buffer) or virtual (recompute), and a read never perturbs what
+anyone else computes, it only joins the hazard graph as one more reader
+— while writing stays defined only on materialized nodes, because it
+needs a place. The part of a view that was no-copy reading extends
+uniformly; the part that was writable aliasing was never coherent for an
+inlined thing and is correctly not offered.</p>
+</section>
+<section id="no-host-to-fall-back-to" class="level2">
+<h2>No host to fall back to</h2>
+<p>The second way storage becomes primary in conventional frameworks is
+the host-resident array: a buffer that exists independently of any
+execution context, globally addressable, the ground truth that device
+buffers are copies of. OCANNL does not have one. No tensor node resolves
+to host storage; the host is not a place an identity can live.</p>
+<p>This is the post-migration state, and the reason it is reachable
+rather than aspirational is worth one sentence of history. A parameter’s
+value in OCANNL is a deterministic, counter-based function of its seed,
+counter, and shape, computed by running an initialization routine in a
+context — so the host copy of a parameter was only ever a cache of
+something re-derivable anywhere, never a source of truth. Once that is
+so, “initialized” means simply “some routine has computed this node into
+this context,” which the running of a routine already records, and the
+host array has nothing left to hold.</p>
+<p>What this changes most visibly is observation. If no node resolves to
+host storage, printing a tensor or testing it for NaNs cannot be a read
+of host memory — so it becomes a query, a small routine compiled and run
+in the context that reads the node and returns an ordinary value. A
+printed corner is a sliced gather; a NaN check is a reduction computed
+on the device; a full export is the gather widened to everything. The
+numbers still arrive in host memory, but as the <em>result</em> of a
+computation owned by the caller, the way any function returns a value,
+not as a property of the identity. The cost is incurred only where the
+observed node has no buffer to read: a virtual node’s readout is
+genuinely recomputed, while a materialized node is a plain buffer copy,
+as cheap as it ever was. And the explicitness repays itself: a readout
+is a routine, so the people writing libraries on OCANNL see and control
+exactly what is recomputed and when, rather than inheriting an opaque
+host-synchronization that fired whenever anyone glanced at an array.</p>
+<p>Refusing views and refusing host residence are the two halves of one
+stance — they are the two ways storage conventionally becomes a primary,
+freely aliasable thing, removed by inlining and by query respectively —
+and together they let the memory taxonomy collapse. Once there is no
+host, the distinctions a mode had to draw about host-versus-device
+transfer have nothing to range over; once observation is a query, a node
+need not be host-visible to be inspectable; and what remains on a node
+is the one distinction that was ever load-bearing — inlined, or stored.
+The lattice of memory modes, elaborate when it had to track host
+residence and transfer direction, normalizes toward that binary, with
+placement among devices pushed down to where it belongs, as a backend’s
+decision rather than a fact the user carries.</p>
+</section>
+<section id="one-identity-many-buffers" class="level2">
+<h2>One identity, many buffers</h2>
+<p>The cardinalities so far spent the zero and the one. The many is
+where contexts being first-class stops being an implementation note.
+Because a tensor node is an identity and not a buffer, the <em>same</em>
+node can be resolved in more than one context at once — backed by a
+buffer on a Mac Studio and, simultaneously, a buffer on a MacBook — and
+nothing about the node has to change for this to be sensible, because
+the node never contained a buffer to begin with.</p>
+<p>The uniform context type changes the operations that span <em>more
+than one</em> context. In an earlier design the backend-specific
+parameters — the pointer representation, the device handle, the event
+type — were exposed in the context’s type, so a CUDA context and a Metal
+context were genuinely different types that could not both appear as
+arguments to a single operation; a cross-backend transfer — sending a
+buffer from one context into the base or merge buffer of another — could
+not even be given a type without contorting the type system into knots,
+and the heterogeneous execution intended from the start went unrealized.
+The current context type hides those parameters, so two contexts of
+different backends are one type and an operation can take both.</p>
+<p>This is what makes sense of <em>merge buffers</em>, and it is worth
+correcting an easy misreading of them. A merge buffer is not a transfer
+primitive bolted onto the side; it is the surface of the multiplicity
+itself. Because one identity can have more than one incarnation, a
+context can hold, alongside a node’s own buffer, a <em>second</em> slot
+carrying another incarnation of the same node — and an all-reduce is
+then an ordinary computation written over the two,
+<code>p.grad =+ p.grad.merge</code>, a combination of two buffers of one
+identity. That expression is meaningful <em>only</em> because the node
+is a context-independent identifier; without that, “the same node on two
+devices” would not name a single thing there is anything to merge. Merge
+buffers are not a candidate for the simplifier’s axe; they are a direct
+expression of the core principle.</p>
+<p>Two directions open from here, and they correspond to the last two
+axes the field drew. Distribution, first, is heterogeneous execution
+where the other backend happens to be on another machine — a functor
+lifting a local backend into a remote one, a Mac Studio and a MacBook
+over USB — which exercises real synchronization and real transfer costs
+rather than simulating them, and falls out of the same
+first-class-context design rather than needing its own. Second,
+tinygrad’s device-as-axis idea is a genuine pull on OCANNL’s future:
+expressing where incarnations live as an axis on the shape, with the
+combination a reduction over it. The honest reading is that this would
+be sugar that lowers <em>to</em> merge-buffer transfers, not a rival to
+them — the axis says where data should live, the merge buffer is the
+primitive that the move and the combination compile down to — and the
+convenience layer is missing ergonomics that OCANNL’s later evolution
+will need to address, the explicit primitive being what exists today and
+the axis-level sugar not yet built.</p>
+<p>Set against both JAX and tinygrad, what that explicit primitive buys
+is finer manual control. Both of them make multiplicity an annotation —
+a sharding spec over a named mesh in JAX, an axis handed to
+<code>shard</code> in tinygrad — and let the compiler insert the
+collectives: JAX’s XLA partitioner propagates the annotated shardings
+across the whole program and synthesizes the all-gathers, all-to-alls,
+and reduce-scatters that resharding requires, and tinygrad’s scheduler
+does the analogous insertion from the sharded axis. OCANNL instead keeps
+the combination in the user’s hands — the all-reduce written as ordinary
+code over a node’s buffers, as above, rather than synthesized by a
+partitioner. The price is verbosity; what it buys is control, and
+heterogeneity, since the same identity may span <em>different</em>
+backends where those schedulers assume one. Annotation with synthesized
+collectives, against identity-across-heterogeneous-contexts with
+combination-as-computation.</p>
+</section>
+<section id="staged-on-purpose" class="level2">
+<h2>Staged, on purpose</h2>
+<p>It must be conceded plainly, because the design-space map makes it
+unavoidable: OCANNL is define-then-run. A tensor is a description
+carrying shape state and forward and backward code, not a value; nothing
+holds numbers until a routine is compiled and run in a context. There is
+no eager mode. That is precisely the property TF2 walked away from, and
+no enumeration of features changes it.</p>
+<p>The concession is smaller than it sounds, because TF1’s notoriety was
+about how it staged, and OCANNL repeats almost none of the specific
+sins. There is no global mutable graph: contexts are first-class
+functional values, threaded explicitly, their lineage tracked, with
+nothing global to corrupt and no variable-scope reuse puzzle. The
+hand-declared control dependencies of TF1 are replaced by the inferred
+hazard graph. The <code>feed_dict</code> of placeholders is replaced by
+typed, structured bindings. OCANNL kept staging and discarded the
+machinery that made TF1’s staging miserable.</p>
+<p>And on one axis staging is not a cost paid but an advantage gained,
+and it is the axis the rest of this series was about. In an eager
+framework a shape mismatch is found at the line that runs it, at
+runtime, once per run, often deep inside a model. OCANNL’s bidirectional
+shape inference resolves the whole program’s shapes at compile time and
+reports a conflict before anything executes. That is a class of error
+eager catches late and repeatedly and a staged compiler catches once and
+early — a development advantage staging <em>enables</em> and eager
+structurally cannot offer. The eager turn was, in the end, a default
+chosen for the exploratory iteration loop, paid for with a second
+compiled mode that the serious-performance path always reached for;
+OCANNL is unimodal-staged, defaulting to the thing the others bolt back
+on, which is the right default for a framework whose whole purpose is
+compilation rather than interactive tensor-poking. The explicitness this
+imposes — that work is organized into routines you compile and run — is,
+for the people building libraries on OCANNL, a feature: caching and
+recomputation are visible and controllable rather than hidden behind an
+eager façade. The genuine residual cost is that data-dependent control
+flow is weaker in a staged dataflow compiler than in an eager
+interpreter, but that is shared with XLA and with JAX under
+<code>jit</code> and with every compiled-dataflow system; it is the
+price of compiling, not a defect inherited from TF1.</p>
+</section>
+<section id="closer-to-a-compiler" class="level2">
+<h2>Closer to a compiler</h2>
+<p>There is a consequence of this design that places OCANNL oddly in its
+own field. Because the tensor layer is a front end — einsum
+specifications and shape inference that lower to a loop nest — the
+optimizer underneath is working not on a graph of tensor operations but
+on scalar code inside loops, and the optimizations it runs are the ones
+a traditional compiler runs. Inlining is what makes a virtual node
+disappear into its consumers. Common-subexpression elimination collapses
+repeated scalar work. There is constant folding, fused multiply-add,
+dead-code elimination by another name when a node proves virtual, affine
+arithmetic on loop indices, and a dependence graph that orders what must
+be ordered. None of these is specific to tensors; they are the contents
+of an undergraduate compilers course, applied to a lowered loop IR. The
+frameworks organized around a graph of tensor ops do their
+characteristic reasoning — fusion, sharding — at the granularity of
+whole operations, and reach the scalar level only at the end, through a
+backend; OCANNL’s center of gravity is already down there, with the
+tensor structure a source language it has mostly left behind by the time
+the interesting decisions are made. This is a spectrum rather than a
+wall — XLA is a genuine compiler reached through an op graph, and
+tinygrad’s move to a UOp graph with ranges has pulled it lower and
+nearer — but among the tensor frameworks OCANNL sits unusually far
+toward the classical-compiler end.</p>
+<p>The clearest instance is what becomes of the lattice’s awkward cell.
+Collapsing memory modes toward inlined-or-stored leaves one intermediate
+that fits neither: a transient that persists for the length of one
+routine and no longer, small enough to want fast local storage rather
+than a device buffer. The way it is drained is exactly the classical
+move. A clean transient read several times at a position becomes a
+virtual node, and its repeated reads are collapsed by
+common-subexpression elimination into a single computation hoisted to a
+local-scope scalar — a construct the loop IR already carries — so that
+what was a node-level buffer becomes a register-class temporary in the
+generated code; a transient whose computation cannot be factored that
+way stays a real buffer instead. That decision — promote the value to a
+local, or leave it in memory — is register allocation, and the
+tensor-level concept of a memory mode dissolves into the scalar-level
+concept of a local variable. It is the direction of travel: storage
+decisions migrating down out of the tensor model and into codegen, where
+a compiler makes them.</p>
+<p>Whether OCANNL stays this far down is not settled, though
+cross-routine organization — distributing work across contexts, binding
+a device axis — is not what would unsettle it; that sits happily above a
+scalar optimizer and leaves it intact. Two pressures would actually move
+the weight up. One is a demand for graph-rewriting optimization: the
+algebraic and pattern rewrites on tensor-level structure that the
+op-graph frameworks specialize in, which OCANNL currently does only
+narrowly, and at the scalar level rather than over a tensor graph. The
+other is thread synchronization — reasoning about parallelism within a
+single kernel rather than ordering whole routines — which is
+parallel-GPU territory, not the scalar-and-loop world a traditional
+compiler inhabits, and it is exactly what the next development
+brings.</p>
+<p>It does, though, make OCANNL constitutionally sympathetic to a
+development the tensor-op frameworks have been reaching for awkwardly:
+the megakernel. A megakernel fuses a large span of computation into a
+single resident GPU kernel that runs from start to finish without
+returning to the host, keeping intermediates in registers and shared
+memory instead of round-tripping them through global memory between
+layers, and sequencing the work across thread blocks by on-device
+synchronization rather than by separate kernel launches. The literature
+frames this around the forward or decode pass because its driving
+workload is low-latency inference, but the construct has no reason to
+stop at that boundary — forward, backward, and the optimizer update are
+all the same kind of dependency-ordered scalar work once you are past
+the host, and an entire training step is as fusable as a single
+inference pass. That wider target is the more natural one for OCANNL,
+whose weight is on training and whose hazard graph already orders
+precisely that chain — <code>grad</code> before <code>sgd</code>, the
+whole step — at the routine level. The shape of that is what OCANNL’s IR
+already produces. Aggressive inlining means most intermediates are
+virtual and never touch global memory; the drain of transients to
+local-scope scalars is precisely the “keep it in registers” discipline a
+megakernel lives by; and that routine-level ordering is already the task
+graph a megakernel must sequence internally. The substrate is congenial
+in a way it is not for a framework that has to fight its way out of an
+op-at-a-time execution model to get there.</p>
+<p>The work that is not done is the hard part, and it is honest to say
+so. OCANNL’s hazard graph today orders <em>routines</em>, and the
+ordering is enforced from the host, between kernel launches, with
+events. A megakernel needs that same dependency information lowered into
+synchronization <em>inside</em> one kernel — lightweight signaling
+across thread blocks, persistent threads consuming a work queue,
+grid-level barriers — which is a different and more delicate problem
+than ordering host-issued launches, with deadlock and occupancy as
+failure modes that do not exist at the routine level. Register pressure
+is the local-versus-stored decision again, now at the scale of a whole
+kernel: promote too much and the kernel spills to global memory, undoing
+the saving it was built for. And there is a tension with the grain of
+the design worth naming rather than smoothing over: pushing stream
+parallelism down to the backend’s discretion moved on-device scheduling
+<em>away</em> from the compiler, while a megakernel asks the compiler to
+take much <em>more</em> of that schedule into its own hands. The
+sympathy is real and the ingredients are present; the synchronization,
+the on-device scheduling, and the register budgeting that turn an
+aggressively-fused IR into an actual megakernel are upcoming work, and
+they reopen exactly the question of how much of the device’s schedule
+OCANNL should own.</p>
+</section>
+<section id="a-discipline-of-removal" class="level2">
+<h2>A discipline of removal</h2>
+<p>Streams were once first-class units of computation in OCANNL’s
+backends, with devices as sets of streams; the user reasoned about them
+and synchronized against them. They are now hidden behind the uniform
+context interface and will be removed, with stream-level parallelism
+delegated to the backend. The shape of the move matches the host removal
+exactly: take a concept the user was forced to carry, absorb its
+mechanical role into an automatic mechanism, and then — the step beyond
+mere automation — remove the concept from the user’s model. Automation
+pays down the keystrokes; only removal pays down the cognitive cost,
+which is the one that compounds.</p>
+<p>The discipline is not, however, “delete anything you can automate,”
+and the streams case shows why the honest version is more careful. Host
+residence carried no information that was not re-derivable, so its
+removal lost nothing; that was a clean subtraction. But first-class
+streams <em>bought</em> a real capability — developing and debugging a
+multi-device algorithm on a single machine by modelling parallelism as
+several streams — and hiding them traded that away. The defensible rule
+is therefore to remove concepts that carry no information <em>in the
+steady state</em>, the production run where you do not want to think
+about streams or hosts at all, and for concepts that are really
+development-time scaffolding, to decide deliberately whether to keep the
+scaffolding or to recover its value some better way. For streams the
+recovery is better than the thing removed: rather than simulate
+distribution with streams on one GPU, OCANNL aims to provide actual
+distribution across networked personal machines, at a fidelity
+simulation never had. The scaffolding is not retained; it is replaced by
+the real structure.</p>
+<p>This is the dual of the refrain that ran through the shape posts.
+There, the move was always to reuse the core and refuse to add a
+primitive — broadcasting was an order, contraction was emergent,
+convolution was a contraction. Here, in the runtime, the move is to
+remove a concept rather than retain it. The same taste for economy,
+resisting additions in the shape language upstairs and forcing
+subtractions in the memory model downstairs.</p>
+</section>
+<section id="the-conjunction" class="level2">
+<h2>The conjunction</h2>
+<p>OCANNL’s position is best stated as a conjunction, because no single
+axis is distinctive. On the movement axis it converges with tinygrad —
+both express movement as loop structure fused on shared ranges — but the
+convergence came from tinygrad’s side: OCANNL never had a
+<code>ShapeTracker</code>, and tinygrad arrived at the range-centric
+representation only after tearing out its stride-metadata one. On the
+multiplicity and derived-storage axes it sits near JAX, distinguished by
+being heterogeneous where JAX is homogeneous and explicit where JAX is
+automatic. On the host axis it is further out than anyone, removing the
+host-resident ground truth entirely and replacing observation with a
+query. On the staging axis it is in the lineage TF2 left, having shed
+TF1’s pains and keeping staging as a deliberate single mode. And on
+device-as-axis it is the borrower, pulled by tinygrad toward a
+representation it does not yet have.</p>
+<p>The position is the <em>combination</em>: a tensor that is an
+identity rather than a buffer, resolving through a context to no
+storage, one storage, or many storages across heterogeneous machines;
+views refused and recovered as compile-time inlining that generalizes
+past striding to computed pseudo-views; aliasing’s ordering carried by
+an explicit hazard graph over identities; the host removed and
+observation made into computation; and the whole thing staged on
+purpose, for an audience that wants a compiler. Each piece exists
+somewhere in the field. The claim is not novelty on any one of them but
+that holding all of them at once is a coherent design with a single
+principle underneath — that storage is derived and identity is primary —
+and that the principle is what lets the pieces fit, rather than merely
+coexist.</p>
+<p>OCANNL is open source, at <a href="https://github.com/ahrefs/ocannl"><code>github.com/ahrefs/ocannl</code></a>.</p>
+</section>
+</section>
+</body>
+</html>
