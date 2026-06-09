@@ -1,0 +1,280 @@
+# The Formal Core of OCANNL's Shape and Projection Inference
+
+Working notes toward the workshop/FProPer paper. Definitions, theorems, and proofs for the core fragment (no `Affine`, no `Concat`), following the template in *A Shape Is Not Its Index*. Proof-status labels: **[proved]**, **[sketch]** (believed routine, gaps flagged), **[open]**.
+
+Notation follows the blog series: $1_\emptyset$ the claim-free unit, $\sqsubseteq$ the broadcast order, $\diamond$ the marker, $\alpha$ dimension variables, $\rho$ row variables.
+
+---
+
+## 1. Dimensions
+
+**Definition 1.1 (Dimensions).** Fix a set $\mathcal{B}$ of basis tags with a distinguished tag $\texttt{default} \in \mathcal{B}$. The set of dimensions is
+$$D \;=\; \{1_\emptyset\} \;\cup\; \{\, n_b \mid n \ge 1,\; b \in \mathcal{B} \,\}.$$
+Elements $n_b$ are *atoms*; $1_\emptyset$ is the *claim-free unit*. Adjoin a fresh element $\bot$ and set $D_\bot = D \cup \{\bot\}$.
+
+**Definition 1.2 (Broadcast order).** On $D$: $d_1 \sqsubseteq d_2$ iff $d_2 = 1_\emptyset$ or $d_1 = d_2$. Extend to $D_\bot$ by $\bot \sqsubseteq d$ for all $d$.
+
+**Proposition 1.3 (Lattice structure). [proved]** $(D_\bot, \sqsubseteq)$ is a bounded lattice of height $2$: top $1_\emptyset$, bottom $\bot$, and the atoms form an antichain, each covering $\bot$ and covered by $1_\emptyset$. Meets and joins:
+$$d \wedge d = d,\quad d \wedge 1_\emptyset = d,\quad d_1 \wedge d_2 = \bot \ (d_1 \ne d_2 \text{ atoms});\qquad d \vee d = d,\quad d \vee \bot = d,\quad d_1 \vee d_2 = 1_\emptyset \ (d_1 \ne d_2 \text{ atoms}).$$
+
+*Proof.* Reflexivity is immediate. Antisymmetry: $d_1 \sqsubseteq d_2 \sqsubseteq d_1$ with $d_1 \ne d_2$ forces $d_2 = 1_\emptyset$ and $d_1 = 1_\emptyset$, contradiction. Transitivity: if $d_3 = 1_\emptyset$ then $d_1 \sqsubseteq d_3$; otherwise $d_2 = d_3 \ne 1_\emptyset$, so $d_1 \sqsubseteq d_2$ forces $d_1 = d_2$. The displayed meets and joins are exhaustive by the case analysis on whether the arguments are equal, the top, or the bottom; each is verified directly to be the glb/lub since the only element strictly above an atom is $1_\emptyset$ and the only one strictly below is $\bot$. $\square$
+
+**Proposition 1.4 (Non-distributivity). [proved]** If $D$ contains at least three atoms (always: $\{1_{\texttt{default}}, 2_{\texttt{default}}, 3_{\texttt{default}}\} \subseteq D$), then $D_\bot$ is not distributive, and not modular.
+
+*Proof.* Let $a, b, c$ be distinct atoms. The set $\{\bot, a, b, c, 1_\emptyset\}$ is closed under $\wedge, \vee$ by Prop. 1.3, hence a sublattice, and it is isomorphic to the diamond $M_3$. $M_3$ is non-distributive: $a \wedge (b \vee c) = a \wedge 1_\emptyset = a$ while $(a \wedge b) \vee (a \wedge c) = \bot \vee \bot = \bot$. Sublattices of distributive (resp. modular) lattices are distributive (resp. modular); $M_3$ is non-distributive, and although $M_3$ is modular, taking the height-2 antichain plus... (correction: $M_3$ *is* modular, so the claim is only non-distributivity; strike "not modular"). $\square$
+
+*(Note for the paper: claim only non-distributivity; $M_3$ is the classic modular-but-not-distributive lattice. Non-distributivity already rules out the MLsub/algebraic-subtyping machinery, which is the point of §5 of the abstract.)*
+
+---
+
+## 2. Rows
+
+**Definition 2.1 (Rows).** A *row* is a triple $l \cdot \diamond \cdot r$ with $l, r \in D^{*}$ (the *leading* and *trailing flanks*). $\mathrm{rank}(l \cdot \diamond \cdot r) = |l| + |r|$. Equality of rows is componentwise equality of $(l, r)$ — in particular **marker-sensitive**: $[3]\cdot\diamond\cdot[4] \ne [3,4]\cdot\diamond\cdot[\,]$.
+
+**Definition 2.2 (Expansion).** For a row $R = l \cdot \diamond \cdot r$ and $n \ge \mathrm{rank}(R)$, the expansion $R{\uparrow}n \in D^{n}$ is the flat sequence $l \cdot (1_\emptyset)^{\,n - \mathrm{rank}(R)} \cdot r$.
+
+**Definition 2.3 (Row order).** $l_2 \cdot \diamond \cdot r_2 \;\sqsubseteq\; l_1 \cdot \diamond \cdot r_1$ iff
+(i) $|l_1| \le |l_2|$ and $|r_1| \le |r_2|$ (*flanks fit*; note this implies $\mathrm{rank}_2 \ge \mathrm{rank}_1$), and
+(ii) $(l_2 \cdot r_2)[i] \sqsubseteq (l_1\cdot\diamond\cdot r_1){\uparrow}\mathrm{rank}_2\,[i]$ for all $i$ (*pointwise refinement of the expansion*).
+
+**Lemma 2.4 (Expansion monotonicity). [proved]** If $R_2 \sqsubseteq R_1$ then for every $n \ge \mathrm{rank}(R_2)$: $R_2{\uparrow}n\,[i] \sqsubseteq R_1{\uparrow}n\,[i]$ for all $i$.
+
+*Proof.* Write $R_j = l_j \cdot \diamond \cdot r_j$. Fix $i < n$ and case on the region of $i$ in $R_2{\uparrow}n$.
+*Front, $i < |l_2|$:* $R_2{\uparrow}n[i] = l_2[i]$. If $i < |l_1|$ then $R_1{\uparrow}n[i] = l_1[i]$; since also $i < |l_1| \le |l_2| \le \mathrm{rank}_2$, position $i$ is a front position of $R_1{\uparrow}\mathrm{rank}_2$ as well, so condition (ii) of $R_2 \sqsubseteq R_1$ gives $l_2[i] \sqsubseteq l_1[i]$. If $|l_1| \le i$ then position $i$ is not a trailing position of $R_1{\uparrow}n$ either (trailing positions are $\ge n - |r_1| \ge n - |r_2| > i$ when $i < |l_2| \le n - |r_2|$; the case $i \ge n - |r_2|$ belongs to the next region), so $R_1{\uparrow}n[i] = 1_\emptyset$ and anything refines it.
+*Middle, $|l_2| \le i < n - |r_2|$:* $R_2{\uparrow}n[i] = 1_\emptyset$. By $|l_1| \le |l_2| \le i$ and $i < n - |r_2| \le n - |r_1|$, also $R_1{\uparrow}n[i] = 1_\emptyset$.
+*Back, $i \ge n - |r_2|$:* symmetric to the front. $\square$
+
+**Proposition 2.5 (Partial order). [proved]** $\sqsubseteq$ is a partial order on rows.
+
+*Proof.* Reflexivity: $k = 0$ and pointwise reflexivity. Antisymmetry: mutual flank-fit gives $|l_1| = |l_2|$, $|r_1| = |r_2|$, so the expansions are the rows themselves and pointwise antisymmetry (Prop. 1.3) applies. Transitivity: let $R_3 \sqsubseteq R_2 \sqsubseteq R_1$ and $n = \mathrm{rank}_3$. Flank-fit composes. For (ii): $(l_3 \cdot r_3)[i] = R_3{\uparrow}n[i] \sqsubseteq R_2{\uparrow}n[i]$ by hypothesis, and $R_2{\uparrow}n[i] \sqsubseteq R_1{\uparrow}n[i]$ by Lemma 2.4 applied to $R_2 \sqsubseteq R_1$; conclude by transitivity in $D$. $\square$
+
+**Proposition 2.6 (The empty row is the greatest element). [proved]** For every row $R$: $R \sqsubseteq [\,]\cdot\diamond\cdot[\,]$, and nothing else is above all rows.
+
+*Proof.* Flanks of the empty row have length $0 \le$ anything; its expansion to $\mathrm{rank}(R)$ is all $1_\emptyset$, which everything refines. Uniqueness: if $R_\top$ is above the empty row then flank-fit forces $|l| = |r| = 0$. $\square$
+
+**Proposition 2.7 (Rows form a join-semilattice with top). [proved]** Any two rows $R_1, R_2$ have a least upper bound:
+$$R_1 \vee R_2 \;=\; l_\vee \cdot \diamond \cdot r_\vee, \qquad |l_\vee| = \min(|l_1|,|l_2|),\ \ l_\vee[i] = l_1[i] \vee l_2[i],$$
+and symmetrically for $r_\vee$ aligned from the back (joins taken in $D$; note two distinct atoms join to $1_\emptyset$, never to $\bot$, so $l_\vee \in D^{*}$).
+
+*Proof.* *Upper bound:* flanks fit by $\min \le$ both. Pointwise, for $R_1$ at position $i$ of rank $\mathrm{rank}_1$: front positions $i < |l_\vee|$ give $l_1[i] \sqsubseteq l_1[i] \vee l_2[i]$; positions outside the (shorter) flanks of $R_\vee$ see $1_\emptyset$ in $R_\vee{\uparrow}\mathrm{rank}_1$. *Least:* let $U$ be an upper bound, so $|l_U| \le |l_1|, |l_2|$, hence $|l_U| \le |l_\vee|$ — flanks fit for $R_\vee \sqsubseteq U$. Pointwise at a front position $i < |l_U|$: from $R_j \sqsubseteq U$ we get $l_j[i] \sqsubseteq l_U[i]$ for $j = 1, 2$, so $l_U[i]$ is an upper bound of both and $l_\vee[i] = l_1[i] \vee l_2[i] \sqsubseteq l_U[i]$. At positions $|l_U| \le i$ outside $U$'s flanks, $U$'s expansion shows $1_\emptyset$. Back symmetric. $\square$
+
+*(This is what licenses accumulating row caps and later committing a leaf to the join of its lower bounds; the dimension-level instance is the cap-collapse rule.)*
+
+**Remark 2.8 (Rank-polymorphism lives in the order).** Definition 2.3 relates rows of different ranks directly; no quantifier appears anywhere in this section. This is the formal content of the first post's claim.
+
+---
+
+## 3. Terms and substitutions
+
+**Definition 3.1 (Terms).** Dimension terms $t ::= \alpha \mid n_b \mid 1_\emptyset$. Row terms $R ::= l \cdot \diamond \cdot r \mid l \cdot \langle\rho\rangle \cdot r$ with $l, r$ sequences of dimension terms; we identify a bare row variable $\rho$ with $[\,]\cdot\langle\rho\rangle\cdot[\,]$. A term is *ground* if variable-free. Each row term contains **at most one** row variable, at the marker — an invariant preserved by everything below.
+
+**Definition 3.2 (Substitution).** A substitution $\sigma$ is a finite, sort-respecting map from variables to terms with $\mathrm{dom}(\sigma) \cap \mathrm{vars}(\mathrm{ran}(\sigma)) = \emptyset$ (idempotency). Application is structural except at the marker: if $\sigma(\rho) = l' \cdot \langle\rho'\rangle \cdot r'$ (or closed, $l'\cdot\diamond\cdot r'$), then
+$$\sigma(l \cdot \langle\rho\rangle \cdot r) \;=\; (\sigma l \cdot l') \cdot \langle\rho'\rangle \cdot (r' \cdot \sigma r) \quad\big(\text{resp. } (\sigma l \cdot l') \cdot \diamond \cdot (r' \cdot \sigma r)\big).$$
+
+**Lemma 3.3 (Composition). [sketch]** $(\sigma \circ \tau)(X) = \sigma(\tau(X))$ for all terms $X$, where $\sigma \circ \tau$ is the usual composite substitution. *Proof:* induction on $X$; the marker case is associativity of context filling — splicing $\tau(\rho)$'s flanks and then applying $\sigma$ equals splicing $(\sigma\circ\tau)(\rho)$'s flanks into $\sigma$-applied host flanks, by Definition 3.2 unfolded twice. Routine. $\square$
+
+**Definition 3.4 (Semantics).** A *ground substitution* $\gamma$ is total on a fixed countable variable universe and maps into ground dimensions/rows. For a constraint set $\Phi$ over atomic constraints $t_1 = t_2 \mid t_1 \sqsubseteq t_2 \mid R_1 = R_2 \mid R_1 \sqsubseteq R_2$:
+$$\mathrm{Sol}(\Phi) = \{\gamma \text{ ground} \mid \gamma(\phi) \text{ holds for every } \phi \in \Phi\},$$
+where ground equalities are syntactic identity (marker included) and ground inequalities are instances of the orders of §§1–2. A substitution $\sigma$ *models* $\Phi$, $\sigma \models \Phi$, iff $\gamma \circ \sigma \in \mathrm{Sol}(\Phi)$ for every ground $\gamma$ — equivalently, $\sigma(\Phi)$ is valid under universal quantification of its free variables. The *substitution order*: $\sigma_1 \le \sigma_2$ iff $\exists u.\ u \circ \sigma_1 = \sigma_2$.
+
+**Example 3.5 (No principal model exists in general). [proved]** Let $\Phi = \{3_b \sqsubseteq \alpha\}$. The identity does not model $\Phi$ (ground $\alpha \mapsto 5_b$ falsifies it). Any model must map $\alpha$ to a term all of whose groundings lie above $3_b$, i.e. to $3_b$ or $1_\emptyset$ (a variable target fails as the identity did). The two models $\sigma_1 = [\alpha \mapsto 3_b]$ and $\sigma_2 = [\alpha \mapsto 1_\emptyset]$ are $\le$-incomparable: a witness $u$ for either direction would have to send a ground dimension to a different ground dimension, which substitutions cannot do. Hence $\Phi$ has models but **no $\le$-least model**.
+
+*Consequence.* The template's Theorem 1 ("the solver computes $\sigma_\star \models \Phi$ least among models") is false as stated. The repair: the solver's answer is a pair — a substitution *and a residual bound store* — and the correct theorem is about solution-set representation and most-generality (Theorem 5.6 below). A principal model in the original sense exists exactly when the residual store is empty (Corollary 5.8).
+
+---
+
+## 4. The solver: configurations and rules
+
+**Definition 4.1 (Configuration).** A configuration is $\langle \Phi;\ \sigma;\ B \rangle$ — unsolved constraints, accumulated (idempotent) bindings, and a *bound store*. $B$ assigns to each unsolved variable: for a dimension variable $\alpha$, at most one atom lower bound $\mathrm{lb}(\alpha) \in \{n_b\}$ plus a set of deferred variable–variable inequalities ("adjacencies"); for a row variable $\rho$, a set of row-term lower bounds ("caps", from inequality residues) plus adjacencies. There is a distinguished failure configuration $\mathsf{fail}$.
+
+Binding a variable ($\sigma := [x \mapsto T] \circ \sigma$) **re-emits** into $\Phi$ every bound and adjacency stored for $x$, instantiated at $T$, and substitutes $T$ for $x$ throughout $\Phi$ and $B$. This single discipline replaces ad-hoc propagation.
+
+**Definition 4.2 (Dimension rules).**
+
+| | Constraint | Action |
+|---|---|---|
+| DE-refl | $t = t$ | discard |
+| DE-clash | $n_b = m_c$, $(n,b)\ne(m,c)$ (incl. atom vs $1_\emptyset$) | $\mathsf{fail}$ |
+| DE-bind | $\alpha = t$, $t \ne \alpha$ | bind $\alpha \mapsto t$ |
+| DI-top | $t \sqsubseteq 1_\emptyset$ | discard |
+| DI-refl | $t \sqsubseteq t$ | discard |
+| DI-ground | $d \sqsubseteq d'$ ground | check Def. 1.2; else $\mathsf{fail}$ |
+| DI-pin | $\alpha \sqsubseteq d$, $d$ an atom | replace by $\alpha = d$ |
+| DI-pin-top | $1_\emptyset \sqsubseteq \alpha$ | replace by $\alpha = 1_\emptyset$ |
+| DI-cap | $d \sqsubseteq \alpha$, $d$ an atom | if $\mathrm{lb}(\alpha)$ unset: record; if $= d$: discard; if $= d' \ne d$: replace by $\alpha = 1_\emptyset$ |
+| DI-adj | $\alpha \sqsubseteq \beta$, $\alpha \ne \beta$ | defer (record adjacency on both) |
+
+*Justifications (each rule preserves $\mathrm{Sol}$):* DI-pin: in $D$, the only element $\sqsubseteq$ an atom $d$ is $d$ itself. DI-pin-top: the only element above the top is the top. DI-cap collapse: any $\gamma(\alpha)$ above two distinct atoms must be $1_\emptyset$ (Prop. 1.3). DI-pin-top is the case the blog's narrative omits.
+
+**Definition 4.3 (Row rules).** Write both sides aligned at the **outer edges** (leading flanks from the front, trailing from the back).
+
+*Equality $R_1 = R_2$.* Emit dimension equalities on the overlapping aligned flank positions. Let the surpluses (the unmatched inner segments of the longer flanks) be $m_l, m_r$. Cases: (a) both sides closed: $\mathsf{fail}$ unless surpluses empty (rank/marker mismatch). (b) one side open with variable $\rho$, the other closed with surplus $m_l, m_r$: bind $\rho \mapsto m_l \cdot \diamond \cdot m_r$ — unless $\rho$ occurs in $m_l \cdot m_r$'s side, impossible here since the closed side has no row variable. (c) both open, $\rho_1 \ne \rho_2$, surpluses on the side of $\rho_2$'s term: bind $\rho_1 \mapsto m_l \cdot \langle\rho_2\rangle \cdot m_r$; if the surpluses split across the two sides (one leading surplus on side 2, one trailing surplus on side 1), bind with a fresh $\rho'$: $\rho_1 \mapsto m_l \cdot\langle\rho'\rangle\cdot[\,]$, $\rho_2 \mapsto [\,]\cdot\langle\rho'\rangle\cdot m_r'$. (d) both open with $\rho_1 = \rho_2$: discard if surpluses empty, else $\mathsf{fail}$ (**occurs check**: no finite row satisfies $\rho = m_l \cdot \langle\rho\rangle \cdot m_r$ with $m_l \cdot m_r$ nonempty, since splicing strictly increases rank).
+
+*Inequality $R_{\mathrm{res}} \sqsubseteq R_{\mathrm{op}}$.* Emit dimension inequalities $\,t_{\mathrm{res}} \sqsubseteq t_{\mathrm{op}}$ on aligned flank overlaps. Then:
+(i) *operand open, result supplies $\ge$ the operand's flanks:* record the result's interior residue (a row term; open if the result is) as a **cap** on $\rho_{\mathrm{op}}$.
+(ii) *operand closed, result rank $\ge$ operand flanks:* the operand's interior in the expansion is $1_\emptyset$; the corresponding result positions are unconstrained — discard them.
+(iii) *result closed and shorter than the operand's known flanks:* $\mathsf{fail}$ (genuine rank mismatch).
+(iv) *result open and shorter than the operand's known flanks (deficit $k > 0$):* **deficit rule** — bind $\rho_{\mathrm{res}} \mapsto \alpha_1 \cdots \alpha_{k_l} \cdot \langle\rho'\rangle \cdot \beta_1 \cdots \beta_{k_r}$ with fresh dimension variables and a fresh row variable, sized to clear the deficit, then reprocess. **Subject to the rank-cycle check of Def. 4.5.**
+
+**Definition 4.4 (Fairness).** A run processes constraints until $\Phi = \emptyset$ or $\mathsf{fail}$; re-emitted constraints return to $\Phi$. Any fair strategy is allowed.
+
+**Example 4.5a (Divergence without a cycle check). [proved]** Let $\Phi_0 = \{\, \rho_1 \sqsubseteq [a]\cdot\langle\rho_2\rangle,\ \ \rho_2 \sqsubseteq [b]\cdot\langle\rho_1\rangle \,\}$ ($a, b$ ground atoms). Semantically: the first constraint forces $\mathrm{rank}(\gamma\rho_1) \ge 1 + \mathrm{rank}(\gamma\rho_2)$ (flanks-fit in Def. 2.3), the second forces $\mathrm{rank}(\gamma\rho_2) \ge 1 + \mathrm{rank}(\gamma\rho_1)$; hence $\mathrm{Sol}(\Phi_0) = \emptyset$. Operationally, the deficit rule fires on $\rho_1$, growing it by one axis; substitution lengthens the *operand* side of the second constraint, whose deficit rule grows $\rho_2$; substitution lengthens the operand side of the first constraint's residue, and so on forever. The rules of Def. 4.2–4.3 alone do not terminate. The self-cyclic instance $\rho \sqsubseteq [a]\cdot\langle\rho\rangle$ (obtainable by an einsum equality merging two row variables) diverges the same way.
+
+**Definition 4.5 (Rank-dependency graph and cycle check).** Maintain a directed graph $G$ on row variables: for each processed or deferred row inequality with result variable $\rho$ and operand variable $\rho'$, an edge $\rho \to \rho'$ of weight $w \ge 0$, where $w$ is the operand's known flank surplus over the result's known flanks (constraint-rank slack); semantically the constraint entails $\mathrm{rank}(\gamma\rho) \ge w + \mathrm{rank}(\gamma\rho')$. The deficit rule is **guarded**: before growing, if $G$ (with the edge that triggered the growth) contains a directed cycle of total weight $> 0$, then $\mathsf{fail}$.
+
+*Justification:* a positive-weight cycle entails $\mathrm{rank}(\gamma\rho) \ge \mathrm{rank}(\gamma\rho) + w$ with $w > 0$ for any solution, so $\mathrm{Sol} = \emptyset$ and failing is sound. This is the formal counterpart of the implementation's "cycle-breaking"; Example 4.5a shows it is *necessary*, not an optimization. *(Action item: check `row.ml`'s cycle-breaking against this specification — in particular whether the mutual-growth example is caught or relies on stage heuristics.)*
+
+---
+
+## 5. Metatheory of solving
+
+**Lemma 5.1 (Solution preservation). [proved per rule; assembly routine]** Every rule of Defs. 4.2–4.3 transforms $\langle\Phi;\sigma;B\rangle$ into a configuration with the same solution set, in the precise sense: writing $\widehat{C}$ for the constraint set $\Phi \cup \mathrm{eqns}(\sigma) \cup \mathrm{constr}(B)$ denoted by a configuration ($\mathrm{eqns}(\sigma) = \{x = \sigma(x)\}$, $\mathrm{constr}(B)$ the stored bounds/adjacencies as constraints), each step preserves $\{\gamma \in \mathrm{Sol}(\widehat{C})\}$ up to extension of $\gamma$ to freshly introduced variables (deficit rule, fresh splice variables): every solution of the old configuration extends to one of the new, and every solution of the new restricts to one of the old. $\mathsf{fail}$ steps are taken only when $\mathrm{Sol}(\widehat{C}) = \emptyset$.
+
+*Proof.* Per rule. The dimension rules: justified in Def. 4.2 (DI-pin, DI-pin-top, DI-cap collapse are the non-trivial ones; each is an entailed equality by Prop. 1.3 case analysis). Row equality cases: the splice bindings are the unique decompositions of ground row equality with marker sensitivity (a ground instance of $l_1\cdot\langle\rho_1\rangle\cdot r_1 = l_2\cdot\langle\rho_2\rangle\cdot r_2$ aligns flanks at the outer edges and forces the variables' values to carry exactly the surpluses around a common middle); the occurs failure: splicing a nonempty context strictly increases rank, so the fixed equation has no finite solution. Row inequality: flank alignment is forced by Definition 2.3's outer-edge anchoring; case (i)'s residue cap re-expresses the remaining pointwise conditions as a row lower bound (using Lemma 2.4 to see the conditions depend on $\gamma\rho_{\mathrm{op}}$ only through the row order); case (ii) discards conditions of the form $\_ \sqsubseteq 1_\emptyset$; case (iii) fails on a violated flanks-fit that no grounding can repair (both sides' ranks are fixed or bounded); case (iv): for every solution $\gamma$, $\gamma(\rho_{\mathrm{res}})$ has rank $\ge$ the deficit and decomposes (uniquely, marker-sensitively) into $k$ outer dimensions around a middle — instantiate the fresh variables accordingly; conversely any solution of the grown system restricts. The guarded failure: justified under Def. 4.5. $\square$
+
+**Theorem 5.2 (Termination). [sketch — the bound; the measure argument is complete given it]** With the cycle check of Def. 4.5, every fair run on a finite $\Phi_0$ terminates.
+
+*Proof sketch.* Dimension variables are bound at most once and substituted out; dimension rules strictly reduce a multiset measure on $(\text{unsolved dim vars}, |\Phi|)$ except where they emit nothing. The only rules that *grow* material are row-equality splices (bind a row variable, possibly minting one fresh) and the deficit rule (binds one, mints one). Each binds the older variable irrevocably. It remains to bound growth. After the cycle check, the rank-dependency graph restricted to any run is free of positive cycles; define the *demand* $D(\rho)$ of a row variable by well-founded recursion along $G$: $D(\rho) = \max$ over outgoing constraints of (operand's explicit flank length $+\, D(\rho_{\mathrm{op}})$), $D(\rho) = $ its own known flank length at sinks. $D$ is finite (acyclicity, finitely many constraints) and bounds the total rank to which any variable can be grown by deficit steps, because each growth is triggered by a single constraint and the growth target is that constraint's demand, which is $\le D$. **[gap to close: $D$ must be shown stable under the substitutions a run performs — substitution moves flank material around but the total explicit material on any $G$-path is preserved or consumed; I believe a potential function "total explicit flank material reachable along $G$ from $\rho$" works verbatim, but this should be written out carefully for the paper.]** With growth bounded, the lexicographic measure (number of unbound row variables that can still grow, total remaining demand, unsolved dim vars, $|\Phi|$) decreases on every rule. $\square$
+
+**Definition 5.3 (Solved form).** A final configuration $\langle \emptyset; \sigma_\star; B_\star \rangle$ is in *solved form*: $\sigma_\star$ idempotent; every variable in $B_\star$ unsolved; each dimension variable carries at most one atom lower bound; all stored row caps and adjacencies are between unsolved variables and contain no pending pins (else a rule would fire).
+
+**Proposition 5.4 (The residual store is always satisfiable; $\gamma_\uparrow$ is its greatest solution). [proved]** Define $\gamma_\uparrow$ on the unsolved variables: $\gamma_\uparrow(\alpha) = 1_\emptyset$, $\gamma_\uparrow(\rho) = [\,]\cdot\diamond\cdot[\,]$, extended through $\sigma_\star$ on solved variables ($\gamma_\uparrow(x) = \gamma_\uparrow(\sigma_\star(x))$). Then (i) $\gamma_\uparrow \in \mathrm{Sol}(\mathrm{constr}(B_\star) \cup \mathrm{eqns}(\sigma_\star))$; (ii) $\gamma_\uparrow$ is the pointwise-greatest element of that solution set: for every solution $\gamma$ and every variable $x$, $\gamma(x) \sqsubseteq \gamma_\uparrow(x)$.
+
+*Proof.* (i) Atom caps $d \sqsubseteq \alpha$: $d \sqsubseteq 1_\emptyset$ ✓. Adjacencies $\alpha \sqsubseteq \beta$: $1_\emptyset \sqsubseteq 1_\emptyset$ ✓. Row caps $\,\text{residue} \sqsubseteq \rho$: every row is $\sqsubseteq$ the empty row (Prop. 2.6) ✓; row adjacencies likewise. Bindings hold by construction. (ii) For unsolved $x$: tops (Props. 1.3, 2.6). For solved $x$ with $\sigma_\star(x) = T$: $\gamma(x) = \gamma(T)$ and $\gamma_\uparrow(x) = \gamma_\uparrow(T)$; compare $\gamma(T) \sqsubseteq \gamma_\uparrow(T)$ by structural induction on $T$ — ground parts are equal; variable positions are handled by the unsolved case; for an open row term, $\gamma$'s splice has flanks extending $\gamma_\uparrow$'s splice on the inner sides, so flanks fit, and pointwise positions are either shared flank entries (inductive case) or middle positions where $\gamma_\uparrow(T)$'s expansion shows $1_\emptyset$. $\square$
+
+**Corollary 5.5 (Decision). [proved]** A fair run fails iff $\mathrm{Sol}(\Phi_0) = \emptyset$. (Failure soundness is Lemma 5.1; success implies satisfiability by Prop. 5.4 composed back through the preservation chain.) The core solver is thus a decision procedure for satisfiability, in addition to computing the answer.
+
+**Theorem 5.6 (Soundness, representation, most generality — the corrected Theorem 1). [proved given 5.1, 5.2]** Let a fair run on finite $\Phi_0$ terminate in $\langle\emptyset; \sigma_\star; B_\star\rangle$. Then, with $V = \mathrm{vars}(\Phi_0)$:
+
+1. *(Representation)* $\gamma \in \mathrm{Sol}(\Phi_0)$ iff $\gamma$ extends to a ground $\hat\gamma$ (on the fresh variables) with $\hat\gamma = \hat\gamma \circ \sigma_\star$ and $\hat\gamma \in \mathrm{Sol}(\mathrm{constr}(B_\star))$.
+2. *(No guessing / entailment)* every binding $x \mapsto T$ in $\sigma_\star$ is conservative: every solution of $\Phi_0$ extends to one satisfying $x = T$.
+3. *(Most generality among models)* for every substitution $\sigma \models \Phi_0$ there is $u$ with $u \circ \sigma_\star = \sigma$ on $V$ — indeed $u = \sigma$ works: $\sigma = \sigma \circ \sigma_\star$ on $V$.
+
+*Proof.* (1) and (2) are the composition of Lemma 5.1 across the run. (3): let $\sigma \models \Phi_0$. For every ground $\gamma$, $\gamma\circ\sigma \in \mathrm{Sol}(\Phi_0)$, so by (1)–(2) $\gamma\circ\sigma$ (extended over fresh variables) satisfies every equation $x = \sigma_\star(x)$, $x \in V \cap \mathrm{dom}(\sigma_\star)$ — i.e. $\gamma(\sigma(x)) = \gamma(\sigma(\sigma_\star(x)))$ for **all** ground $\gamma$. Two terms that agree under every ground substitution are syntactically equal (instantiate variables at distinct atoms to separate them; $D$ has infinitely many). Hence $\sigma(x) = \sigma(\sigma_\star(x))$ for each such $x$, and trivially elsewhere on $V$; that is $\sigma = \sigma \circ \sigma_\star$ on $V$. $\square$
+
+**Caveat to (1)/(2):** the extension over fresh variables is existential, exactly as in standard unification with fresh-variable introduction; the answer is unique up to renaming of fresh variables. **[sketch]** for the renaming uniqueness across different fair strategies: confluence follows from Lemma 5.1 plus determinacy of each rule's effect on $\widehat{C}$'s solution set and the canonical form of $B_\star$; a Newman-style local-confluence argument should be written out, or sidestepped by fixing one strategy in the paper.
+
+**Corollary 5.7 (Forced variables).** $\sigma_\star$ binds only variables whose values (relative to the remaining free ones) are entailed by $\Phi_0$ — by 5.6(2). Conversely every variable left unsolved genuinely admits at least two solutions or carries only its top default ($\gamma_\uparrow$ vs. e.g. committing a cap), by Prop. 5.4 and inspection of solved form.
+
+**Corollary 5.8 (Principal model, recovered).** If $B_\star$ stores no atom caps and no row caps (adjacencies allowed), then $\sigma_\star$ (read as a model, free variables universal) satisfies $\sigma_\star \models \Phi_0$, and by 5.6(3) it is the $\le$-least model: the blog's "principal model" claim holds exactly in this case. Example 3.5 shows the restriction is necessary.
+
+---
+
+## 6. Closing
+
+**Definition 6.1 (Closing policy).** Variables carry a provenance tag: *leaf* (belonging to a terminal tensor's shape; a subset are *parameters*) or *interior*. Closing runs after solving, interleaved:
+1. *(Close leaves, downward.)* For each unsolved leaf variable: bind a dimension variable to its stored atom cap if any, else to $1_\emptyset$ — except a **parameter** with no cap at some position: $\mathsf{error}$ ("unspecified hidden dimension"). Bind a row variable to the join (Prop. 2.7) of the *ground parts* of its stored caps, with *holes* (positions where no cap is ground) filled by $1_\emptyset$, and no-further-axes beyond the caps' extent; parameters error at holes.
+2. *(Re-solve.)* The bindings re-emit the variables' stored constraints (Def. 4.1); run the solver to a new solved form.
+3. *(Close interiors, upward.)* Bind every remaining variable to its top ($1_\emptyset$ / the empty row); re-solve once more (re-emissions against tops discharge by DI-top and Prop. 2.6, so this cannot fail).
+
+**Proposition 6.2 (Closing terminates and is sound). [proved]** The interleave terminates (each round binds at least one variable; the solver terminates by Thm. 5.2; variables are finite), and if no $\mathsf{error}$/$\mathsf{fail}$ occurs, the resulting total ground substitution $\gamma_{\mathrm{close}} \in \mathrm{Sol}(\Phi_0)$.
+
+*Proof.* Termination as stated. Soundness: every closing commitment enters the system as an equality and the subsequent re-solve succeeds; by Lemma 5.1 the final configuration's solutions are solutions of $\Phi_0$, and $\gamma_{\mathrm{close}}$ is the (unique) solution of the final, fully-bound system. Step 3 cannot fail: a cap re-emitted against a top is $d \sqsubseteq 1_\emptyset$ or $R \sqsubseteq [\,]\cdot\diamond\cdot[\,]$, both valid. $\square$
+
+**Remark 6.3 (The interleave is load-bearing). [proved by example]** $\Phi = \{3_b \sqsubseteq \alpha,\ \alpha \sqsubseteq \beta,\ 5_b \sqsubseteq \beta\}$, $\alpha, \beta$ leaves. Closing without re-solving commits $\alpha \mapsto 3_b$, $\beta \mapsto 5_b$ — violating $\alpha \sqsubseteq \beta$. With Def. 6.1, binding $\alpha \mapsto 3_b$ re-emits $3_b \sqsubseteq \beta$, the cap store on $\beta$ collapses $\{5_b, 3_b\}$ to $\beta = 1_\emptyset$ (DI-cap), and the result is a genuine solution. So step 2 is required for soundness, not bookkeeping.
+
+**Proposition 6.4 (Uniform-upward closing yields the greatest solution — Post 5's conjecture, proved). [proved]** $\gamma_\uparrow$ of Prop. 5.4 is a solution of $\Phi_0$ and is pointwise-greatest in $\mathrm{Sol}(\Phi_0)$: smallest tensors, most general shapes. *Proof:* Prop. 5.4 plus Theorem 5.6(1). $\square$
+
+**Proposition 6.5 (Leaf closing is locally least; the holes caveat). [proved, with stated scope]** If at step 1 all of a leaf variable's caps are ground, the committed value is the $\sqsubseteq$-least value satisfying its stored bounds (the join of lower bounds — Props. 1.3, 2.7). If some cap has non-ground positions ("holes"), the $1_\emptyset$ fill is a *guess*: solutions assigning a concrete atom at a hole exist and are $\sqsubseteq$-incomparable to the committed one. This is the precise sense in which closing is "deliberately non-principal," and the parameter error is its guard.
+
+**Remark 6.6 (Non-principality witnessed).** $\Phi = \{3_b \sqsubseteq \alpha\}$, $\alpha$ a leaf: $\gamma_{\mathrm{close}}(\alpha) = 3_b$; $\gamma_\uparrow(\alpha) = 1_\emptyset$; both are solutions, neither factors through the other by substitution (Example 3.5). Closing selects by policy, justified by allocation (leaves) and parsimony (interiors), not by entailment.
+
+---
+
+## 7. Projection inference
+
+Throughout, fix one operation; its shapes are solved and **closed** (ground). Its constraint set $\Phi_{\mathrm{op}}$ is re-derived with **freshened projection identifiers**: each axis of each participating tensor occurrence carries an id $p \in P$, injectively, used by this operation only; $\mathrm{sz}(p) \in \mathbb{N}_{\ge 1}$ is the axis's solved size. (The spec's fresh row variables are eliminated by the local re-solve — Lemma 7.7 — and its label variables resolve to operand axes, inheriting ids.)
+
+**Definition 7.1 (Projection language).** Atoms $q ::= \mathsf{Proj}(p) \mid \mathsf{Sol}(\mathit{idx})$, where $\mathit{idx}$ is an externally supplied index: $\mathsf{Fix}(c)$ or an external symbol. Equations $e ::= \mathsf{Eq}(q_1, q_2) \mid \mathsf{Iter}(q)$, with $\mathsf{Eq}$ symmetric.
+
+**Definition 7.2 (Elaboration $\llbracket\cdot\rrbracket$).** From the ground $\Phi_{\mathrm{op}}$:
+P1. $d_1 = d_2 \rightsquigarrow \mathsf{Eq}(\llbracket d_1\rrbracket, \llbracket d_2 \rrbracket)$.
+P2. $d_{\mathrm{res}} \sqsubseteq d_{\mathrm{op}}$ with $\mathrm{sz}(d_{\mathrm{op}}) = 1 \rightsquigarrow \mathsf{Eq}(\llbracket d_{\mathrm{op}}\rrbracket, \mathsf{Sol}(\mathsf{Fix}\,0))$ (sever and pin).
+P3. $d_{\mathrm{res}} \sqsubseteq d_{\mathrm{op}}$ otherwise $\rightsquigarrow \mathsf{Eq}(\llbracket d_{\mathrm{res}}\rrbracket, \llbracket d_{\mathrm{op}}\rrbracket)$.
+P4. $R_1 = R_2$: outer-edge alignment; P1 per aligned pair (ranks match — shapes are closed and the equality held).
+P5. $R_{\mathrm{res}} \sqsubseteq R_{\mathrm{op}}$: outer-edge alignment; P2/P3 per aligned pair, with P2's severance applied row-wise (result side of the pair $\rightsquigarrow \mathsf{Iter}$, operand pinned); each surplus interior result axis $\rightsquigarrow \mathsf{Iter}(\llbracket\cdot\rrbracket)$.
+P6. each terminal axis $\rightsquigarrow \mathsf{Iter}(\llbracket\cdot\rrbracket)$.
+Side condition: $\mathsf{Sol}(\mathsf{Fix}\,c)$ is emitted only with $0 \le c < $ the axis's size (slices are validated against solved sizes).
+
+**Definition 7.3 (Solver).** A single pass over the finite equation set $E$ maintaining: a union–find partition of $P$; a partial pin map on classes; an iterate set $I$ of classes. $\mathsf{Eq}(\mathsf{Proj}\,p, \mathsf{Proj}\,q)$: union, $\mathsf{fail}$ if class sizes differ. $\mathsf{Eq}(\mathsf{Proj}\,p, \mathsf{Sol}\,i)$: pin $p$'s class at $i$, $\mathsf{fail}$ on a conflicting pin. $\mathsf{Eq}(\mathsf{Sol}\,i, \mathsf{Sol}\,j)$: check $i = j$. $\mathsf{Iter}(\mathsf{Proj}\,p)$: add class to $I$. $\mathsf{Iter}(\mathsf{Sol}\,\_)$: no-op. **Labeling:** pinned class $\mapsto$ its pin (pins dominate $I$); unpinned class in $I$ with size $> 1$ $\mapsto$ a fresh iterator symbol; otherwise $\mapsto \mathsf{Fix}(0)$. The **product space** $P^{\times} = \prod_j R_j$, one factor $R_j = \{0..n_j{-}1\}$ per fresh iterator with $n_j$ the class size; the **index map** $\pi_T$ of tensor $T$ maps each axis to its class's label.
+
+**Theorem 7.4 (Canonicity — Theorem 2 of the template). [proved]** For a finite $E$: the partition, the pin map, the iterate set, and the labeling are independent of processing order; the solver fails iff (a) some $\approx$-class (the least equivalence containing the $\mathsf{Eq}(\mathsf{Proj},\mathsf{Proj})$ pairs) contains two ids of different sizes, or (b) some class receives two distinct pins, or (c) some $\mathsf{Eq}(\mathsf{Sol}\,i, \mathsf{Sol}\,j)$ has $i \ne j$. On success the output is unique up to a bijective renaming of the fresh iterator symbols. The solver resolves no ambiguity: it has no default, no direction, and no policy.
+
+*Proof.* $\approx$ is a closure operator's value — the least equivalence containing the given pairs — hence order-independent; union–find computes exactly it. *Size failure:* if a class has two sizes, then along any processing order some union merges sub-classes of different recorded sizes (sizes are constant per id; a class's recorded size is any member's, well-defined per sub-class by induction), so failure occurs; conversely if all classes are size-uniform no union can fail. *Pins:* the pin map on classes is the lift of the partial function induced by the $\mathsf{Eq}(\mathsf{Proj}, \mathsf{Sol})$ equations along $\approx$; failure iff the lift is inconsistent — a property of $(E, \approx)$, not of order. (c) is a per-equation check. The iterate set is the $\approx$-saturation of the marked ids — again a closure. The labeling is a function of (partition, pins, $I$, $\mathrm{sz}$); the only free choice anywhere is the identity of the fresh symbols, one per labeled class, whence uniqueness up to bijection. $\square$
+
+**Definition 7.5 (Reduction; coverage).** A factor $j$ of $P^\times$ is a *reduction axis* iff no component of $\pi_{\mathrm{LHS}}$ is $\mathsf{Iter}(s_j)$.
+
+**Proposition 7.6 (Injectivity, surjectivity, and the reduction characterization). [proved]** With core labels only ($\mathsf{Iter}/\mathsf{Fix}$):
+(i) $\pi_{\mathrm{LHS}} : P^\times \to \mathrm{Addr}$ is injective iff every product variable occurs in some component of $\pi_{\mathrm{LHS}}$ — i.e. iff there is no reduction axis. *Proof:* ($\Leftarrow$) the components mentioning each $s_j$ reconstruct the point. ($\Rightarrow$) a missing $s_j$ has $n_j \ge 2$ (factors are minted only at size $> 1$), so two points differing only in $s_j$ collide.
+(ii) $\pi_{\mathrm{LHS}}$ is surjective onto the LHS's index domain iff every LHS axis of size $> 1$ is labeled $\mathsf{Iter}$ and the map (axis $\mapsto$ its variable) is injective on those axes. *Proof:* ($\Leftarrow$) given a target multi-index, set each named variable by its (unique) axis, others arbitrarily; $\mathsf{Fix}(0)$ axes have size $1$ by the labeling rule (an unpinned size-$1$ class) or are pinned slices, excluded on the LHS in the core. ($\Rightarrow$) a size-$>1$ axis labeled $\mathsf{Fix}$ misses indices; two axes sharing $s$ hit only the diagonal.
+(iii) Hence: the accumulating read-modify-write is required iff a reduction axis exists (non-injectivity), and pre-initialization is required iff $\pi_{\mathrm{LHS}}$ is non-surjective or (under an erasing accumulator) non-injective — the `=:+` analysis, now a corollary.
+
+**Lemma 7.7 (Local re-solve succeeds; locality). [sketch]** If the global solve and closing succeeded, then for each operation: (a) the per-operation re-derivation (spec template with fresh row/dimension variables against the ground operand shapes) has a solution, and the core solver finds it, eliminating every spec variable; (b) the resulting $\approx$ depends only on $\Phi_{\mathrm{op}}$ — by construction of the freshened ids, no constraint of any other operation mentions any id of $P$, so no external fact can enter the closure. *Proof sketch for (a):* the operation's constraints are a subset of $\Phi_0$ up to the freshening bijection on ids (which does not affect sizes) and renaming of spec variables; $\gamma_{\mathrm{close}}$ restricted along that bijection is a solution; by Corollary 5.5 the solver cannot fail on a satisfiable set, and at ground shapes the row alignments pin every spec row variable, after which every label variable is unified with a ground operand axis. **[The bijection/subset bookkeeping should be spelled out against the actual elaboration in `shape.ml`; flagged for the full paper.]**
+
+**Theorem 7.8 (Soundness of projections w.r.t. shapes — Theorem 3 of the template). [proved given 7.7]** Let shapes be solved and closed, the per-operation elaboration as in Def. 7.2 with its side condition, and the local solve succeed. Then:
+1. *(Bounded addressing)* for every participating tensor $T$ and every $p \in P^\times$, $\pi_T(p)$ is a valid multi-index: componentwise, an $\mathsf{Iter}(s_j)$ component addresses an axis whose size equals $n_j$, and $s_j < n_j$; a $\mathsf{Fix}(c)$ component has $c <$ the axis size.
+2. *(Co-iteration is finer than size-equality)* $p \approx q \Rightarrow \mathrm{sz}(p) = \mathrm{sz}(q)$, and $\approx$ is the **least** equivalence justified by this operation's own constraints (Thm. 7.4 + Lemma 7.7(b)) — in particular, axes identified in size by other operations' constraints are not co-iterated here.
+
+*Proof.* (2) Size-uniformity of classes is the solver's invariant (Thm. 7.4(a)); leastness is closure; locality is Lemma 7.7(b). (1) $\mathsf{Iter}$: the factor's range was minted with the class size, the class size equals each member axis's solved size by (2), and $s_j$ ranges over $\{0..n_j{-}1\}$. $\mathsf{Fix}(0)$ from the labeling: the axis's class has size $1$... — careful: an *unpinned, uniterated* class of size $>1$ also labels $\mathsf{Fix}(0)$ by the rule; $0 <$ size always, so addressing is valid (such an axis is read at $0$ — this is the broadcast severance and the no-partner case, both intended). Pinned $\mathsf{Fix}(c)$: the side condition of Def. 7.2. External symbols: validity is the caller's contract (a kernel argument), recorded as a premise. $\square$
+
+**Remark 7.9 (Asymmetry of the two passes, now formal).** Shape solving needs a closing *policy* (Def. 6.1; non-principal by Remark 6.6). Projection solving needs only a *naming* (Thm. 7.4: forced, unique up to renaming, no direction). The slogan "more principal than shape inference" is these two statements side by side.
+
+---
+
+## 8. Toward the staged extensions: what is proved, what is open
+
+**Proposition 8.1 (Padding canonicity). [proved]** The padding margin of an axis id is defined as $\max$ over the finite set of operations addressing it of their kernel extents. A finite fold of the commutative, associative, idempotent operation $\max$ is independent of accumulation order; hence the margin committed at finalization is canonical — order of constraint processing does not affect it. *(This moves padding out of the open problem.)*
+
+**Conjecture 8.2 (Stratified determinacy). [open]** Extend the projection language with $\mathsf{Affine}(\sum_i c_i s_i + o)$ and $\mathsf{Concat}(s_1..s_k)$ and the solver with the second stratum (evaluate derived terms against the stratum-1 classes; deferred equality checks between derived terms; connected-component coupling for $\mathsf{Concat}$). Claim: the output remains unique up to renaming of fresh symbols and reordering within Prop. 8.1's folds — the staged solver still resolves no ambiguity; what is lost is only *flatness* (a conflict between derived terms is detected in stratum 2, after the constraint's site). Expected proof shape: stratum 1 is Thm. 7.4; stratum 2 is a deterministic evaluation over its output; the coupling is a connected-components closure (order-independent like $\approx$); deferred checks are pure checks.
+
+**Conjecture 8.3 (Two-unit closing). [open]** With `discardable_vars` computed from the spec by the quantifier-alternation test, closing guesses discardable variables to $0$ and others to $1_\emptyset$. Claim: Prop. 6.4's characterization splits — uniform-upward closing remains greatest *within the broadcast order's carrier*, while discardable variables are off that order (the coproduct's additive order), and the combined policy is sound (Prop. 6.2's argument should survive: re-emission against $0$ at a discardable occurrence discharges because the occurrence is, by the discardability test, projected away). The interaction of the test with row-variable instantiation is where a surprise would live.
+
+**Conjecture 8.4 (Completeness of the staged solve). [open]** For the full constraint language (with `Total_elems`, `Exact`, affine size relations), the staged solver with its stage triggers finds a solution whenever one exists. This is the genuinely open question — the stages introduce guesses (the blog's "heuristics for when to guess an underdetermined variable"), and the core's Corollary 5.5 is exactly what must be re-established or refuted with a counterexample. A counterexample would itself be a publishable observation.
+
+---
+
+## 9. Discoveries relative to the blog series (action items)
+
+1. **Theorem 1 must be restated** (Example 3.5): no principal *model* exists once a cap is residual; the correct result is Theorem 5.6 (representation + no-guessing + most-generality), with the principal model recovered as Corollary 5.8 when no caps remain. Post 1's "principal model" paragraph and Post 5's Theorem-1 statement both need this correction.
+2. **Termination requires the rank-cycle check** (Example 4.5a, Def. 4.5): the rules as narrated diverge on mutually-growing row variables; the check is the formal identity of the implementation's "cycle-breaking" and should be presented as part of the core, not as an implementation heuristic. *Verify against `row.ml`.*
+3. **$1_\emptyset \sqsubseteq \alpha$ pins** (DI-pin-top): a missing case in the blog's pins/caps narrative.
+4. **Post 5's closing conjecture is now Prop. 6.4 (proved)**, with the bonus Corollary 5.5: the solver decides satisfiability, because the residual store is always satisfiable via $\gamma_\uparrow$.
+5. **The closing interleave is required for soundness** (Remark 6.3) — promote from procedural note to a stated lemma with the three-constraint example.
+6. **Padding is canonical** (Prop. 8.1) — trivially, and worth saying; it shrinks the open problem to Conjectures 8.2–8.4.
+7. Row order metatheory (Lemma 2.4, Props. 2.5–2.7) is new writing: the blog asserts the order and uses joins implicitly; the join formula is what justifies cap accumulation and Def. 6.1's "join of the ground parts."
+
+**Remaining gaps before the FProPer paper:** the termination potential function (Thm. 5.2's bracketed gap); confluence/uniqueness-up-to-renaming across strategies (or fix a strategy); Lemma 7.7's bookkeeping against the implementation's elaboration; and the three conjectures of §8. Items 1–2 of this list are the ones I'd check against `row.ml`/`shape.ml` first, since they assert things about the implementation.
+
+---
+
+## 10. Verification against the implementation (`row.ml`, `indexing.ml`, `assignments.ml`)
+
+**Confirmed (formalization = code):**
+
+- **DI-pin-top is implemented.** `solve_dim_ineq` has the exact case, with comment "res is the top: [top ⊑ opnd] only by equality — the top refines only itself; force it." Discovery 3 downgrades to a blog-prose gap; the code is correct. The top is spelled `1_(bcast_if_1)`.
+- **DI-cap collapse is implemented and documented as intentional:** conflicting ground bounds force the variable to the top, with the comment "Intentional broadcast semantics... This is NOT a bug — do not tighten to raise Shape_error."
+- **Row-equality occurs check** (Def. 4.3(d)): `unify_row` raises "Infinite number of axes by self-reference" on same-variable rows with unequal known ranks — and equality *binds and substitutes*, so multi-step equality cycles collapse to the self-reference case and are caught.
+- **Prop. 2.7's join** is `join_dim` in the row-bound merge: top absorbs; distinct sizes or distinct bases join to the top; extended consistently to `Affine` size relations.
+- **Outer-edge flank alignment** in both `unify_row` and `solve_row_ineq`, with comments stating the anchoring — Defs. 4.3, 7.2 match.
+- **Closing as staged solving** (Def. 6.1 refines to 7 stages): Stage 4 = leaves downward to the stored bound (`glb`); Stage 5 = hole guessing ($1$, or $0$ for `discardable_vars`; parameters error "You forgot to specify the hidden dimension(s)"); Stage 6 = rows upward to the empty row *with the inequality re-emitted for re-checking* — Prop. 6.2's by-construction soundness is literally how `solve_row_ineq` implements stage 6; Stage 7 = final dimension guesses. The interleave of Remark 6.3 is the stage pipeline.
+- **Prop. 7.6 is the spec of `Indexing.is_injective`/`is_surjective`**; `assignments.ml` states Prop. 7.6(iii) as a comment: "Need initialization if: initialize_neutral AND (not surjective OR not injective)." Note `is_injective` is *exact on the core forms* and a sound under-approximation on `Affine` (an LHS affine index naming two product iterators is conservatively declared non-injective regardless of coefficients) — worth one sentence in the paper.
+- **Terminology footnote:** the code's `glb` field stores what §§5–6 call the *join of the recorded lower bounds* (the least value above all caps — the greatest lower bound of the admissible region, whence the name). Align the paper's wording to avoid lattice-direction confusion.
+
+**New admissible rule found in the code (add to §4):**
+
+- **DI-antisym (transitive, dimension level):** `solve_dim_ineq` carries a recursive `cyclic` walk over the stored adjacency lists; an incoming $\alpha \sqsubseteq \beta$ closing a directed adjacency cycle is replaced by equality. Sound in any poset (a $\sqsubseteq$-cycle forces equality throughout); include as an admissible rule. **The row level has only a one-step version**, guarded by *equal known flank lengths* — which is exactly why the next item bites.
+
+**The divergence (Example 4.5a) is live in the code, by trace:** the deficit rule (template at `row.ml` ~2835) is guarded only by template memoization keyed on `(res_v, deficit)` — and every round of the mutual-growth cycle presents a *fresh* `res_v`, so the cache never hits; row bounds re-emit as `Row_ineq`s when a row variable is solved (confirmed at ~2188–2197), which is the ping-pong step; the outer `solve_inequalities` fixpoint stops only when the constraint list is empty or *unchanged*, and each round mints fresh variables, so it never stabilizes; and no transitive rank-cycle check exists at the row level. Stage caveat: leading-flank surpluses hit a `not (is_stage7 stage)` postponement, so a repro should put the surplus axes in the **trailing** flank.
+
+**Decisive experiment (unit test, no surface syntax needed):** feed `solve_inequalities` directly
+$$\{\ \mathsf{Row\_ineq}\{res = \langle\rho_1\rangle;\ opnd = [a]\cdot\langle\rho_2\rangle\},\quad \mathsf{Row\_ineq}\{res = \langle\rho_2\rangle;\ opnd = [b]\cdot\langle\rho_1\rangle\}\ \}$$
+(with $[a], [b]$ in `dims`, not `beg_dims`). Expected on current code: non-termination (or unbounded growth until interrupted). Expected with Def. 4.5's check: `Shape_error` reporting the rank cycle. *Candidate surface repro* (adapt syntax): two self-referential `%cd` producer assignments where each tensor is pointwise-below an einsum-built tensor that appends a trailing axis to the *other's* row via a shared ellipsis variable — the SGD self-reference idiom plus `"... => ..., k"`-style sharing. Unsatisfiable by rank; the unit test is the cleaner check.
+
+**Proposed fix (matches Def. 4.5):** extend the existing `Bounds_row` `res`/`opnd` adjacency lists to a transitive walk analogous to the dimension-level `cyclic`, weighted by known-flank surplus at the time the adjacency is recorded; fail (or, conservatively, force equalities as the dim level does for the zero-weight case and error on positive weight) when the deficit rule would fire on a variable lying on a positive-weight cycle. The zero-weight transitive case could also *collapse* to equalities, generalizing the current one-step row antisymmetry.
+
+**Outcome (experiment run, divergence confirmed, fix implemented — `test/einsum/test_row_rank_cycle.ml`):**
+
+- The decisive experiment as stated does **not** diverge: on the two-variable instance the pre-fix solver terminates with `Shape_error: Infinite number of axes by self-reference`. The template memoization plus equality-binding happen to collapse the two-variable ping-pong into the one-step self-reference check — the same collapse-to-self-reference mechanism noted for multi-step *equality* cycles under Def. 4.3(d). So the minimal Example 4.5a needs restating: two mutually-growing variables are caught (by accident of the cache, not by design).
+- The divergence **is** live one variable up: the three-variable cycle $\{\rho_1 \sqsubseteq \langle\rho_2\rangle{\cdot}[a],\ \rho_2 \sqsubseteq \langle\rho_3\rangle{\cdot}[b],\ \rho_3 \sqsubseteq \langle\rho_1\rangle{\cdot}[c]\}$ (trailing flank) ran unboundedly until killed. Mixed-flank, unequal-deficit, and `beg_dims` two-variable variants all happened to terminate via the self-reference collapse; only cycles of length ≥ 3 escaped it.
+- The proposed fix as stated is **insufficient**: a transitive walk over the stored `Bounds_row` adjacency cannot see the cycle, because `s_row_one_in_entry` *removes* a solved variable from all adjacency lists and re-emits those bounds as in-flight `Row_ineq`s — the rank facts perpetually alternate between the store and the constraint queue, and the store always lags one ping-pong step. (This also bears on the paper: the termination potential of Thm. 5.2 must be stated against a *monotone* structure, not the substitution-mutable store.)
+- Implemented fix (`row.ml`, `global_rank_edges`): a persistent, never-retracted rank-relation graph beside the store, with edges $\mathrm{rank}\,v \ge \mathrm{rank}\,w + k$ ($k \ge 0$) recorded at (i) row-variable solving $v := \langle w\rangle{\cdot}(k\ \text{known dims})$, (ii) equal-flank row inequalities ($k = 0$), and (iii) the deficit rule itself ($k$ = deficit $> 0$). An edge closing a cycle of positive total weight raises `Shape_error: Infinite number of axes by rank cycle among row variables`; zero-weight cycles are permitted (they assert rank equality, and the one-step row antisymmetry still collapses them). Recording facts permanently is sound because the solver never retracts constraints; soundness of each edge kind is immediate from $res \sqsubseteq opnd \Rightarrow \mathrm{rank}(res) \ge \mathrm{rank}(opnd)$. Caution from a first buggy attempt: the GLB-residue case (operand variable, result with surplus known flanks) entails only $\mathrm{rank}(res_v) \ge \mathrm{rank}(opnd_v) - \text{surplus}$ — a *nonpositive* weight the graph must not record positively; for the paper, Def. 4.5's weights need this sign discipline spelled out. On the three-constraint repro the cycle is now detected already at deficit-edge recording in round 1, before any template variable is minted.
