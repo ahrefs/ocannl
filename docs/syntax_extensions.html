@@ -128,8 +128,8 @@ generalized einsum notation</a>
 generalized einsum notation</a></li>
 <li><a href="#axis-concatenation-with-the-operator" id="toc-axis-concatenation-with-the-operator">Axis concatenation with
 the <code>^</code> operator</a></li>
-<li><a href="#block-tensor-syntax-upcoming" id="toc-block-tensor-syntax-upcoming">Block tensor syntax
-(upcoming)</a></li>
+<li><a href="#block-tensor-syntax" id="toc-block-tensor-syntax">Block
+tensor syntax</a></li>
 <li><a href="#capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints" id="toc-capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
 constraints</a></li>
@@ -193,8 +193,7 @@ generalized einsum notation</a>
 generalized einsum notation</a></li>
 <li><a href="#axis-concatenation-with-the--operator">Axis concatenation
 with the ^ operator</a></li>
-<li><a href="#block-tensor-syntax-upcoming">Block tensor syntax
-(upcoming)</a></li>
+<li><a href="#block-tensor-syntax">Block tensor syntax</a></li>
 </ul></li>
 <li><a href="#further-features-of-the-syntax-extension-cd">Further
 features of the syntax extension %cd</a>
@@ -1344,15 +1343,23 @@ concatenation (slicing, partial updates) works with the existing
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  target =: source ~logic:<span class="st">&quot;a =&gt; a^b&quot;</span></span></code></pre></div>
 <p>Multi-argument syntax for <code>%cd</code> (needed for tensor
 concatenation with multiple sources) is still being designed. The
-natural choice <code>[rhs1; rhs2]</code> conflicts with the planned
-block tensor syntax.</p>
-<h3 id="block-tensor-syntax-upcoming">Block tensor syntax
-(upcoming)</h3>
-<p>The tensor literal syntax will be generalized to support block tensor
-construction, where tensor literals become a special case with scalar
-components. The syntax extensions recursively compose argument tensors
-by introducing and concatenating along a new leading axis:</p>
+natural choice <code>[rhs1; rhs2]</code> conflicts with the block tensor
+syntax (implemented in <code>%op</code>).</p>
+<h3 id="block-tensor-syntax">Block tensor syntax</h3>
+<p>The tensor literal syntax is generalized to support block tensor
+construction: when a list, tuple, or array literal inside
+<code>%op</code> contains tensor expressions (rather than numeric
+literals), it desugars into a call to the <code>stack</code> operation
+(which composes <code>einsum1</code> unsqueeze + <code>concat</code>
+along a fresh leading axis). The result has rank = operand rank + 1
+(true stacking, a new axis).</p>
+<p><strong>Axis mapping by syntax form:</strong></p>
 <table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 39%" />
+<col style="width: 32%" />
+</colgroup>
 <thead>
 <tr>
 <th>Syntax</th>
@@ -1364,27 +1371,53 @@ by introducing and concatenating along a new leading axis:</p>
 <tr>
 <td><code>( , )</code></td>
 <td>Input</td>
-<td><code>(ta, tb)</code> concatenates along a new input axis</td>
+<td><code>(ta, tb)</code> stacks along a new input axis (top-level
+<code>%op</code> expressions only)</td>
 </tr>
 <tr>
 <td><code>[ ; ]</code></td>
 <td>Output</td>
-<td><code>[ta; tb]</code> concatenates along a new output axis</td>
+<td><code>[ta; tb]</code> stacks along a new output axis</td>
 </tr>
 <tr>
 <td><code>[| ; |]</code></td>
 <td>Batch</td>
-<td><code>[|ta; tb|]</code> concatenates along a new batch axis</td>
+<td><code>[|ta; tb|]</code> stacks along a new batch axis</td>
 </tr>
 </tbody>
 </table>
-<p>For example, <code>[ta; tb]</code> translates to: 1. Introduce a new
-output axis for each component:
-<code>...|...-&gt;... =&gt; ...|...-&gt;0, ...</code> for
-<code>ta</code> and <code>tb</code> 2. Concatenate along that axis:
-<code>...|...-&gt;a,... ; ...|...-&gt;b,... =&gt; ...|...-&gt;a^b,...</code></p>
-<p>This allows constructing block matrices, block tensors, and other
-structured tensors from smaller components.</p>
+<p>For example, <code>[ta; tb]</code> desugars to
+<code>stack `Output [| ta; tb |]</code>, which generates: 1. An
+unsqueeze einsum spec introducing a new size-1 output axis per
+component: <code>...|...-&gt;... =&gt; ...|...-&gt;0,...</code>, applied
+to each operand via <code>einsum1</code>. 2. A concat spec joining the
+expanded operands along that axis:
+<code>...|...-&gt; bt0,...; ...|...-&gt; bt1,... =&gt; ...|...-&gt; bt0^bt1,...</code>,
+applied via <code>concat</code>.</p>
+<p><strong>Disambiguation rule:</strong> if the first leaf of the nested
+literal is a numeric constant (int or float, descending through type
+annotations like <code>(2.0 : rgb)</code>), the expression is treated as
+an ndarray constant (existing behavior). Otherwise it is a block tensor.
+To include scalar constants alongside tensors, wrap them with
+<code>!.</code> or <code>!..</code> (e.g.,
+<code>[!.1.0; ta]</code>).</p>
+<p><strong>Notes:</strong></p>
+<ul>
+<li>All components must have the same trailing shape (stacking requires
+shape compatibility).</li>
+<li>Single-element block tensors like <code>[ta]</code> act as unsqueeze
+(add a size-1 leading axis).</li>
+<li>Tuple syntax <code>(ta, tb)</code> only works at the top level of a
+<code>%op</code> expression. Tuples inside function arguments (e.g.,
+<code>f (ta, tb)</code>) are preserved as regular OCaml tuples.</li>
+<li>The named operation is also callable directly:
+<code>TDSL.O.stack `Output [| ta; tb |]</code> (and the
+<code>NTDSL</code> / <code>PDSL</code> variants).</li>
+<li><strong>Known limitation:</strong> nested block matrices
+<code>[[ta; tb]; [tc; td]]</code> (rank+2 via two concat levels) are not
+yet supported by the shape solver; only single-level stacking works
+currently.</li>
+</ul>
 <h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
 constraints</h3>

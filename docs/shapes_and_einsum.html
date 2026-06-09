@@ -2007,8 +2007,8 @@ let%cd update_prefix ~target ~source =
 let%op skip_first_3 x = x ++^ &amp;quot;3^rest =&amp;gt; rest&amp;quot;
 &lt;/code&gt;&lt;/pre&gt;
 &lt;div up-at-unpause=concat-example pause&gt;&lt;/div&gt;
-&lt;div id=&quot;block-tensors&quot; class=&quot;block&quot; title=&quot;Block Tensor Construction (upcoming)&quot;&gt;
-&lt;p&gt;&lt;span&gt;The tensor literal syntax generalizes to block tensors:&lt;/span&gt;&lt;/p&gt;
+&lt;div id=&quot;block-tensors&quot; class=&quot;block&quot; title=&quot;Block Tensor Construction&quot;&gt;
+&lt;p&gt;&lt;span&gt;The tensor literal syntax generalizes to block tensors (stacking along a new leading axis, result rank = operand rank + 1):&lt;/span&gt;&lt;/p&gt;
 &lt;div role=&quot;region&quot;&gt;&lt;table&gt;
 &lt;tr&gt;
 &lt;th&gt;&lt;span&gt;Syntax&lt;/span&gt;&lt;/th&gt;
@@ -2018,20 +2018,20 @@ let%op skip_first_3 x = x ++^ &amp;quot;3^rest =&amp;gt; rest&amp;quot;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;[ ; ]&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;span&gt;Output&lt;/span&gt;&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;[a; b]&lt;/code&gt;&lt;span&gt; - concat on output axis&lt;/span&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;[a; b]&lt;/code&gt;&lt;span&gt; - stack on new output axis&lt;/span&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;( , )&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;span&gt;Input&lt;/span&gt;&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;(a, b)&lt;/code&gt;&lt;span&gt; - concat on input axis&lt;/span&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;(a, b)&lt;/code&gt;&lt;span&gt; - stack on new input axis&lt;/span&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;[| ; |]&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;span&gt;Batch&lt;/span&gt;&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;[|a; b|]&lt;/code&gt;&lt;span&gt; - concat on batch axis&lt;/span&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;[|a; b|]&lt;/code&gt;&lt;span&gt; - stack on new batch axis&lt;/span&gt;&lt;/td&gt;
 &lt;/tr&gt;
-&lt;/table&gt;&lt;/div&gt;&lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* 2x2 block matrix *)
-let%op block = [[a; b]; [c; d]]
+&lt;/table&gt;&lt;/div&gt;&lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Stack two tensors along a new output axis *)
+let%op block = [a; b]
 &lt;/code&gt;&lt;/pre&gt;
 &lt;/div&gt;
 &lt;div pause&gt;&lt;/div&gt;

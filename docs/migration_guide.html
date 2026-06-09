@@ -567,9 +567,9 @@ flattening—concatenation preserves the axis structure.</p>
 <span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_prefix x = x ++^ <span class="st">&quot;a^b =&gt; a&quot;</span>  <span class="co">(* size of &#39;a&#39; inferred from context *)</span></span>
 <span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op get_suffix x = x ++^ <span class="st">&quot;a^b =&gt; b&quot;</span>  <span class="co">(* size of &#39;b&#39; inferred from context *)</span></span>
 <span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Block tensor construction (upcoming syntax) *)</span></span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op block_matrix () =</span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>  [[a; b]; [c; d]]  <span class="co">(* Creates 2x2 block matrix from components *)</span></span></code></pre></div>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* Block tensor construction: stacks components along a new leading axis *)</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op stacked () =</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>  [a; b]  <span class="co">(* Stacks a, b along a new output axis (result rank = operand rank + 1) *)</span></span></code></pre></div>
 <p>The <code>^</code> operator is fundamentally an indexing-level
 operation—it creates an axis that iterates over its components in
 sequence. This enables: - <strong>Tensor concatenation</strong>:
