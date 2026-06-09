@@ -2010,6 +2010,50 @@ let used_in_pointwise = Hash_set.create (module Row_var)
 let add_used_in_spec_or_compose v = Hash_set.add used_in_spec_or_compose v
 let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
 
+(* Persistent rank-relation graph, global like [global_template_cache] (row variable ids are never
+   reused, so entries from unrelated inference problems are unreachable). An edge [v -> (w, k)]
+   with [k >= 0] records the entailed fact [rank v >= rank w + k]: from solving
+   [v := <w> ++ k known dims], from equal-flank row inequalities [<v>+flanks ⊑ <w>+flanks]
+   (k = 0), and from the deficit (template) rule (k = the rank deficit > 0).
+   Such facts are never retracted, unlike the [Bounds_row] res/opnd adjacency lists which drop
+   entries when a variable is substituted away — mutually-growing row variables ping-pong between
+   the store and the in-flight constraint list, so divergence detection needs this side table. *)
+let global_rank_edges = Hashtbl.create (module Row_var)
+
+(* Would adding [rank v >= rank w + k] close a cycle of positive total weight? A path [w ~> v] of
+   total weight [s] entails [rank v >= rank v + s + k]: contradiction iff [s + k > 0]. Stored
+   weights are nonnegative, so for [k > 0] reachability suffices, and for [k = 0] the path must
+   contain a positive edge; DFS over (node, still-needs-positive) states. *)
+let closes_positive_rank_cycle ~src:v ~dst:w k =
+  let visited_need = Hash_set.create (module Row_var) in
+  let visited_done = Hash_set.create (module Row_var) in
+  let rec dfs u need_positive =
+    (equal_row_var u v && not need_positive)
+    ||
+    let visited = if need_positive then visited_need else visited_done in
+    (not (Hash_set.mem visited u))
+    && (Hash_set.add visited u;
+        List.exists (Hashtbl.find_multi global_rank_edges u) ~f:(fun (u', k') ->
+            dfs u' (need_positive && k' = 0)))
+  in
+  dfs w (k = 0)
+
+(* Record the entailed fact [rank v >= rank w + k]; raise if it makes the ranks unsatisfiable,
+   which would otherwise diverge by minting ever-fresh template variables (rank-cycle check,
+   transitive generalization of the one-step self-reference check). *)
+let add_rank_edge ~rows v w k =
+  if equal_row_var v w then (
+    if k > 0 then
+      raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch rows ]))
+  else if closes_positive_rank_cycle ~src:v ~dst:w k then
+    raise
+    @@ Shape_error
+         ("Infinite number of axes by rank cycle among row variables", [ Row_mismatch rows ])
+  else
+    let edges = Hashtbl.find_multi global_rank_edges v in
+    if not (List.mem edges (w, k) ~equal:(fun (w1, k1) (w2, k2) -> equal_row_var w1 w2 && k1 = k2))
+    then Hashtbl.add_multi global_rank_edges ~key:v ~data:(w, k)
+
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
   let rec solve (ineqs, env) : constraint_ -> constraint_ list * _ = function
@@ -2154,14 +2198,19 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let result env =
           let row_env = Utils.Tree_map.map env.row_env ~f in
           let unsolved, env =
-            if beg_handled then
+            if beg_handled then (
+              (match value.bcast with
+              | Row_var u ->
+                  add_rank_edge ~rows:orig_rows v u
+                    (List.length value.beg_dims + List.length value.dims)
+              | Broadcastable -> ());
               let constr =
                 match find_row env.row_env v with
                 | Some (Bounds_row { constr; origin; _ }) ->
                     [ Rows_constr { r = [ value ]; constr; origin } ]
                 | _ -> []
               in
-              (constr, { env with row_env = add_row row_env ~key:v ~data:(Solved_row value) })
+              (constr, { env with row_env = add_row row_env ~key:v ~data:(Solved_row value) }))
             else
               ( [
                   Row_eq
@@ -2647,6 +2696,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ res; opnd ] ])
   | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ }
     when res_dims_l = opnd_dims_l && res_beg_dims_l = opnd_beg_dims_l -> (
+      add_rank_edge ~rows:[ res; opnd ] res_v opnd_v 0;
       match (find_row env.row_env res_v, find_row env.row_env opnd_v) with
       | Some (Bounds_row { res = res1; origin = origin1; _ }), _
         when List.mem ~equal:equal_row_var res1 opnd_v ->
@@ -2833,6 +2883,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
       | Some (Solved_row _), _ | _, Some (Solved_row _) -> assert false)
   | { bcast = Row_var res_v; dims; _ }, _
     when res_dims_l + res_beg_dims_l < opnd_dims_l + opnd_beg_dims_l ->
+      (* The template below commits [rank res_v >= rank opnd_v + deficit] with [deficit > 0]:
+         record it (and detect rank cycles) before minting fresh template variables. *)
+      (match opnd.bcast with
+      | Broadcastable -> ()
+      | Row_var opnd_v ->
+          add_rank_edge ~rows:[ res; opnd ] res_v opnd_v
+            (opnd_dims_l + opnd_beg_dims_l - (res_dims_l + res_beg_dims_l)));
       let budget = opnd_dims_l + opnd_beg_dims_l - (res_dims_l + res_beg_dims_l) in
       let more_dims_l = min budget @@ max 0 (opnd_dims_l - res_dims_l) in
       let more_dims : dim list =
@@ -2873,7 +2930,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
   | { bcast; dims; prov = _; _ }, { bcast = Row_var opnd_v; _ }
     when opnd_dims_l <= res_dims_l && opnd_beg_dims_l <= res_beg_dims_l -> (
       (* GLB residue: drop the OUTER matched prefix from beg_dims and the OUTER matched suffix from
-         dims — symmetric with the per-axis match. *)
+         dims — symmetric with the per-axis match. Note: no rank edge is recorded here — the
+         entailed fact [rank res_v >= rank opnd_v - surplus] has a nonpositive weight, which the
+         rank graph (nonnegative weights only) cannot represent. *)
       let r_res =
         {
           beg_dims = List.drop res.beg_dims beg_dims_l;
