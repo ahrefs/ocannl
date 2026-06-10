@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+shifted flanks, conflicting dims (unsatisfiable): Shape_error: Self-referential row equation with shifted flanks
+shifted flanks, conjugate dims (conservative rejection): Shape_error: Self-referential row equation with shifted flanks
+aligned flanks, conflicting dims: Shape_error: solved dimensions for axis: mismatch
+aligned flanks, matching dims (legitimate no-op): no error

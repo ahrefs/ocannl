@@ -2091,6 +2091,17 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
       if beg_dims1_l + dims1_l <> beg_dims2_l + dims2_l then
         raise
         @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ]);
+      if beg_dims1_l <> beg_dims2_l then
+        (* Equal total flank lengths but shifted splits: the equation is l1.<v>.r1 = l2.<v>.r2
+           whose surplus flank words rotate through [v]'s value (x ++ t = s ++ x). Under
+           marker-sensitive equality this is outright unsatisfiable (the spliced flank lengths
+           cannot agree); under content equality it is satisfiable only for conjugate surpluses
+           with a cyclically periodic [v] -- outside the solver's constraint language. Reject
+           conservatively rather than silently dropping the unmatched flank alignment, which
+           used to accept e.g. [3].<v> = <v>.[5]. *)
+        raise
+        @@ Shape_error
+             ("Self-referential row equation with shifted flanks", [ Row_mismatch [ r1; r2 ] ]);
       let result = unify_suffix ([], env) dims1 dims2 @@ min dims1_l dims2_l in
       (* Leading flank: outer-anchor (the reversed-then-take_from_end pair below pairs the OUTER
          prefixes of each list elementwise; see [unify_suffix] which is symmetric and the
