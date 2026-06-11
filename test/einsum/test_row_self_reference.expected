@@ -9,3 +9,7 @@ ineq, closed-closed shifted, matching dims (satisfiable): no error
 ineq, closed-closed, result surplus faces inserted padding (satisfiable): no error
 ineq, same-var shifted, conflicting dims (unsatisfiable): Shape_error: dimension comparison for axis: mismatch
 ineq, same-var shifted, matching dims (satisfiable): no error
+eq, cross surpluses alone (satisfiable, family binding): no error
+eq, cross surpluses then rho2 ~ [] (satisfiable only sporadically): no error
+eq, rho2 ~ [] then cross surpluses (same store, pinned first): no error
+eq, mirror cross surpluses then rho2 ~ [] (trailing guard rejects): Shape_error: Number of axes mismatch
