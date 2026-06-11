@@ -5,6 +5,13 @@ author: "Łukasz Stafiniak and Claude (Anthropic)"
 
 # A Shape Is Not Its Index
 
+> **Errata and status (June 2026).** The theorem program sketched at the end of this post was carried out in [*The Formal Core of OCANNL's Shape and Projection Inference*](https://lukstafi.github.io/notes/ocannl-formal-core.html). Outcomes, including two corrections:
+>
+> 1. **Theorem 1 (Core principality) is false as stated** — "the clean half" was not clean. No principal $\sigma_\star$ exists once a permissive cap survives solving: a single residual bound such as $3 \sqsubseteq \alpha$ leaves a solution set whose minimal models are incomparable. The corrected result is three-part — the solver's answer is a substitution *plus a residual bound store*, jointly representing the solution set, with no guessing, and most general among models, the last *up to a flat (marker-blind) equivalence* $\approx$ that is now the official semantics of row equality; a principal model in the original sense is recovered exactly when no caps remain. Also, the monotonicity argument anticipated here does not give termination: the deficit rule mints fresh variables, and a *rank-cycle check* is required (it was missing from the implementation too — cycles of length $\ge 3$ diverged). (Formal core, Example 3.5, Theorem 5.6, Corollary 5.8; Def. 4.5, Theorem 5.2.)
+> 2. **The uniform-upward closing conjecture is proved, but in a corrected form.** Closing every variable upward does yield a solution, unconditionally. Its *greatestness* ("most general shapes the constraints allow") holds in the marked order only relative to the run's placement commitments; absolutely, it holds up to the equivalence $\approx$ — marker placement turned out to be order-sensitive policy, not semantics. (Formal core, Props. 5.4 and 6.4, Remark 2.15(v).)
+> 3. **Theorem 2 (Core projection canonicity) is proved as stated** — forced, unique up to renaming, never resolving an ambiguity. The asymmetry slogan stands: shape solving needs a closing *policy*, projection solving only a *naming*. (Formal core, Theorem 7.4, Remark 7.9.)
+> 4. **The multi-stage open problem moved.** Padding canonicity is proved (a max-fold is order-independent). For the rest, completeness can only ever be *relative*: the full constraint language is Diophantine-complete (a total-elements constraint over concatenated rows is a polynomial equation over the naturals), so its satisfiability is undecidable outright, and the open question is to characterize the frontend-generated fragment on which the staged solve is complete. (Formal core, §8.)
+
 Here is a padded matrix, the kind every convolution library has to lay out by hand:
 
 ```
