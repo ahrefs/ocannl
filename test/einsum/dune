@@ -270,6 +270,15 @@
  (libraries base ocannl stdio))
 
 (test
+ (name test_closing_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_closing_order)
+ (libraries base ocannl stdio))
+
+(test
  (name test_basis_total_order)
  (package neural_nets_lib)
  (deps

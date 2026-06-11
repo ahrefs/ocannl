@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+alpha terminal first, ineqs forward: no error, alpha = 3, beta = 1
+beta terminal first, ineqs forward: no error, alpha = 3, beta = 1
+alpha terminal first, ineqs reversed: no error, alpha = 3, beta = 1
+beta terminal first, ineqs reversed: no error, alpha = 3, beta = 1
