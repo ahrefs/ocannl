@@ -1,0 +1,6 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+fma pointwise (a*x + b) = [10.5 40.5 90.5 160.5]
+expected = [10.5 40.5 90.5 160.5]
+fma compose-accumulate (p @ q + r) = [16]
+expected = [16]

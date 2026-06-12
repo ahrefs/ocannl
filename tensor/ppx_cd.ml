@@ -1586,8 +1586,8 @@ let translate ?ident_label (expr : expression) : result =
              ~logic:[%e? { pexp_desc = Pexp_constant (Pconst_string (spec, s_loc, _)); _ }])] ->
         let logic =
           let loc = s_loc in
-          if String.equal spec "." then [%expr Shape.Pointwise_bin]
-          else if String.equal spec "@" then [%expr Shape.Compose]
+          if String.equal spec "." then [%expr Shape.Pointwise_tern]
+          else if String.equal spec "@" then [%expr Shape.Compose_accumulate]
           else
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
