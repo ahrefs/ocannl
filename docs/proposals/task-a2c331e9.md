@@ -2,7 +2,10 @@
 
 **Task**: task-a2c331e9 (subtask 293b of [gh-ocannl-293](gh-ocannl-293.md))
 **Date**: 2026-06-12 (refreshes the 2026-04-25 harness elaboration)
-**Status**: Ready — elaboration-only task; the deliverable is a verdict, not code.
+**Status**: Decided — user selected **Outcome 2 (per-shard backend contexts)** on
+2026-06-12. Follow-through: 293c (`task-2445dd1c`) re-elaborated against the sketch below;
+GH issue #293 milestone aligned to v1.0; Outcome 3 recorded as a v1.x revisit note (no
+tracking task).
 **Blocks**: task-2445dd1c (293c, training-loop integration).
 
 ## Goal
@@ -17,7 +20,13 @@ completed) removed that. Three candidate outcomes:
    host-orchestrated synchronization.
 3. **Multi-process orchestration** — shards as separate processes.
 
-## Recommended verdict: Outcome 2 (per-shard backend contexts)
+## Selected verdict: Outcome 2 (per-shard backend contexts)
+
+> **Verdict (2026-06-12)**: the user selected **Outcome 2**. The recommendation below
+> stands as the rationale of record. The accompanying decisions: align the #293 GH issue
+> milestone to **v1.0** (matching ROADMAP), and keep Outcome 3 (multi-process) as a
+> one-line v1.x revisit note rather than a tracked task — see "Questions for the user"
+> below for the resolved answers.
 
 ### The key factual correction
 
@@ -42,12 +51,19 @@ Still present and load-bearing for sharding:
   same static verification.
 - **Host-side sync**: `await`, `sync`, `will_wait_for`, `all_work`.
 
-Removed by #341 (do not design against): automatic cross-stream writer tracking
-(`wait_for_all`, `wait_for_ready`, cross-stream branch of `update_writer_event`),
+Removed by #341 (do not design against): *automatic* cross-stream writer tracking
+(`wait_for_all` and the cross-stream branch of `update_writer_event`),
 `Shared_cross_streams` sharing, the `Streaming_for` merge-buffer variant, the
 stream-count `config`, and `train.ml`'s `round_robin` driver. Two streams writing the
 same tnode is now undefined behavior — so shards must own disjoint buffers, with the
 merge-buffer copy as the only cross-stream channel. That is exactly the Outcome 2 shape.
+
+**Factual correction (verified 2026-06-12)**: `wait_for_ready` was *not* removed — it
+survives at `backends.ml:48` and is invoked from the `device_to_device` transfer path
+(`backends.ml:150,183,209`) as an *explicit*, host-orchestrated cross-stream wait. Only
+the *implicit* writer tracking went away. This strengthens Outcome 2: the explicit
+"dst stream waits for src stream's transfer to be ready" primitive a per-shard design
+needs is already in the interface, no resurrection required.
 
 ### Why not Outcome 1
 
@@ -96,19 +112,23 @@ val grad_sync : Tensor.t array -> unit  (* all-reduce via merge-buffer copies *)
 - Pipeline parallelism (heterogeneous shards) is 293c territory; this design only fixes
   the primitive layer.
 
-## Questions for the user (the verdict itself)
+## Questions for the user (the verdict itself) — resolved 2026-06-12
 
-1. **Commit to Outcome 2?** (Recommended.) Outcome 1 only if the strategic direction is
-   to drop distributed training entirely.
-2. **Milestones**: ROADMAP already places #293 under v1.0; the GH issue still says v0.8.
-   Update the issue milestone?
-3. **Outcome 3 later?** Recommend a one-line "revisit for multi-node in v1.x" note, no
-   tracking task yet.
+1. **Commit to Outcome 2?** → **Yes, Outcome 2.** Per-shard backend contexts with
+   host-orchestrated synchronization. Outcome 1 (drop distributed training) was not
+   chosen.
+2. **Milestones**: align the GH issue? → **Align the GH issue to v1.0** (matching
+   ROADMAP). Done — issue #293 milestone moved from v0.8 to v1.0.
+3. **Outcome 3 later?** → **Add the one-line note.** Recorded as: "Revisit Outcome 3
+   (multi-process orchestration) for multi-node training in v1.x" — see "Why not
+   Outcome 3" above and the umbrella ([gh-ocannl-293.md](gh-ocannl-293.md)). No tracking
+   task yet.
 
 ## Acceptance Criteria
 
-- [ ] User picks an outcome (this document records the recommendation and evidence).
-- [ ] On Outcome 2: 293c (`task-2445dd1c`) re-elaborated against the sketch above; GH
-      issue milestone aligned with ROADMAP.
+- [x] User picks an outcome (this document records the recommendation, evidence, and the
+      selected verdict: Outcome 2 — see "Selected verdict" and the resolved questions).
+- [x] On Outcome 2: 293c (`task-2445dd1c`) re-elaborated against the sketch above; GH
+      issue milestone aligned with ROADMAP (moved to v1.0).
 - [ ] On Outcome 1: 293b and 293c closed as not-planned; umbrella #293 closed; ROADMAP
-      v1.0 entry removed.
+      v1.0 entry removed. — N/A: Outcome 1 was not selected.
