@@ -84,7 +84,7 @@ What is true today, in `~/ocannl-staging` at the time of writing:
   parallel-devices abstraction. It is registered in `backends.ml` as the
   default backend (`multicore_cc`), but ROADMAP.md v0.7.0 explicitly
   lists *"Deprecated streams cleanup — Remove legacy streams functionality."*
-  Companion document: `docs/streams-cleanup.md`.
+  Companion document: `streams-cleanup.md`.
 - **Available backends:** `multicore_cc`, `sync_cc`, `cuda`, `metal`. None
   is multi-device; CUDA kernels run with `grid_dim=1, block_dim=1` (the
   v0.8 baseline).
@@ -189,7 +189,7 @@ is going to be pursued post-v1.0, but it duplicates gh-ocannl-278's role.
   themselves on the streams-cleanup chopping block; any fork-backend
   design should be specified against the *post-cleanup* interface, not
   the current one.
-- `docs/streams-cleanup.md` — the v0.7.0 cleanup plan; relevant because
+- `streams-cleanup.md` — the v0.7.0 cleanup plan; relevant because
   the residual stream infrastructure is what a 2024 fork-backend would
   have plugged into.
 - `docs/proposals/distro-feasibility-study.md` — the sibling v1.1
@@ -248,7 +248,7 @@ Concrete steps (only step 4 varies by disposition):
 - gh-ocannl-278 (DisTrO distributed training) — sibling v1.1 issue,
   already dispositioned via `docs/proposals/distro-feasibility-study.md`.
   Disposition (c) for 161 effectively merges into 278's arc.
-- v0.7.0 streams-cleanup (`docs/streams-cleanup.md`) — removes the
+- v0.7.0 streams-cleanup (`streams-cleanup.md`) — removes the
   residual stream infrastructure a fork-backend would otherwise sit
   alongside; any future fork-backend design must target the post-cleanup
   interface.

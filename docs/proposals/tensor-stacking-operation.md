@@ -87,7 +87,7 @@ How things work now:
   `TDSL.number ~axis_basis:…`).
 
 - **`docs/syntax_extensions.md`** documents the list/array/tuple → output/batch/
-  input axis-kind mapping. `docs/block-tensor-literal-proposal.md` is prior
+  input axis-kind mapping. `block-tensor-literal-proposal.md` is prior
   background — leave it as-is (not retired without explicit instruction).
 
 - **`test/operations/test_block_tensor.{ml,expected}`** — the seed branch adds a
@@ -144,7 +144,7 @@ Out of scope / non-goals:
 - The Variant-A direct-`Concat`-axis projection/lowering (`task-e548a1b1`,
   abandoned).
 - Re-introducing the `Concat = Concat` `unify_dim` change (already on master).
-- Retiring `docs/block-tensor-literal-proposal.md`.
+- Retiring `block-tensor-literal-proposal.md`.
 - The `gh-ocannl-49` `^` concat-operator surface (aligned but separate work).
 
 Open minor choices (deferrable to the coder; none blocking):

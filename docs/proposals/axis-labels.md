@@ -43,7 +43,7 @@ This terminological collision must be addressed by the implementation. See the A
 - `tensor/einsum_types.ml` -- `axis_spec`, `parsed_axis_labels`, `AxisKey`
 - `tensor/shape.mli` -- public API, notes on dimension basis vs axis labels
 - `docs/shape_inference.md` -- explanation of the basis system (line 49)
-- `docs/workshop-paper-proposal.md` -- design rationale for positional axes (line 32)
+- `workshop-paper-proposal.md` -- design rationale for positional axes (line 32)
 
 ## Design Decisions
 
@@ -258,7 +258,7 @@ The `row_to_bases` function (`tensor/row.ml`) is updated to prefer axis labels o
 
 ## Design Tension
 
-The workshop paper proposal (`docs/workshop-paper-proposal.md`, line 51) articulates a deliberate design rationale for positional axes:
+The workshop paper proposal (`workshop-paper-proposal.md`, line 51) articulates a deliberate design rationale for positional axes:
 - Positional representation builds on mathematical tradition.
 - Row variable inference is ambiguity-free with positional axes but problematic with named axes.
 - An optional dimension basis provides semantic safety without requiring unique axis names.
