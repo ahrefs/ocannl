@@ -76,17 +76,53 @@ let multistep_ok () : bool =
       Float.is_finite l1 && Float.is_finite l2)
     ()
 
-(* The driver builds shard i's graph after [set_random_seed ~seed:(base_seed + i)] so randomized ops
-   draw differently per shard. This exercises that mechanism directly: a uniform draw with the same
-   seed must match, and with a different seed must diverge. *)
-let rng_draw seed : float array =
+(* A randomized model whose owner-shard forward loss depends on the RNG draw (and, with
+   [learning_rate = 0], on nothing else, so no optimizer step perturbs it). [w] is initialized
+   deterministically; the only source of run-to-run variation is the seed the driver assigns. *)
+let owner_loss_with_base_seed base_seed : float =
   Tensor.unsafe_reinitialize ();
-  Tensor.set_random_seed ~seed ();
-  let ones = NTDSL.param ~values:[| 1.; 1.; 1.; 1. |] "ones" ~output_dims:[ 4 ] () in
-  let%op u = uniform () *. ones in
-  let ctx = Context.auto () in
-  let _ctx = Train.forward_once ctx u in
-  Tn.get_values u.Tensor.value
+  Utils.settings.fixed_state_for_init <- Some 1;
+  let learning_rate = NTDSL.param ~value:0.0 "lr" () in
+  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
+  let loss_of x y =
+    let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
+    [%op (((w *. x) + uniform1 () - y) *. ((w *. x) + uniform1 () - y)) ++ "...|... => 0"]
+  in
+  Parallel.data_parallel ~backend_name:"sync_cc" ~reduction:Parallel.Sum ~n_shards:2 ~base_seed
+    ~bindings:IDX.empty ~learning_rate ~inputs:(inputs ()) ~targets:(targets ()) ~loss_of
+    ~f:(fun h ->
+      h.Parallel.step ();
+      h.Parallel.owner_loss_value ())
+    ()
+
+(* The driver assigns shard i the seed [base_seed + i]. With this randomized model and a fixed
+   ambient seed, the owner shard's (= shard 0, seed = base_seed) forward draw — hence its loss —
+   changes with [base_seed] *only because the driver routes [base_seed] into the shard's
+   [set_random_seed]*. Removing/neutralizing that call inside [Parallel.data_parallel] makes both
+   runs fall back to the ambient seed and produce equal losses, flipping this assertion. *)
+let driver_routes_seed_into_shards () : bool =
+  let l_a = owner_loss_with_base_seed 0 in
+  let l_b = owner_loss_with_base_seed 1000 in
+  not (Float.equal l_a l_b)
+
+(* The per-shard seed mutation must be transient: a caller-selected global random seed survives a
+   [Parallel.data_parallel] call. Fails if the driver leaves the global singleton pointing at a
+   shard seed (e.g. if it dropped [with_saved_random_seed]). *)
+let seed_singleton_preserved () : bool =
+  Tensor.unsafe_reinitialize ();
+  Tensor.set_random_seed ~seed:777 ();
+  let before = Tensor.get_random_seed () in
+  let learning_rate = NTDSL.param ~value:0.0 "lr" () in
+  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
+  let loss_of x y =
+    let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
+    [%op (((w *. x) - y) *. ((w *. x) - y)) ++ "...|... => 0"]
+  in
+  Parallel.data_parallel ~backend_name:"sync_cc" ~n_shards:2 ~base_seed:0 ~bindings:IDX.empty
+    ~learning_rate ~inputs:(inputs ()) ~targets:(targets ()) ~loss_of
+    ~f:(fun h -> h.Parallel.step ())
+    ();
+  phys_equal before (Tensor.get_random_seed ())
 
 let () =
   let p1 = run ~n_shards:1 in
@@ -97,8 +133,7 @@ let () =
     (String.concat ~sep:" " (Array.to_list (Array.map p2 ~f:(Printf.sprintf "%.6f"))));
   let close = Array.for_all2_exn p1 p2 ~f:(fun a b -> Float.(abs (a - b) < 1e-4)) in
   Stdio.printf "data-parallel parity with single-shard baseline = %b\n" close;
-  let d0 = rng_draw 0 and d0' = rng_draw 0 and d1 = rng_draw 1 in
-  Stdio.printf "per-shard RNG: same seed identical = %b, distinct seeds diverge = %b\n"
-    (Array.equal Float.equal d0 d0')
-    (not (Array.equal Float.equal d0 d1));
+  Stdio.printf "driver routes per-shard seed into RNG = %b\n" (driver_routes_seed_into_shards ());
+  Stdio.printf "global random-seed singleton preserved across data_parallel = %b\n"
+    (seed_singleton_preserved ());
   Stdio.printf "multi-step via set_batch ok = %b\n" (multistep_ok ())

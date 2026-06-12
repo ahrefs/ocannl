@@ -135,13 +135,16 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   Array.iter xs ~f:(fun x -> Train.set_hosted x.Tensor.value);
   Array.iter ys ~f:(fun y -> Train.set_hosted y.Tensor.value);
   Train.set_hosted learning_rate.Tensor.value;
-  (* Per-shard loss graphs: distinct parameter/input tnodes, distinct RNG seed. *)
+  (* Per-shard loss graphs: distinct parameter/input tnodes, and a distinct RNG seed per shard so
+     randomized ops diverge. The seed mutation is scoped: [with_saved_random_seed] restores the
+     caller's global random-seed singleton afterwards, so a caller-selected seed is not perturbed.
+     Each built loss keeps referencing the seed tensor that was current when it was constructed. *)
   let losses =
-    Array.init n_shards ~f:(fun i ->
-        Tensor.set_random_seed ~seed:(base_seed + i) ();
-        loss_of xs.(i) ys.(i))
+    Tensor.with_saved_random_seed (fun () ->
+        Array.init n_shards ~f:(fun i ->
+            Tensor.set_random_seed ~seed:(base_seed + i) ();
+            loss_of xs.(i) ys.(i)))
   in
-  Tensor.set_random_seed ~seed:base_seed ();
   (* Parameters of each shard, in a stable order (Set order = ascending tnode id = creation order),
      so [params.(i).(k)] is shard i's replica of the k-th parameter. *)
   let params = Array.map losses ~f:(fun l -> Array.of_list (Set.to_list l.Tensor.params)) in
