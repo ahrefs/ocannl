@@ -120,6 +120,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name shard_transfer)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules shard_transfer)
+ (libraries base ocannl stdio arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name zero_out_local_decl)
  (package neural_nets_lib)
  (deps

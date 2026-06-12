@@ -273,6 +273,13 @@ val get_random_seed : unit -> t
     seed, e.g. using [get_random_seed ()] not separated by a call to {!unsafe_reinitialize}, must
     descend from the first caller's optimization context. *)
 
+val with_saved_random_seed : (unit -> 'a) -> 'a
+(** Runs [f], restoring the global random-seed singleton (the one {!get_random_seed} returns) to its
+    prior value afterwards, even on exception. Use this to scope {!set_random_seed} mutations — e.g.
+    building several graphs with distinct per-graph seeds — without perturbing the caller's seed.
+    Tensors built inside [f] keep referencing the seed tensors that were current when they were
+    constructed; only the {e global} pointer is restored. *)
+
 (** {2 Printing.} *)
 
 val header : t -> string

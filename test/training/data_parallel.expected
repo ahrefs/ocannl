@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+n_shards=1: loss=67.5000
+n_shards=2: loss=11.2500
+w after 1-shard step  = [5.000000]
+w after 2-shard step  = [5.000000]
+data-parallel parity with single-shard baseline = true
+driver routes per-shard seed into RNG = true
+shards seeded distinctly (base_seed + i) = true
+global random-seed singleton preserved across data_parallel = true
+multi-step via set_batch ok = true

@@ -83,18 +83,47 @@ data-parallel deliverable above does not depend on it.
 
 ## Acceptance Criteria
 
-- [ ] The sharding primitives `shard_along` / `gather` / `grad_sync` are implemented (in
-      `lib/train.ml` or new `lib/parallel.ml`) per the 293b sketch — this task owns them,
-      as 293b was verdict-only.
-- [ ] Those primitives are wired into a data-parallel training driver.
-- [ ] Per-shard forward+backward routines compile against per-shard backend contexts
-      (one stream/queue/domain per shard); each shard owns disjoint tnode buffers.
-- [ ] `grad_sync` runs between backward and the optimizer step, all-reducing parameter
-      gradients across shards via merge-buffer transfer routines + `wait_for_ready`, with
-      a selectable sum/mean reduction.
-- [ ] Per-shard RNG seeding diverges so data-parallel shards process distinct batch
-      slices.
-- [ ] A `test/training/` test trains a small model data-parallel across ≥2 shards and
-      checks parity (within tolerance) against the single-shard baseline.
-- [ ] Pipeline parallelism is either delivered or explicitly split into a follow-up task
-      with a recorded rationale.
+- [x] The sharding primitives `shard_along` / `gather` / `grad_sync` are implemented (in
+      new `lib/parallel.ml`) per the 293b sketch — this task owns them, as 293b was
+      verdict-only. `shard_along` / `gather` are public functions; `grad_sync` is realized
+      as the data-parallel session's all-reduce (exposed on the session handle as
+      `grad_sync : unit -> unit`, and run by `step`). Its signature differs from the
+      sketch's `Tensor.t array -> unit` because the raw-backend layer needs the per-shard
+      *contexts* (which a bare `Tensor.t array` does not carry); the all-reduce core is
+      tested in isolation in `test/operations/shard_transfer.ml`.
+- [x] Those primitives are wired into a data-parallel training driver
+      (`Parallel.data_parallel`).
+- [x] Per-shard forward+backward routines compile against per-shard backend contexts
+      (one stream per shard via `new_stream` / `get_device`); each shard owns disjoint
+      tnode buffers (on single-device unified-memory backends a shared hosted tnode cannot
+      hold distinct per-shard data, so each shard rebuilds the model over its own tnodes).
+- [x] `grad_sync` runs between backward and the optimizer step, all-reducing parameter
+      gradients across shards via `device_to_device ~into_merge_buffer:Copy` transfer
+      routines (internally gated by `wait_for_ready`) + a `%cd` accumulation, with a
+      selectable `Sum` / `Mean` reduction.
+- [x] Per-shard RNG seeding diverges: each shard's graph is built after
+      `set_random_seed ~seed:(base_seed + shard_id)` (scoped by `Tensor.with_saved_random_seed`
+      so the caller's global seed is restored), and the data slices are themselves distinct
+      (`shard_along`). Verified by three driver-level checks in `test/training/data_parallel.ml`:
+      "shards seeded distinctly (base_seed + i)" (the handle reports the exact per-shard seeds;
+      flips to false if the driver seeds every shard with `base_seed`), "driver routes per-shard
+      seed into RNG" (flips if the driver stops routing `base_seed` into the shard seeds at all),
+      and "global random-seed singleton preserved across data_parallel" (transient-mutation check).
+      Note: shards also diverge incidentally through distinct `self_id`s, so the load-bearing
+      assertion for the per-shard *offset* is the seed-distinctness one.
+- [x] A `test/training/` test (`data_parallel.ml`) trains a small model data-parallel
+      across 2 shards and checks parameter parity against the single-shard baseline.
+- [x] Pipeline parallelism is **split into a follow-up task** with a recorded rationale
+      (see "Pipeline parallelism" below).
+
+## Pipeline parallelism — split to a follow-up (decision, 2026-06-12)
+
+Pipeline parallelism is **not** delivered in 293c; it is split into a dedicated follow-up
+subtask of #293. Rationale: it is strictly more complex than data parallelism (heterogeneous
+shards running different layers, a stage scheduler, activation/gradient hand-off contracts
+between stages, micro-batching, and bubble management), it shares **none** of the
+data-parallel all-reduce machinery, and the data-parallel deliverable does not depend on it.
+The data-parallel primitives in `lib/parallel.ml` (`shard_along` / `gather` / merge-buffer
+transfers) are reusable building blocks for it but impose no design constraint. No tracking
+task file is created yet (the work is recorded here under the #293 umbrella); open one when
+pipeline parallelism is scheduled.

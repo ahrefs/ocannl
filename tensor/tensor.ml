@@ -759,6 +759,10 @@ let rec get_random_seed () =
       set_random_seed ();
       get_random_seed ()
 
+let with_saved_random_seed f =
+  let saved = !random_seed in
+  Exn.protectx ~f ~finally:(fun () -> random_seed := saved) ()
+
 let%track5_sexp unsafe_reinitialize () : unit =
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);

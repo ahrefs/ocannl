@@ -2,6 +2,15 @@
  (files ../config/ocannl_config))
 
 (test
+ (name data_parallel)
+ (package neural_nets_lib)
+ (modules data_parallel)
+ (deps ocannl_config)
+ (libraries base ocannl stdio arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name moons_demo)
  (package neural_nets_lib)
  (modules moons_demo)
