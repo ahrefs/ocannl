@@ -3,6 +3,34 @@
 **Task**: gh-ocannl-195
 **Issue**: https://github.com/ahrefs/ocannl/issues/195
 
+## Status update (2026-06-12)
+
+- Issue #195 is OPEN, label `enhancement`, milestone v0.8 ("GPU tiling and
+  related optimizations"; per ROADMAP.md v0.8 targets mid-June 2026, though
+  the schedule is running late — the repo is still at version 0.6.3).
+  Issue #412 (multi-threaded kernels / tensor cores) is also OPEN at v0.8,
+  so the "performance benefit waits for #412" framing still holds.
+- **Nothing has landed** for this proposal: no `__constant__` emission or
+  constant-memory budget exists in `c_syntax.ml` / `cuda_backend.ml`; the
+  only `__constant__` uses remain the ThreeFry builtins in
+  `builtins_cuda.ml` (still line 297).
+- Kernel-parameter identifiers were renamed (#356, commit `9262ab44`):
+  `Param_ptr` is now `Kparam_ptr`, and the `params` list / `code.params`
+  field are now `kparams` (`cuda_backend.ml:284–292`, `link_proc` at
+  `cuda_backend.ml:920`). Phase 1/2 text below should read accordingly.
+- Line numbers drifted (fixed in the table below): `compile_proc` is at
+  `c_syntax.ml:842`; `Effectively_constant` at `tnode.ml:23`;
+  `known_constant` at `tnode.ml:244`; constant marking at `tensor.ml:593,
+  609, 647`; `kernel_prep_line` at `cuda_backend.ml:317` (the launch still
+  forces `grid_dim_x:1, block_dim_x:1`, now at `cuda_backend.ml:970`);
+  ocaml-cudajit's `get_global` at `cuda.ml:1788–1793`.
+- Related backend work that landed since (Metal private storage mode for
+  GPU-only buffers, commit `1cf9a95b`; merge-buffer/`device_to_device`
+  reshape in `backend_intf.ml`) does not touch the CUDA constant-memory
+  path; the design here remains applicable.
+- Remains to do: all four phases. Still a reasonable v0.8 follow-up to or
+  companion of #412.
+
 ## Goal
 
 Selectively place small, read-only (`Effectively_constant` / `Hosted Constant`) tensors into CUDA `__constant__` memory to exploit the hardware constant cache. This is a targeted optimization for data that all threads in a warp read from the same address simultaneously (broadcast access pattern), which becomes relevant once multi-threaded kernels (gh-ocannl-412) are implemented.
@@ -30,28 +58,31 @@ CUDA constant memory is a 64KB region of read-only device memory with a dedicate
 
 ### Current Architecture
 
-**Tensors are passed as kernel pointer parameters.** In `c_syntax.ml` `compile_proc` (line 756), every materialized or in-context tensor becomes a pointer parameter to the kernel function. The `link_proc` function in `cuda_backend.ml` (line 929) maps each `Param_ptr tn` to a `Cu.Stream.Tensor` kernel argument.
+**Tensors are passed as kernel pointer parameters.** In `c_syntax.ml` `compile_proc` (line 842), every materialized or in-context tensor becomes a pointer parameter to the kernel function. The `link_proc` function in `cuda_backend.ml` (line 920) maps each `Kparam_ptr tn` *(renamed from `Param_ptr` by #356)* to a `Cu.Stream.Tensor` kernel argument.
 
-**`Effectively_constant` is already tracked.** The `Tnode.memory_mode` type (in `tnode.ml` line 48) includes `Effectively_constant`, set for number literals, fixed parameters, and constant-filled tensors (`tensor.ml` lines 585, 601, 639). The `known_constant` function (`tnode.ml` line 273) returns true for these. Backends currently do not special-case this -- they are allocated as regular device memory.
+**`Effectively_constant` is already tracked.** The `Tnode.memory_mode` type (in `tnode.ml` line 23) includes `Effectively_constant`, set for number literals, fixed parameters, and constant-filled tensors (`tensor.ml` lines 593, 609, 647). The `known_constant` function (`tnode.ml` line 244) returns true for these. Backends currently do not special-case this -- they are allocated as regular device memory.
 
 **`__constant__` is already used for builtins.** The ThreeFry PRNG in `builtins_cuda.ml` (line 297) uses `__device__ __constant__ unsigned int THREEFRY_C240 = ...` and `THREEFRY_ROTATION[8][4]`. These are hardcoded strings embedded in the CUDA source. This confirms the compilation pipeline (NVRTC + module loading) handles `__constant__` declarations correctly.
 
 **`cuModuleGetGlobal` is bound.** The ocaml-cudajit binding (`cuda.ml` line 1792) wraps `cuModuleGetGlobal_v2`, returning a `Deviceptr.t` and size. This is the API needed to locate `__constant__` variables after module loading.
 
-**Kernels run single-threaded today.** The `kernel_prep_line` guard (`cuda_backend.ml` line 329) forces `grid_dim=1, block_dim=1`. Constant memory's broadcast advantage requires multiple threads reading the same address in a warp. Until gh-ocannl-412 (multi-threaded kernels), the performance benefit is negligible.
+**Kernels run single-threaded today.** The `kernel_prep_line` guard (`cuda_backend.ml` line 317) plus the `grid_dim_x:1, block_dim_x:1` launch (line 970) force single-threaded execution. Constant memory's broadcast advantage requires multiple threads reading the same address in a warp. Until gh-ocannl-412 (multi-threaded kernels), the performance benefit is negligible.
 
 ### Relevant Code Locations
 
 | Component | File | Lines | Relevance |
 |-----------|------|-------|-----------|
-| Memory mode type | `arrayjit/lib/tnode.ml` | 47-55 | `Effectively_constant` definition |
-| `known_constant` | `arrayjit/lib/tnode.ml` | 273-276 | Predicate for constant tensors |
-| Kernel param assembly | `arrayjit/lib/c_syntax.ml` | 756-810 | Where tensor params are collected; needs branching for constant tensors |
-| Kernel launch | `arrayjit/lib/cuda_backend.ml` | 929-987 | `link_proc`: maps params to kernel args; constant tensors bypass this |
-| Module loading | `arrayjit/lib/cuda_backend.ml` | 989-1002 | `link`: loads PTX module; constant data copy goes here |
+| Memory mode type | `arrayjit/lib/tnode.ml` | 23 | `Effectively_constant` definition |
+| `known_constant` | `arrayjit/lib/tnode.ml` | 244-247 | Predicate for constant tensors |
+| Kernel param assembly | `arrayjit/lib/c_syntax.ml` | 842+ | `compile_proc`: where tensor kparams are collected; needs branching for constant tensors |
+| Kernel launch | `arrayjit/lib/cuda_backend.ml` | 920-987 | `link_proc`: maps kparams to kernel args; constant tensors bypass this |
+| Module loading | `arrayjit/lib/cuda_backend.ml` | 988-1012 | `link`: loads PTX module; constant data copy goes here |
 | Existing `__constant__` | `arrayjit/lib/builtins_cuda.ml` | 297-309 | ThreeFry constants pattern |
-| `cuModuleGetGlobal` | `ocaml-cudajit/src/cuda.ml` | 1789-1794 | OCaml binding already available |
-| Tensor constant marking | `tensor/tensor.ml` | 585, 601, 639 | Where `Effectively_constant` is set |
+| `cuModuleGetGlobal` | `ocaml-cudajit/src/cuda.ml` | 1788-1793 | OCaml binding already available |
+| Tensor constant marking | `tensor/tensor.ml` | 593, 609, 647 | Where `Effectively_constant` is set |
+
+*(Update 2026-06-12: line numbers refreshed; "params"/"Param_ptr" became
+"kparams"/"Kparam_ptr" via #356.)*
 
 ### Why Not Wait for Multi-Threaded Kernels?
 
@@ -87,7 +118,7 @@ This requires a new hook in `C_syntax_config`: `constant_declarations : (Tn.t * 
 2. For each, call `Cu.Module.get_global run_module ~name:<ident>` to get the device pointer.
 3. Copy the host data with `Cu.Stream.memcpy_H_to_D` (or synchronous `Cu.Deviceptr.memcpy_H_to_D` since constant memory must be set before any kernel launch using it).
 
-The `code` record in `cuda_backend.ml` (line 295) needs a new field: `constant_tensors : Tn.t list` listing the tensors placed in constant memory (so `link_proc` knows which tensors are NOT in the params list).
+The `code` record in `cuda_backend.ml` (line 284) needs a new field: `constant_tensors : Tn.t list` listing the tensors placed in constant memory (so `link_proc` knows which tensors are NOT in the `kparams` list).
 
 ### Phase 3: Configuration and Safety
 

@@ -1,5 +1,31 @@
 # Proposal: Transformer Inference for a Small Open-Weights Model
 
+## Status update (2026-06-12)
+
+- Issue #377 is OPEN, milestone **v0.7.1** (GH due date 2026-03-14 has lapsed; ROADMAP.md
+  still lists "Transformer inference demo (#377)" under v0.7.1).
+- **Superseded by `docs/proposals/gh-ocannl-377.md`** ("GPT-2 Small Inference Pipeline",
+  2026-04-15), which covers the same scope against the same issue with fresher context.
+  This file should be treated as the historical first elaboration.
+- Several premises have since landed, invalidating "what's missing" claims below:
+  - `decoder_only_block` and a `decoder_only` stack now exist in `lib/nn_blocks.ml`
+    (lines 231 and 245), with `~mask` and `pos_embed` support; they arrived with the
+    decoder-only Names-dataset example (`test/training/transformer_names.ml`, PR #57).
+    Caveat: the block is **post-layer-norm**; GPT-2 needs a pre-norm variant, so that gap
+    stands.
+  - RoPE and sinusoidal position embeddings landed (#398 CLOSED, commit `9d943eb9`;
+    PoPE deferred to #444) — the claim "no RoPE code exists in lib/" is no longer true.
+  - A BPE tokenizer now exists: `Dataprep.Bpe` in `ocaml-dataprep/lib/bpe.ml`, compatible
+    with HuggingFace tokenizer.json and explicitly supporting GPT-2 (also Gemma 3, Qwen 3,
+    SmolLM2). See `docs/proposals/dataprep-tokenizer-integration.md`. The "minimal inline
+    BPE" fallback is obsolete.
+- Still missing: GeLU/SiLU/Sigmoid/Erf activations, weight conversion from safetensors,
+  embedding lookup for a 50K vocab, and the inference script itself (`gpt2_inference.ml`
+  does not exist).
+- `Persistence.{save,load,restore}` (#373) is unchanged and remains the weight-loading seam.
+- nn_blocks.ml line numbers drifted: `softmax` is now at 107, `multi_head_attention` 179,
+  `layer_norm` 208, `transformer_encoder_block` 217, `transformer` 309.
+
 ## Goal
 
 Build an end-to-end inference pipeline that loads pre-trained GPT-2 small (124M parameters) weights, tokenizes a text prompt, runs a forward pass through a decoder-only transformer, and generates coherent text autoregressively. This demonstrates OCANNL's ability to run real pre-trained models and serves as a flagship example for the v0.7.1 milestone.
@@ -33,13 +59,13 @@ ROADMAP.md v0.7.1: "Transformer inference demo (#377)"
 - `transformer` (line 202): encoder-decoder architecture (not decoder-only)
 - `softmax` (line 106): numerically stable with temperature
 
-**No decoder-only block in nn_blocks.ml**: The `transformer_encoder_block` is the closest match but uses post-layer-norm and lacks a `~mask` parameter. The Names transformer proposal (watch-ocannl-README-md-369aadb4) specifies adding `decoder_only_block` to nn_blocks.ml, but it has not been implemented yet.
+**No decoder-only block in nn_blocks.ml**: The `transformer_encoder_block` is the closest match but uses post-layer-norm and lacks a `~mask` parameter. The Names transformer proposal (watch-ocannl-README-md-369aadb4) specifies adding `decoder_only_block` to nn_blocks.ml, but it has not been implemented yet. *(Update 2026-06-12: implemented — `decoder_only_block` (post-norm, with `~mask`) and `decoder_only` are now in nn_blocks.ml; a pre-norm variant is still needed for GPT-2.)*
 
 **No GeLU/SiLU activations**: Only ReLU, Exp, Log, Sin, Cos, Sqrt, Neg, Tanh_approx exist. GeLU can be composed: `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`.
 
-**RoPE** (gh-ocannl-398): The issue is closed but no RoPE code exists in `lib/`. Not needed for GPT-2 (which uses learned positional embeddings), but would be needed for LLaMA/Gemma follow-up.
+**RoPE** (gh-ocannl-398): The issue is closed but no RoPE code exists in `lib/`. *(Update 2026-06-12: RoPE and sinusoidal embeddings now exist in nn_blocks.ml via the `position_embedding` type, commit `9d943eb9`.)* Not needed for GPT-2 (which uses learned positional embeddings), but would be needed for LLaMA/Gemma follow-up.
 
-**Tokenizer** (dataprep): The `Dataprep` package is already an opam dependency. `Dataprep.Names` provides character-level tokenization. A BPE tokenizer (`Dataprep.Bpe_tokenizer`) is being developed in `ocaml-dataprep`. If not ready, a minimal GPT-2 BPE decoder can be implemented inline.
+**Tokenizer** (dataprep): The `Dataprep` package is already an opam dependency. `Dataprep.Names` provides character-level tokenization. A BPE tokenizer (`Dataprep.Bpe_tokenizer`) is being developed in `ocaml-dataprep`. If not ready, a minimal GPT-2 BPE decoder can be implemented inline. *(Update 2026-06-12: it is ready — `Dataprep.Bpe` reads HuggingFace tokenizer.json and supports GPT-2.)*
 
 ### Architecture: GPT-2 Small
 
@@ -103,5 +129,5 @@ total parameters: ~124M (~500MB float32)
 
 - **gh-ocannl-373** (Tensor persistence): DONE -- `Persistence.{save,load,restore}` available
 - **watch-ocannl-README-md-ebb316ea** (Tokenizers): In progress in `ocaml-dataprep`. Can work around with inline BPE if not ready.
-- **watch-ocannl-README-md-369aadb4** (Names transformer): Not yet implemented, but this task will independently add `decoder_only_block` to nn_blocks.ml (the Names example can then reuse it)
+- **watch-ocannl-README-md-369aadb4** (Names transformer): Not yet implemented, but this task will independently add `decoder_only_block` to nn_blocks.ml (the Names example can then reuse it) *(Update 2026-06-12: landed the other way around — the Names example (PR #57) brought `decoder_only_block` into nn_blocks.ml, which GPT-2 work can now reuse/adapt)*
 - **gh-ocannl-398** (RoPE): Not needed for GPT-2. Relevant for future LLaMA/Gemma work.

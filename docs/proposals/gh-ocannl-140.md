@@ -1,5 +1,14 @@
 # Partition the Benchmark Table by `result_label`
 
+## Status update (2026-06-12)
+
+- Issue [#140](https://github.com/ahrefs/ocannl/issues/140) is still OPEN, milestone v1.0 (due 2026-06-30).
+- Not yet started: re-verified at HEAD `d9de22f0` — `tensor/PrintBox_utils.ml` still has the `TODO(#140)` comment at line 119 and the `List.hd_exn result_labels` bug at line 129; `let table` still starts at line 102.
+- `bin/compilation_speed.ml:69` remains the single call site, unchanged.
+- No commits touched `tensor/PrintBox_utils.ml` or `bin/compilation_speed.ml` since April 2026; none of the proposal's assumptions are invalidated.
+- The repo-wide broadcast-order reversal (LUB→GLB) and basis-rename refactors did not affect this file.
+- Everything in the Approach section remains to do: grouping, per-group `Speedup`/`Mem gain`, stacking, tests.
+
 ## Goal
 
 Refactor `PrintBox_utils.table` so that benchmark rows with different `result_label` values are grouped, with each group rendered as its own record (and its own results-column header) stacked vertically. Today the function uses `List.hd_exn result_labels` as the results-column header for every row regardless of the row's actual label, and computes `Speedup` / `Mem gain` against a single global maximum that mixes incomparable measurements when labels disagree.
@@ -23,7 +32,7 @@ Per harness memory, autonomous OCANNL work is paused while the user does a hands
 
 ### Current state
 
-`tensor/PrintBox_utils.ml`, lines 102--130 (verified at HEAD `03116b23`):
+`tensor/PrintBox_utils.ml`, lines 102--130 (verified at HEAD `03116b23`; re-verified unchanged at `d9de22f0`, 2026-06-12):
 
 ```ocaml
 let table rows =

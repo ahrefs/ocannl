@@ -3,6 +3,16 @@
 **Issue**: [#122](https://github.com/ahrefs/ocannl/issues/122)
 **Milestone**: v1.0
 
+## Status update (2026-06-12)
+
+- Issue #122 is still **OPEN**, milestone v1.0 (GH milestone due date 2026-06-30; ROADMAP.md, the milestone authority, targets v1.0 for end of October 2026).
+- **No implementation has landed**: there is still no `lib/metrics.ml`, no `Metrics` re-export in `lib/ocannl.ml`, and no `docs/experiment_tracking.md`.
+- `Train.example_train_result` is still defined (now at `lib/train.ml:183`) and still referenced nowhere else in the tree — the delete-or-wire-up decision remains open.
+- `test/training/moons_demo.ml` still hand-accumulates `losses` / `log_losses` / `learning_rates` into ref lists (lines 37-39) and feeds them to `PrintBox_utils.plot` — the retrofit target is unchanged.
+- `val get_used_memory : device -> int` is still in `arrayjit/lib/backend_intf.ml` (now line 259). Note `backend_intf.ml` has changed elsewhere since this proposal (e.g. `device_to_device` now returns a transfer routine; `merge_buffer_use = No | Copy`), but none of that affects this proposal's claims.
+- No repo-wide renames (basis/refines etc.) affect this proposal.
+- The full scope — Metrics module, CSV export, demo retrofit, snapshot, narrative doc, follow-up issues — remains to do.
+
 ## Goal
 
 Issue #122 asks OCANNL to "have a story about / support for experiment

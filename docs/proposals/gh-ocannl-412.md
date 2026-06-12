@@ -3,6 +3,16 @@
 **Task**: gh-ocannl-412
 **Issue**: https://github.com/ahrefs/ocannl/issues/412
 
+## Status update (2026-06-12)
+
+- Issue #412 is OPEN, milestone v0.8 ("GPU tiling and related optimizations in the polyhedral style"). ROADMAP.md still targets v0.8 for mid-June 2026 with tiling as the lead item — this proposal remains the plan of record.
+- None of the five phases has started: the single-thread guard (`kernel_prep_line`, now `cuda_backend.ml:317-318`) and the hardcoded `grid_dim_x:1, block_dim_x:1` launch (now `cuda_backend.ml:970`) are still in place; Metal still dispatches one threadgroup (`metal_backend.ml:818-823`).
+- The soft dependencies have resolved favorably: #351 (CSE after inlining) is CLOSED COMPLETED — cross-statement CSE with hoisting to a common ancestor scope landed in `low_level.ml`; #350 (loop-invariant hoisting) is CLOSED NOT_PLANNED (largely subsumed by the CSE hoisting work); #311 (`-march=native`) is CLOSED COMPLETED, so the CPU performance floor exists.
+- #318 (megakernel deep dive) is CLOSED COMPLETED as an exploration; #411 (HIP backend) remains OPEN.
+- Kernel parameters were renamed `params`→`kparams` / `Param_ptr`→`Kparam_ptr` (#356), which touches the `compile_proc`/launch plumbing this proposal extends for launch-configuration carrying.
+- Line numbers in the Key Code Pointers table have been refreshed to the current tree (notable drift: `optimize_proc` is now at `low_level.ml:1619`, `pp_ll` at `c_syntax.ml:331`, `compile_proc` at `c_syntax.ml:842`); `assignments.ml`'s `loop_accum` (line 282) and `to_low_level` (line 190) are unchanged.
+- Remaining work: all of Phases 1–5 plus the deferred follow-ups.
+
 ## Goal
 
 Transform OCANNL from single-threaded GPU kernels into properly parallelized, tiled execution across CUDA, Metal, and C backends. This is the core of the v0.8 milestone ("GPU-style performance"). The work introduces loop tiling as an IR transformation, maps tiled loops to GPU thread/block indices for parallel execution, and adds shared memory (SMEM) cooperation and register blocktiling for memory hierarchy exploitation. The end state is that matrix multiplication (and general einsum operations with contraction dimensions) achieves substantial speedups by utilizing GPU parallelism and memory hierarchy -- moving from the current baseline of `grid_dim=1, block_dim=1` to properly configured multi-threaded kernels.
@@ -25,16 +35,16 @@ Transform OCANNL from single-threaded GPU kernels into properly parallelized, ti
 ### Current Architecture
 
 **The single-threaded baseline.** All CUDA kernels currently run with a single thread:
-- `cuda_backend.ml` line 328-329: `kernel_prep_line = "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"`
-- `cuda_backend.ml` line 979: `S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args`
-- `metal_backend.ml` lines 787-794: dispatches with `threadgroups_per_grid: {1,1,1}` and `width = min max_threads 1`
+- `cuda_backend.ml` lines 317-318: `kernel_prep_line = "/* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"`
+- `cuda_backend.ml` line 970: `S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args`
+- `metal_backend.ml` lines 818-823: dispatches with `threadgroups_per_grid: {1,1,1}` and `width = min max_threads 1`
 
 **The IR-to-code pipeline.** Operations flow through:
 1. **Shape system** (`shape.ml`): einsum specs with batch/output/input dimensions. "Input" dims are the contracted (reduction) dimensions in an einsum; "batch" and "output" are non-contracted.
 2. **Projections** (`indexing.ml` lines 136-157): `projections.product_space` and `product_iterators` define the iteration space. `project_lhs` and `project_rhs` map product iterators to tensor indices.
 3. **Assignments** (`assignments.ml`): `Accum_op` with accumulator (`accum: Ops.binop`), LHS, RHS, and projections. `to_low_level` (line 190) converts to nested `For_loop` nodes by iterating over `product_space` dimensions.
-4. **Low-level IR** (`low_level.ml`): `For_loop { index; from_; to_; body }` nodes, `Set`/`Get`/`Local_scope` for scalar computation. `optimize_proc` (line 1388) runs virtualization, simplification, and CSE.
-5. **C syntax emission** (`c_syntax.ml`): `pp_ll` (line 305) converts `For_loop` to C `for` loops. `compile_proc` (line 756) assembles the full kernel function.
+4. **Low-level IR** (`low_level.ml`): `For_loop { index; from_; to_; body }` nodes, `Set`/`Get`/`Local_scope` for scalar computation. `optimize_proc` (line 1619) runs virtualization, simplification, and CSE *(Update 2026-06-12: CSE now includes cross-statement hoisting to a common ancestor scope, from #351)*.
+5. **C syntax emission** (`c_syntax.ml`): `pp_ll` (line 331) converts `For_loop` to C `for` loops. `compile_proc` (line 842) assembles the full kernel function.
 6. **Backend launch** (`cuda_backend.ml`): NVRTC compilation, module loading, kernel launch.
 
 **Key observation for tiling.** The `product_space` in projections already separates the iteration dimensions. In a matrix multiply `C[i,j] += A[i,k] * B[k,j]`:
@@ -51,28 +61,28 @@ The tiling strategy maps directly:
 | Location | Description |
 |----------|-------------|
 | `arrayjit/lib/low_level.ml` lines 33-50 | IR type definition: `For_loop`, `Set`, `Get`, `Local_scope` |
-| `arrayjit/lib/low_level.ml` lines 1695-1711 | `loop_over_dims` -- generates nested for-loops from dimension array |
-| `arrayjit/lib/low_level.ml` lines 1713-1741 | `unroll_dims` -- full unrolling for small dimensions |
-| `arrayjit/lib/low_level.ml` lines 1388-1398 | `optimize_proc` -- the optimization pipeline entry point |
-| `arrayjit/lib/low_level.ml` lines 168-174 | `optimized` record type (traced_store, llc, merge_node) |
+| `arrayjit/lib/low_level.ml` line 1929 | `loop_over_dims` -- generates nested for-loops from dimension array |
+| `arrayjit/lib/low_level.ml` line 1947 | `unroll_dims` -- full unrolling for small dimensions |
+| `arrayjit/lib/low_level.ml` line 1619 | `optimize_proc` -- the optimization pipeline entry point |
+| `arrayjit/lib/low_level.ml` line 169 | `optimized` record type (traced_store, llc, merge_node) |
 | `arrayjit/lib/assignments.ml` lines 282-451 | `loop_accum` -- lowers `Accum_op` to `For_loop` nests with projection-based indexing |
-| `arrayjit/lib/indexing.ml` lines 136-157 | `projections` type with `product_space`, `product_iterators`, `project_lhs`, `project_rhs` |
+| `arrayjit/lib/indexing.ml` lines 137-157 | `projections` type with `product_space`, `product_iterators`, `project_lhs`, `project_rhs` |
 | `arrayjit/lib/c_syntax.ml` lines 16-75 | `C_syntax_config` module type -- backend-specific hooks |
-| `arrayjit/lib/c_syntax.ml` lines 305-331 | `pp_ll` -- For_loop to C for-loop emission |
-| `arrayjit/lib/c_syntax.ml` lines 756-810 | `compile_proc` -- kernel function assembly, `kernel_prep_line` emission |
-| `arrayjit/lib/cuda_backend.ml` lines 312-390 | `Cuda_syntax_config` -- CUDA-specific types, builtins |
-| `arrayjit/lib/cuda_backend.ml` line 979 | Kernel launch with hardcoded `grid_dim_x:1, block_dim_x:1` |
+| `arrayjit/lib/c_syntax.ml` line 331 | `pp_ll` -- For_loop to C for-loop emission |
+| `arrayjit/lib/c_syntax.ml` line 842 | `compile_proc` -- kernel function assembly, `kernel_prep_line` emission |
+| `arrayjit/lib/cuda_backend.ml` lines 310-390 | `Cuda_syntax_config` -- CUDA-specific types, builtins |
+| `arrayjit/lib/cuda_backend.ml` line 970 | Kernel launch with hardcoded `grid_dim_x:1, block_dim_x:1` |
 | `arrayjit/lib/builtins_cuda.ml` | CUDA builtins: vector types (`float4_t`, `half8_t`), FMA, conversions |
-| `arrayjit/lib/metal_backend.ml` lines 787-794 | Metal dispatch with 1 threadgroup |
-| `ROADMAP.md` lines 118-135 | v0.8 milestone definition |
+| `arrayjit/lib/metal_backend.ml` lines 818-823 | Metal dispatch with 1 threadgroup |
+| `ROADMAP.md` lines 118-150 | v0.8 milestone definition |
 
 ### Related Work
 
-- **gh-ocannl-351** (CSE after inlining): Should ideally run before tiling to simplify the IR. Soft dependency -- tiling can proceed independently.
-- **gh-ocannl-350** (Loop invariant hoisting): Same soft dependency as CSE.
-- **gh-ocannl-318** (Megakernels): Complementary -- megakernels fuse multiple operations; tiling optimizes within a single operation. Both are v0.8 targets.
-- **gh-ocannl-411** (HIP backend): HIP tiling follows the same patterns as CUDA tiling.
-- **gh-ocannl-311** (Add `-march=native`): CPU performance floor for the C backend.
+- **gh-ocannl-351** (CSE after inlining): Should ideally run before tiling to simplify the IR. *(Update 2026-06-12: landed — closed COMPLETED; cross-statement CSE with hoisting is in `low_level.ml`.)*
+- **gh-ocannl-350** (Loop invariant hoisting): Same soft dependency as CSE. *(Update 2026-06-12: closed NOT_PLANNED — largely subsumed by the CSE hoisting work.)*
+- **gh-ocannl-318** (Megakernels): Complementary -- megakernels fuse multiple operations; tiling optimizes within a single operation. Both are v0.8 targets. *(Update 2026-06-12: the #318 exploration is closed COMPLETED.)*
+- **gh-ocannl-411** (HIP backend): HIP tiling follows the same patterns as CUDA tiling. *(Still open.)*
+- **gh-ocannl-311** (Add `-march=native`): CPU performance floor for the C backend. *(Update 2026-06-12: landed — closed COMPLETED.)*
 
 ### Reference Articles
 

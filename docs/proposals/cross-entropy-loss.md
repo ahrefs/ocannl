@@ -1,5 +1,13 @@
 # Add Nn_blocks.cross_entropy_loss helper
 
+## Status update (2026-06-12)
+
+- Not implemented yet: there is no `cross_entropy_loss` in `lib/nn_blocks.ml`, and `transformer_with_loss` (now at line 347) still computes `log (softmax ~spec:"... | v" () logits)` — the numerical instability this proposal targets is still present.
+- Line references drifted and are corrected in the table below: `reduce_specified_axes` is at lines 98-103, `softmax` at 107-115, `transformer_with_loss` at 347-361.
+- Motivation has strengthened: two more training examples landed since (test/training/`fsm_transformer.ml` and `transformer_names.ml`, plus `mlp_names.ml`/`mlp_bn_names.ml`), each hand-rolling a softmax + NLL loss variant.
+- The `softmax` helper gained a `?temperature` parameter but its `~spec` convention and subtract-max pattern are unchanged; the proposed design still applies as written.
+- No GitHub issue tracks this; it is a standalone ergonomics proposal.
+
 ## Goal
 
 Cross-entropy loss from logits is reimplemented in every training example with slight variations, some numerically unstable (e.g. `log(softmax(x))` in `transformer_with_loss`). A canonical `cross_entropy_loss` helper in `Nn_blocks` eliminates this boilerplate and provides a numerically stable implementation using the log-softmax trick.
@@ -20,16 +28,18 @@ Cross-entropy loss from logits is reimplemented in every training example with s
 
 | File | Lines | Relevance |
 |------|-------|-----------|
-| `lib/nn_blocks.ml:98-104` | `reduce_specified_axes` | Generates reduction einsum spec from user-facing axis spec -- reuse for the new function |
-| `lib/nn_blocks.ml:107-113` | `softmax` | Existing helper whose `~spec` convention and numerical stability pattern (subtract max) should be followed |
-| `lib/nn_blocks.ml:325-338` | `transformer_with_loss` | Uses naive `log(softmax(x))` -- primary refactoring target |
-| `test/training/mnist_conv.ml:105-109` | MNIST loss | Uses `softmax + epsilon` pattern -- could optionally adopt the helper |
-| `test/training/bigram.ml:40-42` | Bigram loss | Manual softmax + NLL pattern |
-| `test/training/fsm_transformer.ml:132-133` | FSM loss | Another NLL pattern variant |
+| `lib/nn_blocks.ml:98-103` | `reduce_specified_axes` | Generates reduction einsum spec from user-facing axis spec -- reuse for the new function |
+| `lib/nn_blocks.ml:107-115` | `softmax` | Existing helper whose `~spec` convention and numerical stability pattern (subtract max) should be followed |
+| `lib/nn_blocks.ml:347-361` | `transformer_with_loss` | Uses naive `log(softmax(x))` -- primary refactoring target |
+| `test/training/mnist_conv.ml:104-108` | MNIST loss | Uses `softmax + epsilon` pattern -- could optionally adopt the helper |
+| `test/training/bigram.ml:51-52` | Bigram loss | Manual softmax + NLL pattern |
+| `test/training/fsm_transformer.ml:122-123` | FSM loss | Another NLL pattern variant |
+
+*(Update 2026-06-12: line numbers refreshed; `test/training/transformer_names.ml:~130` is a further NLL reimplementation site that landed since this was written.)*
 
 ### Numerical stability
 
-The existing `softmax` helper (line 107-113) already implements the subtract-max trick:
+The existing `softmax` helper (line 107-115) already implements the subtract-max trick:
 ```ocaml
 let max_vals = x_scaled @^^ spec in
 let exp_vals = exp (x_scaled - max_vals) in
@@ -49,7 +59,7 @@ The `cross_entropy_loss` function should use the same approach but compute `log_
 
 *Suggested approach -- agents may deviate if they find a better path.*
 
-Add `cross_entropy_loss` to `lib/nn_blocks.ml` near the existing `softmax` function (around line 114):
+Add `cross_entropy_loss` to `lib/nn_blocks.ml` near the existing `softmax` function (around line 116):
 
 ```ocaml
 let%op cross_entropy_loss ~spec ?mask ?normalize_by () ~logits ~targets =

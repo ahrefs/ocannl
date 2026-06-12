@@ -1,5 +1,66 @@
 # Dynamic Indexing — Reintroduction Disposition Memo
 
+## Resolution (2026-06-12): retired — subsumed by #343
+
+Per Łukasz: **#186 is retired as subsumed by
+[gh-ocannl-343](gh-ocannl-343.md)** (virtual one-hot / embedding
+optimization). The disposition this memo was meant to produce is hereby
+recorded:
+
+- **Dynamic indexing is not re-introduced** as a first-class
+  `axis_index`/shape-inference feature. The complexity/benefit ratio is too
+  high: it touches shape inference, projections, every backend's codegen,
+  and the gradient story, while the dominant in-tree need (embedding
+  lookup / gather) is served by #343's compiler rewrite, whose
+  `Get_dynamic`-style construct lives only in the low-level IR.
+- **#343 owns the dynamic-index lowering construct** (the `indexing.ml` /
+  `low_level.ml` design space sketched in its Phase 3) — no rival index
+  representation should be designed under this issue.
+- **Re-opening triggers**: a concrete demand for *scatter* (dynamic write
+  indices), top-k routing, or KV-cache-style in-place updates — the cases
+  #343's gather-only rewrite structurally cannot express. #377 (GPT-2
+  inference) confirmed it does not need them (single-token one-hot
+  suffices). If such a need lands, reopen with this memo as the starting
+  point rather than designing from scratch.
+- Practical effect: the GH issue can be closed as "not planned (subsumed by
+  #343)" with a comment along the lines of the above; the v0.7.1 milestone
+  move is moot. This document stays as the historical record.
+
+The memo content below is retained for reference.
+
+## Status update (2026-06-12)
+
+- Issue #186 is OPEN, label still `explore`, but its milestone was moved
+  **v1.1 → v0.7.1 on 2026-05-11** (GH milestone events). The "issue metadata
+  says non-blocking for v0.7.1" tension described below has been resolved in
+  the direction of promotion — effectively disposition (A)/(C)'s
+  implementation half is now scheduled for v0.7.1, alongside #377.
+  ROADMAP.md's v0.7.1 section does not list #186 explicitly yet.
+- Issue #377 (transformer inference demo) is still OPEN at v0.7.1. The
+  v0.7.1 milestone (originally mid-March 2026) is running late: the repo is
+  still at version 0.6.3 and v0.6.4-themed work is what has been landing.
+- **Dynamic indexing remains unimplemented**: `arrayjit/lib/indexing.ml`'s
+  `axis_index` still has only `Fixed_idx | Iterator | Affine | Sub_axis |
+  Concat`; the one-hot workarounds in `lib/nn_blocks.ml`
+  (`one_hot_of_int_list`), `test/training/mlp_names.ml`
+  (`fill_ctx_one_hot`), and `test/training/fsm_transformer.ml`
+  (`seqs_to_flat_one_hot`) are all still in place, as is `Batch_slice` /
+  `@|` (`tensor/operation.ml:630`). README's caveat is still at line 18.
+- `CHANGES.md` line references drifted: the removal note is now at line 527
+  and the prior-prototype behavior notes at lines ~596–602.
+- Related-context drift: #271 (low-bit optimizers) was closed NOT_PLANNED;
+  #341 (multicore_cc non-determinism) was closed COMPLETED. RoPE/position
+  embeddings (#398), tensor stacking + block-literal `%op` syntax
+  (`58bfd6e5`), and the broadcast-order reversal (LUB→GLB) and
+  "label"→"basis" renames all landed — none change the DI design space,
+  though any new shape-inference text for the design memo should use the
+  post-reversal vocabulary ("refines", join semilattice).
+- Remains to do: the design-memo content itself (API choice, per-backend
+  codegen story, gradient story) and then the implementation now implied by
+  the v0.7.1 milestone. The single-threaded CUDA constraint cited below is
+  still accurate (`cuda_backend.ml:317` `kernel_prep_line`; launch forces
+  `grid_dim_x:1, block_dim_x:1` at line 970).
+
 ## Goal
 
 Address [gh-ocannl-186](https://github.com/ahrefs/ocannl/issues/186) —
@@ -20,10 +81,11 @@ the user's hands-on audit picks the final answer.
 
 The "giant refactor" referenced in the issue body did happen. Confirmed by:
 
-- `CHANGES.md` line 517 (release notes from the refactor): *"Dynamic indexing
+- `CHANGES.md` line 527 *(line updated 2026-06-12)* (release notes from the
+  refactor): *"Dynamic indexing
   is not supported anymore (to reduce complexity). It might be reintroduced
   if needed."*
-- `CHANGES.md` lines 586–592 describe the prior prototype's behavior
+- `CHANGES.md` lines 596–602 *(lines updated 2026-06-12)* describe the prior prototype's behavior
   ("skips over parallel axes", "can produce virtual nodes") — that machinery
   is gone.
 - `README.md` line 18 records the current contract publicly: *"OCANNL does
@@ -107,7 +169,8 @@ DI is reintroduced post-v0.7.0 on its own merits.
 ### Issue metadata
 
 - `explore` label, milestone v1.1 (post-v1.0), priority B, effort large
-  (6–10 days).
+  (6–10 days). *(Update 2026-06-12: the GH milestone was moved to v0.7.1 on
+  2026-05-11; the label remains `explore`. See the status update above.)*
 - The `explore` label is documented as *"Priority below 'enhancement',
   non-blocking for milestones"* — i.e. the current metadata says DI is not
   blocking v0.7.1.
@@ -123,7 +186,8 @@ DI is reintroduced post-v0.7.0 on its own merits.
   finalization) is in flight; v0.7.1 also includes tokenizer bindings (a
   separate prerequisite for #377 that is independent of DI).
 - gh-ocannl-271 (Adam optimizer / quantization) and other "explore"-labeled
-  issues form a parallel queue.
+  issues form a parallel queue. *(Update 2026-06-12: #271 has since been
+  closed as not planned.)*
 - Prior closely-shaped proposals: `gh-ocannl-161` (fork-backend disposition
   memo) and `gh-ocannl-278` (DisTrO feasibility study) followed the same
   artifact-only-disposition pattern; this proposal mirrors that style.
@@ -335,6 +399,10 @@ For each of CC, CUDA, Metal, the memo must answer:
 
 **Surfaced question for the user (load-bearing):**
 
+*(Update 2026-06-12: effectively answered — the issue's milestone was moved
+to v0.7.1 on 2026-05-11, i.e. the promotion path was chosen; the question
+below is kept for the historical record.)*
+
 > Issue #186 is currently labeled `explore` / milestone v1.1 / priority B.
 > Issue #377 (GPT-2 inference demo, milestone v0.7.1) is the most
 > prominent downstream consumer of dynamic indexing. Without DI, #377
@@ -344,3 +412,79 @@ For each of CC, CUDA, Metal, the memo must answer:
 > narrow first landing to embedding-only, (B) accept the workaround for
 > v0.7.1 and keep DI at v1.1 as planned, or (C) write the design memo
 > now and implement post-v0.7.0. Recommendation: (C).
+
+## Design review (2026-06-12)
+
+**Verdict: sound-with-changes.** The disposition framework was the right
+artifact and its claims check out against the code (verified today:
+`indexing.ml:104-120` variant list; `Batch_slice`/`@|` at
+`operation.ml:617-630`; `one_hot_of_int_list` at `nn_blocks.ml:61`;
+README line 18; CHANGES line 527; `cuda_backend.ml:317` and the
+`grid_dim_x:1, block_dim_x:1` launch at line 970). But the milestone move
+answered the question the memo poses, so the document's remaining value is
+the design-memo skeleton — and that skeleton has one structural gap: it does
+not position dynamic indexing against #343's virtual one-hot, which is the
+nearer-term solution to the same headline use case.
+
+**Reading the milestone move.** v1.1 → v0.7.1 (2026-05-11) means "implement
+DI in the v0.7.1 timeframe", i.e. (A)/(C)-accelerated. But note the #377
+proposal (`docs/proposals/gh-ocannl-377.md`, "single-token one-hot is
+feasible (~200KB) ... avoids the need for" dynamic indexing) concludes the
+inference demo does **not** need DI. So the promotion should be read as
+"same release, not blocking": keep the narrow first landing
+(embedding-lookup/gather only) and do not let #377 wait on DI.
+
+**#186 vs #343 — complementary or competing?** Both, explicitly:
+
+- *Short term: complementary, different layers.* #343 (milestone v0.8) keeps
+  all indices static and recovers gather codegen via an `Equality_with_index`
+  fetch op plus a `simplify_llc` pattern — no shape-inference changes, safe
+  fallback when the pattern misses. #186 makes runtime-tensor-valued indices
+  first-class (API + shape inference + codegen) and covers what #343
+  structurally cannot: scatter, top-k sampling without host roundtrip,
+  kv-cache writes, variable-length attention.
+- *Long term: competing on the embedding case only.* If #186 lands fully, a
+  user-facing gather subsumes #343's embedding-lookup win; #343's simplifier
+  pattern then survives as an optimization for einsum-with-one-hot code.
+- *Shared substrate — the actionable point:* #343 Phase 3 already proposes a
+  minimal `axis_index` extension (`Dynamic_lookup of { tn; idcs }`, rendering
+  as `(int)(buffer[offset])`). The #186 design memo should adopt that variant
+  as the common IR substrate — i.e. API option 3 ("hybrid": tensor-layer
+  `Gather`/`Scatter` lowering to a special `axis_index`) lowering to the
+  *same* variant #343's simplifier emits. Decide which issue owns the
+  `indexing.ml` change and record it in both documents, otherwise two rival
+  index-variant designs will accrete. (Also: `gh-ocannl-377.md` line 93
+  mislabels #343 as "dynamic indexing" — fix that cross-reference.)
+
+**Recommendations:**
+
+1. Re-scope the acceptance criteria: the "enumerate three dispositions, user
+   picks" ACs are moot post-milestone-move. The deliverable now is filling
+   the design-memo skeleton (API choice, per-backend codegen, gradient
+   story) plus the #343 division-of-labor statement above.
+2. Resolve two of the memo's open questions now rather than deferring:
+   out-of-bounds policy — clamp as the default (cheap, deterministic,
+   matches #343's safe-fallback spirit; optional trap under a debug flag);
+   virtual gather — not needed day one, #343's virtual one-hot covers the
+   inlining-shaped uses.
+3. Sequence the first landing as gather-only (embedding lookup over the
+   rightmost axis), with scatter/scatter-add deferred. The single-threaded
+   CUDA/Metal execution model makes gather trivial codegen today, but
+   atomic-scatter design should be written *after* the v0.8
+   tiling/parallelism work changes the kernel launch story — note that
+   dependency in the memo.
+4. Restrict shape inference initially to index tensors with
+   compile-time-known shapes (no "row variable resolved from runtime shape"
+   concept) — this keeps the first landing inside the existing
+   constraint-solver vocabulary (post-GLB-reversal: "refines", join
+   semilattice).
+
+**Open decision points for Łukasz:**
+
+- Confirm the milestone-move reading: is DI genuinely intended *in* v0.7.1
+  (even though #377 doesn't need it), or should the issue ride along to
+  v0.7.2/v0.8 next to #343?
+- Which issue owns the `axis_index` extension — #343 (as its Phase 3) with
+  #186 building on it, or #186 with #343's simplifier retargeted to it?
+- Out-of-bounds policy sign-off: clamp (recommended) vs trap vs documented
+  undefined behavior.

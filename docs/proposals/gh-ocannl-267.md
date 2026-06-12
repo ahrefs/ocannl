@@ -3,6 +3,17 @@
 **Issue:** [ahrefs/ocannl#267](https://github.com/ahrefs/ocannl/issues/267)
 **Status:** Draft proposal
 
+## Status update (2026-06-12)
+
+- Issue [#267](https://github.com/ahrefs/ocannl/issues/267) is **OPEN**, milestone **v0.9** (GH milestone due-date 2026-05-30 is stale; per ROADMAP.md, v0.9 targets Aug 24, 2026 — ICFP week, matching the "ICFP milestone" framing below).
+- The deliverable (`docs/research/tiramisu.md` + issue comment) has **not** been produced; `docs/research/` does not exist yet (harness task status: deferred).
+- Code claims re-verified: `Indexing.axis_index`'s `Affine` variant, the `projections` record (`product_space` / `product_iterators`), `Low_level.t`'s `For_loop`, and the memory-mode classification (Virtual / Materialized / Device_only / Hosted) all match current code; CUDA kernels still launch with `grid_dim_x:1, block_dim_x:1`. The central claim — no schedule layer, no split/tile/reorder/fuse pass — still holds.
+- `Low_level.optimize_proc` has grown since drafting: the pipeline now also runs common-subexpression elimination (`eliminate_common_subexpressions`, #351) and cross-statement CSE with hoisting (`hoist_cross_statement_cse` / `hoist_shared_locals`); it remains free of loop-restructuring transformations.
+- Referenced-issue drift: #242 (TVM) is now CLOSED/completed; #320 (Metal private storage mode) is CLOSED/completed (landed in commit 1cf9a95b) — area 5's "Metal private-mode optimisation" is no longer pending work; #350 (loop hoisting) was closed as not planned (hoisting landed via cross-statement CSE instead); #344 (pool allocator) and #412 (matmul/tensor cores) remain OPEN; #278 (DisTrO) remains OPEN on v1.1.
+- Communication-layer drift: `Backend.device_to_device` now **returns a transfer routine** (with static merge-buffer verification; `merge_buffer_use = No | Copy`, the streaming variant is gone) — transfers are closer to "declared" first-class objects than the "currently imperative" description in area 6/Context suggests. Multi-streaming cleanup also removed cross-stream automatic coherence (multiple streams per device remain).
+- New-text vocabulary note: since April 2026 the broadcast order was reversed (LUB→GLB, meet→join, "⊑" reads "refines") and dimension "label" was renamed to "basis" — use the new terms in the eventual write-up.
+- Verdict: still actionable as written; the schedule-layer gap analysis is unchanged and remains the central question for v0.9.
+
 ## Goal
 
 [Tiramisu](https://github.com/Tiramisu-Compiler/tiramisu) is a polyhedral
@@ -73,7 +84,9 @@ Key types live in `arrayjit/lib/indexing.ml` and `arrayjit/lib/low_level.ml`:
   at lowering time from the order of `product_space` axes.
 - `Low_level.optimize_proc` — the post-lowering optimisation pipeline:
   tracing-based visit counting, virtualisation (inlining of single-access
-  tensors), cleanup, and algebraic simplification. There is no schedule
+  tensors), cleanup, and algebraic simplification. *(Update 2026-06-12: the
+  pipeline now also includes common-subexpression elimination and
+  cross-statement CSE with hoisting.)* There is no schedule
   transformation pass (no split, tile, reorder, fuse) at this layer.
 - `arrayjit/lib/assignments.ml` — high-level `Accum_op`, `Set_vec_unop`,
   `Fetch`. `Assignments.to_low_level` is the lowering boundary.
@@ -94,7 +107,8 @@ Tiramisu's four-level IR (per the paper):
    `fuse`, `unroll`, `vectorize`, `parallelize`, `gpu_tile`,
    `compute_at`, `storage_fold`. Implemented as ISL schedule trees.
    No OCANNL analogue — loop structure is fixed by `product_space` order
-   and `optimize_proc` only does virtualisation / simplification.
+   and `optimize_proc` only does virtualisation / simplification (plus,
+   as of 2026, CSE and hoisting — still no loop restructuring).
 3. **Data layout** — buffer allocation, storage mappings, dimension
    permutations, padding. OCANNL's analogue is the `memory_mode`
    classification (Virtual / Materialized / Device_only / Hosted) plus the
@@ -103,7 +117,9 @@ Tiramisu's four-level IR (per the paper):
 4. **Communication** — explicit MPI send/recv, GPU host↔device transfers,
    distributed schedules. OCANNL's analogue is the merge-buffer machinery
    and backend-specific copy operations; communication is currently
-   imperative rather than declared.
+   imperative rather than declared. *(Update 2026-06-12: partially shifted —
+   `device_to_device` now returns a transfer routine, a first-class
+   schedulable object, with static merge-buffer verification.)*
 
 Tiramisu uses ISL for: representing iteration domains as Presburger sets,
 checking dependences via Pluto-style schedule construction, and emitting
@@ -111,7 +127,7 @@ loops via `isl_ast_build`.
 
 ### Sibling research tasks already drafted
 
-- gh-ocannl-242 (TVM deep dive) — proposal exists at
+- gh-ocannl-242 (TVM deep dive, closed as completed) — proposal exists at
   `docs/proposals/gh-ocannl-242.md`. Establishes the table-of-primitives
   format and the "schedule primitives vs. OCANNL" mapping. The Tiramisu
   write-up should explicitly cross-reference it rather than re-derive the
@@ -119,7 +135,9 @@ loops via `isl_ast_build`.
 - gh-ocannl-301 (IREE / MLIR), gh-ocannl-261 (superoptimizers),
   gh-ocannl-306 (Petalisp/Caten) — same family of scouting tasks; the
   Tiramisu write-up should note overlap.
-- gh-ocannl-350 (loop hoisting), gh-ocannl-412 (matmul / tensor cores) —
+- gh-ocannl-350 (loop hoisting) *(Update 2026-06-12: closed as not planned —
+  hoisting landed via cross-statement CSE instead)*, gh-ocannl-412
+  (matmul / tensor cores, still open) —
   v0.7.2 / v0.8 work where Tiramisu primitives become directly actionable
   (tile / interchange / vectorize / gpu_tile).
 
@@ -168,7 +186,9 @@ The seven areas to cover, in order:
    Universal Pool Allocator (#344) plus memory modes already cover this,
    or whether explicit dimension-permutation / padding annotations
    (à la `storage_fold` / `buffer.reshape`) would be valuable for the
-   v0.8 tiling work and Metal private-mode optimisation (#320).
+   v0.8 tiling work and Metal private-mode optimisation (#320 — *Update
+   2026-06-12: completed; Metal now uses private storage mode for
+   GPU-only buffers*).
 6. **Communication layer.** OCANNL is single-machine (no MPI); Tiramisu's
    communication layer is mostly out of scope. Briefly note that the
    merge-buffer mechanism is OCANNL's analogue and that adopting an

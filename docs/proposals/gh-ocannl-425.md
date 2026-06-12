@@ -1,8 +1,17 @@
 # Proposal: Migrate slipshow presentations to v0.10.0 with Mermaid
 
+## Status update (2026-06-12)
+
+- Issue #425 is OPEN, milestone v0.7 (that milestone's due date has long passed; this is a small background task that simply hasn't been picked up).
+- Nothing has landed: `.github/workflows/gh-pages-docs.yml:20` still downloads slipshow v0.6.0, and no Mermaid diagrams have been added to any deck.
+- The proposal's "v0.10.0 (the latest release)" is stale: slipshow v0.11.0 ("Brazlip") was released 2026-05-24. The migration target should be v0.11.0 — re-verify the `slipshow-linux-x86_64.tar` asset name and the v0.11.0 changelog for additional warnings/breaking changes before implementing.
+- The three slide decks are unchanged in length (871 / 592 / 565 lines), so the Mermaid candidate locations listed below remain valid; `dune-project:140` still lists `(slipshow :with-doc)`.
+- The workflow now compiles all three decks (workflow lines 25, 28, 45) — all must compile cleanly under the new version.
+- Remaining work: the entire proposal (version bump, warning cleanup, Mermaid diagrams, deployment check), retargeted at v0.11.0.
+
 ## Goal
 
-Upgrade the slipshow version used in the GH Pages workflow from v0.6.0 to v0.10.0 (the latest release), enabling Mermaid diagram support in slide decks, and add Mermaid diagrams where they improve clarity.
+Upgrade the slipshow version used in the GH Pages workflow from v0.6.0 to v0.10.0 *(Update 2026-06-12: now v0.11.0, the latest release)*, enabling Mermaid diagram support in slide decks, and add Mermaid diagrams where they improve clarity.
 
 ## Acceptance Criteria
 

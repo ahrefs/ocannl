@@ -1,5 +1,14 @@
 # Concise syntax for merge buffer transfers
 
+## Status update (2026-06-12)
+
+- Still wanted: ROADMAP.md lists "Concise syntax for merge buffer transfers" under the v1.0 Ergonomics section. No `merge_from`-style helper exists yet, and there are still zero in-repo user-side call sites of `device_to_device` outside `arrayjit/lib`.
+- Major API change invalidates the code snippets below: `device_to_device` no longer schedules the copy and returns `bool` — it now builds and returns a transfer routine, `context routine option` (commit 1162646d; signature at `arrayjit/lib/backend_intf.ml:307`). The caller runs `Task.run r.schedule` (or links a consumer against `r.context`).
+- gh-ocannl-288 is CLOSED/COMPLETED: static merge-buffer verification landed as `check_merge_buffer_static` in `arrayjit/lib/backends.ml`, performed at link time against the `merge_buffer_node` recorded on the transfer routine's returned context. The "verification is dynamic-only today" framing and the "#288 is complementary, can ship without it" argument are obsolete; the dynamic `check_merge_buffer` remains as a residual run-time check.
+- A related ergonomic helper landed for the non-merge case: `init_from_device` (`backend_intf.ml:328`, `backends.ml:~201`) wraps `device_to_device ~into_merge_buffer:No` for first-time placement.
+- `merge_buffer_use = No | Copy` confirmed (`backend_intf.ml:43`); `Streaming_for` is indeed gone (#341 cleanup, commit 692d8c9d).
+- Remaining work: redesign the sketch against the routine-returning API — a `merge_from`-style combinator would now run the transfer routine's schedule and then the consumer's, and should obtain/preserve the static verification by linking the consumer against the transfer routine's context. Acceptance criteria mentioning a `bool` return need adjusting accordingly.
+
 ## Goal
 
 Provide a concise API for the "transfer a tensor node into another routine's
@@ -55,6 +64,10 @@ call site:
 
 ### How merge buffer transfers work today
 
+*(Update 2026-06-12: this section describes the pre-1162646d API. `device_to_device` now
+returns a transfer routine — `context routine option` — instead of scheduling the copy and
+returning `bool`; see the Status update above and `arrayjit/lib/backend_intf.ml:307`.)*
+
 The low-level primitive is in `arrayjit/lib/backends.ml`,
 `Add_buffer_retrieval_and_syncing.device_to_device`:
 
@@ -79,6 +92,9 @@ The signature is exposed via `Backend_intf.Backend_device_common`:
 val device_to_device :
   Tnode.t -> into_merge_buffer:merge_buffer_use -> dst:context -> src:context -> bool
 ```
+
+*(Update 2026-06-12: the return type is now `context routine option` — the function builds
+a transfer routine that the caller schedules.)*
 
 with `type merge_buffer_use = No | Copy` (`backend_intf.ml`, after the
 multi-stream cleanup in PR #341 removed the `Streaming_for` variant).
@@ -136,6 +152,13 @@ parallelism, or sooner if a federation/transformer demo wants merge buffers.
 
 ### Relation to gh-ocannl-288 (static merge buffer verification)
 
+*(Update 2026-06-12: #288 is CLOSED/COMPLETED. Static verification now exists as
+`check_merge_buffer_static` in `backends.ml`, checked at link time against the
+`merge_buffer_node` carried by the context that the `device_to_device` transfer routine
+returns. The paragraph below is the pre-#288 state of play; the dynamic check remains
+as a residual run-time guard. The new sugar should be designed to flow through the
+static check — i.e. link consumers against the transfer routine's context.)*
+
 #288 asks for *static* (compile-time / shape-time) verification that
 merge-buffer producers and consumers agree on the tensor node. The current
 codebase already performs *dynamic* verification in `check_merge_buffer`
@@ -175,6 +198,13 @@ upgrades the safety net but does not gate this ergonomic change.
 ## Approach
 
 *Suggested approach — agents may deviate if they find a better path.*
+
+*(Update 2026-06-12: the sketch below predates the routine-returning `device_to_device`.
+An updated `merge_from` would pattern-match on `device_to_device tn ~into_merge_buffer:Copy
+~dst:r.context ~src` returning `Some transfer`, run `Task.run transfer.schedule` then
+`Task.run r.schedule`, and ideally arrange for `r` to be linked against `transfer.context`
+so the static merge-buffer check (#288, landed) applies. The ergonomic motivation is
+unchanged — if anything the raw pattern is now slightly longer.)*
 
 Add a new helper to `Add_buffer_retrieval_and_syncing` in `backends.ml`
 roughly along these lines:

@@ -3,6 +3,15 @@
 Task: gh-ocannl-170
 Issue: https://github.com/ahrefs/ocannl/issues/170
 
+## Status update (2026-06-12)
+
+- Issue ahrefs/ocannl#170 is still OPEN, milestone v0.8 (ROADMAP target: mid-June 2026; the GitHub milestone due date lags).
+- Not implemented: no pinned/staging-buffer code exists in `arrayjit/lib/cuda_backend.ml`, and ocaml-cudajit (HEAD `16c61b6`, post-0.7.2) still has no `cuMemAllocHost`/`cuMemFreeHost` bindings — both halves of the work remain.
+- Line numbers in the key-locations table had drifted and are corrected in place below (e.g. `from_host` is now at `cuda_backend.ml:250`, `opt_alloc_merge_buffer` at 119-126, `alloc_if_needed` at `backends.ml:489`).
+- Backend interface change since the proposal was written: `device_to_device` now *returns* a transfer routine with static merge-buffer verification (`backend_intf.ml:307`), and `merge_buffer_use` is `No | Copy` (`Streaming_for` is gone). This does not invalidate the design; the `opt_alloc_merge_buffer` lazy-grow precedent is unchanged.
+- `finalize_device` (now at `cuda_backend.ml:128-134`) frees the per-device constant-buffer cache; the staging-buffer free in Step 4 should join that path or per-stream cleanup.
+- All six Approach steps remain to do.
+
 ## Goal
 
 Speed up CPU-GPU memory transfers in the CUDA backend by using pinned (page-locked) host memory for staging buffers. Pinned memory enables DMA transfers and can be 2-3x faster for host-device copies. Following the CUDA documentation's warning, pinned memory is used sparingly -- only for reusable staging buffers, not for all bigarrays.
@@ -27,17 +36,19 @@ When source host memory is pageable, the CUDA driver must internally copy it to 
 
 ### Key code locations
 
+*(Update 2026-06-12: line numbers refreshed against current HEAD.)*
+
 | Component | File | Line(s) | Relevance |
 |-----------|------|---------|-----------|
-| `from_host` | `arrayjit/lib/cuda_backend.ml` | 258-261 | H2D transfer: calls `Cu.Stream.memcpy_H_to_D` with bigarray |
-| `to_host` | `arrayjit/lib/cuda_backend.ml` | 263-266 | D2H transfer: calls `Cu.Stream.memcpy_D_to_H` with bigarray |
-| `alloc_if_needed` | `arrayjit/lib/backends.ml` | 470-559 | Initial H2D for constants; calls `Device.from_host` |
-| `Ndarray.create_array` | `arrayjit/lib/ndarray.ml` | 470-482 | Host array creation via `Bigarray.Genarray.create` (unchanged) |
+| `from_host` | `arrayjit/lib/cuda_backend.ml` | 250-253 | H2D transfer: calls `Cu.Stream.memcpy_H_to_D` with bigarray |
+| `to_host` | `arrayjit/lib/cuda_backend.ml` | 255-258 | D2H transfer: calls `Cu.Stream.memcpy_D_to_H` with bigarray |
+| `alloc_if_needed` | `arrayjit/lib/backends.ml` | 489+ | Initial H2D for constants; calls `Device.from_host` |
+| `Ndarray.create_array` | `arrayjit/lib/ndarray.ml` | 470+ | Host array creation via `Bigarray.Genarray.create` (unchanged) |
 | Device buffer alloc | `arrayjit/lib/cuda_backend.ml` | 58-88 | `Alloc_buffer` module: `mem_alloc`, `alloc_zeros`, `free_buffer` |
-| Stream finalization | `arrayjit/lib/cuda_backend.ml` | 130-135 | `finalize_device`: frees cross-stream buffers |
-| Merge buffer pattern | `arrayjit/lib/cuda_backend.ml` | 121-128 | `opt_alloc_merge_buffer`: lazy grow pattern (model for staging buffer) |
+| Stream finalization | `arrayjit/lib/cuda_backend.ml` | 128-134 | `finalize_device`: frees constant-buffer-cache buffers |
+| Merge buffer pattern | `arrayjit/lib/cuda_backend.ml` | 119-126 | `opt_alloc_merge_buffer`: lazy grow pattern (model for staging buffer) |
 | cudajit `Deviceptr` | `ocaml-cudajit/src/cuda.ml` | ~1489 | `mem_alloc` / `mem_free`: pattern for new `mem_alloc_host` / `mem_free_host` |
-| cudajit FFI bindings | `ocaml-cudajit/cuda_ffi/bindings.ml` | 43-48 | `cu_mem_alloc` / `cu_mem_alloc_async`: pattern for new binding |
+| cudajit FFI bindings | `ocaml-cudajit/cuda_ffi/bindings.ml` | 43-46 | `cu_mem_alloc` / `cu_mem_alloc_async`: pattern for new binding |
 
 ### Dependency: ocaml-cudajit bindings
 
@@ -53,7 +64,7 @@ The existing `opt_alloc_merge_buffer` in `cuda_backend.ml` (line 121-128) demons
 
 **File: `ocaml-cudajit/cuda_ffi/bindings.ml`**
 
-Add two new FFI bindings after the existing `cu_mem_free_async` (line 112):
+Add two new FFI bindings after the existing `cu_mem_free_async` (line 111):
 
 ```ocaml
 let cu_mem_alloc_host =

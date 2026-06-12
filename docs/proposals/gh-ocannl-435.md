@@ -3,6 +3,16 @@
 **Issue:** [ahrefs/ocannl#435](https://github.com/ahrefs/ocannl/issues/435)
 **Status:** Draft proposal
 
+## Status update (2026-06-12)
+
+- Issue #435 is OPEN (label `explore`), milestone v1.0 (end of October 2026). No comments have been posted on the issue and `docs/explore/simply-comparison.md` does not exist — the deliverable has not been produced; the task has not started.
+- The OCANNL comparison target has grown since elaboration: `lib/nn_blocks.ml` is now 579 lines (the "~440" figure below is stale) — additions include `batch_norm1d`/`batch_norm2d` (#59) and RoPE/sinusoidal position embeddings (#398, closed; PoPE deferred to #444). `lib/train.ml` is 253 lines.
+- The OCANNL column gained substantial new evidence: `test/training/transformer_names.ml` (decoder-only autoregressive transformer on the Names dataset, #57 closed COMPLETED), `fsm_transformer.ml` (#116), and the makemore tutorials (`mlp_names.ml`, `mlp_bn_names.ml`). The *position encoding* and *normalization* axes of the eleven-axis table now have real OCANNL entries.
+- `lib/persistence.ml`/`.mli` (tensor persistence, #373) is in place as anticipated below.
+- Sister explore task #318 (megakernel deep dive) is closed COMPLETED; #242/#306/#316 remain complementary context.
+- The precondition note still holds: local clones of Simply and NanoDO are absent from `/Users/lukstafi/simply/` and `/Users/lukstafi/nanodo/` — the implementing worker must re-clone both.
+- Remaining work: all eight acceptance criteria (read Simply/NanoDO, build the table, write `docs/explore/simply-comparison.md`, post the GH comment).
+
 ## Goal
 
 Produce a structured deep-dive comparison of two reference Python/JAX neural-network frameworks against OCANNL's user-facing library code, and post the findings as a comment on issue #435. The two references are:
@@ -10,7 +20,7 @@ Produce a structured deep-dive comparison of two reference Python/JAX neural-net
 - **Simply** ([google-deepmind/simply](https://github.com/google-deepmind/simply)) — Google DeepMind's "minimal-yet-production" LLM research framework. ~4000-line `model_lib.py` covers LayerNorm/RMSNorm, gated/MoE FFN, multi-head/GQA attention with RoPE/flash/sliding-window/KV-cache, full TransformerLM, plus a separate `rl_lib.py` (~1466 lines) for REINFORCE/GRPO. Built on a custom `SimplyModule` base class with explicit `init(prng_key) -> PyTree` / `apply(params, x)` separation.
 - **NanoDO** ([google-deepmind/nanodo](https://github.com/google-deepmind/nanodo)) — a ~166-line decoder-only transformer using Flax `nn.Module`. Serves as the "minimum viable transformer" baseline.
 
-The comparison target on the OCANNL side is `lib/` — `nn_blocks.ml` (~440 lines of building blocks), `train.ml` (~300 lines of training utilities), `ocannl.ml` (re-exports), and (added since elaboration) `persistence.ml`. The deliverable is a write-up that informs OCANNL's `lib/` evolution toward LLM workloads, not code changes in this round.
+The comparison target on the OCANNL side is `lib/` — `nn_blocks.ml` (~579 lines of building blocks as of 2026-06), `train.ml` (~253 lines of training utilities), `ocannl.ml` (re-exports), and (added since elaboration) `persistence.ml`. The deliverable is a write-up that informs OCANNL's `lib/` evolution toward LLM workloads, not code changes in this round.
 
 This is exploratory research. No public API of OCANNL is touched.
 

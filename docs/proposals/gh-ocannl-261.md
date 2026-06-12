@@ -4,6 +4,16 @@
 **Status:** Draft proposal — research / scouting task
 **Milestone:** v0.9 (Program search with execution-based cost functions)
 
+## Status update (2026-06-12)
+
+- Issue [#261](https://github.com/ahrefs/ocannl/issues/261) is **OPEN**, milestone **v0.9** (GH milestone due-date 2026-05-30 is stale; per ROADMAP.md, v0.9 targets Aug 24, 2026 — ICFP week).
+- The deliverable (`docs/research/superoptimizers.md` write-up + follow-up issues) has **not** been produced; `docs/research/` still does not exist (the sibling deep-dive write-ups live as proposals under `docs/proposals/`, not under `docs/research/` — adjust the AC path or create the directory when executing).
+- Sibling-task states corrected: #242 (TVM) CLOSED/completed; #301 (IREE) and #306 (Petalisp/Caten) CLOSED as **not planned** (no `docs/research/` write-ups landed for them). #267 (Tiramisu) and #265 (Candle) remain OPEN as draft proposals.
+- Line-number drift in `arrayjit/lib/low_level.ml` (re-verified 2026-06-12): `optimize_proc` now at line 1619; `simplify_llc` at 1014; `eliminate_common_subexpressions` at 1317; `hoist_shared_locals` at 1504; `hoist_cross_statement_cse` at 1586. `Assignments.to_low_level` (line 190) and `Assignments.lower` (line 983) unchanged. `c_syntax.ml` is now ~981 lines, `tensor/tensor.ml` ~1105 lines.
+- The CUDA single-threaded baseline still holds: kernels launch with `grid_dim_x:1, block_dim_x:1` in `cuda_backend.ml`.
+- Repo-wide changes since April 2026 that new text should respect: broadcast-order reversal (LUB→GLB, meet→join, "⊑" reads "refines"), dimension "label"→"basis" rename, "invalid"→"discardable" rename, and `device_to_device` now returning a transfer routine with static merge-buffer verification (`merge_buffer_use = No | Copy`). None of these invalidate the design content here, but rewrite-rule work over `Assignments.t` should use the post-reversal vocabulary.
+- Verdict: still actionable as written (research + issue fan-out); nothing has been implemented or filed yet.
+
 ## Goal
 
 This is a **research / scouting task**, not an implementation task. The
@@ -104,22 +114,25 @@ of the world as of 2026-04-30:
   (around line 190) and `Assignments.lower` (around line 982) — the
   bridge from the high-level `Assignments.t` IR to `Low_level.t`.
 - **Optimisation pipeline** (`arrayjit/lib/low_level.ml`):
-  `optimize_proc` at line ~1595 composes
+  `optimize_proc` at line ~1619 *(line numbers re-verified 2026-06-12)* composes
   `cleanup_virtual_llc → simplify_llc → eliminate_common_subexpressions
-   → hoist_cross_statement_cse`. `simplify_llc` itself is at line 1013
+   → hoist_cross_statement_cse`. `simplify_llc` itself is at line 1014
   (the Tentative Design's pointer to lines 1007–1192 is approximately
   correct — the body now extends to ~1180).
 - **Already landed (stale claims in the task file):**
   - gh-ocannl-351 (CSE after inlining) — **CLOSED**. CSE is
-    `eliminate_common_subexpressions` at line 1306.
+    `eliminate_common_subexpressions` at line 1317.
   - gh-ocannl-350 (loop hoisting / loop-invariant code motion) —
     **CLOSED**. Hoisting is `hoist_cross_statement_cse` /
-    `hoist_shared_locals` at lines 1477–1572.
+    `hoist_shared_locals` at lines 1504–1618.
   - gh-ocannl-25 (loop fusion exploration) — **CLOSED**.
   - gh-ocannl-131 (single product_space iteration for grouped
     accumulations) — **CLOSED**.
   - gh-ocannl-242 (TVM deep dive), gh-ocannl-301 (IREE), gh-ocannl-306
-    (Petalisp / Caten) — **CLOSED**, write-ups landed.
+    (Petalisp / Caten) — **CLOSED**. *(Update 2026-06-12: only #242 was
+    closed as completed; #301 and #306 were closed as not planned, and
+    no `docs/research/` write-ups exist — the deep-dive material lives
+    in the corresponding `docs/proposals/gh-ocannl-NNN.md` files.)*
 - **Still open and adjacent:**
   - gh-ocannl-267 (Tiramisu deep dive) — proposal already at
     `docs/proposals/gh-ocannl-267.md`. Identifies the *missing
@@ -178,7 +191,7 @@ Seams to consider, with concrete file pointers:
 
 - **Graph-level rewrites** → `arrayjit/lib/assignments.ml` (`Accum_op`,
   `Set_vec_unop`, `Fetch`, `sequential` / `sequence` builders);
-  `tensor/tensor.ml` (operator definitions, ~1087 lines). Equality
+  `tensor/tensor.ml` (operator definitions, ~1105 lines). Equality
   saturation would build an e-graph over `Assignments.t` or a
   pre-`Assignments` form; this is the most natural fit for the
   e-graph paper.
@@ -193,7 +206,7 @@ Seams to consider, with concrete file pointers:
   thread-block / loop-tile rewrites would compose with these, not
   replace them. Identify the natural insertion point in the pipeline.
 - **Instruction-level rewrites** → `arrayjit/lib/c_syntax.ml`
-  (~899 lines) and the per-backend emitters
+  (~981 lines) and the per-backend emitters
   (`cc_backend.ml`, `cuda_backend.ml`, `metal_backend.ml`). Mirage's
   thread-tier rewrites correspond to choices made here.
 

@@ -3,6 +3,15 @@
 Task: gh-ocannl-163
 Issue: https://github.com/ahrefs/ocannl/issues/163
 
+## Status update (2026-06-12)
+
+- Issue #163 is still OPEN, milestone v0.8 (ROADMAP targets mid-June 2026 for v0.8).
+- Not yet started: `docs/research/` does not exist and no ggml-lessons note has been written.
+- **Major invalidation: gh-ocannl-137 (quantization) was CLOSED as NOT_PLANNED.** The verdict option `already covered by gh-ocannl-137` is no longer available; quantization-related techniques (including block quantization with shared scales) must get verdict `file follow-up issue`, `not applicable`, or `future` — and the note should record 137's closure rather than cite it as a live follow-up.
+- gh-ocannl-164 (AVX/AVX2) is still OPEN, milestone v0.8, with its proposal at `docs/proposals/gh-ocannl-164.md` unimplemented — the `already covered by gh-ocannl-164` verdict remains available.
+- Cited OCANNL surfaces re-verified at HEAD `d9de22f0`: `ops.ml`, `c_syntax.ml`, `cc_backend.ml`, `builtins_cc.ml`, `tnode.ml`, `backend_impl.ml`, `schedulers.ml` all exist; `backend_impl.ml` still uses unaligned `Ctypes.allocate_n`; `schedulers.ml` still runs one OCaml `Domain` worker per stream with no intra-kernel parallelism.
+- Backend-layer changes since April 2026 worth reflecting in the note: `device_to_device` now returns a transfer routine with static merge-buffer verification (`merge_buffer_use = No | Copy`; `Streaming_for` is gone), Metal uses private storage mode for GPU-only buffers (`1cf9a95b`), and commit `272c0880` removed the deprecated multi-stream backend infrastructure (cross-stream automatic coherence) while multiple streams per device remain.
+
 ## Goal
 
 Produce a focused research note that distills what OCANNL can learn from
@@ -15,7 +24,9 @@ The note bounds an otherwise open-ended exploration: a fixed list of ~5
 ggml techniques, each examined through the same template, each closing
 with a single explicit verdict. Where ggml-inspired work is already tracked
 by `gh-ocannl-137` (quantization) or `gh-ocannl-164` (AVX/AVX2 intrinsics),
-the note records the mapping rather than duplicating scope. Where ggml
+the note records the mapping rather than duplicating scope. *(Update
+2026-06-12: #137 has since been closed as not-planned, so only the #164
+mapping remains live; see Status update.)* Where ggml
 techniques are not yet tracked (the obvious candidates at draft time are
 memory-mapped weights, an intra-kernel thread pool, and block-quantization
 scale grouping), the worker files new GitHub issues against `ahrefs/ocannl`.
@@ -44,7 +55,8 @@ scale grouping), the worker files new GitHub issues against `ahrefs/ocannl`.
      `arrayjit/lib/schedulers.ml`. Line numbers are forbidden (they drift);
      use symbol names and short distinctive code quotes when needed.
   4. **Verdict** — exactly one of:
-     - `already covered by gh-ocannl-137` (quantization)
+     - `already covered by gh-ocannl-137` (quantization) *(Update
+       2026-06-12: no longer available — #137 closed as not-planned)*
      - `already covered by gh-ocannl-164` (AVX/AVX2 intrinsics)
      - `file follow-up issue` (with proposed issue title and 1-line scope)
      - `not applicable` (with reason)
@@ -79,7 +91,7 @@ scale grouping), the worker files new GitHub issues against `ahrefs/ocannl`.
 | C builtins/includes | `arrayjit/lib/builtins_cc.ml` | Where SIMD platform-detection macros (`__AVX2__`, `__ARM_NEON`) and intrinsic helpers belong. |
 | Tensor node model | `arrayjit/lib/tnode.ml` | `memory_mode` / `Hosted` distinguish where tensor data lives; relevant for memory-mapped weight loading. |
 | Allocation | `arrayjit/lib/backend_impl.ml` | Currently uses `Ctypes.allocate_n int8_t` (no alignment guarantee). The 164 proposal already plans to switch to aligned allocation; mmap-backed allocation would integrate here. |
-| CPU scheduling | `arrayjit/lib/schedulers.ml` | Per-stream OCaml `Domain` worker. Recent commit `272c0880` removed multi-stream infrastructure. Intra-kernel work-stealing is a *separate* concept (parallelizing the body of a single kernel across cores) and is not currently present. |
+| CPU scheduling | `arrayjit/lib/schedulers.ml` | Per-stream OCaml `Domain` worker. Commit `272c0880` removed the *deprecated* multi-stream backend infrastructure (cross-stream automatic coherence); multiple streams per device remain. Intra-kernel work-stealing is a *separate* concept (parallelizing the body of a single kernel across cores) and is not currently present. |
 
 Note: there is no `arrayjit/lib/cpu_backend.ml`; the CPU code path is
 `c_syntax.ml` (emit C) + `cc_backend.ml` (compile and run via system C
@@ -88,8 +100,10 @@ should correct that pointer in the research note.
 
 ### Existing scope of related tasks
 
-**`gh-ocannl-137` (quantization, milestone v1.1, effort large).** Acceptance
-criteria as of writing: tensors quantizable to int8/fp8/int4 with
+**`gh-ocannl-137` (quantization, milestone v1.1, effort large).** *(Update
+2026-06-12: CLOSED as not-planned; the description below is kept as
+historical context, but the note must not claim coverage by this issue.)*
+Acceptance criteria as of writing: tensors quantizable to int8/fp8/int4 with
 scale/zero-point, mixed-precision computation, at least one quantization
 scheme implemented, quantized inference within tolerance. The tentative
 design notes that OCANNL already has `Half`, `Bfloat16`, `Fp8`, `Uint4x32`
@@ -133,10 +147,11 @@ focus its new-issue output on the gaps.
    "quantization" in the abstract: ggml's Q4_0/Q4_1/Q8_0 formats group
    32 values and share one `fp16` scale (and optionally one offset) per
    group. This is an *encoding* decision orthogonal to QAT/PTQ. It
-   plausibly falls under `gh-ocannl-137`, but only if that task
-   explicitly adopts a block-grouped storage layout — currently it does
-   not. Mapping point: a layout descriptor in `ops.ml` or `tnode.ml`,
-   plus dequantize/matmul kernels in `builtins_cc.ml`.
+   plausibly fell under `gh-ocannl-137`, but that issue is now closed
+   as not-planned *(Update 2026-06-12)*, so if this technique is judged
+   worthwhile it needs a fresh follow-up issue. Mapping point: a layout
+   descriptor in `ops.ml` or `tnode.ml`, plus dequantize/matmul kernels
+   in `builtins_cc.ml`.
 
 The worker should validate these gap claims against the latest state of
 137/164 before writing the note, and adjust the verdict per technique

@@ -1,5 +1,13 @@
 # Collapse Repeated Identifiers in debug_name
 
+## Status update (2026-06-12)
+
+- Issue #281 is still OPEN, milestone v0.7. Harness status: deferred. Not implemented — `get_debug_name` still joins components verbatim with no collapsing.
+- Motivating issue #210 (runtime argument labels) is CLOSED as completed (back in v0.4), so the label repetition this proposal addresses can occur today; the motivation stands.
+- Line numbers drifted: `get_debug_name` is now at `arrayjit/lib/tnode.ml` lines 96-114 (was 121-139). The structure described (code_name short-circuit, `is_alphanum_` filter, `"grad"` strip, `String.concat ~sep:"_"`, `.grad` suffix) is unchanged and the proposed insertion point (between grad-strip and concat) remains valid.
+- One detail not in the original write-up: the current code also has fallback branches for empty `components` (`"n<id>"` / `"n<id-1>.grad"`), which the collapsing helper does not affect.
+- The approach (self-contained `collapse_consecutive` helper in `tnode.ml`, no API changes) is still accurate; nothing else in the proposal is invalidated.
+
 ## Goal
 
 When a tensor's `label` list contains consecutive identical identifiers (e.g. `["attention"; "attention"; "attention"]`), `get_debug_name` should collapse them into a count-suffixed form (e.g. `"attention3"`) instead of producing verbose names like `"attention_attention_attention"`. This keeps debug output readable as issue #210 (incorporating runtime argument labels) introduces label repetition.
@@ -19,7 +27,7 @@ Tracked by: https://github.com/ahrefs/ocannl/issues/281
 
 ### Current implementation
 
-`get_debug_name` in `arrayjit/lib/tnode.ml` (lines 121-139):
+`get_debug_name` in `arrayjit/lib/tnode.ml` (lines 96-114 as of 2026-06-12):
 
 1. If `code_name` is set, uses it directly (with `.grad` suffix handling).
 2. Otherwise, filters `label` through `is_alphanum_` to keep only alphanumeric components.
@@ -35,4 +43,4 @@ Add a helper function (e.g. `collapse_consecutive`) that folds over the string l
 
 ### Related
 
-- **#210**: Incorporate runtime argument labels -- the feature that motivates this collapsing.
+- **#210**: Incorporate runtime argument labels -- the feature that motivates this collapsing. *(Update 2026-06-12: #210 is closed/completed, so the repetition it produces is live in current debug output.)*

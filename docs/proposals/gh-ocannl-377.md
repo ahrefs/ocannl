@@ -6,11 +6,21 @@ Build an end-to-end inference pipeline for GPT-2 Small (124M parameters) that lo
 
 GitHub issue: https://github.com/ahrefs/ocannl/issues/377
 
+## Status update (2026-06-12)
+
+- Issue is OPEN, milestone v0.7.1 (mid-March 2026 per ROADMAP.md — now ~3 months past due; the inference demo is the milestone's headline remaining item).
+- Partially overtaken by landed work: `lib/nn_blocks.ml` now has `decoder_only_block` (line 231) and a `decoder_only` stack (line 245) (commit cafa0c44, with a decoder-only example at `test/training/transformer_names.ml`). However, both are **post-norm** with a ReLU `mlp` FFN and no final layer norm or configurable activation — GPT-2 needs pre-norm + GeLU, so Phase 1 becomes "generalize or add pre-norm variants of" rather than "add from scratch".
+- Position embeddings landed (#398, commits 9d943eb9/ddf60b1e): RoPE and sinusoidal encodings, with a `pos_embed` parameter threaded through `multi_head_attention` and the decoder blocks; PoPE deferred to #444. GPT-2 still needs *learned* absolute position embeddings (a plain parameter add), unaffected.
+- Dependencies verified still accurate: `lib/persistence.{ml,mli}` provides `save ~appending`, `load ?prefix_namespace`, `restore`; `Dataprep.Bpe` (in ocaml-dataprep) provides `from_pretrained`, `encode`, `decode`, `vocab_size`, plus `token_to_id`/`id_to_token`, and supports GPT-2.
+- Still missing: GeLU (no gelu/silu anywhere in the tree), the weight-conversion and reference-dump scripts (`scripts/` contains only `setup-ocaml-env.sh`), and the inference example itself (`test/training/` has no `gpt2_inference.ml`).
+- File drift: `bigram_mlp.ml` was rewritten as `mlp_names.ml`; `fsm_transformer.ml` remains and is still the best structural reference, alongside the newer `transformer_names.ml`.
+- Embedding lookup workaround (single-token one-hot, avoiding #343) is still valid — #343 remains open/unstarted.
+
 ## Acceptance Criteria
 
 - [ ] GeLU activation added to `lib/nn_blocks.ml` using the tanh approximation composed from existing ops: `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`
-- [ ] `decoder_only_block` added to `lib/nn_blocks.ml`: pre-layer-norm, masked self-attention, GeLU FFN, configurable activation, no cross-attention
-- [ ] `decoder_only_transformer` added to `lib/nn_blocks.ml`: stacks N blocks with final layer norm, accepts learned positional embeddings
+- [ ] `decoder_only_block` added to `lib/nn_blocks.ml`: pre-layer-norm, masked self-attention, GeLU FFN, configurable activation, no cross-attention *(Update 2026-06-12: a post-norm ReLU `decoder_only_block` now exists at nn_blocks.ml:231; this criterion becomes generalizing it or adding a pre-norm variant)*
+- [ ] `decoder_only_transformer` added to `lib/nn_blocks.ml`: stacks N blocks with final layer norm, accepts learned positional embeddings *(Update 2026-06-12: a `decoder_only` stack exists at nn_blocks.ml:245, but without final layer norm)*
 - [ ] Python weight conversion script (`scripts/convert_gpt2_weights.py`) downloads GPT-2 Small from HuggingFace, splits fused QKV weights, transposes Conv1D-style matrices, and writes OCANNL checkpoint format (s-expression header + binary)
 - [ ] Weights loaded via `Persistence.restore` into the constructed OCANNL model graph
 - [ ] Tokenization uses `Dataprep.Bpe.from_pretrained "openai-community/gpt2"` for encode/decode
@@ -28,14 +38,15 @@ GitHub issue: https://github.com/ahrefs/ocannl/issues/377
 **Tensor persistence** (`lib/persistence.ml`): Fully implemented `save`, `load`, and `restore` with binary checkpoint format. `restore` matches by tnode ID and overwrites hosted buffers, verifying precision and dimension compatibility. This is the weight-loading mechanism.
 
 **Transformer blocks** (`lib/nn_blocks.ml`):
-- `multi_head_attention` (line 181): Separate Q/K/V projections via `w_q`, `w_k`, `w_v` params, scaled dot-product, optional causal mask, temperature, dropout, RoPE support
-- `layer_norm` (line 211): Learnable gamma/beta, configurable epsilon
+- `multi_head_attention` (line 179): Separate Q/K/V projections via `w_q`, `w_k`, `w_v` params, scaled dot-product, optional causal mask, temperature, dropout, RoPE support
+- `layer_norm` (line 208): Learnable gamma/beta, configurable epsilon
 - `softmax` (line 107): Numerically stable with temperature, axis-specified via `~spec`
 - `mlp` (line 89): Variable-depth MLP with linear output, uses ReLU
-- `transformer_encoder_block` (line 220): Post-norm self-attention + FFN (close but uses post-norm and ReLU; no mask parameter)
+- `transformer_encoder_block` (line 217): Post-norm self-attention + FFN (close but uses post-norm and ReLU; no mask parameter)
+- `decoder_only_block` (line 231) and `decoder_only` stack (line 245): *(Update 2026-06-12: landed since this proposal)* masked self-attention + FFN with `~mask` parameter, but post-norm, ReLU FFN, no final layer norm
 - `dropout` (line 82): Controlled by train_step presence
 
-**Decoder-only pattern** already demonstrated in `test/training/fsm_transformer.ml`: A decoder-only model with masked self-attention, learned positional embeddings, causal mask, separate training and inference compilation, and shared weight parameters between the two. This is the primary reference for how to structure the GPT-2 inference script.
+**Decoder-only pattern** already demonstrated in `test/training/fsm_transformer.ml`: A decoder-only model with masked self-attention, learned positional embeddings, causal mask, separate training and inference compilation, and shared weight parameters between the two. This is the primary reference for how to structure the GPT-2 inference script. *(Update 2026-06-12: `test/training/transformer_names.ml` is a newer decoder-only example built on the `nn_blocks` decoder blocks.)*
 
 **BPE tokenizer** (`Dataprep.Bpe` in `ocaml-dataprep`): Fully implemented, supports HuggingFace `tokenizer.json` format. API: `from_pretrained "openai-community/gpt2"` for download+load, `encode t string -> int array`, `decode t ids -> string`, `vocab_size t -> int`. Compatible with GPT-2's byte-level BPE (50257 vocab).
 
@@ -64,7 +75,7 @@ GitHub issue: https://github.com/ahrefs/ocannl/issues/377
 
 1. **Embedding lookup**: With vocab_size=50257, full-sequence one-hot encoding is memory-prohibitive. For autoregressive inference (one token at a time), single-token one-hot is feasible (~200KB). For the initial prompt, process tokens sequentially or in a small batch. This avoids the need for #343 (dynamic indexing).
 
-2. **Pre-layer-norm block**: The existing `transformer_encoder_block` uses post-norm. GPT-2 needs: `x = x + mha(ln1(x))` then `x = x + gelu_ffn(ln2(x))`. A new `decoder_only_block` must be added.
+2. **Pre-layer-norm block**: The existing `transformer_encoder_block` — and the since-landed `decoder_only_block` *(Update 2026-06-12)* — use post-norm. GPT-2 needs: `x = x + mha(ln1(x))` then `x = x + gelu_ffn(ln2(x))`. The existing `decoder_only_block` must be generalized (pre-norm option, configurable activation) or a pre-norm variant added.
 
 3. **Fused QKV weight splitting**: HuggingFace GPT-2 stores `c_attn.weight` as a single (768, 2304) Conv1D-style matrix. The Python converter must: (a) transpose from (in, out) to (out, in), and (b) split into three (768, 768) matrices for separate `w_q`, `w_k`, `w_v`.
 
@@ -78,8 +89,8 @@ GitHub issue: https://github.com/ahrefs/ocannl/issues/377
 
 - **Tensor persistence (#373)**: DONE -- `Persistence.{save,load,restore}` fully implemented
 - **BPE tokenizer**: DONE -- `Dataprep.Bpe` supports GPT-2 via `from_pretrained`
-- **RoPE (#398)**: Not needed for GPT-2 (uses learned positional embeddings)
-- **#343 (dynamic indexing)**: Not needed -- single-token one-hot is sufficient for inference
+- **RoPE (#398)**: DONE (landed, with sinusoidal encodings; PoPE deferred to #444) — but not needed for GPT-2 (uses learned positional embeddings)
+- **#343 (virtual one-hot / embedding optimization)**: Not needed -- single-token one-hot is sufficient for inference
 
 ## Approach
 
@@ -94,7 +105,7 @@ let gelu x =
 ```
 This uses the standard tanh approximation and composes entirely from existing operations (pointmul, add, tanh, sqrt, pointpow).
 
-**Add `decoder_only_block`**: Pre-layer-norm masked self-attention + FFN with configurable activation:
+**Add `decoder_only_block`** *(Update 2026-06-12: a post-norm `decoder_only_block` and `decoder_only` stack already exist in nn_blocks.ml — adapt/generalize them rather than adding from scratch, and avoid name clashes)*: Pre-layer-norm masked self-attention + FFN with configurable activation:
 ```ocaml
 let decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff
     ?(epsilon = 1e-5) ?(activation = relu) ?(pos_embed = No_pos_embed) () =

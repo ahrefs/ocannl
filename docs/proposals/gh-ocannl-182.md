@@ -1,5 +1,15 @@
 # Reproduce "Growing Bonsai Networks with RNNs" (gh-ocannl-182)
 
+## Status update (2026-06-12)
+
+- Issue [ahrefs/ocannl#182](https://github.com/ahrefs/ocannl/issues/182) is still OPEN (label: explore), milestone v1.0. Per ROADMAP.md (authoritative) v1.0 targets end of October 2026; the GitHub milestone due date (June 2026) lags.
+- The Ludics harness task records a start on 2026-04-30, but nothing has landed: there is no `test/training/bonsai_rnn.ml`, no related branch, and no pruning helper in `lib/train.ml`.
+- gh-ocannl-59 (makemore) is now CLOSED — `test/training/mlp_names.ml`, `mlp_bn_names.ml` and `batch_norm1d` in `lib/nn_blocks.ml` landed, giving extra training-loop scaffolding to crib from (also new: `fsm_transformer.ml` from gh-ocannl-116, conv examples).
+- gh-ocannl-60 (LSTM example) is still OPEN (milestone v0.7.1); no `lstm_cell` exists in `lib/nn_blocks.ml`, so the recommended fallback — a local vanilla `tanh`-RNN cell — applies.
+- Cited APIs re-verified at HEAD: `Tn.set_values`/`get_values` (`arrayjit/lib/tnode.ml:752`/`758`), `to_dag`/`to_printbox` (`tensor/tensor.ml`), `Train.run_once`/`init_params`, `Tensor.params`, `Utils.settings.fixed_state_for_init`, `relu`/`sat01`/`tanh` exported and still no `sigmoid` primitive, still no Graphviz exporter.
+- Repo-wide renames since April 2026 (broadcast-order reversal LUB→GLB, "label"→"basis") do not touch any identifier this proposal relies on.
+- The entire implementation remains to do.
+
 ## Goal
 
 Reproduce the central result from Casey Primozic's blog post
@@ -104,7 +114,7 @@ Specifics worth keeping in mind during implementation:
   zero. The blog also experiments with quantising the surviving weights — that
   is explicitly out of scope (see Scope).
 
-### Existing OCANNL building blocks (verified at HEAD)
+### Existing OCANNL building blocks (verified at HEAD; re-verified 2026-06-12)
 
 Reuse these — do not invent parallel infrastructure.
 
@@ -170,6 +180,8 @@ Reuse these — do not invent parallel infrastructure.
   each other; they share idioms.
 - **gh-ocannl-59** (makemore examples) — language-modeling siblings; useful
   reference for data-tensor / training-loop scaffolding but not a dependency.
+  *(Update 2026-06-12: now closed — `mlp_names.ml` and `mlp_bn_names.ml`
+  landed in `test/training/`.)*
 
 ## Scope
 

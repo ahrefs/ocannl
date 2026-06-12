@@ -4,6 +4,16 @@
 **Issue**: https://github.com/ahrefs/ocannl/issues/277
 **Milestone**: v0.8
 
+## Status update (2026-06-12)
+
+- Issue #277 is still OPEN, milestone v0.8 (per ROADMAP.md: "GPU tiling, megakernels", mid-June 2026). Harness status: deferred.
+- The deliverable `docs/krnl-autograph-analysis.md` has not been written; no work has started.
+- **gh-ocannl-373 (tensor persistence) is CLOSED as completed** — `lib/persistence.ml` and binary payload I/O in `arrayjit/lib/ndarray.ml` landed. Acceptance criterion 3 and Expected Finding 2 (serialization lessons "informing #373's design") are moot; any serialization comparison would now be retrospective, not design input.
+- **gh-ocannl-301 (IREE deep dive) is CLOSED as not planned** — the "Vulkan as universal fallback" thread no longer has a follow-up task to hand off to.
+- gh-ocannl-318 (megakernel deep dive) is CLOSED as completed; `docs/megakernel-deep-dive.md` exists and remains a valid comparison point for Luminal's fusion.
+- The "single-threaded kernels" constraint still holds: CUDA kernels launch with `grid_dim_x:1 ~block_dim_x:1` (`arrayjit/lib/cuda_backend.ml:970`); gh-ocannl-412 (tiling) is still OPEN, milestone v0.8.
+- Remaining value of this task is the three-way architecture comparison (krnl/autograph vs Luminal vs OCANNL) and the "why they stalled" lessons; the serialization and Vulkan-fallback angles have lost most of their actionability.
+
 ## Goal
 
 Produce a structured comparative analysis of [krnl](https://github.com/charles-r-earp/krnl) (a Rust GPGPU kernel framework using Vulkan/SPIR-V) and [autograph](https://github.com/charles-r-earp/autograph) (an ML library built on krnl), evaluating their design decisions against OCANNL's architecture and identifying any transferable lessons. The analysis also includes a comparison with [Luminal](https://github.com/jafioti/luminal) (a graph-compiler ML framework in Rust) as requested in the original issue. The deliverable is a written analysis document, not code changes.
@@ -12,7 +22,7 @@ Produce a structured comparative analysis of [krnl](https://github.com/charles-r
 
 - [ ] A written analysis document (`docs/krnl-autograph-analysis.md`) covering the subsystems listed in the Context section below
 - [ ] krnl's Vulkan/SPIR-V kernel model is assessed for portability lessons relevant to OCANNL's multi-backend architecture (CUDA, Metal, C)
-- [ ] autograph's tensor serialization and model composition patterns are compared against OCANNL's existing and planned capabilities (especially gh-ocannl-373 tensor persistence)
+- [ ] autograph's tensor serialization and model composition patterns are compared against OCANNL's existing and planned capabilities (especially gh-ocannl-373 tensor persistence) *(Update 2026-06-12: #373 is closed/implemented — see `lib/persistence.ml`; this comparison is now retrospective)*
 - [ ] A three-way architectural comparison: krnl/autograph (eager-mode, Vulkan) vs Luminal (graph compiler, CUDA/Metal) vs OCANNL (einsum IR, code generation) -- identifying where each approach has advantages and disadvantages
 - [ ] Each identified technique or pattern is classified as: (a) already addressed by OCANNL or an existing task, (b) applicable and recommended with target milestone, or (c) not applicable with rationale
 - [ ] For category (b) items, concrete recommendations specify which OCANNL module/file would be affected and at what level of effort
@@ -55,7 +65,7 @@ Luminal is a Rust ML framework with a graph-compiler approach:
 - krnl's approach: single API (Vulkan) targeting all GPUs vs OCANNL's native CUDA + Metal
 - Portability vs performance tradeoff
 - Relevance: OCANNL already has multiple native backends; could Vulkan serve as a universal fallback?
-- Related: gh-ocannl-301 (IREE deep dive, which also has a Vulkan backend)
+- Related: gh-ocannl-301 (IREE deep dive, which also has a Vulkan backend) *(Update 2026-06-12: #301 closed as not planned)*
 
 **2. Kernel dispatch model**
 - krnl's iterator-based kernel definition vs OCANNL's einsum-to-loop-nest code generation
@@ -64,7 +74,7 @@ Luminal is a Rust ML framework with a graph-compiler approach:
 
 **3. Serialization and persistence**
 - autograph's serde-based tensor/model/optimizer serialization
-- How this compares to OCANNL's planned tensor persistence (gh-ocannl-373)
+- How this compares to OCANNL's tensor persistence (gh-ocannl-373, now implemented in `lib/persistence.ml`)
 - Whether serde-style derive macros have an OCaml equivalent pattern (ppx)
 
 **4. Model composition patterns**
@@ -95,10 +105,10 @@ Key constraints affecting which lessons transfer:
 |---------------|-----------|
 | `docs/proposals/gh-ocannl-253.md` | llm.c study -- same "study external project" format |
 | `docs/proposals/gh-ocannl-412.md` | Tiling proposal -- krnl's parallelism model is relevant context |
-| gh-ocannl-373 | Tensor persistence -- autograph's serde patterns are directly relevant |
-| gh-ocannl-301 | IREE deep dive -- IREE also uses Vulkan/SPIR-V |
-| gh-ocannl-265 | Candle study -- another Rust ML framework comparison |
-| gh-ocannl-318 | Megakernels -- Luminal's kernel fusion is a comparison point |
+| gh-ocannl-373 | Tensor persistence -- autograph's serde patterns are directly relevant *(closed/implemented as of 2026-06)* |
+| gh-ocannl-301 | IREE deep dive -- IREE also uses Vulkan/SPIR-V *(closed as not planned)* |
+| gh-ocannl-265 | Candle study -- another Rust ML framework comparison *(open, v0.9)* |
+| gh-ocannl-318 | Megakernels -- Luminal's kernel fusion is a comparison point *(closed/completed)* |
 | `docs/megakernel-deep-dive.md` | Existing megakernel analysis |
 
 ## Approach
@@ -151,7 +161,7 @@ Based on the task elaboration, the likely high-value findings are:
 
 1. **Vulkan as universal fallback** (v1.0+, exploratory): krnl demonstrates that Vulkan can serve as a single GPU compute API. However, the performance gap vs native CUDA is significant, and OCANNL already has native backends. The main lesson is whether a Vulkan/SPIR-V path could replace the Metal backend for broader portability. Likely conclusion: not worth the complexity given OCANNL's existing multi-backend architecture, but the IREE deep dive (gh-ocannl-301) may revisit this.
 
-2. **Serialization patterns for tensor persistence** (v0.7.0, relevant): autograph's serde-based approach is clean and composable. The OCaml equivalent would be ppx-derived serializers. This directly informs gh-ocannl-373's design.
+2. **Serialization patterns for tensor persistence** (v0.7.0, relevant): autograph's serde-based approach is clean and composable. The OCaml equivalent would be ppx-derived serializers. This directly informs gh-ocannl-373's design. *(Update 2026-06-12: #373 has since landed; this finding can only validate the shipped design, not inform it.)*
 
 3. **Graph-level fusion vs IR-level megakernels** (v0.8, context): Luminal's graph rewriting approach is conceptually similar to OCANNL's megakernel plans but operates at a higher abstraction level. Comparing the two can clarify where OCANNL should fuse (IR level) vs where graph-level reasoning is needed.
 

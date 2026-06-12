@@ -4,6 +4,15 @@
 **Issue:** https://github.com/ahrefs/ocannl/issues/54
 **Milestone:** v0.7.1
 
+## Status update (2026-06-12)
+
+- Issue [#54](https://github.com/ahrefs/ocannl/issues/54) is still **OPEN**, milestone v0.7.1 (due 2026-03-14, now past due); ROADMAP.md still lists the MNIST/CIFAR training setups under v0.7.1. Harness task is `deferred`.
+- The substantive implementation remains landed and stable: `test/training/mnist_conv.ml` (204 lines), `cifar_conv.ml` (214 lines), `conv_data.ml` (163 lines) plus `.expected` files all present on `master`. Post-proposal commits: `0a0e1c02` (center CIFAR data, custom binary loader) and `d570661a` (formatting).
+- The README checkbox is **still unchecked** — now at `README.md:73` (`- [ ] Add convnet examples: MNIST and CIFAR.`); the proposal's "line 72" reference has drifted by one.
+- CIFAR still uses the custom `Conv_data.load_cifar10` loader; the `Dataprep.Cifar10` decision (Option A vs B) remains unresolved.
+- The `test/training/dune` stanzas for both tests now sit around lines 66-79 (drifted from 54-74 as other `*_names.ml` makemore tests were added under #59, now closed).
+- Remaining work is unchanged and still minimal: check the README box, settle/document the dataprep criterion, final review.
+
 ## Goal
 
 Finalize the MNIST and CIFAR-10 classifier examples so they serve as polished, well-documented
@@ -36,7 +45,7 @@ loading, updating the README checkpoint, and verifying documentation quality.
      correct dependencies (`ocannl`, `dataprep`, `conv_data`, `unix`).
 
 5. **README.md checkbox for convnet examples can be checked off.**
-   - Not yet done: `README.md` line 72 still shows `- [ ] Add convnet examples: MNIST and CIFAR.`
+   - Not yet done: `README.md` line 73 *(Update 2026-06-12: was line 72)* still shows `- [ ] Add convnet examples: MNIST and CIFAR.`
    - Action: change to `- [x]`.
 
 ## Context
@@ -46,11 +55,11 @@ loading, updating the README checkpoint, and verifying documentation quality.
 | File | Purpose | Lines |
 |------|---------|-------|
 | `test/training/mnist_conv.ml` | MNIST LeNet classifier with train/eval | 204 |
-| `test/training/cifar_conv.ml` | CIFAR-10 LeNet classifier with train/eval | 215 |
-| `test/training/conv_data.ml` | int8→float32 conversion, CIFAR binary loader | 165 |
+| `test/training/cifar_conv.ml` | CIFAR-10 LeNet classifier with train/eval | 214 |
+| `test/training/conv_data.ml` | int8→float32 conversion, CIFAR binary loader | 163 |
 | `test/training/mnist_conv.expected` | Regression test expected output | 24 |
 | `test/training/cifar_conv.expected` | Regression test expected output | 24 |
-| `test/training/dune` | Build stanzas for both tests | relevant stanzas at lines 54-74 |
+| `test/training/dune` | Build stanzas for both tests | relevant stanzas at lines 66-79 |
 
 ### Architecture used
 
@@ -70,7 +79,7 @@ Both examples use `Nn_blocks.lenet` (5x5 conv → relu → pool → 5x5 conv →
 Since the core implementation is complete and passing tests, the remaining work is minimal:
 
 ### 1. Check README checkbox
-Change `README.md` line 72 from `- [ ]` to `- [x]` for the convnet examples item.
+Change `README.md` line 73 from `- [ ]` to `- [x]` for the convnet examples item.
 
 ### 2. Verify CIFAR `dataprep` criterion
 The acceptance criterion says "Examples use the `dataprep` package for data loading." The CIFAR

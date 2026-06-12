@@ -2,19 +2,28 @@
 
 GitHub issue: [ahrefs/ocannl#333](https://github.com/ahrefs/ocannl/issues/333)
 
+## Status update (2026-06-12)
+
+- Issue #333 is OPEN, GH milestone v0.7. ROADMAP.md lists it under v0.7.0 ("Remove hosted tensor mode", part of the context-handling finalization theme); that milestone's nominal date (end Feb 2026) has slipped, but the task remains on the roadmap.
+- Not started: `Tnode.t` still has the `array : Nd.t option Lazy.t` field, `Hosted of memory_type`, `memory_type`, `devices_not_lagging_host`, and the `prepare_read`/`prepare_write` machinery; `lib/train.ml` still has `set_on_host`, `set_hosted`, `every_non_literal_on_host`, and `?(hosted = true)` parameters.
+- Line numbers in this proposal have drifted (corrected in place below): the `array` field is now `tnode.ml:49`, `memory_type`/`memory_mode` are lines 12-40, `devices_not_lagging_host` is line 69, value access is lines 727-761, `update_memory_mode` starts at line 261. `Hosted` reference count in `tnode.ml` is now ~35 (was ~49); `ndarray.ml` is now ~1036 lines.
+- Landed since this was written, easing or reshaping parts of the plan: tensor persistence (`lib/persistence.ml`, #373) — the "parameter serialization" edge case should now route through `Persistence` rather than reviving `Train.save_params` (still commented out); deprecated multi-stream infrastructure removed from the backend layer (cross-stream automatic coherence is gone; multiple streams per device remain); `device_to_device` now returns a transfer routine with static merge-buffer verification (`backend_intf.ml:307`), and `merge_buffer_use` is `No | Copy` (Streaming_for is gone); Metal now uses private storage mode for GPU-only buffers (commit 1cf9a95b), making the `use_host_memory` unified-memory note Metal-specific to shared-mode buffers.
+- `use_host_memory` lives in `arrayjit/lib/backend_impl.ml` (lines 20, 188), not `backend_intf.ml`.
+- The design itself (acceptance criteria 1-11, the on-demand printing trick, the context-based value access) is not invalidated by any landed work; it remains the v0.7.0 roadmap plan.
+
 ## Goal
 
 Eliminate the dual host/device memory model by removing the `array` field from `Tnode.t`, the `Hosted` variant from `memory_mode`, and the `memory_type` type entirely. All tensor data lives exclusively on devices; CPU-side value access (printing, saving, inspection) happens via on-demand device-to-host transfers through a context. The `Ndarray` module is retained as a slimmed-down utility for temporary host buffers but is no longer stored inside tensor nodes.
 
 ## Acceptance Criteria
 
-1. **`array` field removed from `Tnode.t`**: The `array : Nd.t option Lazy.t` field (tnode.ml line 74) is deleted. No host-side copy is stored in the tensor node.
+1. **`array` field removed from `Tnode.t`**: The `array : Nd.t option Lazy.t` field (tnode.ml line 49) is deleted. No host-side copy is stored in the tensor node.
 
 2. **`Hosted` variant and `memory_type` removed**: The `Hosted of memory_type` variant is deleted from `memory_mode`. The `memory_type` type (`Unset_hosted`, `Constant`, `Nonconstant`, `Changed_on_devices`, `Volatile`) is deleted entirely. `Materialized` collapses to mean `On_device`.
 
-3. **`devices_not_lagging_host` removed**: The host/device sync tracking field (tnode.ml line 94) and all `prepare_read`/`prepare_write` callback machinery are removed.
+3. **`devices_not_lagging_host` removed**: The host/device sync tracking field (tnode.ml line 69) and all `prepare_read`/`prepare_write` callback machinery are removed.
 
-4. **Context-based value access**: `get_value`, `set_value`, `get_values`, `set_values` (tnode.ml lines 810-844) are replaced with context-aware versions that perform on-demand device-to-host transfers. An optional `mutable host_cache : Nd.t option` field on `Tnode.t` allows evictable caching (mutable, not lazy, per the issue author's comment about future buffer eviction).
+4. **Context-based value access**: `get_value`, `set_value`, `get_values`, `set_values` (tnode.ml lines 727-761) are replaced with context-aware versions that perform on-demand device-to-host transfers. An optional `mutable host_cache : Nd.t option` field on `Tnode.t` allows evictable caching (mutable, not lazy, per the issue author's comment about future buffer eviction).
 
 5. **On-demand tensor printing**: `Tensor.print` works without hosted arrays. The `[%cd "for_print" =: t_to_print]` trick creates a temporary device-to-host copy. A cache of for-print tensor nodes avoids recompilation. This is off by default for `Tensor.print`, on by default for `Train.printf`.
 
@@ -34,17 +43,17 @@ Eliminate the dual host/device memory model by removing the `array` field from `
 
 ### Current architecture
 
-`Tnode.t` maintains a dual-memory model where tensor nodes can have both a host-side `Ndarray` (the `array` field) and device-side buffers managed by backends. The `Hosted of memory_type` memory mode controls synchronization between host and device copies, with five `memory_type` sub-variants driving a complex state machine in `update_memory_mode` (tnode.ml lines 306-352). (Note: `update_memory_sharing` was removed in the streams cleanup.)
+`Tnode.t` maintains a dual-memory model where tensor nodes can have both a host-side `Ndarray` (the `array` field) and device-side buffers managed by backends. The `Hosted of memory_type` memory mode controls synchronization between host and device copies, with five `memory_type` sub-variants driving a complex state machine in `update_memory_mode` (tnode.ml lines 261-306). (Note: `update_memory_sharing` was removed in the streams cleanup.)
 
-Key code locations:
-- **Tnode.t type**: arrayjit/lib/tnode.ml lines 73-98 (record with `array`, `devices_not_lagging_host`)
-- **memory_mode/memory_type**: arrayjit/lib/tnode.ml lines 36-65
-- **Value access**: arrayjit/lib/tnode.ml lines 809-844 (`get_value`, `set_value`, `get_values`, `set_values`)
-- **Mode transitions**: arrayjit/lib/tnode.ml lines 306-388 (~49 `Hosted` references in tnode.ml)
+Key code locations *(line numbers refreshed 2026-06-12)*:
+- **Tnode.t type**: arrayjit/lib/tnode.ml lines 48-73 (record with `array`, `devices_not_lagging_host`)
+- **memory_mode/memory_type**: arrayjit/lib/tnode.ml lines 12-40
+- **Value access**: arrayjit/lib/tnode.ml lines 727-761 (`get_value`, `set_value`, `get_values`, `set_values`)
+- **Mode transitions**: arrayjit/lib/tnode.ml lines 261-306 (~35 `Hosted` references in tnode.ml)
 - **Backend transfers**: arrayjit/lib/backends.ml (`to_host`, `from_host`)
 - **Train helpers**: lib/train.ml (`set_on_host`, `set_hosted`, `every_non_literal_on_host`)
 - **Low-level compilation**: arrayjit/lib/low_level.ml (2 `Hosted` references in mode assignment)
-- **Ndarray module**: arrayjit/lib/ndarray.ml (~772 lines)
+- **Ndarray module**: arrayjit/lib/ndarray.ml (~1036 lines)
 
 ### Design rationale (from issue author)
 
@@ -57,15 +66,36 @@ The author's comments clarify the progression of thinking:
 
 **In scope**: Removing `array` field, `Hosted` variant, `memory_type` type, host/device sync tracking, Train.ml hosted helpers, updating value access to require context, implementing on-demand printing, updating all tests and examples, minimizing Ndarray.
 
-**Out of scope**: Full Ndarray module removal (still needed for precision-polymorphic host buffers), buffer eviction policy design (future work enabled by this change), unified memory optimization (orthogonal), `from_host`/`to_host` backend signature changes.
+**Out of scope**: Full Ndarray module removal (still needed for precision-polymorphic host buffers), buffer eviction policy design (future work enabled by this change), unified memory optimization (orthogonal), `from_host`/`to_host` backend signature changes. *(Update 2026-06-12: "no signature changes" is only true of the implementation-facing API — `No_buffer_retrieval_or_syncing.from_host`/`to_host` already take an explicit `Ndarray.t`. The user-facing wrappers in `backends.ml` (`Add_buffer_retrieval_and_syncing`) pattern-match on `tn.array = lazy (Some hosted)` to source/sink host data, so they must change: either take an `Ndarray.t` argument or read/write the `host_cache` staging buffer.)*
 
 ### Impact estimate
 
-This is a large refactoring touching ~50+ locations across tnode.ml, low_level.ml, backends.ml, train.ml, tensor.ml, operation.ml, and test files. The API change (adding `~ctx` to value access) propagates to all downstream callers. The `update_memory_mode` state machine shrinks significantly with `Hosted` removal.
+This is a large refactoring touching ~50+ locations across tnode.ml, low_level.ml, backends.ml, train.ml, tensor.ml, operation.ml, and test files. *(Update 2026-06-12: add `lib/persistence.ml` to this list — `save`/`restore` call `Tn.do_read` and read/write `tn.array` directly, and `load` creates hosted tnodes via `Tn.create_from_padded` before any context exists; its API needs a `~ctx` parameter (or staged host data), not just internal edits.)* The API change (adding `~ctx` to value access) propagates to all downstream callers. The `update_memory_mode` state machine shrinks significantly with `Hosted` removal.
 
 ### Edge cases
 
 - **Printing without context**: Before compilation, tensor printing shows shape/metadata only (no values). A "print context" pattern or lazy printing can address interactive use.
-- **Parameter serialization**: The disabled `save_params`/`restore_params` in train.ml needs redesign around context-based device-to-host-to-disk path.
+- **Parameter serialization**: The disabled `save_params`/`restore_params` in train.ml needs redesign around context-based device-to-host-to-disk path. *(Update 2026-06-12: tensor persistence landed as `lib/persistence.ml` (#373); the redesign should target `Persistence` rather than reviving the train.ml stubs.)*
 - **Virtual/Local tnodes**: These have no device buffers. Printing requires materializing first.
 - **C backend**: cc_backend.ml uses `Lazy.force tn.array` for compiled C function parameter binding -- must switch to context array map.
+
+## Design review (2026-06-12)
+
+**Verdict: sound-with-changes.** The end state (nothing hosted, context-based on-demand access) matches the issue author's final position and is the right target. The plan underspecifies three load-bearing mechanisms: the staging lifecycle for host data that exists *before* any context, the fate of the `use_host_memory` zero-copy path, and the Persistence API change. Land **before** #344.
+
+**Recommendations:**
+
+1. **Design `host_cache` as a staging buffer with an explicit lifecycle, not just a read cache.** Three flows need host data before a device buffer exists: tensor literals (`create_from_padded`/`create_with_reshape`, today `Hosted Unset_hosted`), `Persistence.load` (creates tnodes from file payloads pre-context), and AC 7 parameter init. Define one mechanism: *pending host data, uploaded at first link (replacing `alloc_if_needed`'s `will_copy_from_host` path), evictable read-cache thereafter*. Otherwise AC 7 and the persistence edge case will be solved twice, differently.
+2. **Resolve the Tnode/Ndarray contradiction.** AC 4 puts `mutable host_cache : Nd.t option` on `Tnode.t`, but the proposal's title removes the Ndarray dependency from Tnode. Either accept the (slimmed) dependency and retitle, or keep `host_cache` in a side table (e.g. weak `Hashtbl.M(Tnode)` owned by an Ndarray-aware layer such as `backends.ml`/`context.ml`). The side table is cleaner layering and keeps `tnode.ml` free of `ndarray.ml`; the field is simpler. Pick one explicitly.
+3. **Decide the zero-copy constants question (biggest hidden cost).** Today on cc and Metal-shared, hosted constants' device buffers *wrap the host array pointer* (`alloc_if_needed`'s `use_host_memory` branch; Metal dispatch fallback at `metal_backend.ml:791-799`). With `tn.array` gone and `host_cache` evictable, wrapping an evictable pointer is unsafe. Options: (a) pin constants' staging buffers (zero-copy preserved, but it's hosted-mode-for-constants by another name); (b) always allocate device-side + copy (simpler, but transient 2x memory and an extra copy on CPU backends where host arrays currently *are* the buffers). Whichever is chosen, on unified-memory backends `get_value`/`get_values` should read through the context's buffer pointer with no copy.
+4. **Add missing cleanup to AC 6:** the `automatic_host_transfers` setting, `sync_routine`'s hosted pre/post hooks (`backends.ml:240-260`), and the Metal dispatch constant-wrap fallback all become dead code; `Hosted Unset_hosted` assignment in `low_level.ml:443` needs a replacement default.
+5. **AC 5 needs a context-plumbing decision for printing** (see below) — the `for_print` trick compiles and runs code, which requires a `Context.t`, but `Tensor.print` takes none today.
+
+**Open decision points for Łukasz:**
+
+- `host_cache` on `Tnode.t` vs. side table (rec 2).
+- Zero-copy constants on unified memory: keep via pinned staging, or drop (rec 3).
+- How does `Tensor.print`/`Train.printf` obtain a context: explicit `?ctx` argument, an ambient "most recent context" registry, or restrict value-printing to `Train.printf`-style call sites that have one?
+- Persistence API shape post-#333: `save`/`restore` gain `~ctx`; does `load` stage payloads in `host_cache` until first link, or return `(tn, Ndarray.t)` pairs for the caller to upload?
+
+**Ordering note:** land #333 before #344. Removing `Hosted` collapses Metal's storage-mode segregation to "private pools + small shared staging" and deletes the `use_host_memory` pointer-wrapping entries — exactly the special cases that would otherwise force a `Wrapped of buffer_ptr` escape hatch into #344's `buffer_offset` type, only to be ripped out again.

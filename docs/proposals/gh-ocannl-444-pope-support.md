@@ -1,5 +1,14 @@
 # Proposal: PoPE (Polar Position Embeddings) support
 
+## Status update (2026-06-12)
+
+- Issue [#444](https://github.com/ahrefs/ocannl/issues/444) is **OPEN**, no milestone assigned; the harness task is in `deferred` state (priority B).
+- **Not implemented yet**: no `softplus`/`sigmoid` primitive exists anywhere (`tensor/operation.ml`, `arrayjit/lib/ops.ml`, `lib/nn_blocks.ml` re-verified); `position_embedding` still has no `PoPE` variant; the deferral comment is now at `nn_blocks.ml:128-130`.
+- RoPE infrastructure remains in place and unchanged: `rope` at `nn_blocks.ml:165`, `rope_frequencies` at 135, `position_indices` at 143, `interleave`/`deinterleave_even`/`deinterleave_odd` at `tensor/operation.ml:336-366`.
+- Line drift only: `multi_head_attention` now starts at `nn_blocks.ml:179`; `Shape.set_dim d d_k` is now at line 197; RoPE is applied at lines 186-191. (Line references in the body have been updated.)
+- Repo-wide changes since April 2026 (broadcast-order reversal LUB→GLB, dimension "label"→"basis" rename, tensor stacking + block-literal `%op` syntax) do not materially affect this design; new text should use the post-reversal vocabulary.
+- The approach and acceptance criteria remain valid as written; the main prerequisite (native `Softplus`/`Sigmoid` low-level ops with backend codegen) is still outstanding.
+
 ## Goal
 
 Add PoPE (arXiv:2509.10534) as a position embedding variant in OCANNL's transformer blocks. PoPE applies `softplus` to Q/K elements independently to produce magnitudes, which are then paired with position-only phases (from RoPE-style frequency/position angles). This maps `d` scalars to `2d` real values, doubling the per-head dimensionality, unlike RoPE which rotates pairs in-place.
@@ -21,10 +30,10 @@ Add PoPE (arXiv:2509.10534) as a position embedding variant in OCANNL's transfor
 ### Current state (verified)
 
 - **RoPE is fully implemented**: `position_embedding` type already has `RoPE of { freqs; positions }` variant. The `rope` function, `rope_frequencies`, `position_indices`, `interleave`/`deinterleave_even`/`deinterleave_odd` are all in place and tested.
-- **`multi_head_attention`** (`nn_blocks.ml:181-209`): Takes `~d_k ~d_v` params, projects Q/K/V via inline params `{ w_q }`, `{ w_k }`, `{ w_v }`. The dim `d` is set to `d_k` at line 200. RoPE is applied between projection and score computation (lines 190-193).
+- **`multi_head_attention`** (`nn_blocks.ml:179-206`): Takes `~d_k ~d_v` params, projects Q/K/V via inline params `{ w_q }`, `{ w_k }`, `{ w_v }`. The dim `d` is set to `d_k` at line 197. RoPE is applied between projection and score computation (lines 186-191). *(Update 2026-06-12: line numbers refreshed.)*
 - **Softplus is NOT available** as a primitive unary op. Available unary ops: `relu`, `sat01`, `exp`, `log`, `exp2`, `log2`, `sin`, `cos`, `sqrt`, `tanh`, `recip`, `recip_sqrt`. The `%cd` DSL for assignment-level code does not have `softplus` or `sigmoid` as primitives.
 - **Interleave/deinterleave ops** are available in `tensor/operation.ml` and exposed in the DSL. They handle even/odd pair splitting/merging on the last output axis.
-- **Existing PoPE placeholder**: A comment at `nn_blocks.ml:129-131` explicitly defers PoPE to #444.
+- **Existing PoPE placeholder**: A comment at `nn_blocks.ml:128-130` explicitly defers PoPE to #444.
 - **#398 proposal** (`docs/proposals/gh-ocannl-398.md`): Confirms PoPE was deferred because it doubles dimensionality and requires decoupling projection width from head width.
 
 ### Key difference from RoPE

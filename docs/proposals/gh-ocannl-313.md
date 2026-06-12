@@ -3,6 +3,14 @@
 **Task**: gh-ocannl-313
 **Issue**: https://github.com/ahrefs/ocannl/issues/313
 
+## Status update (2026-06-12)
+
+- Issue #313 is OPEN; its GH milestone reads v0.7 (lagging). ROADMAP.md places it under v0.7.1 ("Backend improvements: MSVC support for Windows C backend").
+- Not started: `cc_backend.ml` still has no compiler-family detection, no MSVC flag handling, and `c_syntax.ml`'s `Pure_C_config.main_kernel_prefix` is still `""` — the analysis and approach remain applicable as written.
+- Re-verified anchors: compiler detection via `ocamlc -config` is still `cc_backend.ml:23-41`; `kernel_link_flags` 77-85; `compiler_flags` 87-96; `cmdline` 98-101; `Dl.dlopen` at line 150; `arch_flags` defaulting to `-march=native` at line 20. Drifted: `Foreign.foreign` is now at `cc_backend.ml:393` (was 391); the function-header generation `string B.main_kernel_prefix ^^ ...` is now at `c_syntax.ml:892` (was 803-805). `builtins_cc.ml` statement-expression macros are still at lines 73 and 82.
+- Related landed work that touched these files but does not change the plan: kernel params renamed `params`→`kparams` / `Param_ptr`→`Kparam_ptr` (#356), cross-statement CSE hoisting in `low_level.ml`, and Zero_out elision changes (gh-ocannl-420). Generated C remains standard C99.
+- Remains to do: the entire approach (compiler-family detection, MSVC flags `/O2 /LD /Fe:`, `__declspec(dllexport)` prefix, `.lib`/`.exp` cleanup, MSVC arch-flag default, Windows verification).
+
 ## Goal
 
 Enable OCANNL's C backend (`cc_backend.ml`) to compile generated C code using MSVC (`cl.exe`) on native Windows, load the resulting DLL, and execute compiled functions -- without regressing GCC/Clang compilation on Unix.
@@ -31,7 +39,7 @@ The compilation flow:
 2. `c_compile_and_load` (cc_backend.ml:62-153) shells out to the system C compiler
 3. Compiler detected via `ocamlc -config` field `c_compiler:` (cc_backend.ml:23-41)
 4. The resulting `.so`/`.dll` is loaded with `Dl.dlopen ~flags:[RTLD_NOW]` (line 150)
-5. Functions are looked up via `Foreign.foreign ~from:lib name` (line 391)
+5. Functions are looked up via `Foreign.foreign ~from:lib name` (line 393)
 
 ### What already works on Windows
 
@@ -47,7 +55,7 @@ The entire flag construction is GCC-specific:
 - `kernel_link_flags` (line 77-85): `-shared -fPIC` on Linux, `-bundle` on macOS, `-shared` on Win32 -- the Win32 case uses GCC/MinGW syntax, not MSVC
 - `cmdline` (line 98-100): `compiler f_path flags -o libname link_flags` -- MSVC uses different argument ordering and `/` prefix flags
 
-**2. DLL symbol export (c_syntax.ml:803-805)**
+**2. DLL symbol export (c_syntax.ml:892)** *(Update 2026-06-12: was 803-805, line drifted)*
 GCC with `-shared` exports all symbols by default. MSVC does NOT. Functions must be marked `__declspec(dllexport)` or a `.def` file must be provided. The function header is generated as:
 ```ocaml
 string B.main_kernel_prefix ^^ space ^^ string "void" ^^ space ^^ string name
@@ -78,8 +86,8 @@ The generated C code is standard C99 -- no GCC extensions found:
 | Compiler flags (optimization, arch, fast-math) | `cc_backend.ml` | 87-97 |
 | Command line assembly | `cc_backend.ml` | 98-101 |
 | Dynamic loading (`Dl.dlopen`) | `cc_backend.ml` | 150 |
-| Function linking (`Foreign.foreign`) | `cc_backend.ml` | 391 |
-| Function header generation | `c_syntax.ml` | 803-805 |
+| Function linking (`Foreign.foreign`) | `cc_backend.ml` | 393 |
+| Function header generation | `c_syntax.ml` | 892 |
 | `main_kernel_prefix` (empty for CC) | `c_syntax.ml` | 90 |
 | C includes/builtins | `builtins_cc.ml` | 1-10 |
 | `builtins.c` (C stubs, same float16 macros) | `arrayjit/lib/builtins.c` | 1-32 |
@@ -135,7 +143,7 @@ let main_kernel_prefix =
   if Sys.win32 then "__declspec(dllexport)" else ""
 ```
 
-This uses the existing `main_kernel_prefix` mechanism (already used by CUDA for `extern "C" __global__` and Metal for `kernel`). The field is concatenated before `void` in the function signature at c_syntax.ml:804.
+This uses the existing `main_kernel_prefix` mechanism (already used by CUDA for `extern "C" __global__` and Metal for `kernel`). The field is concatenated before `void` in the function signature at c_syntax.ml:892.
 
 ### 4. Handle MSVC auxiliary file cleanup (cc_backend.ml)
 

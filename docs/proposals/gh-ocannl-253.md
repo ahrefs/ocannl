@@ -10,6 +10,16 @@
 > defers all kernel/training-loop material here; this proposal stays the
 > canonical home for llm.c-derived recommendations.
 
+## Status update (2026-06-12)
+
+- Issue [#253](https://github.com/ahrefs/ocannl/issues/253) is **OPEN**, milestone **v0.8** (GH milestone due-date 2026-02-28 is stale; per ROADMAP.md — the authority on milestones — v0.8 targets mid-June 2026, v0.9 targets Aug 24, 2026 / ICFP week).
+- The deliverable (`docs/llm-c-analysis.md`) has **not** been produced; the study has not started (harness task status: deferred).
+- Core gap claims re-verified against current code and still hold: no GELU anywhere in `lib/`/`tensor/`/`arrayjit/`; no Adam/AdamW, LR scheduling, or gradient clipping in `lib/train.ml` (only `sgd_one`); no warp-shuffle builtins in `arrayjit/lib/builtins_cuda.ml`; CUDA kernels still launch with `grid_dim_x:1, block_dim_x:1` (`cuda_backend.ml`); per-tensor `Cu.Deviceptr.mem_alloc` allocation; pool allocator #344 still OPEN.
+- Cross-referenced issues: #412 (tiling) and #164 (AVX) remain OPEN on v0.8; #318 (megakernels) is CLOSED/completed with `docs/megakernel-deep-dive.md` landed; #270 (Imbue) is CLOSED/completed with `docs/imbue-infrastructure-lessons.md` landed; #377 (transformer inference demo) remains OPEN on v0.7.1.
+- Minor drift: `round_robin` no longer exists in `train.ml` (only `sequential_loop`); `nn_blocks.ml` has since gained rotary position embeddings (RoPE, #444), `batch_norm1d`, and decoder-only transformer blocks — the activation/optimizer gaps cited below are unchanged.
+- Repo-wide renames since April 2026 (broadcast-order LUB→GLB reversal, dimension "label"→"basis") do not affect this proposal's content.
+- Verdict: still actionable as written; the analysis remains to be done.
+
 ## Goal
 
 Produce a structured analysis of Andrej Karpathy's [llm.c](https://github.com/karpathy/llm.c) project, identifying which design decisions and optimization techniques are applicable to OCANNL, which are already covered by existing tasks, and which represent unique lessons that should inform OCANNL's v0.8-v0.9 development. The deliverable is a documented gap analysis with concrete recommendations, not direct code porting -- llm.c is hand-written C/CUDA for GPT-2, while OCANNL generates kernels from a high-level einsum IR. The value is in understanding *why* llm.c's choices work and mapping those insights to OCANNL's architecture.
@@ -77,7 +87,7 @@ llm.c implements GPT-2 (124M) training in pure C and CUDA, achieving parity with
 
 **OCANNL relevance:**
 - OCANNL's `Train` module provides `sgd_one` (SGD with momentum) but no AdamW, learning rate scheduling, or gradient clipping. These are higher-level training utilities.
-- The `sequential_loop` and `round_robin` functions in `train.ml` handle batch iteration but not gradient accumulation across micro-batches.
+- The `sequential_loop` function in `train.ml` handles batch iteration but not gradient accumulation across micro-batches. *(Update 2026-06-12: `round_robin` has been removed along with the cross-stream data-parallel infrastructure — multi-streaming cleanup #341.)*
 - llm.c's training loop patterns are informative for OCANNL's training examples (v0.7.1 milestone: MNIST, CIFAR, transformer inference).
 
 **4. CUDA optimization patterns**

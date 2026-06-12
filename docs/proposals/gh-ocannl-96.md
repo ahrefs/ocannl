@@ -2,6 +2,30 @@
 
 Tracked by: https://github.com/ahrefs/ocannl/issues/96
 
+## Status update (2026-06-12)
+
+- Issue #96 is OPEN, milestone **v1.0** (due 2026-06-30). Not started: there is still no
+  `Train.checkpoint*` API, no `lib/checkpoint.ml`, and the old npz-based `save_params` /
+  `restore_params` code remains commented out at `lib/train.ml:44-62`.
+- The dependency story still holds exactly as written: `lib/persistence.{ml,mli}` (#373) is
+  unchanged — `save : appending:bool -> Tensor.tn_set -> string -> unit`,
+  `load : ?prefix_namespace:string -> string -> Tensor.tn_set` (non-empty prefixes still
+  rejected, reserved for #372), `restore : Tensor.tn_set -> string -> unit`.
+- Optimizer state is still anonymous: `Train.sgd_one` (`lib/train.ml:99-108`) still introduces
+  `sgd_momentum` via an inline `%cd` declaration with no first-class handle, and
+  `example_train_result` is still at `lib/train.ml:183`. Open question 4 (explicit
+  `optimizer_state : tn_set`) remains the main design decision.
+- Minor line drift in `tensor/tensor.ml`: `random_seed` ref is now at line 120,
+  `set_random_seed` at 747, and the `Tn.update_prec res.value Ir.Ops.uint4x32` call at
+  line 752 (was 744). No semantic change.
+- Repo-wide changes since April (multi-stream backend-layer cleanup, `device_to_device`
+  returning a transfer routine, label→basis rename) do not touch this proposal's seams;
+  the checkpointing design works at the host-buffer level via `Persistence`.
+- Remains to do: everything in the Approach section (optimizer-state refactor, checkpoint
+  save/load API, RNG handling, `docs/persistence_format.md`, `test/training/` integration
+  test). New `test/training/` examples (bigram, transformer_names, mnist_conv, ...) provide
+  ready-made small training loops for the round-trip test.
+
 ## Goal
 
 Provide a `Train.checkpoint` API that saves and restores all global training
@@ -124,10 +148,11 @@ Verified against `/Users/lukstafi/ocannl-staging`:
    optimizer functions populate. Option (b) is the cleaner long-term
    choice.
 
-3. **RNG state.** `tensor/tensor.ml:121-145` keeps `random_seed : t option
+3. **RNG state.** `tensor/tensor.ml:120-160` keeps `random_seed : t option
    ref`, lazily initialized by `Tensor.set_random_seed ?seed ()`. The
    underlying tnode is `Uint4x32`-precision (forced via
-   `Tn.update_prec res.value Ir.Ops.uint4x32` at line 744). The seed tnode
+   `Tn.update_prec res.value Ir.Ops.uint4x32` at line 752 *(Update
+   2026-06-12: was 744)*). The seed tnode
    is an ordinary tnode and `Persistence` already handles arbitrary
    precisions.
 
@@ -147,8 +172,8 @@ The Feb-2026 task elaboration cited:
   new `lib/persistence.{ml,mli}` (added 2026-03-26 in commits `d67cbeda` /
   `05fbf6f0` / `757c5875`) is what we now build on.
 - `~/ocannl/tensor/tensor.ml:118` for `random_seed` -- it is now at
-  `tensor/tensor.ml:121` (a few lines drifted); precision is still
-  `Uint4x32` (line 744). No semantic change.
+  `tensor/tensor.ml:120` (a few lines drifted); precision is still
+  `Uint4x32` (line 752 as of 2026-06-12). No semantic change.
 - `Ndarray.t` -- still at `arrayjit/lib/ndarray.ml`, with
   `read_payload_from_channel` / `write_payload_to_channel` already used
   by `Persistence`.

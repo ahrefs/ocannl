@@ -3,6 +3,15 @@
 **Issue**: [#103](https://github.com/ahrefs/ocannl/issues/103)
 **Milestone**: v1.0
 
+## Status update (2026-06-12)
+
+- Issue #103 is still **OPEN**, milestone v1.0 (GH milestone due date 2026-06-30; ROADMAP.md, the milestone authority, targets v1.0 for end of October 2026 under "Documentation, completeness, ergonomics").
+- **No implementation has landed.** `tensor/PrintBox_utils.ml` is unchanged: the `plot` wrapper (now at line 80) still matches the snippet quoted below verbatim — no legend support, no labels channel, no intermediate ticks.
+- The dependency pin is still `printbox-ext-plot >= 0.12` (dune-project) and 0.12 is the installed version; the upstream `plot_spec` type still carries no label field, so the "implement on top of `BPlot.box`" consequence still holds.
+- All cited call-sites verified current: `test/training/moons_demo.ml` (three-spec plot), `test/operations/primitive_ops.ml`, `bin/compilation_speed.ml`, `test/operations/zero2hero_1of7*.ml` — none pass per-series identification.
+- No repo-wide renames (basis/refines etc.) affect this proposal; it is presentation-layer only.
+- Everything in Acceptance Criteria and Approach remains to do.
+
 ## Goal
 
 OCANNL's text-based plots (built on `printbox-ext-plot`) currently support

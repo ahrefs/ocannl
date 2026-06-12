@@ -3,6 +3,15 @@
 **Issue**: https://github.com/ahrefs/ocannl/issues/409
 **Task**: gh-ocannl-409
 
+## Status update (2026-06-12)
+
+- Issue #409 is still OPEN. Its GitHub milestone says v0.7, but ROADMAP.md (the authority on milestones) lists "Improve configuration handling (#409)" under v1.0 — this remains deferred ergonomics work.
+- None of the proposed changes have landed: `read_cmdline_or_env_var` (`utils.ml:53-79`) still generates only `ocannl_`-prefixed variants, there is no known-keys registry, and no validation of config-file keys or commandline args.
+- All discrepancies listed below still exist, with line drift in `ocannl_config.example`: the `bacend` typo is now at line 75, `never_capture_stdout` at line 83, `randomness_lib=stdlib` at line 142; `default_prng_variant` and `cd_ident_style` are still missing from the example. `ocannl_config.for_debug` still has the stale `output_debug_files_in_run_directory` (line 11) and unused `randomness_lib=for_tests` (line 14).
+- New config key since this proposal was written: `build_files_prefix` (commit b6fe6105, isolates test output under `build_files/<prefix>/`; documented in the example at line 63 and read in `utils.ml`). The known-keys list below must include it; the current code has 58 `arg_name` keys plus the two bootstrap keys (`suppress_welcome_message`, `no_config_file`).
+- Recent `utils.ml` changes (8485b77c, 199b5ad3) only touched startup cleanup (recursive `remove_dir_if_exists`, sanitized prefix segments) — they don't conflict with this proposal.
+- Verdict: proposal remains valid and actionable as written, modulo the line-number drift and the added key noted above.
+
 ## Goal
 
 Improve OCANNL configuration usability by (1) accepting commandline arguments without the `ocannl_` prefix, (2) validating config file keys and commandline args against a known set, and (3) fixing discrepancies between `ocannl_config.example` and actual code usage.
@@ -33,17 +42,19 @@ The config file parser already accepts keys without the prefix. Only the command
 
 ### Known discrepancies (as of current HEAD)
 
+*(Update 2026-06-12: all discrepancies below re-verified as still present; line numbers refreshed.)*
+
 | File | Issue |
 |------|-------|
-| `ocannl_config.example` line 69 | `bacend=multicore_cc` -- typo, should be `backend` |
-| `ocannl_config.example` line 136 | `randomness_lib=stdlib` -- no corresponding `get_global_arg` call in code |
-| `ocannl_config.example` | Missing: `default_prng_variant`, `cd_ident_style`, `never_capture_stdout` (partially -- it's at line 77 but the key used in code is `never_capture_stdout`) |
+| `ocannl_config.example` line 75 | `bacend=multicore_cc` -- typo, should be `backend` |
+| `ocannl_config.example` line 142 | `randomness_lib=stdlib` -- no corresponding `get_global_arg` call in code |
+| `ocannl_config.example` | Missing: `default_prng_variant`, `cd_ident_style` (`never_capture_stdout` is present, at line 83) |
 | `ocannl_config.for_debug` line 11 | `output_debug_files_in_run_directory=true` -- stale name, should be `output_debug_files_in_build_directory` |
 | `ocannl_config.for_debug` line 14 | `randomness_lib=for_tests` -- unused key |
 
 ### All known config keys from code
 
-Extracted from all `get_global_arg`/`get_global_flag` call sites (54 unique keys):
+Extracted from all `get_global_arg`/`get_global_flag` call sites (54 unique keys) *(Update 2026-06-12: now 58 `arg_name` keys plus the two bootstrap keys; `build_files_prefix` was added since — include it in the registry)*:
 
 **Settings (utils.ml)**: `log_level`, `debug_log_from_routines`, `output_debug_files_in_build_directory`, `fixed_state_for_init`, `print_decimals_precision`, `check_half_prec_constants_cutoff`, `automatic_host_transfers`, `default_prng_variant`, `big_models`
 
@@ -55,7 +66,7 @@ Extracted from all `get_global_arg`/`get_global_flag` call sites (54 unique keys
 
 **Low-level/optimization**: `virtualize_max_visits`, `virtualize_max_tracing_dim`, `enable_device_only`, `inline_scalar_constexprs`, `inline_simple_computations`, `inline_complex_computations`, `output_prec_in_ll_files`, `stack_threshold_in_bytes`
 
-**Other**: `ll_ident_style`, `cd_ident_style`, `default_prec`, `limit_constant_fill_size`, `max_shape_error_origins`
+**Other**: `ll_ident_style`, `cd_ident_style`, `default_prec`, `limit_constant_fill_size`, `max_shape_error_origins`, `build_files_prefix` *(added 2026; see Status update)*
 
 ### Approach
 

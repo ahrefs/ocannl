@@ -2,7 +2,45 @@
 
 **Issue:** [ahrefs/ocannl#247](https://github.com/ahrefs/ocannl/issues/247)
 **Milestone:** v1.0
-**Status:** Draft proposal
+**Status:** Implemented (June 2026) — see status update below
+
+## Status update (2026-06-12)
+
+- GH issue #247 is still OPEN with milestone v1.0, but the work has **landed in
+  this repo** via PR #30 (`rank-cycle-row-vars`): commits `c66082c5` (detect
+  rank cycles among row variables, Def. 4.5 rank-cycle check), `dbf67fcb`
+  (reject self-referential row equations with shifted flanks), `3f80d706`
+  (rotational row constraints — deferral into closing). The issue can likely
+  be closed once this reaches upstream.
+- The landed design **differs from this proposal's approach**: instead of a
+  post-substitution syntactic `row_var_occurs_in_row` occurs check at binding
+  sites, the implementation maintains a persistent rank-relation graph
+  (`global_rank_edges` with `closes_positive_rank_cycle` / `add_rank_edge`,
+  `tensor/row.ml` ~2020–2055). Each entailed fact `rank v >= rank w + k` is
+  recorded as an edge; an edge closing a positive-total-weight cycle raises
+  `Shape_error ("Infinite number of axes by rank cycle among row variables", ...)`.
+  This catches transitive (indirect) cycles — AC2 — which the in-flight
+  constraint reduction would otherwise diverge on by minting ever-fresh
+  template variables.
+- Tests landed as `test/einsum/test_row_rank_cycle.ml` + `.expected`, covering
+  two- and three-variable rank cycles via `Row.solve_inequalities` (not
+  `unify_row` as sketched here). The direct self-reference case (AC1) is
+  rejected too; per `dbf67fcb`'s commit message, reviewing this proposal's AC1
+  test surfaced the shifted-flank hole that commit fixes.
+- The error message says "rank cycle among row variables" rather than
+  "occurs check" — the AC wording below ("occurs check" or "row variable")
+  is satisfied via the latter alternative.
+- Structural drift invalidates the code sketches below: `beg_dims` moved from
+  `Row_var` to `Row.t` (commit `ff8c6846`), so `Row_var { v; beg_dims = [d] }`
+  no longer type-checks. Line numbers drifted: `dim_var_occurs_in_dim` is now
+  at `row.ml:1681`, its use in `unify_dim` at `row.ml:1941`, `subst_row` at
+  `row.ml:1348`, the depth-16 caps at `row.ml:1386`/`1493`, the depth-4 cap at
+  `row.ml:3285`, and the "Infinite number of axes by self-reference" sites at
+  `row.ml:1364`, `2047`, `2093`, `2167`, `2723`.
+- Repo-wide renames since this was written (broadcast-order reversal LUB→GLB,
+  dimension "label"→"basis") do not affect the substance of this proposal.
+- Remaining: nothing implementation-side; only upstream issue hygiene
+  (close #247 / link the landed commits and test).
 
 ## Goal
 
@@ -11,7 +49,8 @@ constraint -- a row variable bound (directly or transitively) to a row that
 contains itself in its `bcast` field -- is detected and reported as a
 `Shape_error` with a clear message, rather than risking infinite recursion or
 stack overflow inside `subst_row` / `unify_row`. This mirrors the existing
-dim-variable occurs check (`row.ml:1611`, `row.ml:1893`) and brings shape
+dim-variable occurs check (`row.ml:1611`, `row.ml:1893`) *(Update 2026-06-12:
+now `row.ml:1681`, `row.ml:1941`)* and brings shape
 inference closer to the standard "occurs check" required for sound first-order
 unification.
 
@@ -82,6 +121,11 @@ module:
   unification but does not itself implement it.
 
 ### Existing partial cycle checks
+
+*(Update 2026-06-12: the line numbers in the table below predate the landed
+rank-cycle work and the `beg_dims` move to `Row.t`; they no longer match.
+The transitive check now lives in `add_rank_edge` / `closes_positive_rank_cycle`
+near `row.ml:2027`.)*
 
 Several `Shape_error "Infinite number of axes by self-reference"` sites
 *already* catch specific symptoms of cyclic row-var bindings:

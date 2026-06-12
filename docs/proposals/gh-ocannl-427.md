@@ -1,8 +1,18 @@
 # Proposal: Reproduce Small-Size Transformer Digit Addition Results
 
+## Status update (2026-06-12)
+
+- Issue #427 is OPEN, milestone v0.8. Implementation has not started: there is no `test/training/digit_addition.ml`.
+- The framing has inverted: gh-ocannl-57 (decoder-only autoregressive transformer example) is CLOSED COMPLETED — `test/training/transformer_names.ml` (Names dataset) landed. This task is now a sibling algorithmic-learning example rather than a "precursor" to #57, and `transformer_names.ml` is an additional (more complete) reference pattern alongside `fsm_transformer.ml`.
+- `bigram_mlp.ml` no longer exists — it was rewritten as `test/training/mlp_names.ml` (makemore Part 2); `mlp_bn_names.ml` and `batch_norm1d` (#59) also landed in the same area.
+- RoPE and sinusoidal position embeddings landed via #398 (CLOSED COMPLETED), confirming the `multi_head_attention` capabilities cited below; PoPE was deferred to #444.
+- Line references to `lib/nn_blocks.ml` and `test/training/fsm_transformer.ml` drifted and have been refreshed in place below.
+- The "CUDA single-threaded kernels" risk still holds: the `grid_dim=1, block_dim=1` guard is still in `cuda_backend.ml` (#412 OPEN, v0.8) — CPU backends remain the sensible default for this model size.
+- Remaining work: the entire proposal (data generator, model, training loop, evaluation, dune test entry).
+
 ## Goal
 
-Demonstrate that OCANNL's transformer building blocks can train a tiny transformer (~500-1000 parameters) to learn multi-digit addition from scratch, reproducing the "grokking" phenomenon where accuracy suddenly jumps after extended training. This validates OCANNL as a viable framework for algorithmic learning tasks and serves as a precursor to the decoder-only autoregressive transformer example (gh-ocannl-57).
+Demonstrate that OCANNL's transformer building blocks can train a tiny transformer (~500-1000 parameters) to learn multi-digit addition from scratch, reproducing the "grokking" phenomenon where accuracy suddenly jumps after extended training. This validates OCANNL as a viable framework for algorithmic learning tasks and serves as a precursor to the decoder-only autoregressive transformer example (gh-ocannl-57). *(Update 2026-06-12: #57 has since landed as `test/training/transformer_names.ml`, so this is now a companion example, not a precursor.)*
 
 ## Acceptance Criteria
 
@@ -20,32 +30,32 @@ Demonstrate that OCANNL's transformer building blocks can train a tiny transform
 
 ### Existing Building Blocks
 
-- **`multi_head_attention`** (`lib/nn_blocks.ml:181-209`): Q/K/V projections, scaled dot-product attention, multi-head via einsum, optional causal mask, dropout. Supports RoPE and sinusoidal position embeddings.
+- **`multi_head_attention`** (`lib/nn_blocks.ml:179`): Q/K/V projections, scaled dot-product attention, multi-head via einsum, optional causal mask, dropout. Supports RoPE and sinusoidal position embeddings.
 
-- **`mlp`** (`lib/nn_blocks.ml:89-96`): Variable-depth MLP with ReLU activations and linear output. Used as the FFN in transformer blocks.
+- **`mlp`** (`lib/nn_blocks.ml:89`): Variable-depth MLP with ReLU activations and linear output. Used as the FFN in transformer blocks.
 
-- **`softmax`** (`lib/nn_blocks.ml:107-113`): Numerically stable (max subtraction), axis-specified via `~spec`.
+- **`softmax`** (`lib/nn_blocks.ml:107`): Numerically stable (max subtraction), axis-specified via `~spec`.
 
-- **`layer_norm`** (`lib/nn_blocks.ml:211-218`): Learnable gamma/beta. Note: `fsm_transformer.ml` omits layer norm for tiny models because recentered weights + normalization can kill gradient signal. We should experiment with and without.
+- **`layer_norm`** (`lib/nn_blocks.ml:208`): Learnable gamma/beta. Note: `fsm_transformer.ml` omits layer norm for tiny models because recentered weights + normalization can kill gradient signal. We should experiment with and without.
 
-- **Causal mask**: Lower-triangular matrix pattern used in `fsm_transformer.ml:103-108` and `transformer_test.ml:57-69`.
+- **Causal mask**: Lower-triangular matrix pattern used in `fsm_transformer.ml:95-98` and `transformer_test.ml:56-69`.
 
-- **Initialization**: `kaiming` and `xavier` initializers available in `nn_blocks.ml:31-53`. Alternatively, the manual recentering approach from `fsm_transformer.ml:168-174` (shift uniform[0,1) to centered range).
+- **Initialization**: `kaiming` and `xavier` initializers available in `nn_blocks.ml:31-53`. Alternatively, the manual recentering approach from `fsm_transformer.ml:152-163` (shift uniform[0,1) to centered range).
 
 ### Reference Implementation Pattern: `fsm_transformer.ml`
 
 This is the closest existing example. It trains a single-block decoder-only transformer on FSM next-state prediction. Key patterns to follow:
 
-- **Data**: One-hot encoded sequences, flat arrays loaded via `Tn.set_values` (lines 51-59).
-- **Model**: Manual assembly of `multi_head_attention` + `mlp` with residual connections, no layer norm (lines 116-124).
-- **Compilation**: Separate training and inference compilation paths sharing weights (lines 128-194).
-- **Training loop**: Manual epoch/batch iteration, `grad_update` + `sgd_update`, linear LR warmdown (lines 200-226).
-- **Evaluation**: Separate inference routine compiled from same model, argmax prediction (lines 236-258).
-- **Weight init**: Post-init recentering to avoid exp overflow in attention (lines 168-174).
+- **Data**: One-hot encoded sequences, flat arrays loaded via `Tn.set_values` (lines 43-59 and 197-200).
+- **Model**: Manual assembly of `multi_head_attention` + `mlp` with residual connections, no layer norm (lines 104-117).
+- **Compilation**: Separate training and inference compilation paths sharing weights (lines 118-180).
+- **Training loop**: Manual epoch/batch iteration, `grad_update` + `sgd_update`, linear LR warmdown (lines 188-213).
+- **Evaluation**: Separate inference routine compiled from same model, argmax prediction (lines 215-244).
+- **Weight init**: Post-init recentering to avoid exp overflow in attention (lines 152-163).
 
-### Reference Implementation Pattern: `bigram_mlp.ml`
+### Reference Implementation Pattern: `mlp_names.ml` (formerly `bigram_mlp.ml`)
 
-Training loop with batched data, LR scheduling, SGD, and inference via `%cd` for weight sharing.
+Training loop with batched data, LR scheduling, SGD, and inference via `%cd` for weight sharing. *(Update 2026-06-12: `bigram_mlp.ml` was rewritten as `test/training/mlp_names.ml`; see also `transformer_names.ml` for a full decoder-only transformer training/sampling loop.)*
 
 ### Papers
 
@@ -102,7 +112,7 @@ This exceeds the 777-parameter target. To reduce: use d_k = d_v = 8 (or lower), 
 
 ### 3. Training Loop
 
-- SGD with linear LR warmdown (following `fsm_transformer.ml` and `bigram_mlp.ml`)
+- SGD with linear LR warmdown (following `fsm_transformer.ml` and `mlp_names.ml`)
 - On-the-fly batch generation: each batch is freshly generated random addition problems
 - Batch size: 32-64
 - Training steps: 10k-50k (grokking can take many apparently unproductive steps)

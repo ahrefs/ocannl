@@ -3,6 +3,19 @@
 **Task**: gh-ocannl-411
 **Issue**: https://github.com/ahrefs/ocannl/issues/411
 
+## Status update (2026-06-12)
+
+- Issue #411 is still OPEN, GitHub milestone v0.6.4. ROADMAP.md lists it as a "parallel / background task, can slip to v0.6.4" — still planned, not started.
+- No implementation has landed: there are no `hip*` files in `arrayjit/lib/`, and `~/ocaml-hipjit/` still contains only LICENSE and README.
+- The architecture description below remains accurate (optional dune library + `(select ...)` stub pattern, shared `C_syntax` layer), but several reference APIs changed since this was written and the HIP port must follow the new shapes:
+  - Kernel parameter plumbing was renamed in #356: `params`/`Param_ptr` are now `kparams`/`Kparam_ptr` (`backend_intf.ml:48`, `cuda_backend.ml` uses `kparams` throughout).
+  - `Backend.device_to_device` now RETURNS a transfer routine instead of scheduling the copy directly (`backend_intf.ml:307-313`), with static merge-buffer verification; `merge_buffer_use` is now `No | Copy` — the `Streaming_for` variant is gone (`backend_intf.ml:43`).
+  - Multi-streaming cleanup (#341, closed completed) removed cross-stream automatic coherence; multiple streams per device remain. Any "stream-to-stream coherence" assumptions from the CUDA backend snapshot this proposal was based on should be re-checked against current `cuda_backend.ml`.
+  - The Metal backend gained a private (GPU-only) storage mode for device buffers (commit 1cf9a95b) — a useful second reference for the memory-management phase.
+- `Lowered_backend` is defined in `backend_impl.ml:264` (re-exported as `Ir.Backend_impl.Lowered_backend`), not in `backend_intf.ml`; the user-facing `Backend` module type is at `backend_intf.ml:336`. Code-pointer table below updated.
+- `cuda_backend.ml` is currently ~1046 lines; line offsets cited for its internals have drifted slightly but the structure is unchanged.
+- Remaining work: the entire plan (Phases 1-4) is still to do; the proposal stands, modulo the API drift noted above.
+
 ## Goal
 
 Add AMD GPU support to OCANNL by creating (1) an `ocaml-hipjit` standalone bindings package for HIP driver API and hipRTC, and (2) a `hip_backend` in OCANNL that mirrors the existing CUDA backend. HIP is source-compatible with CUDA, so both the bindings and backend are largely mechanical translations of their CUDA counterparts.
@@ -52,13 +65,14 @@ The repo exists at `~/ocaml-hipjit/` with LICENSE and README only -- no code yet
 
 | File | Role |
 |------|------|
-| `arrayjit/lib/backend_intf.ml:357-377` | `Backend` module type |
-| `arrayjit/lib/cuda_backend.ml` | Primary reference (~1055 lines) |
+| `arrayjit/lib/backend_intf.ml:336` | `Backend` module type |
+| `arrayjit/lib/backend_impl.ml:264` | `Lowered_backend` module type (as `Ir.Backend_impl.Lowered_backend`) |
+| `arrayjit/lib/cuda_backend.ml` | Primary reference (~1046 lines) |
 | `arrayjit/lib/cuda_backend_impl.cudajit.ml` | 1-line: `include Cuda_backend` |
 | `arrayjit/lib/cuda_backend_impl.missing.ml` | Stub using `Lowered_backend_missing` |
-| `arrayjit/lib/backends.ml:643-665` | `fresh_backend` registration |
-| `arrayjit/lib/dune:62-76` | `cuda_backend` optional library definition |
-| `arrayjit/lib/dune:94-142` | `context` library with select directives |
+| `arrayjit/lib/backends.ml:642` | `fresh_backend` registration |
+| `arrayjit/lib/dune:62-80` | `cuda_backend` optional library definition |
+| `arrayjit/lib/dune` (`context` library, select directives ~lines 105-120) | backend selection |
 | `arrayjit/lib/c_syntax.ml:16` | `C_syntax_config` module type |
 | `~/ocaml-cudajit/` | Bindings package to mirror |
 

@@ -1,5 +1,16 @@
 # DisTrO/DeMo Distributed Training — Feasibility Study
 
+## Status update (2026-06-12)
+
+- gh-ocannl-278 is still OPEN, milestone v1.1. ROADMAP.md's post-1.0 section now lists "DisTrO distributed training (#278, see docs/proposals/distro-feasibility-study.md)" — i.e. Approach step 2 (ROADMAP pointing at this doc) is done. Remaining: comment on the issue with the disposition question (Approach step 3).
+- Issue-reference corrections (the original text mischaracterized several):
+  - gh-ocannl-341 is actually titled "Resolve non-determinism of multicore_cc and restore it as the primary testing target" and is CLOSED/COMPLETED (not "Not planned"). The multi-stream cleanup landed via commit 692d8c9d: cross-stream *automatic coherence* was removed, but multiple streams per device (and cross-device `device_to_device` transfers, which now return transfer routines) remain.
+  - gh-ocannl-271 is "Support quantization for optimizers: low-bit optimizers", CLOSED/NOT_PLANNED — it is *not* the AdamW issue. No open issue tracks AdamW as of 2026-06-12; an implementation arc would need to file one.
+  - gh-ocannl-270 (Imbue training-in-the-large lessons) is CLOSED/COMPLETED.
+  - gh-ocannl-293 (sharding/slicing with minimal copying) is OPEN; ROADMAP places it under v1.0 "Feature completeness" (the GH milestone field lags).
+- Per ROADMAP (the authority on milestones), v1.0 targets end of October 2026; the "v0.8 GPU performance milestone consumes available cycles" framing is aging but the cycle-scarcity argument still holds.
+- The prerequisite chain and the recommendation of disposition (a) remain valid; "execution is single-device" should be read as "no multi-process/multi-host execution" — multi-stream and multi-device execution exist at the backend level.
+
 ## Goal
 
 Address [gh-ocannl-278](https://github.com/ahrefs/ocannl/issues/278) — "Example
@@ -9,9 +20,13 @@ concrete, rather than building any distributed-training infrastructure.
 
 The issue is labelled `explore`, milestoned `v1.1` (post-v1.0), and the task
 effort is `large`. OCANNL currently has no distributed training capability:
-multi-streaming was deliberately removed in
-[gh-ocannl-341](https://github.com/ahrefs/ocannl/issues/341) ("Not planned"),
-there is no AllReduce/NCCL/MPI integration, and execution is single-device.
+the deprecated multi-stream "virtual GPU" data-parallelism infrastructure was
+deliberately removed under
+[gh-ocannl-341](https://github.com/ahrefs/ocannl/issues/341) *(Update
+2026-06-12: closed as completed, not "Not planned"; multiple streams per
+device remain, but cross-stream automatic coherence is gone)*,
+there is no AllReduce/NCCL/MPI integration, and execution is
+single-process/single-host.
 The v0.8 GPU performance milestone (single-thread CUDA baseline) and the
 ICFP 2026 OCaml Workshop / FProPer paper deadlines (May–June 2026) consume
 the available cycles, so net-new distributed infra is not affordable now.
@@ -53,10 +68,13 @@ Out of scope (explicitly):
 
 ### Current OCANNL state relevant to distributed training
 
-- Single-device execution. No multi-process or multi-host coordination layer
+- Single-process execution. No multi-process or multi-host coordination layer
   exists.
-- Multi-streaming (using GPU streams or CPU threads as parallel "virtual GPUs")
-  was removed; gh-ocannl-341 closed as *Not planned*. Any future cross-device
+- Multi-streaming-as-data-parallelism (using GPU streams or CPU threads as
+  parallel "virtual GPUs") was removed; gh-ocannl-341 closed as completed
+  *(Update 2026-06-12: corrected from "Not planned"; streams themselves remain,
+  the removed part is cross-stream automatic coherence and the data-parallel
+  `Train.parallel_update` machinery)*. Any future cross-device
   parallelism will be built from scratch on a different model.
 - Optimizer surface: `Train.sgd_one` / `Train.sgd_update` in `lib/train.ml`,
   identifiable by the `"param sgd step"` block comment. This is the touchpoint
@@ -98,8 +116,10 @@ training loop, ordered roughly bottom-up:
    scope here, but the absence is blocking.
 3. **AdamW optimizer.** *Blocking for DeMo, not for distributed-training-in-general.*
    DeMo is built on top of AdamW-style adaptive moments; SGD-with-momentum
-   is not a drop-in substitute. AdamW is tracked separately as
-   gh-ocannl-271. Without it, one could ship distributed SGD but not DeMo.
+   is not a drop-in substitute. *(Update 2026-06-12: AdamW is currently
+   untracked — gh-ocannl-271, previously cited here, is actually the low-bit
+   optimizer quantization issue, closed as not-planned.)* Without AdamW, one
+   could ship distributed SGD but not DeMo.
 4. **DCT (or FFT) operation.** *Missing-but-substitutable.* DeMo's compression
    step is a DCT followed by chunking/top-k. A from-scratch DCT over
    power-of-two sizes is a few hundred lines; an FFT-based implementation
@@ -190,9 +210,13 @@ writing it first is the no-regret move.
 
 **Dependencies**:
 
-- gh-ocannl-271 (AdamW) — not a prerequisite for the doc, but a prerequisite
-  for any future implementation arc the doc describes.
-- gh-ocannl-270 (Imbue/llm.c distributed context) — sibling exploration.
-- gh-ocannl-293 (sharding) — sibling prerequisite for any future arc.
-- gh-ocannl-341 (multi-streaming removed) — closed; cited as why the
-  distributed model has to be built fresh.
+- AdamW — not a prerequisite for the doc, but a prerequisite for any future
+  implementation arc the doc describes. *(Update 2026-06-12: no tracking
+  issue exists; gh-ocannl-271, formerly cited here, is the low-bit optimizer
+  quantization issue, closed not-planned.)*
+- gh-ocannl-270 (Imbue/llm.c distributed context) — sibling exploration;
+  closed completed.
+- gh-ocannl-293 (sharding) — sibling prerequisite for any future arc; open,
+  under v1.0 per ROADMAP.
+- gh-ocannl-341 (deprecated multi-stream infrastructure removed; closed
+  completed) — cited as why the distributed model has to be built fresh.

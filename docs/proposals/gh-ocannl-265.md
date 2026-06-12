@@ -3,6 +3,16 @@
 **Issue:** [ahrefs/ocannl#265](https://github.com/ahrefs/ocannl/issues/265)
 **Status:** Draft proposal
 
+## Status update (2026-06-12)
+
+- Issue [#265](https://github.com/ahrefs/ocannl/issues/265) is **OPEN**, milestone **v0.9** (GH milestone due-date 2026-05-30 is stale; per ROADMAP.md, v0.9 targets Aug 24, 2026 — ICFP week).
+- The study has **not** been done — no write-up or issue comment exists (harness task status: deferred).
+- Sibling-study states: #242 (TVM) and #316 (DumPy/torchdim) CLOSED/completed; #301 (IREE) and #306 (Petalisp/Caten) CLOSED as **not planned**; #267 (Tiramisu) still OPEN as a draft proposal.
+- **Assumption invalidated:** gh-ocannl-271 ("Support quantization for optimizers: low-bit optimizers") was CLOSED as **not planned** (milestone v1.1). The "quantization findings feed directly into #271" framing below no longer has a live target issue; quantization lessons from Candle would need a new home (e.g. a fresh issue) if the study surfaces them.
+- OCANNL-side code pointers re-verified: all listed backend files exist unchanged; CUDA kernels still launch single-threaded (`grid_dim_x:1, block_dim_x:1` in `cuda_backend.ml`), so the v0.8 framing stands.
+- Op-coverage drift: `lib/nn_blocks.ml` has since gained RoPE (rotary embeddings via the `pos_embed` strategy, #444), `batch_norm1d`, and decoder-only transformer blocks; a tensor stacking operation with block-literal `%op` syntax also landed. The op-gap catalogue in study area 3 should be re-derived against current `nn_blocks.ml`, not the list sketched below.
+- Verdict: still actionable as a study task; the quantization-related acceptance criterion needs retargeting.
+
 ## Goal
 
 Survey [huggingface/candle](https://github.com/huggingface/candle) and identify
@@ -33,7 +43,9 @@ APIs.
       assessment of value and effort for each.
 - [ ] Note the relationship to gh-ocannl-271 (quantization, where Candle's
       GGUF support is most directly relevant) and any other tasks where
-      Candle observations apply.
+      Candle observations apply. *(Update 2026-06-12: #271 was closed as
+      not planned — file a new issue if the study surfaces actionable
+      quantization work.)*
 - [ ] Post the findings as a comment on issue #265 and/or land them as the
       final write-up replacing this proposal.
 
@@ -90,7 +102,8 @@ kernels.
 
 4. **Quantization**
    - Candle has substantial GGUF / quantized inference support. This is
-     directly relevant to gh-ocannl-271 and should be the area where
+     directly relevant to gh-ocannl-271 *(Update 2026-06-12: closed as not
+     planned; see Status update)* and should be the area where
      Candle's lessons are most actionable. Capture: what dtypes Candle
      supports, where the dequantize-on-load vs. on-the-fly decisions live,
      how kernels are specialized per quantization scheme, and what Candle
@@ -136,11 +149,11 @@ kernels.
 ### Related tasks
 
 - gh-ocannl-242 -- TVM deep dive (more aligned with OCANNL; completed)
-- gh-ocannl-267 -- Tiramisu deep dive
-- gh-ocannl-271 -- Quantization (Candle's GGUF support feeds directly here)
-- gh-ocannl-301 -- IREE deep dive
-- gh-ocannl-306 -- Petalisp/Caten deep dive
-- gh-ocannl-316 -- DumPy/torchdim study
+- gh-ocannl-267 -- Tiramisu deep dive (still open)
+- gh-ocannl-271 -- Quantization (closed as not planned as of 2026-06)
+- gh-ocannl-301 -- IREE deep dive (closed as not planned)
+- gh-ocannl-306 -- Petalisp/Caten deep dive (closed as not planned)
+- gh-ocannl-316 -- DumPy/torchdim study (completed)
 
 ## Approach (optional)
 
@@ -172,12 +185,13 @@ kernels.
 
 **Out of scope:**
 - Implementing any Candle-inspired changes in OCANNL -- those are tracked
-  separately (e.g. #271 for quantization, the v0.8 milestone for GPU
-  performance).
+  separately (quantization formerly via #271, now closed not-planned; GPU
+  performance via the v0.8 milestone).
 - Benchmarking Candle against OCANNL.
 - Adding a Rust toolchain or Candle as any kind of dependency.
 
 **Dependencies:**
 - Reads cleanly alongside the other "study" tasks (#242, #267, #301, #306,
-  #316). Most actionable findings will likely feed into #271
-  (quantization) and the v0.8 GPU performance milestone.
+  #316). Most actionable findings will likely feed into quantization work
+  (formerly #271, now closed as not planned — would need a fresh issue)
+  and the v0.8 GPU performance milestone.

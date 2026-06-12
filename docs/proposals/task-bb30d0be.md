@@ -5,6 +5,24 @@
 **Date**: 2026-04-07  
 **Status**: Ready to implement
 
+## Status update (2026-06-12)
+
+- **Both fixes have landed; this task looks DONE.**
+- Fix 1 landed in commit `75454fc4` (2026-05-14, "MIssing logging notice in test expectations"):
+  `arrayjit/test/test_ndarray_binary_io.expected` now begins with the two log-level lines
+  ("Retrieving commandline... ocannl_log_level" / "Found 0, in the config file"), exactly as
+  proposed. The same commit also fixed `test/operations/rope_test.expected`.
+- Fix 2 landed in commit `ca18d479` (2026-05-14, "Fix projection dedupe for singleton max pool"),
+  via a different but equivalent mechanism than proposed: instead of switching to
+  `Map.of_alist_reduce`, the `symbol_to_proj` alist is pre-deduplicated with
+  `Utils.unique_keep_first` (keep-first semantics, same as the proposed `~f:(fun first _ -> first)`)
+  before the still-present `Map.of_alist_exn` call. The code is now at `tensor/shape.ml`
+  around lines 1980-1986 (was 1899-1901).
+- `test/einsum/test_max_pool2d` (including the `output_dim_1` case) and
+  `test_ndarray_binary_io` are present and passing in the current tree; the test suite has
+  moved on substantially since (CSE hoisting, decoder-only transformer tests, etc.).
+- Nothing remains to do; the symlink under `docs/in-progress/` can be retired.
+
 ## Goal
 
 Restore `dune runtest` to exit code 0 by fixing two independent test failures introduced in recent

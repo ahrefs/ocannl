@@ -3,6 +3,15 @@
 **Issue:** [ahrefs/ocannl#308](https://github.com/ahrefs/ocannl/issues/308)
 **Status:** Proposal
 
+## Status update (2026-06-12)
+
+- Issue #308 is OPEN; its GH milestone still reads v0.7 (due 2026-01-30, lagging). ROADMAP.md does not list #308 explicitly — the closest fit is the v1.0 item "Address select 'explore' issues to demonstrate capability".
+- Not started: `test/einsum/tensor_puzzles.ml` does not exist and no puzzle solutions have been committed.
+- The cited capabilities all still exist and were re-verified: `++^` (concat-sum, `tensor/operation.ml`), `@^^` (`einmax1`), `+++` (`outer_sum`), `range_of_shape`, `where`, and affine indexing.
+- New since this proposal was written: a tensor stacking operation (`Operation.stack`) and block-literal `%op` syntax landed (commit 58bfd6e5). Puzzle #9 (`vstack`) and possibly #13 (`pad_to`) now have a more direct route than raw `^` concatenation specs; the classification table should be revisited for those rows during implementation.
+- Also new: `Shape.set_scale` for within-shape multiplicative constraints, the dimension "label" → "basis" rename across Row/Shape/Tensor APIs, and the broadcast-order reversal (LUB→GLB, "⊑" now reads "refines"). None of these invalidate the puzzle classification, but new code/prose should use the post-rename vocabulary.
+- The "missing capabilities" table (gather/scatter, scan/prefix-sum, flip, roll, reshape) remains accurate — none of these primitives have landed.
+
 ## Goal
 
 Solve the [Sasha Rush Tensor Puzzles](https://github.com/srush/Tensor-Puzzles) that map naturally to OCANNL's extended einsum notation, and provide clear explanations for those that do not fit. The deliverable is a documented analysis (posted as a GitHub issue comment and committed as a test/example file) that showcases OCANNL's einsum expressiveness and identifies gaps.
@@ -44,7 +53,7 @@ OCANNL's extended einsum provides:
 | 6 | `triu` | **Workaround** | `range_of_shape` comparison: `where(i <= j, 1, 0)` |
 | 7 | `cumsum` | Not expressible | Loop-carried dependency, needs scan primitive |
 | 8 | `diff` | **Workaround** | Convolution with kernel `[1, -1]` via affine indexing |
-| 9 | `vstack` | **Einsum** | Concatenation: `++^ "a; b => a^b"` |
+| 9 | `vstack` | **Einsum** | Concatenation: `++^ "a; b => a^b"` *(Update 2026-06-12: `Operation.stack` and block-literal `%op` syntax now also cover this directly)* |
 | 10 | `roll` | Not expressible | Circular shift needs modular dynamic indexing |
 | 11 | `flip` | Not expressible | Reversed indexing `a[n-1-i]` not in affine spec |
 | 12 | `compress` | Not expressible | Prefix-sum for output positions + scatter |

@@ -4,9 +4,19 @@
 **Milestone:** v1.0
 **Status:** Draft proposal
 
+## Status update (2026-06-12)
+
+- Issue [#80](https://github.com/ahrefs/ocannl/issues/80) is **OPEN** (state reason: REOPENED), milestone v1.0 (due 2026-06-30); harness task is `deferred`.
+- Still unimplemented: the `Pexp_let` hard error is intact, now at `tensor/ppx_cd.ml:1850-1859` (was 1832-1842), with the commented-out shallow-rewrite sketch at lines 1860-1862. Line references in the body have been refreshed.
+- **gh-ocannl-348 ("Simplify translations from the `%cd` syntax") is now CLOSED**, so the coordination concern in "Related task" is resolved: the `transl` calling convention survived unchanged (`translate` at line 490, `loop = transl ~bad_pun_hints` at line 497), and the recommended closure-captured-env threading still applies as written.
+- Other verified anchors: `expr_type` at lines 6-20, `projections_slot` at line 24, `result` at lines 77-93 — all unchanged. The `%cd` consumer counts still hold (71 occurrences in `tensor/operation.ml`, 3 in `lib/train.ml`). The `test/ppx/` diff-against-expected harness (`test_ppx_op.ml` / `test_ppx_op_expected.ml`) is intact.
+- Line drift inside `ppx_cd.ml` (from the basis-rename and axis-annotation commits `d980b82f`, `b2cee000`, `c4918bd1`): special-purpose identifiers now at ~1052-1096, catchall prefix/suffix slot heuristic at ~1099-1111, `%op`'s `Pexp_let` handler at `ppx_op.ml:654-664`.
+- Repo-wide renames since April 2026 (broadcast LUB→GLB reversal, "label"→"basis", "invalid"→"discardable") touched `ppx_cd.ml` only superficially; none of the design's assumptions are invalidated.
+- The design, acceptance criteria, and the six ambiguities remain current; no implementation work has started.
+
 ## Goal
 
-Replace the hard error at `tensor/ppx_cd.ml:1832-1842` with a real translation
+Replace the hard error at `tensor/ppx_cd.ml:1850-1859` with a real translation
 of `let ... in ...` (and `let ... and ... in ...`, `let _ = ... in ...`,
 `let rec ... in ...`) inside `%cd` blocks. The translator must thread a
 small lexical environment that records, for each let-bound identifier, the
@@ -25,7 +35,7 @@ behaviour-preserving.
       the inlined form `lhs =:+ v1 + v2` (i.e. identical `Accum_binop` /
       `Accum_unop` shape, identical projections lazy thunk, identical
       embedded-nodes set). *Mutation falsifier:* removing the env extension
-      so `s` falls into the catchall `Pexp_ident` case at `ppx_cd.ml:1081`
+      so `s` falls into the catchall `Pexp_ident` case at `ppx_cd.ml:1099`
       makes `s` resolve via the prefix/suffix heuristic to `slot = Undet`
       and `typ = Unknown`, which produces a different `comp` (or fails to
       compile because the LHS slot can no longer be derived).
@@ -35,7 +45,7 @@ behaviour-preserving.
       recorded on `Pexp_let` flows to the `Pexp_ident` lookup and into
       `setup_array ~for_slot:RHS1`. *Mutation falsifier:* dropping the env
       entry forces the body to fall back on the prefix/suffix heuristic
-      (`ppx_cd.ml:1086-1091`), under which a name like `r` matches none of
+      (`ppx_cd.ml:1104-1109`), under which a name like `r` matches none of
       the `lhs_*`/`rhs1_*`/... patterns and resolves to `Undet`; the
       generated assignment loses its slot tag and the projections it derives
       no longer match the inlined version.
@@ -137,10 +147,11 @@ is fiddly and benefits from review before agents begin.
 
 The seeded design pointers in the task file are accurate as of this audit:
 
-- **Error site:** `tensor/ppx_cd.ml:1832-1842` -- the `Pexp_let` arm in
+- **Error site:** `tensor/ppx_cd.ml:1850-1859` *(Update 2026-06-12: was
+  1832-1842)* -- the `Pexp_let` arm in
   `transl` builds a `Location.error_extensionf` with the message
   "let-in: local let-bindings not implemented yet". A commented-out sketch
-  on lines 1843-1844 shows the obvious-but-wrong shallow rewrite (recurse
+  on lines 1860-1862 shows the obvious-but-wrong shallow rewrite (recurse
   into bindings and body, rebuild `Pexp_let`); the comment is correct that
   this is not enough -- it doesn't track kind/slot.
 - **`expr_type` definition:** `tensor/ppx_cd.ml:6-20`. Variants are `Code
@@ -163,19 +174,19 @@ The seeded design pointers in the task file are accurate as of this audit:
   form `loop ~proj_in_scope expr1`. (Verified by `grep -c "loop ~proj"`.)
   Threading a new `~env` parameter would touch every one of them. See
   "Approach" for a less invasive option.
-- **Slot heuristic for free identifiers:** `tensor/ppx_cd.ml:1081-1093`.
+- **Slot heuristic for free identifiers:** `tensor/ppx_cd.ml:1099-1111`.
   After the special-case identifiers (`lhs`, `v`, `g`, `rhs1`, `t`, `t1`,
   `v1`, `g1`, ...), unrecognized identifiers are run through prefix/suffix
   patterns: `lhs_*` / `*_lhs` -> LHS, `rhs1_*` / `*_rhs1` -> RHS1, ...,
   `rhs_*` / `*_rhs` -> RHS1, otherwise Undet. The let-binding lookup must
   decide whether to override or coexist with this heuristic (see
   Ambiguity 1).
-- **Special-purpose identifiers:** `tensor/ppx_cd.ml:1034-1078` -- `lhs`,
+- **Special-purpose identifiers:** `tensor/ppx_cd.ml:1052-1096` -- `lhs`,
   `v`, `g`, `rhs1`, `t`, `t1`, `v1`, `g1`, `rhs2`, `t2`, `v2`, `g2`,
   `rhs3`, `t3`, `v3`, `g3`. Each maps to a fixed `(typ, slot)` pair.
   These should NOT be shadowable by a user `let lhs = ... in ...` (see
   Ambiguity 5) -- or if they should, the rule needs to be explicit.
-- **`%op` reference implementation:** `tensor/ppx_op.ml:569-579`. `%op`'s
+- **`%op` reference implementation:** `tensor/ppx_op.ml:654-664`. `%op`'s
   `Pexp_let` handler is structurally simple: recurse into each binding's
   RHS, recurse into the body, reduce all `vbs`, rebuild the `Pexp_let`.
   It does NOT track an environment. This works for `%op` because every
@@ -221,7 +232,7 @@ tensor declarations (e.g. `{ hint }`). They are lifted to the top of the
 contains an inline declaration, the resulting `vbs` must propagate up
 through the `Pexp_let` reconstruction -- otherwise the lifted
 `value_binding` will reference identifiers no longer in scope. The `%op`
-implementation already does this correctly (`reduce_vbss` on line 579);
+implementation already does this correctly (`reduce_vbss` on `ppx_op.ml:664`);
 `%cd` must do the same plus carry the env.
 
 ### Related task
@@ -230,7 +241,9 @@ implementation already does this correctly (`reduce_vbss` on line 579);
 the same area. If it lands first, the env-threading touch points may
 shrink. If this proposal lands first, gh-ocannl-348 may need to consider
 the new env parameter. Coordinate by reading whichever is in flight at
-implementation time.
+implementation time. *(Update 2026-06-12: #348 is now closed; the
+`transl`/`loop` calling convention is unchanged, so no coordination is
+needed anymore.)*
 
 ## Approach
 
@@ -253,7 +266,7 @@ implementation time.
    (correctness under exception unwinding, scope-pop ordering for `let
    ... and ...`) is local to the let-handler.
 
-3. New `Pexp_let` arm (replacing lines 1832-1842):
+3. New `Pexp_let` arm (replacing lines 1850-1859):
 
    ```ocaml
    | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
@@ -280,7 +293,7 @@ implementation time.
    ```
 
 4. New `Pexp_ident` lookup. In the catchall identifier branch (line
-   1081) check the env first. If found, return a `result` with the
+   1099) check the env first. If found, return a `result` with the
    recorded `typ` and `slot`. If not found, fall back to the existing
    prefix/suffix heuristic. This gives "env-wins" precedence (see
    Ambiguity 1).

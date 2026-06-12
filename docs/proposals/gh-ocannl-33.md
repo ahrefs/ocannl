@@ -3,6 +3,15 @@
 GitHub issue: [ahrefs/ocannl#33](https://github.com/ahrefs/ocannl/issues/33)
 Milestone: v1.0
 
+## Status update (2026-06-12)
+
+- Issue #33 is OPEN, milestone v1.0 (consistent with ROADMAP.md's v1.0, "End of October 2026" — this remains an unstarted v1.0 task).
+- Not started: `test/training/model_surgery.ml` does not exist, and the README hedge with the `starightforward` typo is still present at `README.md:27`.
+- All building blocks re-verified in the current tree: `stop_gradient` (`tensor/operation.ml:608`), `Tnode.set_values`/`get_values` (`arrayjit/lib/tnode.ml:752`/`758`), `Tensor.params` (`tensor/tensor.mli:22`), `Train.sgd_one` (`lib/train.ml:99`), `Nn_blocks.mlp` (`lib/nn_blocks.ml:89`). The `test/training/` reference tests (`moons_demo.ml`, `mlp_names.ml`, `mlp_bn_names.ml`, etc.) all exist.
+- Tensor persistence (`lib/persistence.ml`, #373) has landed, confirming the proposal's non-goal note; disk-based transfer learning remains out of scope here.
+- Interaction to watch: proposal/issue #333 (remove hosted memory mode) plans to replace `Tn.get_values`/`set_values` with context-aware versions. If #333 lands first, scenario B's API calls change shape (a `ctx` argument) but the demo's substance is unaffected.
+- Remains to do: everything in the Approach section (single `test/training/model_surgery.ml` covering A-D, `.expected` file, dune stanza, README edit).
+
 ## Goal
 
 Replace the hedged claim in `README.md` ("Model surgery should be straightforward (not sure if we are there yet)") with a concrete, runnable demonstration that the four canonical model-surgery workflows compose cleanly out of OCANNL's existing primitives, despite OCANNL being fully compiled. Where the demonstration uncovers genuine friction in current code, surface it as a follow-up issue rather than papering over it in the demo.

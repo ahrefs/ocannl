@@ -1,5 +1,13 @@
 # Diagnose RTX 3050 compute_mode = 1 (uncategorized)
 
+## Status update (2026-06-12)
+
+- Issue [ahrefs/ocannl#166](https://github.com/ahrefs/ocannl/issues/166) is still OPEN, milestone v0.8 (ROADMAP target: mid-June 2026 — the GitHub milestone due date of Feb 2026 lags ROADMAP.md, which is authoritative).
+- No fix has landed in `lukstafi/ocaml-cudajit` (HEAD `16c61b6`, post-0.7.2 release): `computemode_of_cu` still raises `invalid_arg` on `CU_COMPUTEMODE_UNCATEGORIZED` (`src/cuda.ml:234`), so a driver-returned `1` would crash `properties.exe` rather than print.
+- All cited locations re-verified against the current ocaml-cudajit checkout: `type computemode` at `src/cuda.ml:179`, `type cu_computemode` at `cuda_ffi/bindings_types.ml:489`, ctypes constants at `cuda_ffi/bindings_types.ml:1555-1557`. Nothing in the proposal's code analysis is stale.
+- No work in the ocannl repo since April 2026 touches this task; it remains blocked on physical access to the RTX 3050 desktop.
+- Everything in the Approach section remains to do.
+
 ## Goal
 
 Determine why `dune exec cudajit/bin/properties.exe` on the RTX 3050 desktop reports

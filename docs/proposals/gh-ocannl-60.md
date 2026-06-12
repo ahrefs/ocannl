@@ -1,5 +1,15 @@
 # Add LSTM example (gh-ocannl-60)
 
+## Status update (2026-06-12)
+
+- Issue [#60](https://github.com/ahrefs/ocannl/issues/60) is **OPEN**, milestone v0.7.1 (past due); harness task is `deferred`. No LSTM code exists anywhere in the repo (`lib/nn_blocks.ml`, `test/training/` re-verified) — the proposal is entirely unimplemented.
+- Related issues: gh-ocannl-57 (transformer on Names) **CLOSED/merged** as the proposal already noted; gh-ocannl-59 (makemore examples) now **CLOSED COMPLETED** — `mlp_names.ml`, `mlp_bn_names.ml`, and `batch_norm1d` landed, so `test/training/` has more scaffold precedents than when this was written.
+- **Key new capability**: a tensor stacking operation + block-literal `%op` syntax landed (commit `58bfd6e5`); `Operation.stack` is at `tensor/operation.ml:508` and exposed through the DSL surfaces. This supersedes the hand-rolled `stack_along_seq` sketch in Phase 4 — use `stack` to reassemble the per-step hidden states. (Note: print `stack`/`concat` results with `~style:\`Default`, not `\`Inline` — the inline printer crashes on concatenated shapes.)
+- Line drift in `tensor/operation.ml`: `slice` is now defined at line 617 (was 584), `@|` exposed in the `O` modules around line 858 (was 819).
+- `transformer_names.ml` scaffold remains valid; its cross-entropy was switched to a numerically stable log-softmax (commit `4daab9ee`), matching the proposal's "max-shift log-softmax" description.
+- No `sigmoid` primitive has been added since; the option-1-vs-option-2 design question is still open.
+- Repo-wide renames since April 2026 (broadcast-order reversal LUB→GLB, "label"→"basis") do not affect this plan; write any new shape-inference text with post-reversal vocabulary ("refines", join semilattice).
+
 ## Goal
 
 Add OCANNL's first recurrent architecture: an LSTM building block and a
@@ -62,7 +72,8 @@ Issue: https://github.com/ahrefs/ocannl/issues/60
   time step therefore shares the same tensor nodes. This is the mechanism
   that makes unrolled LSTMs correct without any new framework support.
 - **Batch-axis slicing** — `operation.ml` `slice` / infix `@|` (defined at
-  line 584, registered on `NDO_final` at line 819) takes an
+  line 617, exposed in the `O` modules around line 858) *(Update 2026-06-12:
+  line numbers refreshed)* takes an
   `Indexing.static_symbol` and returns the tensor sliced at the leftmost
   batch axis. `@|` is the idiomatic way to extract time step `t` from a
   `[batch_size; seq_len]` batch layout. The einsum notation `"2...|... => ...|..."`
@@ -107,7 +118,8 @@ keep this PR focused; file a follow-up for option 2 if desired.
   proposal uses the separate-weight-matrices formulation (Approach B), which
   sidesteps concatenation entirely.
 - **gh-ocannl-59** (makemore examples) — LSTM is the RNN variant in the
-  makemore lineage.
+  makemore lineage. *(Update 2026-06-12: #59 is closed as completed;
+  `mlp_names.ml` and `mlp_bn_names.ml` landed in `test/training/`.)*
 
 ## Approach
 
@@ -198,6 +210,9 @@ Copy `test/training/transformer_names.ml` wholesale as the scaffolding:
   `stack_along_seq` is the inverse of the per-step slicing — can be expressed
   via einsum `concat_sum`, or by writing the hidden-state outputs directly
   into a pre-allocated tensor using named axes. Coder decides.
+  *(Update 2026-06-12: a first-class `stack` operation has since landed
+  (`tensor/operation.ml:508`, commit `58bfd6e5`) — prefer it over the
+  hand-rolled alternatives above.)*
 
 - SGD, epochs, step counter, expected-file generation all unchanged.
 

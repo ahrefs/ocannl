@@ -3,6 +3,15 @@
 Task: gh-ocannl-164
 Issue: https://github.com/ahrefs/ocannl/issues/164
 
+## Status update (2026-06-12)
+
+- Issue #164 is still OPEN, milestone v0.8 (ROADMAP targets mid-June 2026 for v0.8); gh-ocannl-412 (tiling) is also still OPEN on v0.8.
+- Not yet started: no `restrict` qualifiers, vectorization pragmas, or `OCANNL_HAS_AVX2`/`OCANNL_HAS_NEON` macros exist anywhere in `c_syntax.ml`, `cc_backend.ml`, or `builtins_cc.ml`; `backend_impl.ml:48` still allocates via unaligned `Ctypes.allocate_n`.
+- Identifiers re-verified at HEAD `d9de22f0`; several line numbers drifted (table below updated): `pp_ll` is now at `c_syntax.ml:331`, `For_loop` codegen at ~340-357, `compile_proc` at ~842-981, `loop_over_dims` at `low_level.ml:1929`. `For_loop` (line 38), `Set_from_vec` (line 41), `pp_array_offset` (line 275), `arch_flags` (cc_backend.ml:20), and `c_vec_typ_of_prec` (ops.ml:339) are unchanged.
+- Kernel parameters were renamed from `params` to `kparams` (commit `9262ab44`, #356): Phase 3a's `restrict` change now lands in `compile_proc`'s `kparams` construction (`Kparam_ptr` entries, ~c_syntax.ml:847-881).
+- A first-touch `Zero_out` elision landed in `c_syntax.ml` (gh-ocannl-420, `zero_out_seen` hash set cleared in `compile_proc`) — orthogonal to this proposal but nearby in the same functions; rebase Phase 3 around it.
+- All Acceptance Criteria and the phased Approach remain valid as written.
+
 ## Goal
 
 Enable the C backend to leverage AVX/AVX2 SIMD instructions for vectorizable inner loops, with NEON as the ARM/Apple Silicon equivalent. The primary mechanism is compiler auto-vectorization via appropriate flags and code patterns, supplemented by structured loop generation that the compiler can reliably vectorize. This provides a foundation for the explicit SIMD micro-kernels needed by the tiling task (watch-ocannl-README-md-347818d3 / gh-ocannl-412).
@@ -23,11 +32,11 @@ Enable the C backend to leverage AVX/AVX2 SIMD instructions for vectorizable inn
 
 ### Current compilation pipeline (C backend)
 
-1. **Low-level IR** (`arrayjit/lib/low_level.ml`): `For_loop { index; from_; to_; body; trace_it }` (line 38). `loop_over_dims` (line 1695) generates nested for-loops from dimension arrays. Loops iterate from `from_` to `to_` inclusive.
+1. **Low-level IR** (`arrayjit/lib/low_level.ml`): `For_loop { index; from_; to_; body; trace_it }` (line 38). `loop_over_dims` (line 1929) generates nested for-loops from dimension arrays. Loops iterate from `from_` to `to_` inclusive.
 
-2. **C code generation** (`arrayjit/lib/c_syntax.ml`): `pp_ll` (line 305) emits C `for` loops. The loop index type is `uint32_t` (or `uint64_t` for big models). Array accesses use computed offsets via `pp_array_offset` (line 275).
+2. **C code generation** (`arrayjit/lib/c_syntax.ml`): `pp_ll` (line 331) emits C `for` loops. The loop index type is `uint32_t` (or `uint64_t` for big models). Array accesses use computed offsets via `pp_array_offset` (line 275).
 
-3. **CC backend** (`arrayjit/lib/cc_backend.ml`): Compiles generated `.c` files with GCC/Clang. Compiler flags (line 86-96): `-O3 -march=native` by default. The `arch_flags` setting (line 20) defaults to `-march=native` which already enables AVX2 on machines that support it, but the generated code is not structured for auto-vectorization.
+3. **CC backend** (`arrayjit/lib/cc_backend.ml`): Compiles generated `.c` files with GCC/Clang. Compiler flags (lines 87-97): `-O3 -march=native` by default. The `arch_flags` setting (line 20) defaults to `-march=native` which already enables AVX2 on machines that support it, but the generated code is not structured for auto-vectorization.
 
 4. **Memory allocation** (`arrayjit/lib/backend_impl.ml`): Uses `Ctypes.allocate_n int8_t ~count:size_in_bytes` (line 48), which calls `malloc` -- no alignment guarantee beyond default (typically 16 bytes on 64-bit systems, insufficient for AVX's 32-byte requirement).
 
@@ -37,14 +46,16 @@ Enable the C backend to leverage AVX/AVX2 SIMD instructions for vectorizable inn
 
 ### Key code locations
 
+*(Line numbers re-verified 2026-06-12 at HEAD `d9de22f0`.)*
+
 | Component | File | Line(s) | Relevance |
 |-----------|------|---------|-----------|
-| `For_loop` codegen | `arrayjit/lib/c_syntax.ml` | 314-331 | Where loop headers are emitted; add pragma hints here |
-| `compile_proc` | `arrayjit/lib/c_syntax.ml` | 756-892 | Function generation; add `restrict` to pointer params |
-| Compiler flags | `arrayjit/lib/cc_backend.ml` | 86-96 | Add conditional AVX2/FMA flags |
+| `For_loop` codegen | `arrayjit/lib/c_syntax.ml` | 340-357 | Where loop headers are emitted; add pragma hints here |
+| `compile_proc` | `arrayjit/lib/c_syntax.ml` | 842-981 | Function generation; add `restrict` to pointer params (now called `kparams`, built via `Kparam_ptr`) |
+| Compiler flags | `arrayjit/lib/cc_backend.ml` | 87-97 | Add conditional AVX2/FMA flags |
 | `arch_flags` setting | `arrayjit/lib/cc_backend.ml` | 20 | Default `-march=native` |
-| Memory allocation | `arrayjit/lib/backend_impl.ml` | 44-51 | Replace with aligned allocation |
-| Local array declarations | `arrayjit/lib/c_syntax.ml` | 860-877 | Add alignment attribute |
+| Memory allocation | `arrayjit/lib/backend_impl.ml` | 44-51 | Replace with aligned allocation (`Ctypes.allocate_n` at line 48) |
+| Local array declarations | `arrayjit/lib/c_syntax.ml` | ~949-966 | `local_decls` in `compile_proc`; add alignment attribute |
 | Includes / builtins | `arrayjit/lib/builtins_cc.ml` | 1-10 | Add platform detection macros |
 | Precision types | `arrayjit/lib/ops.ml` | 324-337 | C type names for SIMD width computation |
 | `C_syntax_config` | `arrayjit/lib/c_syntax.ml` | 16-75 | Module type; may need `restrict` or alignment config |
@@ -105,11 +116,11 @@ These macros are needed by the tiling task for explicit intrinsics, and immediat
 
 **File: `arrayjit/lib/c_syntax.ml`**
 
-3a. **`restrict` qualifiers on pointer parameters** (in `compile_proc`, around line 773):
+3a. **`restrict` qualifiers on pointer parameters** (in `compile_proc`, around lines 847-881 where `kparams` / `Kparam_ptr` entries are built):
 
 Change parameter declarations from `float *arr` to `float * restrict arr`. This tells the compiler that pointers don't alias, which is a prerequisite for auto-vectorization. OCANNL's memory model supports this: each tensor has its own allocation.
 
-3b. **Vectorization pragma hints** (in `pp_ll`, around line 314):
+3b. **Vectorization pragma hints** (in `pp_ll`, around line 340):
 
 Before the innermost `for` loop (detected by checking whether the loop body contains no nested `For_loop`), emit:
 
@@ -123,7 +134,7 @@ Before the innermost `for` loop (detected by checking whether the loop body cont
 
 Detection of "innermost loop" requires a simple check: scan the body for `For_loop` nodes. If none found, this is an inner loop candidate for the pragma.
 
-3c. **Alignment attribute on local arrays** (in `compile_proc`, around line 868-874):
+3c. **Alignment attribute on local arrays** (in `compile_proc`'s `local_decls`, around lines 949-966):
 
 Change local array declarations from:
 ```c

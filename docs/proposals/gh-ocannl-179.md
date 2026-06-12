@@ -1,5 +1,13 @@
 # C-syntax tracing printf: clean line breaks and indentation
 
+## Status update (2026-06-12)
+
+- Issue [ahrefs/ocannl#179](https://github.com/ahrefs/ocannl/issues/179) is still OPEN (label: bug), milestone v0.8 (ROADMAP target: mid-June 2026).
+- The bug is still present: all three `pp_log_statement` bodies are unchanged from the excerpts below — raw `^^` with `comma ^^ space`, no `group`/`nest`/`break` (current locations: `arrayjit/lib/c_syntax.ml:209`, `arrayjit/lib/cuda_backend.ml:812`, `arrayjit/lib/metal_backend.ml:663`).
+- The pretty-printer invocation `PPrint.ToBuffer.pretty 1.0 110` is confirmed at `c_syntax.ml:240` (`filter_and_prepend_builtins`).
+- The reference combinator style at `c_syntax.ml` ~177-200 (ternary/binary `group`/`ifflat`/`nest`) is still there; the other reference line numbers cited below (331, 344-346, 805) have drifted to unrelated code.
+- No conflicting work has landed on these files since April 2026 (recent commits touched Zero_out elision, CSE, Metal storage modes — none affect log-statement layout). The proposal remains fully actionable as written.
+
 ## Goal
 
 Generated tracing log statements (`fprintf` / `printf` / Metal `log_debug`) in
@@ -73,8 +81,9 @@ string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma ^^ spa
 
 The same file (`c_syntax.ml`) already uses PPrint's `group` / `nest` /
 `ifflat` / `break` combinators idiomatically elsewhere, e.g. for ternary,
-binary, and call-like expressions around lines 177–200, 331, 344–346, 805.
-Those existing call sites are good reference style for the fix.
+binary, and call-like expressions around lines 177–200 *(Update 2026-06-12:
+the additional refs to lines 331, 344–346, 805 have drifted; 177–200 still
+holds)*. Those existing call sites are good reference style for the fix.
 
 The pretty-printer is invoked in `filter_and_prepend_builtins` with
 `PPrint.ToBuffer.pretty 1.0 110 ...` (line ~240), so the target line width
