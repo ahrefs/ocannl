@@ -1,0 +1,7 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+n_shards=1: loss=67.5000
+n_shards=2: loss=11.2500
+w after 1-shard step  = [5.000000]
+w after 2-shard step  = [5.000000]
+data-parallel parity with single-shard baseline = true
