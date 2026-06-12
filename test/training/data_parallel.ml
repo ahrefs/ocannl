@@ -52,6 +52,18 @@ let run ~n_shards : float array =
       Array.concat_map h.Parallel.owner_params ~f:(fun p -> Tn.get_values p.Tensor.value))
     ()
 
+(* The driver builds shard i's graph after [set_random_seed ~seed:(base_seed + i)] so randomized ops
+   draw differently per shard. This exercises that mechanism directly: a uniform draw with the same
+   seed must match, and with a different seed must diverge. *)
+let rng_draw seed : float array =
+  Tensor.unsafe_reinitialize ();
+  Tensor.set_random_seed ~seed ();
+  let ones = NTDSL.param ~values:[| 1.; 1.; 1.; 1. |] "ones" ~output_dims:[ 4 ] () in
+  let%op u = uniform () *. ones in
+  let ctx = Context.auto () in
+  let _ctx = Train.forward_once ctx u in
+  Tn.get_values u.Tensor.value
+
 let () =
   let p1 = run ~n_shards:1 in
   let p2 = run ~n_shards:2 in
@@ -60,4 +72,8 @@ let () =
   Stdio.printf "w after 2-shard step  = [%s]\n"
     (String.concat ~sep:" " (Array.to_list (Array.map p2 ~f:(Printf.sprintf "%.6f"))));
   let close = Array.for_all2_exn p1 p2 ~f:(fun a b -> Float.(abs (a - b) < 1e-4)) in
-  Stdio.printf "data-parallel parity with single-shard baseline = %b\n" close
+  Stdio.printf "data-parallel parity with single-shard baseline = %b\n" close;
+  let d0 = rng_draw 0 and d0' = rng_draw 0 and d1 = rng_draw 1 in
+  Stdio.printf "per-shard RNG: same seed identical = %b, distinct seeds diverge = %b\n"
+    (Array.equal Float.equal d0 d0')
+    (not (Array.equal Float.equal d0 d1))

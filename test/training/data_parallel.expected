@@ -5,3 +5,4 @@ n_shards=2: loss=11.2500
 w after 1-shard step  = [5.000000]
 w after 2-shard step  = [5.000000]
 data-parallel parity with single-shard baseline = true
+per-shard RNG: same seed identical = true, distinct seeds diverge = true
