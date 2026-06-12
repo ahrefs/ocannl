@@ -1,0 +1,15 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+eq, shifted flanks, conflicting dims (unsatisfiable): Shape_error: solved dimensions for axis: mismatch
+eq, shifted flanks, conjugate dims (least-material resolution): no error
+eq, aligned flanks, conflicting dims: Shape_error: solved dimensions for axis: mismatch
+eq, aligned flanks, matching dims (legitimate no-op): no error
+ineq, closed-closed shifted, conflicting dims (unsatisfiable): Shape_error: dimension comparison for axis: mismatch
+ineq, closed-closed shifted, matching dims (satisfiable): no error
+ineq, closed-closed, result surplus faces inserted padding (satisfiable): no error
+ineq, same-var shifted, conflicting dims (unsatisfiable): Shape_error: dimension comparison for axis: mismatch
+ineq, same-var shifted, matching dims (satisfiable): no error
+eq, cross surpluses alone (satisfiable, family binding): no error
+eq, cross surpluses then rho2 ~ [] (satisfiable only sporadically): no error
+eq, rho2 ~ [] then cross surpluses (same store, pinned first): no error
+eq, mirror cross surpluses then rho2 ~ [] (trailing guard rejects): Shape_error: Number of axes mismatch

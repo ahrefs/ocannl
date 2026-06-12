@@ -58,3 +58,4 @@ docs/*.log
 docs/*.out
 docs/*.bbl
 docs/*.blg
+.DS_Store
