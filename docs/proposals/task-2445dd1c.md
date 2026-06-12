@@ -16,13 +16,18 @@ cleanup (#341); its remaining hook is `Train.grad_update ~setup_for_parallel`
 
 ## Design (resolved: build on 293b's Outcome 2)
 
-293b fixed the primitive layer: shards are explicit per-shard backend contexts (one
-stream/queue/domain per shard), each owning disjoint tnode buffers, with the per-stream
-merge buffer (`device_to_device tn ~into_merge_buffer:Copy`, now a transfer *routine*) as
-the only cross-stream channel, and `wait_for_ready` (`backends.ml:48`) as the explicit
-host-orchestrated synchronization point. 293c wires those into the training loop.
+293b *designed* the primitive layer (it was an elaboration-only verdict task and ships no
+code): shards are explicit per-shard backend contexts (one stream/queue/domain per
+shard), each owning disjoint tnode buffers, with the per-stream merge buffer
+(`device_to_device tn ~into_merge_buffer:Copy`, now a transfer *routine*) as the only
+cross-stream channel, and `wait_for_ready` (`backends.ml:48`) as the explicit
+host-orchestrated synchronization point. **293c owns both halves of the implementation**:
+it builds the sharding primitives per the 293b sketch *and* wires them into the training
+loop. (293b records the design but commits no code, so no other open task is responsible
+for these APIs — they live here.)
 
-The primitives 293b proposes for 293c to consume (`lib/parallel.ml` or `lib/train.ml`):
+The primitives 293c implements (in `lib/parallel.ml` or `lib/train.ml`), per the 293b
+sketch:
 
 ```ocaml
 val shard_along : axis:int -> n_shards:int -> Tensor.t -> Tensor.t array
@@ -62,8 +67,9 @@ data-parallel deliverable above does not depend on it.
 
 ## Out of scope
 
-- The sharding primitives themselves (`shard_along` / `gather` / `grad_sync`) — those are
-  293b territory ([task-a2c331e9.md](task-a2c331e9.md)); 293c consumes them.
+- The *design* of the sharding primitives (which outcome, which backend mechanisms) —
+  that was 293b's verdict ([task-a2c331e9.md](task-a2c331e9.md)). Their *implementation*
+  is in-scope here (see Design above); 293b ships no code.
 - Slice-as-alias-view ([task-e4003e5f.md](task-e4003e5f.md), independent; alias views
   make `shard_along` allocation-free but are not a hard blocker — sharding can ship
   copy-on-shard initially).
@@ -77,8 +83,10 @@ data-parallel deliverable above does not depend on it.
 
 ## Acceptance Criteria
 
-- [ ] `shard_along` / `gather` / `grad_sync` (from 293b) are wired into a data-parallel
-      training driver in `lib/train.ml` (or new `lib/parallel.ml`).
+- [ ] The sharding primitives `shard_along` / `gather` / `grad_sync` are implemented (in
+      `lib/train.ml` or new `lib/parallel.ml`) per the 293b sketch — this task owns them,
+      as 293b was verdict-only.
+- [ ] Those primitives are wired into a data-parallel training driver.
 - [ ] Per-shard forward+backward routines compile against per-shard backend contexts
       (one stream/queue/domain per shard); each shard owns disjoint tnode buffers.
 - [ ] `grad_sync` runs between backward and the optimizer step, all-reducing parameter

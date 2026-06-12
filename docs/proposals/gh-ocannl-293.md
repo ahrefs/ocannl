@@ -21,7 +21,7 @@ original Phase 2 design assumptions.
 |---------|----------|-------|---------------------|
 | 293a `task-e4003e5f` | [task-e4003e5f.md](task-e4003e5f.md) | Slice/sub-tensor as alias view: convert `Fetch.Slice` from a materializing copy loop to buffer aliasing | **Blocked on [#344](https://github.com/ahrefs/ocannl/issues/344)** (universal pool allocator, still open, milestone v0.7) |
 | 293b `task-a2c331e9` | [task-a2c331e9.md](task-a2c331e9.md) | Re-elaborate sharding primitives post-#341; elaboration-only verdict task | **Decided 2026-06-12: Outcome 2 (per-shard backend contexts)** |
-| 293c `task-2445dd1c` | [task-2445dd1c.md](task-2445dd1c.md) | Training-loop integration of sharding (data/pipeline parallelism) | Ready — re-elaborated against 293b's Outcome 2 verdict (2026-06-12) |
+| 293c `task-2445dd1c` | [task-2445dd1c.md](task-2445dd1c.md) | Implements the sharding primitives (`shard_along`/`gather`/`grad_sync`) per 293b's design **and** their training-loop integration (data/pipeline parallelism) — 293b is verdict-only, so the primitive implementation lives here | Ready — re-elaborated against 293b's Outcome 2 verdict (2026-06-12) |
 
 Natural sequencing: 293a → 293b verdict → 293c, though 293b (a research/decision task)
 can proceed independently of 293a.
