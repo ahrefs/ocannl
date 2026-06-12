@@ -102,9 +102,12 @@ data-parallel deliverable above does not depend on it.
       routines (internally gated by `wait_for_ready`) + a `%cd` accumulation, with a
       selectable `Sum` / `Mean` reduction.
 - [x] Per-shard RNG seeding diverges: each shard's graph is built after
-      `set_random_seed ~seed:(base_seed + shard_id)`, and the data slices are themselves
-      distinct (`shard_along`). Verified by the RNG-divergence check in
-      `test/training/data_parallel.ml`.
+      `set_random_seed ~seed:(base_seed + shard_id)` (scoped by `Tensor.with_saved_random_seed`
+      so the caller's global seed is restored), and the data slices are themselves distinct
+      (`shard_along`). Verified by the *driver-level* RNG test in
+      `test/training/data_parallel.ml` ("driver routes per-shard seed into RNG", which flips
+      if the driver stops routing `base_seed` into the shard seeds) plus a transient-mutation
+      check ("global random-seed singleton preserved across data_parallel").
 - [x] A `test/training/` test (`data_parallel.ml`) trains a small model data-parallel
       across 2 shards and checks parameter parity against the single-shard baseline.
 - [x] Pipeline parallelism is **split into a follow-up task** with a recorded rationale

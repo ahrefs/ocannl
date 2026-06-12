@@ -122,7 +122,9 @@ let schedule (r : _ Ir.Backend_intf.routine) = Task.run r.Ir.Backend_intf.schedu
 
    Per-shard RNG streams diverge by default: shard i's graph is built after
    [set_random_seed ~seed:(base_seed + i)], so randomized ops (dropout, [uniform_at]) draw
-   differently per shard while the data slices are themselves distinct. *)
+   differently per shard while the data slices are themselves distinct. The seed mutation is
+   scoped by [Tensor.with_saved_random_seed], so the caller's global random seed is restored on
+   return. *)
 let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(momentum = 0.0)
     ?(base_seed = 0) ~n_shards ~(bindings : Idx.unit_bindings) ~(learning_rate : Tensor.t)
     ~(inputs : Tensor.t) ~(targets : Tensor.t) ~(loss_of : Tensor.t -> Tensor.t -> Tensor.t) ~f () =
