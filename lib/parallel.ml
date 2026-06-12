@@ -90,6 +90,11 @@ type handle = {
       (** Run one synchronized optimizer step: every shard's forward+backward, an all-reduce of the
           parameter gradients across shards via merge-buffer transfer routines, one optimizer update
           on the owner shard, then a broadcast of the updated parameters back to the other shards. *)
+  grad_sync : unit -> unit;
+      (** All-reduce the parameter gradients across shards onto the owner via merge-buffer transfer
+          routines (with the configured {!reduction}). Run after the shards' backward passes and
+          before the optimizer step; {!step} already calls it, but it is exposed for custom training
+          loops. *)
   set_batch : inputs:Tensor.t -> targets:Tensor.t -> unit;
       (** Scatter a fresh logical batch across the shards (re-shards along the batch axis and copies
           into the per-shard input buffers) for multi-step training. *)
@@ -284,6 +289,7 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
     {
       n_shards;
       step;
+      grad_sync;
       set_batch;
       owner_loss_value;
       sync_params_to_host;
