@@ -3,7 +3,7 @@
 GitHub issue: [ahrefs/ocannl#293](https://github.com/ahrefs/ocannl/issues/293)
 **Task**: gh-ocannl-293 (container, `leaf: false`)
 **Date**: 2026-06-12
-**Status**: Open umbrella — tracks three split subtasks; no implementation work happens under this id directly.
+**Status**: Open umbrella — tracks three split subtasks; no implementation work happens under this id directly. **293b decided 2026-06-12: Outcome 2 (per-shard backend contexts); GH issue milestone aligned to v1.0; Outcome 3 (multi-process) deferred to a v1.x revisit.**
 
 ## Context
 
@@ -20,22 +20,22 @@ original Phase 2 design assumptions.
 | Subtask | Proposal | Scope | Status (2026-06-12) |
 |---------|----------|-------|---------------------|
 | 293a `task-e4003e5f` | [task-e4003e5f.md](task-e4003e5f.md) | Slice/sub-tensor as alias view: convert `Fetch.Slice` from a materializing copy loop to buffer aliasing | **Blocked on [#344](https://github.com/ahrefs/ocannl/issues/344)** (universal pool allocator, still open, milestone v0.7) |
-| 293b `task-a2c331e9` | [task-a2c331e9.md](task-a2c331e9.md) | Re-elaborate sharding primitives post-#341; elaboration-only verdict task | Ready; recommendation drafted (per-shard backend contexts) awaiting user verdict |
-| 293c `task-2445dd1c` | [task-2445dd1c.md](task-2445dd1c.md) | Training-loop integration of sharding (data/pipeline parallelism) | Blocked on 293b's verdict |
+| 293b `task-a2c331e9` | [task-a2c331e9.md](task-a2c331e9.md) | Re-elaborate sharding primitives post-#341; elaboration-only verdict task | **Decided 2026-06-12: Outcome 2 (per-shard backend contexts)** |
+| 293c `task-2445dd1c` | [task-2445dd1c.md](task-2445dd1c.md) | Implements the sharding primitives (`shard_along`/`gather`/`grad_sync`) per 293b's design **and** their training-loop integration (data/pipeline parallelism) — 293b is verdict-only, so the primitive implementation lives here | Ready — re-elaborated against 293b's Outcome 2 verdict (2026-06-12) |
 
 Natural sequencing: 293a → 293b verdict → 293c, though 293b (a research/decision task)
 can proceed independently of 293a.
 
-## Milestone discrepancy (needs a decision)
+## Milestone discrepancy — resolved 2026-06-12
 
-- The GitHub issue still carries milestone **v0.8** (due 2026-02-28, already past).
+- The GitHub issue previously carried milestone **v0.8** (due 2026-02-28, already past).
 - `ROADMAP.md` lists "Sharding and slicing with minimal copying (#293)" under
   **v1.0 — End of October 2026** ("Feature completeness").
 - 293a additionally depends on #344, which is **v0.7** work still open.
 
-The ROADMAP placement is the operative one; the GH issue milestone should be moved to
-v1.0 to match (or the ROADMAP revised, but v0.8's actual scope is tiling/megakernel/Metal
-optimizations, so the slip looks intentional).
+**Resolution (user decision, 2026-06-12)**: the ROADMAP placement is operative; the GH
+issue #293 milestone was **moved from v0.8 to v1.0** to match. (v0.8's actual scope is
+tiling/megakernel/Metal optimizations, so the slip was intentional.)
 
 ## What changed since the original issue sketch
 
@@ -55,7 +55,14 @@ optimizations, so the slip looks intentional).
   `{ ptr : 'buffer_ptr; size_in_bytes : int }` with no offset, so cheap alias views
   (293a) stay blocked on it.
 
+## Outcome 3 (multi-process) — deferred
+
+Per the 293b verdict, multi-process / multi-node orchestration (Outcome 3) is **not**
+pursued now: OCANNL has no in-tree fork/IPC/Eio machinery, and Outcome 2 delivers
+sharding in-process. **Revisit Outcome 3 (multi-process orchestration) for multi-node
+training in v1.x** — recorded as a one-line note here, no tracking task yet.
+
 ## Completion criterion
 
-This umbrella completes when all three subtasks land or close (293b may legitimately
-close 293c as not-planned; see its decision tree).
+This umbrella completes when all three subtasks land or close. 293b is decided (Outcome
+2); 293c is now elaborated against it and 293a remains blocked on #344.
