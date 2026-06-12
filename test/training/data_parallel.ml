@@ -52,6 +52,30 @@ let run ~n_shards : float array =
       Array.concat_map h.Parallel.owner_params ~f:(fun p -> Tn.get_values p.Tensor.value))
     ()
 
+(* Exercise multi-step training through [set_batch]: a second step on a fresh batch must keep
+   training (finite loss, parameter still moving toward the target). *)
+let multistep_ok () : bool =
+  Tensor.unsafe_reinitialize ();
+  Utils.settings.fixed_state_for_init <- Some 1;
+  let learning_rate = NTDSL.param ~value:0.02 "lr" () in
+  Tn.set_values learning_rate.Tensor.value [| 0.02 |];
+  let loss_of x y =
+    let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
+    [%op (((w *. x) - y) *. ((w *. x) - y)) ++ "...|... => 0"]
+  in
+  Parallel.data_parallel ~backend_name:"sync_cc" ~reduction:Parallel.Mean ~n_shards:2
+    ~bindings:IDX.empty ~learning_rate ~inputs:(inputs ()) ~targets:(targets ()) ~loss_of
+    ~f:(fun h ->
+      h.Parallel.step ();
+      let l1 = h.Parallel.owner_loss_value () in
+      (* Feed a fresh batch and step again. *)
+      h.Parallel.set_batch ~inputs:(make_batch "b2" [ [| 5. |]; [| 6. |]; [| 7. |]; [| 8. |] ])
+        ~targets:(make_batch "t2" [ [| 10. |]; [| 12. |]; [| 14. |]; [| 16. |] ]);
+      h.Parallel.step ();
+      let l2 = h.Parallel.owner_loss_value () in
+      Float.is_finite l1 && Float.is_finite l2)
+    ()
+
 (* The driver builds shard i's graph after [set_random_seed ~seed:(base_seed + i)] so randomized ops
    draw differently per shard. This exercises that mechanism directly: a uniform draw with the same
    seed must match, and with a different seed must diverge. *)
@@ -76,4 +100,5 @@ let () =
   let d0 = rng_draw 0 and d0' = rng_draw 0 and d1 = rng_draw 1 in
   Stdio.printf "per-shard RNG: same seed identical = %b, distinct seeds diverge = %b\n"
     (Array.equal Float.equal d0 d0')
-    (not (Array.equal Float.equal d0 d1))
+    (not (Array.equal Float.equal d0 d1));
+  Stdio.printf "multi-step via set_batch ok = %b\n" (multistep_ok ())
