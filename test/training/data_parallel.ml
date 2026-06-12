@@ -105,6 +105,27 @@ let driver_routes_seed_into_shards () : bool =
   let l_b = owner_loss_with_base_seed 1000 in
   not (Float.equal l_a l_b)
 
+(* Shard-to-shard divergence: the driver must seed shard 0 and shard 1 *differently* (base_seed + i),
+   not all with base_seed. The handle reports the exact per-shard seeds it used; this asserts they
+   are pairwise distinct (specifically shard 0 <> shard 1, and equal to base_seed + i). Flips if the
+   driver seeds every shard with base_seed (the reviewer's mutation target: dropping the [+ i]). A
+   draw comparison cannot stand in here because shards already diverge through distinct [self_id]s
+   regardless of the seed. *)
+let shards_seeded_distinctly () : bool =
+  let learning_rate = NTDSL.param ~value:0.0 "lr" () in
+  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
+  let loss_of x y =
+    let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
+    [%op (((w *. x) + uniform1 () - y) *. ((w *. x) + uniform1 () - y)) ++ "...|... => 0"]
+  in
+  Parallel.data_parallel ~backend_name:"sync_cc" ~n_shards:2 ~base_seed:100 ~bindings:IDX.empty
+    ~learning_rate ~inputs:(inputs ()) ~targets:(targets ()) ~loss_of
+    ~f:(fun h ->
+      let s = h.Parallel.shard_seeds in
+      (* Shard 0 and shard 1 seeded distinctly, following base_seed + i. *)
+      Array.length s = 2 && Array.for_alli s ~f:(fun i v -> v = 100 + i) && not (s.(0) = s.(1)))
+    ()
+
 (* The per-shard seed mutation must be transient: a caller-selected global random seed survives a
    [Parallel.data_parallel] call. Fails if the driver leaves the global singleton pointing at a
    shard seed (e.g. if it dropped [with_saved_random_seed]). *)
@@ -134,6 +155,7 @@ let () =
   let close = Array.for_all2_exn p1 p2 ~f:(fun a b -> Float.(abs (a - b) < 1e-4)) in
   Stdio.printf "data-parallel parity with single-shard baseline = %b\n" close;
   Stdio.printf "driver routes per-shard seed into RNG = %b\n" (driver_routes_seed_into_shards ());
+  Stdio.printf "shards seeded distinctly (base_seed + i) = %b\n" (shards_seeded_distinctly ());
   Stdio.printf "global random-seed singleton preserved across data_parallel = %b\n"
     (seed_singleton_preserved ());
   Stdio.printf "multi-step via set_batch ok = %b\n" (multistep_ok ())

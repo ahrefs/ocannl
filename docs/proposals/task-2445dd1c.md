@@ -104,10 +104,13 @@ data-parallel deliverable above does not depend on it.
 - [x] Per-shard RNG seeding diverges: each shard's graph is built after
       `set_random_seed ~seed:(base_seed + shard_id)` (scoped by `Tensor.with_saved_random_seed`
       so the caller's global seed is restored), and the data slices are themselves distinct
-      (`shard_along`). Verified by the *driver-level* RNG test in
-      `test/training/data_parallel.ml` ("driver routes per-shard seed into RNG", which flips
-      if the driver stops routing `base_seed` into the shard seeds) plus a transient-mutation
-      check ("global random-seed singleton preserved across data_parallel").
+      (`shard_along`). Verified by three driver-level checks in `test/training/data_parallel.ml`:
+      "shards seeded distinctly (base_seed + i)" (the handle reports the exact per-shard seeds;
+      flips to false if the driver seeds every shard with `base_seed`), "driver routes per-shard
+      seed into RNG" (flips if the driver stops routing `base_seed` into the shard seeds at all),
+      and "global random-seed singleton preserved across data_parallel" (transient-mutation check).
+      Note: shards also diverge incidentally through distinct `self_id`s, so the load-bearing
+      assertion for the per-shard *offset* is the seed-distinctness one.
 - [x] A `test/training/` test (`data_parallel.ml`) trains a small model data-parallel
       across 2 shards and checks parameter parity against the single-shard baseline.
 - [x] Pipeline parallelism is **split into a follow-up task** with a recorded rationale

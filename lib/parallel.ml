@@ -103,6 +103,10 @@ type handle = {
   owner_params : Tensor.t array;
       (** The owner shard's parameter tensors (in stable order). Read their host values after
           {!sync_params_to_host}. *)
+  shard_seeds : int array;
+      (** The RNG seed assigned to each shard ([shard_seeds.(i) = base_seed + i]). These are the
+          exact values passed to [set_random_seed] when building the shards, so distinct entries
+          witness that the per-shard RNG seeding diverges. *)
 }
 
 let schedule (r : _ Ir.Backend_intf.routine) = Task.run r.Ir.Backend_intf.schedule
@@ -137,14 +141,18 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   Array.iter xs ~f:(fun x -> Train.set_hosted x.Tensor.value);
   Array.iter ys ~f:(fun y -> Train.set_hosted y.Tensor.value);
   Train.set_hosted learning_rate.Tensor.value;
-  (* Per-shard loss graphs: distinct parameter/input tnodes, and a distinct RNG seed per shard so
-     randomized ops diverge. The seed mutation is scoped: [with_saved_random_seed] restores the
-     caller's global random-seed singleton afterwards, so a caller-selected seed is not perturbed.
-     Each built loss keeps referencing the seed tensor that was current when it was constructed. *)
+  (* Distinct RNG seed per shard so randomized ops diverge across shards: shard i uses
+     [shard_seeds.(i) = base_seed + i]. The same value is passed to [set_random_seed] and recorded in
+     [shard_seeds], so the recorded seeds are exactly the ones the shards were built with. The
+     mutation is scoped: [with_saved_random_seed] restores the caller's global random-seed singleton
+     afterwards, so a caller-selected seed is not perturbed; each built loss keeps referencing the
+     seed tensor that was current when it was constructed. *)
+  let shard_seeds = Array.init n_shards ~f:(fun i -> base_seed + i) in
+  (* Per-shard loss graphs: distinct parameter/input tnodes. *)
   let losses =
     Tensor.with_saved_random_seed (fun () ->
-        Array.init n_shards ~f:(fun i ->
-            Tensor.set_random_seed ~seed:(base_seed + i) ();
+        Array.mapi shard_seeds ~f:(fun i seed ->
+            Tensor.set_random_seed ~seed ();
             loss_of xs.(i) ys.(i)))
   in
   (* Parameters of each shard, in a stable order (Set order = ascending tnode id = creation order),
@@ -299,4 +307,5 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       owner_loss_value;
       sync_params_to_host;
       owner_params = params.(0);
+      shard_seeds;
     }
