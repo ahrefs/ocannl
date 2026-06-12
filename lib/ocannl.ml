@@ -9,5 +9,6 @@ module PrintBox_utils = Ocannl_tensor.PrintBox_utils
 module Train = Train
 (** User-facing modules *)
 
+module Parallel = Parallel
 module Nn_blocks = Nn_blocks
 module Persistence = Persistence

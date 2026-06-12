@@ -1,0 +1,13 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+n_shards=3
+shard 0 = [0 1]
+shard 1 = [2 3]
+shard 2 = [4 5]
+gathered = [0 1 2 3 4 5]
+round-trip identity = true
+n_shards<=0 raises = true
+uneven batch raises = true
+axis<>0 raises = true
+all-reduce sum = [4 6]
+done
