@@ -28,6 +28,21 @@ completed) removed that. Three candidate outcomes:
 > one-line v1.x revisit note rather than a tracked task — see "Questions for the user"
 > below for the resolved answers.
 
+> **Addendum from the tinygrad deep dive (2026-06-12,
+> [a-range-is-not-its-shape](../blog/a-range-is-not-its-shape.md), port area 4)**: the
+> verdict composes with tinygrad's shard-axis design rather than competing with it. The
+> portable part of tinygrad's multi-device story is the *propagation algebra* — a
+> per-tensor-node placement annotation propagated by local per-op rules (Reshape remaps
+> preserving the shard boundary, Permute follows, Reduce on the shard axis annihilates) —
+> not the interchangeable device n-tuples it rides on (a homogeneity assumption
+> heterogeneous contexts are built to avoid). Read against Outcome 2, the annotation is a
+> later *checking and sugar layer over* the explicit `shard_along`/`gather`/`grad_sync`
+> primitives: first verifying that the explicit primitives sit where shard boundaries
+> change, eventually auto-inserting them by lowering annotation boundaries to the same
+> merge-buffer transfers — with an explicit placement *policy hook* (which context
+> combines) where tinygrad hardcodes interchangeability. Sequencing: after the explicit
+> primitives ship; no change to this verdict or to 293c's elaboration.
+
 ### The key factual correction
 
 #341 removed cross-stream *coherence*, not multi-streaming itself. Verified against the

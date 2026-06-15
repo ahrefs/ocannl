@@ -1,7 +1,15 @@
 # Tinygrad Deep Dive: Architecture Comparison and Porting Prospects
 
 **Date**: 2026-06-12
-**Status**: Draft proposal — deliverable is a blog article (plus optional appendix), not code.
+**Status**: Article delivered 2026-06-12 —
+[docs/blog/a-range-is-not-its-shape.md](../blog/a-range-is-not-its-shape.md), pinned to
+tinygrad v0.13.0 commit `2bfdf85f87da`. Sharding conclusion recorded as an addendum in
+[task-a2c331e9.md](task-a2c331e9.md) (verdict had meanwhile been decided: Outcome 2 —
+the article positions the propagation algebra as checking/sugar over it). Gap stubs
+created: [schedule-ir-optops.md](schedule-ir-optops.md),
+[axis-types-for-loops.md](axis-types-for-loops.md),
+[interval-analysis-scalar-t.md](interval-analysis-scalar-t.md). Remaining: optional
+appendix; cross-post to lukstafi.github.io.
 **GitHub issue**: none, by design — unlike the study family (#242 TVM, #267 Tiramisu,
 #261 superoptimizers), tinygrad is a long-standing inspiration source and Łukasz
 already did a personal deep dive back in the ShapeTracker era; this proposal is the
@@ -14,9 +22,7 @@ are worth porting to OCANNL and in what form. The README lists tinygrad among OC
 inspirations, and ROADMAP v0.9 frames OCANNL's scheduling direction explicitly against
 it ("instead of dynamic scheduling as in tinygrad, we can schedule statically by program
 search"). The comparison targets *rangeify-era* tinygrad — the representational
-convergence (loop-nest IR rather than ShapeTracker stride stacks) is precisely what
-makes porting tractable now, and the article should say so: against old tinygrad there
-was nothing to port onto.
+convergence (loop-nest IR rather than ShapeTracker stride stacks).
 
 **Deliverables**:
 1. A blog article under `docs/blog/` (cross-posted to lukstafi.github.io), audience:
