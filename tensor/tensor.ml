@@ -323,15 +323,25 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   let unpadded_dims = lazy_to_dims shape in
   let padding = lazy (Shape.to_padding shape) in
   let v =
+    (* For ndarray-backed literals the init buffer is no longer stored on the tensor node
+       (gh-ocannl-333); we register it in [Host_inits] so each context uploads it at link time. *)
     match terminal_op with
     | Some (Shape.Data (Asgns.Reshape data)) ->
-        Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false
-          ~base_ndarray:data ()
+        let tn, init =
+          Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false
+            ~base_ndarray:data ()
+        in
+        Ir.Host_inits.register tn init;
+        tn
     | Some (Shape.Data (Asgns.Keep_shape_no_padding data)) ->
-        Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None ()
+        let tn, init = Tn.create_from_padded ~id ~label ~ndarray:data ~padding:None () in
+        Ir.Host_inits.register tn init;
+        tn
     | Some (Shape.Data (Asgns.Padded { data; padding = padding_spec; padded_value })) ->
         let padding = Some (padding_spec, Some padded_value) in
-        Tn.create_from_padded ~id ~label ~ndarray:data ~padding ()
+        let tn, init = Tn.create_from_padded ~id ~label ~ndarray:data ~padding () in
+        Ir.Host_inits.register tn init;
+        tn
     | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
   let update_infer_prec tn prec =
@@ -666,8 +676,9 @@ let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_
       ?input_axes ?output_axes ?deduced ()
   in
   let v = t.value in
-  (* It is convenient to use the param syntax for volatiles (mutable embedded_nodes). *)
-  Tn.update_memory_mode v (Hosted Nonconstant) 241;
+  (* Parameters live on device and are materialized; CPU access (init, inspection) is on-demand via
+     the context (gh-ocannl-333). *)
+  Tn.update_memory_mode v Materialized 241;
   (* In principle, gradients can even be local, if a single jitted block does forward, backprop, and
      update computations. *)
   (match t.diff with
@@ -786,19 +797,22 @@ let header t =
   ^ "]"
 (*^" "^PrintBox_text.to_string (PrintBox.Simple.to_box v.label)*)
 
-let lazy_optional_payload ~force ~present ~missing v =
-  if Lazy.is_val v.Tn.array || force then (
-    Tn.do_read v;
-    match Lazy.force v.array with
-    | Some p -> present p
-    | None -> `Vlist (false, [ `Text (missing ()); `Text "<void>" ]))
-  else `Vlist (false, [ `Text (missing ()); `Text "<not-in-yet> " ])
+(* On-demand value retrieval for printing (gh-ocannl-333). Values live only on devices; rendering
+   them requires an explicit context, off by default for [Tensor.print] and on for [Train.printf].
+   When no context is supplied, or the node is not present in the context, a placeholder is shown
+   instead of the values. *)
+let optional_payload ?ctx ~present ~missing v =
+  match Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx v) with _ -> None) with
+  | Some nd -> present nd
+  | None ->
+      let tag = if Option.is_none ctx then "<no-context>" else "<not-in-context>" in
+      `Vlist (false, [ `Text (missing ()); `Text tag ])
 
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
 [@@deriving sexp_of]
 
-let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ~force
+let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_per_axis ?ctx
     ~with_shape ~with_id ~with_value ~with_grad t =
   (* First scan to identify which tensors appear embedded anywhere *)
   let tensors_with_embedded_occurrence = Hash_set.create (module Int) in
@@ -859,9 +873,8 @@ let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_
         `Subtree_with_ID (id, `Tree (add_shape [ `Text txt ], children))
     | _, true, false, _ | _, true, true, None ->
         let node =
-          lazy_optional_payload t.value ~force
+          optional_payload ?ctx t.value
             ~present:(fun v_array ->
-              Tn.do_read t.value;
               `Box
                 (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices v_array))
             ~missing:(fun () -> txt ^ " " ^ where_located t.value)
@@ -872,31 +885,25 @@ let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_
           grad_txt diff ^ if (not should_elide) && not embedded then " non-emb" else ""
         in
         let node =
-          if Lazy.is_val diff.grad.array then
-            match Lazy.force diff.grad.array with
-            | Some g_array ->
-                Tn.do_read diff.grad;
-                `Box
-                  (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array)
-            | None -> `Text (prefix ^ " " ^ where_located diff.grad)
-          else `Text (prefix ^ " <not-in-yet> " ^ where_located diff.grad)
+          optional_payload ?ctx diff.grad
+            ~present:(fun g_array ->
+              `Box (Nd.render_array ~brief:true ~prefix ?entries_per_axis ~labels ~indices g_array))
+            ~missing:(fun () -> prefix ^ " " ^ where_located diff.grad)
         in
         `Subtree_with_ID (id, `Tree (add_shape [ node ], children))
     | _, true, true, Some diff ->
         let node =
           let value =
-            lazy_optional_payload t.value ~force
+            optional_payload ?ctx t.value
               ~present:(fun v_array ->
-                Tn.do_read t.value;
                 `Box
                   (Nd.render_array ~brief:true ~prefix:txt ?entries_per_axis ~labels ~indices
                      v_array))
               ~missing:(fun () -> txt ^ " " ^ where_located t.value)
           in
           let grad =
-            lazy_optional_payload diff.grad ~force
+            optional_payload ?ctx diff.grad
               ~present:(fun g_array ->
-                Tn.do_read diff.grad;
                 `Box
                   (Nd.render_array ~brief:true ~prefix:(grad_txt diff) ?entries_per_axis ~labels
                      ~indices g_array))
@@ -909,8 +916,9 @@ let%debug5_sexp to_dag ?(single_node = false) ?(embedded_only = false) ?entries_
   to_dag { subtensor = t; embedded = true }
 
 let to_printbox ?single_node ?embedded_only ?entries_per_axis ?(with_id = false) ?(force = false)
-    ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
-  to_dag ?single_node ?embedded_only ?entries_per_axis ~with_id ~force ~with_shape ~with_value
+    ?ctx ?(with_shape = false) ?(with_value = true) ~with_grad ~depth t =
+  ignore force;
+  to_dag ?single_node ?embedded_only ?entries_per_axis ?ctx ~with_id ~with_shape ~with_value
     ~with_grad t
   |> PrintBox_utils.reformat_dag depth
 
@@ -931,8 +939,9 @@ let%debug_sexp log_debug_info ~from_log_level t =
             Tn.log_debug_info ~from_log_level diff.grad]);
       List.iter ~f:log_child t.children]]
 
-let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
+let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
+  ignore force;
   let sh = t.shape in
   let label = Tn.label t.value in
   let prefix_str =
@@ -988,21 +997,20 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
   let open PPrint in
   (* Create document for tensor value *)
   let has_grad = with_grad && Option.is_some t.diff in
+  let retrieve tn = Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx tn) with _ -> None) in
   let value_doc =
-    if (not force) && not (Lazy.is_val t.value.array) then
-      string prefix_str ^^ string " <not-in-yet>" ^^ break 1
-    else
-      match (style, Lazy.force t.value.array) with
-      | _, None ->
-          string prefix_str ^^ string " <not-hosted>" ^^ if has_grad then break 1 else empty
-      | `Inline, Some arr ->
-          Tn.do_read t.value;
-          string prefix_str ^^ space
-          ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
-          ^^ if has_grad then break 1 else empty
-      | _, Some arr ->
-          Tn.do_read t.value;
-          Nd.to_doc ~prefix:prefix_str ~labels ~indices arr ^^ if has_grad then break 1 else empty
+    match retrieve t.value with
+    | None ->
+        let tag = if Option.is_none ctx then " <no-context>" else " <not-in-context>" in
+        string prefix_str ^^ string tag ^^ if has_grad then break 1 else empty
+    | Some arr -> (
+        match style with
+        | `Inline ->
+            string prefix_str ^^ space
+            ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
+            ^^ if has_grad then break 1 else empty
+        | _ ->
+            Nd.to_doc ~prefix:prefix_str ~labels ~indices arr ^^ if has_grad then break 1 else empty)
   in
 
   (* Create document for gradient *)
@@ -1010,23 +1018,20 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     if with_grad then
       match t.diff with
       | Some diff -> (
-          if (not force) && not (Lazy.is_val diff.grad.array) then
-            string (grad_txt diff) ^^ string " <not-in-yet>"
-          else
-            match Lazy.force diff.grad.array with
-            | None -> string (grad_txt diff) ^^ string " <not-hosted>"
-            | Some arr -> (
-                match style with
-                | `Inline ->
-                    Tn.do_read diff.grad;
-                    string (grad_txt diff)
-                    ^^ space
-                    ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec
-                         arr
-                | `Default | `N5_layout _ | `Label_layout _ ->
-                    Tn.do_read diff.grad;
-                    let prefix = prefix_str ^ " " ^ grad_txt diff in
-                    Nd.to_doc ~prefix ~labels ~indices arr))
+          match retrieve diff.grad with
+          | None ->
+              let tag = if Option.is_none ctx then " <no-context>" else " <not-in-context>" in
+              string (grad_txt diff) ^^ string tag
+          | Some arr -> (
+              match style with
+              | `Inline ->
+                  string (grad_txt diff)
+                  ^^ space
+                  ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec
+                       arr
+              | `Default | `N5_layout _ | `Label_layout _ ->
+                  let prefix = prefix_str ^ " " ^ grad_txt diff in
+                  Nd.to_doc ~prefix ~labels ~indices arr))
       | None -> empty
     else empty
   in
@@ -1085,11 +1090,11 @@ let%debug5_sexp to_doc ~force ~with_grad ~with_code ?(with_low_level = false)
     ^^ (if is_empty value_doc && is_empty grad_doc then empty else hardline)
     ^^ code_doc ^^ low_level_doc)
 
-let print ?here ?(force = false) ~with_grad ~with_code ?(with_low_level = false)
+let print ?here ?(force = false) ?ctx ~with_grad ~with_code ?(with_low_level = false)
     (style : array_print_style) t =
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
-  let doc = to_doc ~force ~with_grad ~with_code ~with_low_level style t in
+  let doc = to_doc ?ctx ~force ~with_grad ~with_code ~with_low_level style t in
   PPrint.ToChannel.pretty 0.7 100 Stdio.stdout doc;
   Stdio.Out_channel.flush Stdio.stdout
 
@@ -1098,12 +1103,13 @@ let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
       assert (id = root.id);
       print ~with_grad ~with_code style root)
 
-let print_tree ?here ?(force = false) ?entries_per_axis ?(with_backend_info = false)
+let print_tree ?here ?(force = false) ?ctx ?entries_per_axis ?(with_backend_info = false)
     ?(with_id = true) ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t
     =
+  ignore force;
   Option.iter here ~f:(fun here ->
       Stdio.printf "HERE: %s\n%!" (Source_code_position.to_string here));
   (* FIXME: print backend info *)
   ignore with_backend_info;
   PrintBox_text.output Stdio.stdout @@ PrintBox_utils.dag_to_box @@ PrintBox_utils.boxify depth
-  @@ to_dag ?entries_per_axis ?embedded_only ~with_id ~force ~with_shape ~with_value ~with_grad t
+  @@ to_dag ?entries_per_axis ?embedded_only ?ctx ~with_id ~with_shape ~with_value ~with_grad t

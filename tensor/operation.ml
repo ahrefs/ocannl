@@ -8,26 +8,30 @@ module Tn = Ir.Tnode
 let _get_local_debug_runtime = Utils.get_local_debug_runtime
 let grad t = (Option.value_exn ~here:[%here] ~message:"No-gradient tensor" t.Tensor.diff).grad
 
+(* After gh-ocannl-333 there is no host copy on a tensor node: value access is an on-demand,
+   context-mediated device-to-host transfer. The [At] accessors therefore take an explicit
+   [(context, tensor)] pair. Setters return the updated context (it carries initialized-node
+   tracking); discard it when writing to an already-initialized node. *)
 module At = struct
-  (** Get the value at the given indices. *)
-  let ( .@{} ) t = Tn.get_value t.Tensor.value
+  (** Get the value at the given indices: [At.((ctx, t).@{idx})]. *)
+  let ( .@{} ) (ctx, t) idx = Context.get_value ctx t.Tensor.value idx
 
-  let ( .@%{} ) t = Tn.get_value @@ grad t
+  let ( .@%{} ) (ctx, t) idx = Context.get_value ctx (grad t) idx
 
-  (** Set the value at the given indices. *)
-  let ( .@{}<- ) t = Tn.set_value t.Tensor.value
+  (** Set the value at the given indices: [At.((ctx, t).@{idx} <- v)]; returns the updated context. *)
+  let ( .@{}<- ) (ctx, t) idx v = Context.set_value ctx t.Tensor.value idx v
 
-  let ( .@%{}<- ) t = Tn.set_value @@ grad t
+  let ( .@%{}<- ) (ctx, t) idx v = Context.set_value ctx (grad t) idx v
 
   (** Get the value at the given index from a single-axis shape tensor. *)
-  let ( .@[] ) t indx = Tn.get_value t.Tensor.value [| indx |]
+  let ( .@[] ) (ctx, t) indx = Context.get_value ctx t.Tensor.value [| indx |]
 
-  let ( .@%[] ) t indx = Tn.get_value (grad t) [| indx |]
+  let ( .@%[] ) (ctx, t) indx = Context.get_value ctx (grad t) [| indx |]
 
-  (** Set the value at the given index for a single-axis shape tensor. *)
-  let ( .@[]<- ) t indx = Tn.set_value (grad t) [| indx |]
+  (** Set the value at the given index for a single-axis shape tensor; returns the updated context. *)
+  let ( .@[]<- ) (ctx, t) indx v = Context.set_value ctx (grad t) [| indx |] v
 
-  let ( .@%[]<- ) t indx = Tn.set_value (grad t) [| indx |]
+  let ( .@%[]<- ) (ctx, t) indx v = Context.set_value ctx (grad t) [| indx |] v
 end
 
 module Initial_NTDSL = struct

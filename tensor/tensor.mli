@@ -328,6 +328,7 @@ val to_printbox :
   ?entries_per_axis:int ->
   ?with_id:bool ->
   ?force:bool ->
+  ?ctx:Context.t ->
   ?with_shape:bool ->
   ?with_value:bool ->
   with_grad:bool ->
@@ -336,6 +337,7 @@ val to_printbox :
   PrintBox.t
 
 val to_doc :
+  ?ctx:Context.t ->
   force:bool ->
   with_grad:bool ->
   with_code:bool ->
@@ -344,9 +346,13 @@ val to_doc :
   t ->
   PPrint.document
 
+(** [print] renders a tensor's metadata and, when an explicit [?ctx] is supplied, its values via an
+    on-demand device-to-host transfer (gh-ocannl-333). Without [?ctx] (the default) values are shown
+    as a placeholder. *)
 val print :
   ?here:Ppx_here_lib.position ->
   ?force:bool ->
+  ?ctx:Context.t ->
   with_grad:bool ->
   with_code:bool ->
   ?with_low_level:bool ->
@@ -359,6 +365,7 @@ val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style 
 val print_tree :
   ?here:Ppx_here_lib.position ->
   ?force:bool ->
+  ?ctx:Context.t ->
   ?entries_per_axis:int ->
   ?with_backend_info:bool ->
   ?with_id:bool ->

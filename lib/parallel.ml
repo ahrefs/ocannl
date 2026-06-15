@@ -16,7 +16,36 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
     shard count. *)
 type reduction = Sum | Mean
 
-(* Splits a hosted tensor's host array into [n_shards] contiguous sub-arrays along [axis], copying
+(* Host-side accessor for ndarray-backed (literal) tensors. After gh-ocannl-333 tensor data lives
+   only on devices; the host-level sharding helpers below therefore operate on literal tensors whose
+   initialization buffer is registered in [Host_inits]. *)
+let host_get (tn : Tn.t) =
+  match Ir.Host_inits.find tn with
+  | Some nd ->
+      let nd = Lazy.force nd in
+      let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+      fun idx -> Nd.get_as_float ?padding nd idx
+  | None ->
+      invalid_arg
+        (Printf.sprintf
+           "Parallel: tensor %s has no host-side data; only ndarray-backed (literal) tensors can be \
+            sharded/gathered at the host level"
+           (Tn.debug_name tn))
+
+(** Reads all (unpadded) values of an ndarray-backed (literal) tensor from its host initialization
+    buffer. Use for inspecting host-level shard/gather results. *)
+let host_values (t : Tensor.t) : float array =
+  let tn = t.Tensor.value in
+  match Ir.Host_inits.find tn with
+  | Some nd ->
+      let nd = Lazy.force nd in
+      let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+      Nd.retrieve_flat_values ?padding nd
+  | None ->
+      invalid_arg
+        (Printf.sprintf "Parallel.host_values: tensor %s has no host-side data" (Tn.debug_name tn))
+
+(* Splits a literal tensor's host buffer into [n_shards] contiguous sub-arrays along [axis], copying
    the data (copy-on-shard; alias views are subtask 293a and out of scope here). Each sub-array is
    wrapped as a fresh batch-major tensor term so that every shard owns distinct tnodes. *)
 let shard_along ~axis ~n_shards (t : Tensor.t) : Tensor.t array =
@@ -36,7 +65,7 @@ let shard_along ~axis ~n_shards (t : Tensor.t) : Tensor.t array =
          n_shards);
   let sub = batch / n_shards in
   let prec = Lazy.force tn.Tn.prec in
-  let get = Tn.get_value tn in
+  let get = host_get tn in
   let rest = Array.subo dims ~pos:1 in
   Array.init n_shards ~f:(fun k ->
       let sub_dims = Array.append [| sub |] rest in
@@ -69,7 +98,7 @@ let gather ~axis (shards : Tensor.t array) : Tensor.t =
         invalid_arg
           (Printf.sprintf "Parallel.gather: shard %d has incompatible shape for axis-0 gather" i));
   let total = sub * n in
-  let gets = Array.map shards ~f:(fun s -> Tn.get_value s.Tensor.value) in
+  let gets = Array.map shards ~f:(fun s -> host_get s.Tensor.value) in
   let nd =
     Nd.init_array ~debug:"gather" prec ~dims:(Array.append [| total |] rest) ~padding:None
       ~f:(fun idx ->
@@ -99,10 +128,15 @@ type handle = {
       (** Scatter a fresh logical batch across the shards (re-shards along the batch axis and copies
           into the per-shard input buffers) for multi-step training. *)
   owner_loss_value : unit -> float;  (** The owner shard's scalar loss after the latest {!step}. *)
-  sync_params_to_host : unit -> unit;  (** Copy the owner shard's parameters to their host arrays. *)
+  sync_params_to_host : unit -> unit;
+      (** Awaits the owner stream. Retained for API compatibility; after gh-ocannl-333 host values
+          are read on demand via {!read_values} rather than copied to a host array. *)
+  read_values : Tensor.t -> float array;
+      (** Reads a tensor's current values from the owner shard's context via an on-demand
+          device-to-host transfer. Use for the owner's parameters / loss. *)
   owner_params : Tensor.t array;
-      (** The owner shard's parameter tensors (in stable order). Read their host values after
-          {!sync_params_to_host}. *)
+      (** The owner shard's parameter tensors (in stable order). Read their values via
+          {!read_values}. *)
   shard_seeds : int array;
       (** The RNG seed assigned to each shard ([shard_seeds.(i) = base_seed + i]). These are the
           exact values passed to [set_random_seed] when building the shards, so distinct entries
@@ -138,9 +172,9 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   let num_devices = Backend.num_devices () in
   let xs = shard_along ~axis:0 ~n_shards inputs in
   let ys = shard_along ~axis:0 ~n_shards targets in
-  Array.iter xs ~f:(fun x -> Train.set_hosted x.Tensor.value);
-  Array.iter ys ~f:(fun y -> Train.set_hosted y.Tensor.value);
-  Train.set_hosted learning_rate.Tensor.value;
+  Array.iter xs ~f:(fun x -> Train.set_materialized x.Tensor.value);
+  Array.iter ys ~f:(fun y -> Train.set_materialized y.Tensor.value);
+  Train.set_materialized learning_rate.Tensor.value;
   (* Distinct RNG seed per shard so randomized ops diverge across shards: shard i uses
      [shard_seeds.(i) = base_seed + i]. The same value is passed to [set_random_seed] and recorded in
      [shard_seeds], so the recorded seeds are exactly the ones the shards were built with. The
@@ -162,7 +196,7 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   Array.iter params ~f:(fun ps ->
       if Array.length ps <> n_params then
         invalid_arg "Parallel.data_parallel: shards disagree on the parameter count");
-  Array.iter params ~f:(Array.iter ~f:(fun p -> Train.set_hosted p.Tensor.value));
+  Array.iter params ~f:(Array.iter ~f:(fun p -> Train.set_materialized p.Tensor.value));
   (* Build the forward+backward comps before the parameter-init comps, matching {!Train.run_once}:
      [grad_update] consumes the forward/backprop roots, and [init_params] must run against the state
      it leaves. *)
@@ -183,8 +217,14 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
         schedule init_routine;
         Backend.await streams.(i);
         let ctx = init_routine.Ir.Backend_intf.context in
-        let ctx = Backend.init_from_host ctx xs.(i).Tensor.value in
-        let ctx = Backend.init_from_host ctx ys.(i).Tensor.value in
+        (* Stage the shard's input/target slices: upload the literal shards' host data into the
+           freshly-allocated device buffers (gh-ocannl-333). *)
+        let init_literal ctx (t : Tensor.t) =
+          let nd = Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find t.Tensor.value)) in
+          Backend.init_from_host ctx t.Tensor.value nd
+        in
+        let ctx = init_literal ctx xs.(i) in
+        let ctx = init_literal ctx ys.(i) in
         Backend.await streams.(i);
         Backend.link ctx (Backend.compile ctx.optimize_ctx bindings updates.(i)))
   in
@@ -264,12 +304,40 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       ?momentum:(if Float.(momentum > 0.0) then Some momentum else None)
       owner_loss
   in
-  let owner_ctx = Backend.init_from_host owner_ctx learning_rate.Tensor.value in
+  (* After gh-ocannl-333 there is no host array on a tensor node; host access goes through explicit
+     device transfers with a caller-supplied [Ndarray]. These helpers wrap that for the raw per-shard
+     backend contexts. *)
+  let host_buffer_of (tn : Tn.t) =
+    Nd.create_array
+      ~debug:("parallel host buffer for " ^ Tn.debug_name tn)
+      (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.Tn.dims) ~padding:(Lazy.force tn.Tn.padding)
+  in
+  let read_ctx_values ~ctx ~stream (tn : Tn.t) =
+    let nd = host_buffer_of tn in
+    ignore (Backend.to_host ctx tn nd : bool);
+    Backend.await stream;
+    let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+    Nd.retrieve_flat_values ?padding nd
+  in
+  (* Upload a literal (ndarray-backed) tensor's host data into an existing device buffer. *)
+  let upload_literal ~ctx ~stream ~(dst : Tn.t) (src : Tensor.t) =
+    let src_nd = Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find src.Tensor.value)) in
+    ignore (Backend.from_host ctx dst src_nd : bool);
+    Backend.await stream
+  in
+  (* The learning rate is a small constant; initialize it on the owner via its own init code (its
+     [Constant] fetch runs on-device), rather than uploading a host array. *)
+  let owner_ctx =
+    let init_comp = Ocannl_tensor.Tensor.init_params learning_rate in
+    let r = Backend.link owner_ctx (Backend.compile owner_ctx.optimize_ctx bindings init_comp) in
+    schedule r;
+    Backend.await owner_stream;
+    r.Ir.Backend_intf.context
+  in
   let sgd_routine =
     Backend.link owner_ctx (Backend.compile owner_ctx.optimize_ctx bindings sgd_comp)
   in
   let step () =
-    ignore (Backend.from_host owner_ctx learning_rate.Tensor.value : bool);
     Array.iter grad_routines ~f:schedule;
     Array.iter streams ~f:Backend.await;
     grad_sync ();
@@ -281,23 +349,18 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
     let nxs = shard_along ~axis:0 ~n_shards inputs in
     let nys = shard_along ~axis:0 ~n_shards targets in
     for i = 0 to n_shards - 1 do
-      Tn.set_values xs.(i).Tensor.value (Tn.get_values nxs.(i).Tensor.value);
-      Tn.set_values ys.(i).Tensor.value (Tn.get_values nys.(i).Tensor.value);
-      ignore (Backend.from_host shard_ctx.(i) xs.(i).Tensor.value : bool);
-      ignore (Backend.from_host shard_ctx.(i) ys.(i).Tensor.value : bool);
-      Backend.await streams.(i)
+      upload_literal ~ctx:shard_ctx.(i) ~stream:streams.(i) ~dst:xs.(i).Tensor.value nxs.(i);
+      upload_literal ~ctx:shard_ctx.(i) ~stream:streams.(i) ~dst:ys.(i).Tensor.value nys.(i)
     done
   in
   let owner_loss_value () =
-    ignore (Backend.to_host owner_ctx owner_loss.Tensor.value : bool);
-    Backend.await owner_stream;
-    Tn.get_value owner_loss.Tensor.value [| 0 |]
+    (read_ctx_values ~ctx:owner_ctx ~stream:owner_stream owner_loss.Tensor.value).(0)
   in
-  let sync_params_to_host () =
-    Array.iter params.(0) ~f:(fun p ->
-        ignore (Backend.to_host owner_ctx p.Tensor.value : bool));
-    Backend.await owner_stream
+  let read_values (t : Tensor.t) =
+    read_ctx_values ~ctx:owner_ctx ~stream:owner_stream t.Tensor.value
   in
+  (* Retained for API compatibility; reading happens on demand via {!read_values}. *)
+  let sync_params_to_host () = Backend.await owner_stream in
   f
     {
       n_shards;
@@ -306,6 +369,7 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       set_batch;
       owner_loss_value;
       sync_params_to_host;
+      read_values;
       owner_params = params.(0);
       shard_seeds;
     }
