@@ -218,25 +218,28 @@ let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = I
 let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
   run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
 
-(* For-print cache (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's value is
-   not materialized in the printing context, we compile and run a copy of it ([for_print = t + 0])
-   into a fresh device-resident node, and register that node as a for-print proxy so the printer can
-   read the tensor's value through it. The copy tensor is cached by source-node id so the for-print
-   node is reused across repeated prints (the proposal's "cache of for-print tensor nodes"). *)
-let for_print_cache : (int, Tensor.t) Hashtbl.t = Hashtbl.create (module Int)
+(* For-print materialization (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's
+   value is not already materialized in the printing context, recompile a copy of it
+   ([for_print = t + 0]) into a fresh device-resident node and register that node as a for-print
+   proxy, so the printer reads the tensor's value through it.
 
+   This is best-effort: it works for recomputable (e.g. virtual / fetch-defined) tensors. For a
+   tensor that is materialized elsewhere but simply absent from this context, the copy cannot be
+   linked (its operand has no value here) — in that case we fall back to the metadata placeholder
+   rather than crash. A fresh copy is built each call because [forward_once] consumes the copy's
+   forward root; the for-print node is registered as the source's proxy for subsequent reads. *)
 let ensure_printable (ctx : Context.t) (t : Tensor.t) : Context.t =
   if Context.mem ctx t.Tensor.value then ctx
-  else begin
-    let for_print =
-      Hashtbl.find_or_add for_print_cache t.Tensor.value.Tn.id ~default:(fun () ->
-          let%op for_print = t + 0 in
-          for_print)
-    in
-    let ctx = forward_once ctx for_print in
-    Context.register_for_print ~src:t.Tensor.value ~proxy:for_print.Tensor.value;
-    ctx
-  end
+  else
+    try
+      let for_print =
+        let%op for_print = t + 0 in
+        for_print
+      in
+      let ctx = forward_once ctx for_print in
+      Context.register_for_print ~src:t.Tensor.value ~proxy:for_print.Tensor.value;
+      ctx
+    with _ -> ctx
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. It takes an explicit context and

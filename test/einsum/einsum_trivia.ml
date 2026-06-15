@@ -543,7 +543,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:542:21
-    [5]: =>_ho4 shape 0:5|2:7->1:3  <not-in-context>
+    [7]: =>_ho4 shape 0:5|2:7->1:3  <not-in-context>
     |}];
   let%op ho5 = hey ++ "...|...->...o => o" in
   let ctx = Train.forward_once ctx ho5 in
@@ -551,14 +551,25 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:550:21
-    [0]: r2x4x3 shape 0:2|2:3->1:4  <not-in-context>
+    ┌─────────────────────────────────────────────────────────────┐
+    │[0]: r2x4x3 shape 0:2|2:3->1:4                               │
+    │┌──────┬────────────────────────┬───────────────────────────┐│
+    ││      │0 @ 0                   │1 @ 0                      ││
+    ││      │axis 2                  │axis 2                     ││
+    │├──────┼────────────────────────┼───────────────────────────┤│
+    ││axis 1│ 0.00  1.00     2.00    │ 1.20e+1  1.30e+1  1.40e+1 ││
+    ││      │ 3.00  4.00     5.00    │ 1.50e+1  1.60e+1  1.70e+1 ││
+    ││      │ 6.00  7.00     8.00    │ 1.80e+1  1.90e+1  2.00e+1 ││
+    ││      │ 9.00  1.00e+1  1.10e+1 │ 2.10e+1  2.20e+1  2.30e+1 ││
+    │└──────┴────────────────────────┴───────────────────────────┘│
+    └─────────────────────────────────────────────────────────────┘
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho5;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:556:21
+    HERE: test/einsum/einsum_trivia.ml:567:21
     ┌───────────────────────────────────────┐
-    │[6]: =>_ho5 shape 0:4                  │
+    │[10]: =>_ho5 shape 0:4                 │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -572,9 +583,9 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho6;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:572:21
+    HERE: test/einsum/einsum_trivia.ml:583:21
     ┌───────────────────────────────────────┐
-    │[8]: =>_ho6 shape 0:4                  │
+    │[14]: =>_ho6 shape 0:4                 │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -589,9 +600,9 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho7;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:589:21
+    HERE: test/einsum/einsum_trivia.ml:600:21
     ┌─────────────────────────────────────────────┐
-    │[10]: =>_ho7 shape 0:3,1:2,2:4               │
+    │[16]: =>_ho7 shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 2                              ││
     │├──────┼────────────────────────────────────┤│
@@ -618,7 +629,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:618:21
+    HERE: test/einsum/einsum_trivia.ml:629:21
     ┌─────────────────────────────────────────────┐
     │[2]: *._c shape 0:3|1:4                      │
     │┌──────┬────────────────────────────────────┐│
@@ -638,7 +649,7 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx f;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:638:21
+    HERE: test/einsum/einsum_trivia.ml:649:21
     ┌─────────────────────────────────────────────┐
     │[5]: *._f shape 0:3,1:2,2:4                  │
     │┌──────┬────────────────────────────────────┐│
@@ -666,7 +677,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:666:21
+    HERE: test/einsum/einsum_trivia.ml:677:21
     ┌─────────────────────────────────────────────┐
     │[1]: =>_ho shape 0:2|1:4                     │
     │┌──────┬────────────────────────────────────┐│
@@ -682,7 +693,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho2;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:682:21
+    HERE: test/einsum/einsum_trivia.ml:693:21
     ┌────────────────────────────────────────────────────────────────┐
     │[2]: =>_ho2 shape 0:2|2:3->1:1                                  │
     │┌──────┬───────────────────────────┬───────────────────────────┐│
@@ -699,7 +710,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho3;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:699:21
+    HERE: test/einsum/einsum_trivia.ml:710:21
     ┌──────────────────────┐
     │[4]: =>_ho3 shape 0:1 │
     │┌┬─────────┐          │
@@ -714,7 +725,7 @@ let%expect_test "einsum1 fixed dim axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho4;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:714:21
+    HERE: test/einsum/einsum_trivia.ml:725:21
     ┌──────────────────────────────┐
     │[5]: =>_ho4 shape 0:2,1:1,2:3 │
     │┌──────┬──────────────────┐   │
@@ -740,7 +751,7 @@ let%expect_test "einsum with fixed dim axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:740:21
+    HERE: test/einsum/einsum_trivia.ml:751:21
     ┌─────────────────────────────────────────────┐
     │[2]: *._c shape 0:3|1:4                      │
     │┌──────┬────────────────────────────────────┐│
@@ -771,7 +782,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx positions;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:771:21
+    HERE: test/einsum/einsum_trivia.ml:782:21
     ┌─────────────────────────────┐
     │[9]: + shape 0:4,1:5,2:6,3:3 │
     │┌──────┬──────────────────┐  │
@@ -914,13 +925,13 @@ let%expect_test "outer_sum simulating axis concatenation" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ti;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:914:21
+    HERE: test/einsum/einsum_trivia.ml:925:21
     [1]: =>_ti shape 0:4,1:3  <not-in-context>
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx tk;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:920:21
+    HERE: test/einsum/einsum_trivia.ml:931:21
     ┌───────────────────────────┐
     │[7]: =>_tk shape 0:6,1:3   │
     │┌──────┬──────────────────┐│
@@ -950,7 +961,7 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:950:21
+    HERE: test/einsum/einsum_trivia.ml:961:21
     ┌─────────────────────────────────────────────────────────────────┐
     │[2]: *._c shape 0:3|1:4,2:2                                      │
     │┌──────┬──────────────────┬──────────────────┬──────────────────┐│
@@ -976,7 +987,7 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
-    HERE: test/einsum/einsum_trivia.ml:976:21
+    HERE: test/einsum/einsum_trivia.ml:987:21
     ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │[2]: *._c shape 2:4->0:3,1:2                                                                                           │
     │┌──────┬────────────────────────────────────┬────────────────────────────────────┬────────────────────────────────────┐│

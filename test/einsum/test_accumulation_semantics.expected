@@ -36,7 +36,14 @@ Expected values (summing over output dimension):
 === Testing diagonal tensor (not surjective) ===
 Input (1D tensor of size 5):
 HERE: test/einsum/test_accumulation_semantics.ml:53:21
-[0]: 0...4 shape 0:5  <not-in-context>
+┌─────────────────────────────────┐
+│[0]: 0...4 shape 0:5             │
+│┌┬──────────────────────────────┐│
+│││axis 0                        ││
+│├┼──────────────────────────────┤│
+│││ 0.00  1.00  2.00  3.00  4.00 ││
+│└┴──────────────────────────────┘│
+└─────────────────────────────────┘
 
 Diagonal tensor 'i=>ii' (5x5 with zeros off-diagonal):
 HERE: test/einsum/test_accumulation_semantics.ml:56:21
@@ -58,7 +65,14 @@ Note: Off-diagonal elements should be zero (initialized by Zero_out)
 === Testing fixed index projection (not surjective) ===
 Input (1D tensor of size 4):
 HERE: test/einsum/test_accumulation_semantics.ml:76:21
-[0]: 0...3 shape 0:4  <not-in-context>
+┌───────────────────────────┐
+│[0]: 0...3 shape 0:4       │
+│┌┬────────────────────────┐│
+│││axis 0                  ││
+│├┼────────────────────────┤│
+│││ 0.00  1.00  2.00  3.00 ││
+│└┴────────────────────────┘│
+└───────────────────────────┘
 
 Sparse tensor 'i=>i0' (only first column populated):
 HERE: test/einsum/test_accumulation_semantics.ml:79:21
@@ -79,7 +93,16 @@ Note: Only column 0 should have values, others should be zero
 === Testing bijective transpose (optimization case) ===
 Input (3x4 matrix):
 HERE: test/einsum/test_accumulation_semantics.ml:98:21
-[0]: r3x4 shape 0:3,1:4  <not-in-context>
+┌───────────────────────────────────────┐
+│[0]: r3x4 shape 0:3,1:4                │
+│┌──────┬──────────────────────────────┐│
+││      │axis 1                        ││
+│├──────┼──────────────────────────────┤│
+││axis 0│ 0.00  1.00  2.00     3.00    ││
+││      │ 4.00  5.00  6.00     7.00    ││
+││      │ 8.00  9.00  1.00e+1  1.10e+1 ││
+│└──────┴──────────────────────────────┘│
+└───────────────────────────────────────┘
 
 Transposed 'ij=>ji' (4x3 matrix):
 HERE: test/einsum/test_accumulation_semantics.ml:101:21

@@ -53,8 +53,8 @@ let%expect_test "relu" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -72,8 +72,8 @@ let%expect_test "sat01" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -91,8 +91,8 @@ let%expect_test "exp(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -110,8 +110,8 @@ let%expect_test "log(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -129,8 +129,8 @@ let%expect_test "log2(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -148,8 +148,8 @@ let%expect_test "sin(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -167,8 +167,8 @@ let%expect_test "cos(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -186,8 +186,8 @@ let%expect_test "neg(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -205,8 +205,8 @@ let%expect_test "fma(x, 2, 1)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -224,8 +224,8 @@ let%expect_test "sqrt(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -243,8 +243,8 @@ let%expect_test "recip(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -262,8 +262,8 @@ let%expect_test "recip_sqrt(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -281,8 +281,8 @@ let%expect_test "tanh(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -300,8 +300,8 @@ let%expect_test "uint4x32_to_prec_uniform(x)" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -319,8 +319,8 @@ let%expect_test "where(x < 0, sin(x), cos(x))" =
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 310-313, characters 8-52
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 342, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 331-334, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 363, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41

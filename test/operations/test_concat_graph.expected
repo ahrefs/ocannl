@@ -36,26 +36,26 @@ x3_3 = [6.0, 7.0] (dim 2)
 --- Forward pass: sin((x1_3, x2_3, x3_3) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
 HERE: test/operations/test_concat_graph.ml:82:21
-[20]: sin_result3 shape 0:7  <not-in-context>
+[32]: sin_result3 shape 0:7  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
 HERE: test/operations/test_concat_graph.ml:86:21
-[23]: =>_loss3 shape 0:1  <not-in-context>
+[35]: =>_loss3 shape 0:1  <not-in-context>
 
 Gradient of x1_3 (cos of original values):
 HERE: test/operations/test_concat_graph.ml:89:21
-[12]: 1,2 shape 0:2  <not-in-context>
+[24]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of x2_3:
 HERE: test/operations/test_concat_graph.ml:92:21
-[14]: 3,4,5 shape 0:3  <not-in-context>
+[26]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of x3_3:
 HERE: test/operations/test_concat_graph.ml:95:21
-[16]: 6,7 shape 0:2  <not-in-context>
+[28]: 6,7 shape 0:2  <not-in-context>
 grad_6,7 <not-in-context>
 
 === Three-way Concat With Unit Dimension Test ===
@@ -68,26 +68,26 @@ x3_u = [4.0, 5.0] (dim 2)
 --- Forward pass: sin((x1_u, x2_u, x3_u) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
 HERE: test/operations/test_concat_graph.ml:130:23
-[34]: sin_result_u shape 0:5  <not-in-context>
+[61]: sin_result_u shape 0:5  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
 HERE: test/operations/test_concat_graph.ml:134:23
-[37]: =>_loss_u shape 0:1  <not-in-context>
+[64]: =>_loss_u shape 0:1  <not-in-context>
 
 Gradient of x1_u (cos of original values):
 HERE: test/operations/test_concat_graph.ml:137:23
-[26]: 1,2 shape 0:2  <not-in-context>
+[53]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of x2_u:
 HERE: test/operations/test_concat_graph.ml:140:23
-[28]: 3 shape 0:1  <not-in-context>
+[55]: 3 shape 0:1  <not-in-context>
 grad_3 <not-in-context>
 
 Gradient of x3_u:
 HERE: test/operations/test_concat_graph.ml:143:23
-[30]: 4,5 shape 0:2  <not-in-context>
+[57]: 4,5 shape 0:2  <not-in-context>
 grad_4,5 <not-in-context>
 
 === Nested Concatenation Test ===
@@ -100,26 +100,26 @@ n3 = [6.0, 7.0] (dim 2)
 --- Forward pass: sin(((n1, n2) ++^ "a; b => a^b", n3) ++^ "a; b => a^b") ---
 Nested concatenation result (after sin):
 HERE: test/operations/test_concat_graph.ml:172:21
-[50]: sin_nested shape 0:7  <not-in-context>
+[92]: sin_nested shape 0:7  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss:
 HERE: test/operations/test_concat_graph.ml:176:21
-[53]: =>_loss_n shape 0:1  <not-in-context>
+[95]: =>_loss_n shape 0:1  <not-in-context>
 
 Gradient of n1:
 HERE: test/operations/test_concat_graph.ml:179:21
-[40]: 1,2 shape 0:2  <not-in-context>
+[82]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of n2:
 HERE: test/operations/test_concat_graph.ml:182:21
-[42]: 3,4,5 shape 0:3  <not-in-context>
+[84]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of n3:
 HERE: test/operations/test_concat_graph.ml:185:21
-[44]: 6,7 shape 0:2  <not-in-context>
+[86]: 6,7 shape 0:2  <not-in-context>
 grad_6,7 <not-in-context>
 
 === Boundary Unit Dim: First Component Dim 1 ===
@@ -132,23 +132,23 @@ b3 = [5.0, 6.0] (dim 2)
 --- Forward pass ---
 Concatenated result (after sin):
 HERE: test/operations/test_concat_graph.ml:212:21
-[64]: sin_result_b1 shape 0:6  <not-in-context>
+[121]: sin_result_b1 shape 0:6  <not-in-context>
 
 --- Backward pass: gradients ---
 
 Gradient of b1:
 HERE: test/operations/test_concat_graph.ml:216:21
-[56]: 1 shape 0:1  <not-in-context>
+[113]: 1 shape 0:1  <not-in-context>
 grad_1 <not-in-context>
 
 Gradient of b2:
 HERE: test/operations/test_concat_graph.ml:219:21
-[58]: 2,3,4 shape 0:3  <not-in-context>
+[115]: 2,3,4 shape 0:3  <not-in-context>
 grad_2,3,4 <not-in-context>
 
 Gradient of b3:
 HERE: test/operations/test_concat_graph.ml:222:21
-[60]: 5,6 shape 0:2  <not-in-context>
+[117]: 5,6 shape 0:2  <not-in-context>
 grad_5,6 <not-in-context>
 
 === Boundary Unit Dim: Last Component Dim 1 ===
@@ -161,23 +161,23 @@ l3 = [6.0] (dim 1)
 --- Forward pass ---
 Concatenated result (after sin):
 HERE: test/operations/test_concat_graph.ml:249:21
-[78]: sin_result_l shape 0:6  <not-in-context>
+[147]: sin_result_l shape 0:6  <not-in-context>
 
 --- Backward pass: gradients ---
 
 Gradient of l1:
 HERE: test/operations/test_concat_graph.ml:253:21
-[70]: 1,2 shape 0:2  <not-in-context>
+[139]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of l2:
 HERE: test/operations/test_concat_graph.ml:256:21
-[72]: 3,4,5 shape 0:3  <not-in-context>
+[141]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of l3:
 HERE: test/operations/test_concat_graph.ml:259:21
-[74]: 6 shape 0:1  <not-in-context>
+[143]: 6 shape 0:1  <not-in-context>
 grad_6 <not-in-context>
 
 === Concatenation Graph Test Complete ===
