@@ -51,6 +51,7 @@
   ndarray
   indexing
   tnode
+  host_inits
   low_level
   assignments
   task

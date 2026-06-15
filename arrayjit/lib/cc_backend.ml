@@ -402,15 +402,15 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         | bs, Kparam_ptr tn :: ps ->
             let c_ptr =
               match Map.find ctx_arrays tn with
-              | None ->
-                  Ndarray.get_voidptr_not_managed
-                  @@ Option.value_exn ~here:[%here]
-                       ~message:
-                         [%string
-                           "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from \
-                            context: %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
-                  @@ Lazy.force tn.array
               | Some arr -> arr
+              | None ->
+                  (* After gh-ocannl-333 there is no host array to fall back on: every in-context
+                     node must be present in [ctx_arrays] (allocated by [alloc_if_needed]). *)
+                  raise
+                  @@ Utils.User_error
+                       [%string
+                         "Cc_backend.link_compiled: node %{Tn.debug_name tn} missing from context: \
+                          %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
       in

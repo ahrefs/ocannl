@@ -53,54 +53,41 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
         if not (equal_stream s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) =
-    match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, Some src ->
+  let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
+    match Map.find ctx.ctx_arrays tn with
+    | Some src ->
         [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
-        (* Stdio.printf "copying: %s to_host\n" (Tn.debug_name tn); *)
         (* No cross-stream writer synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no
            concurrent cross-stream writes to wait for before this device-to-host copy. *)
         Backend.to_host ~src_ptr:src ~src:ctx hosted;
         true
-    | _ -> false
+    | None -> false
 
   let update_writer_event ?e ctx tn =
     let s = ctx.stream in
     let e = Option.value_or_thunk e ~default:(fun () -> Backend.all_work s) in
-    (* Wait for writing to finish before reading. *)
-    (match tn with
-    | Assignments.Merge_buffer _ -> ()
-    | Assignments.Node tn ->
-        Tnode.prepare_read
-          ~is_done:(fun () -> Backend.is_done e)
-          ~sync:(fun () -> Backend.sync e)
-          ~transfer:(fun () -> if to_host ctx tn then Backend.await s)
-          tn);
     match tn with
-    | Node tn ->
-        Hash_set.add tn.devices_not_lagging_host ctx.stream.device.device_id;
-        Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
-    | Merge_buffer tn ->
+    | Assignments.Node tn -> Hashtbl.update s.updating_for tn ~f:(fun _ -> e)
+    | Assignments.Merge_buffer tn ->
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%track3_sexp from_host (ctx : Backend.context) tn =
-    match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, Some dst ->
+  let%track3_sexp from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
+    match Map.find ctx.ctx_arrays tn with
+    | Some dst ->
         (* No cross-stream reader synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
            cross-stream readers to wait for before this host-to-device upload. *)
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
-        (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ctx @@ Node tn;
         true
-    | _ -> false
+    | None -> false
 
-  let%track3_sexp init_from_host (ctx : Backend.context) tn =
-    match (tn, Map.find ctx.ctx_arrays tn) with
-    | { Tn.array = (lazy (Some hosted)); _ }, None ->
+  let%track3_sexp init_from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
+    match Map.find ctx.ctx_arrays tn with
+    | None ->
         let dims = Lazy.force tn.dims in
         (* Use alloc_array since we're immediately copying from host *)
         let dst =
@@ -109,20 +96,14 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             (Lazy.force tn.prec) ~dims ctx.stream
         in
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
-        (* Stdio.printf "copying: %s from_host\n" (Tn.debug_name tn); *)
         Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
         update_writer_event ctx @@ Node tn;
         { ctx with ctx_arrays = Map.add_exn ctx.ctx_arrays ~key:tn ~data:dst }
-    | _, Some _ ->
+    | Some _ ->
         raise
         @@ Utils.User_error
              ("init_from_host: input context already contains tensor node " ^ Tn.debug_name tn
             ^ ", for stream " ^ Backend.get_name ctx.stream)
-    | _ ->
-        raise
-        @@ Utils.User_error
-             ("init_from_host: tensor node is not hosted: " ^ Tn.debug_name tn ^ ", for stream "
-            ^ Backend.get_name ctx.stream)
 
   (* [device_to_device] builds a transfer routine instead of scheduling the copy directly. The
      caller schedules it (via [Task.run r.schedule]) or links a consumer against [r.context]. For
@@ -238,26 +219,15 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
   type r = Backend.context routine [@@deriving sexp_of]
 
   let sync_routine (r : r) : r =
+    (* Host transfers are no longer automatic (gh-ocannl-333): all CPU-side access goes through
+       explicit, on-demand [Context] transfers. [sync_routine] now only records the post-execution
+       writer event for the routine's outputs (used for device-side ordering and merge buffers). *)
     let s = r.context.stream in
-    let hosted_inputs = Set.filter r.inputs ~f:(fun tn -> Tn.is_hosted_force tn 47) in
-    let pre () =
-      assert (Domain.is_main_domain ());
-      if Utils.settings.automatic_host_transfers then
-        Set.iter hosted_inputs ~f:(fun tn ->
-            if not (Hash_set.mem tn.devices_not_lagging_host s.device.device_id) then
-              assert (from_host r.context tn))
-      (* Since merge buffers are always per-stream, no need to check r.merge_buffer_input. *)
-    in
     let post () =
       let e = Backend.all_work s in
-      Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e r.context @@ Node tn);
-      Set.iter hosted_inputs ~f:(fun tn ->
-          Tn.prepare_write
-            ~is_done:(fun () -> Backend.is_done e)
-            ~sync:(fun () -> Backend.sync e)
-            tn)
+      Set.iter r.outputs ~f:(fun tn -> update_writer_event ~e r.context @@ Node tn)
     in
-    { r with schedule = Task.(prepend ~work:pre @@ append ~work:post r.schedule) }
+    { r with schedule = Task.(append ~work:post r.schedule) }
 
   let sync_device device =
     Utils.weak_iter device.streams ~f:Backend.await;
@@ -491,27 +461,24 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       let stream = parent_context.stream in
       [%log Tn.debug_name key];
       [%log (key : Tnode.t)];
+      (* Host initialization data for ndarray-backed literals / loaded nodes is registered in the
+         weakly-owned [Host_inits] table (gh-ocannl-333). It is read (not consumed) here, so the
+         same node can be initialized into multiple independent contexts. *)
+      let host_init = Host_inits.find key in
       let default () =
         let dims = Lazy.force key.dims in
         (* Use alloc_array when zero initialization is not needed: - When copying from host
            immediately after allocation - When the node has explicit Zero_out operations in the
            lowered code *)
-        let will_copy_from_host =
-          Utils.settings.automatic_host_transfers && Tn.known_constant key
-          && match key.array with (lazy (Some _)) -> true | _ -> false
-        in
+        let will_copy_from_host = Option.is_some host_init in
         let mode = Option.map key.memory_mode ~f:fst in
         let dst_ptr =
           if will_copy_from_host || node.Low_level.zero_initialized_by_code then
             alloc_array ?mode (Lazy.force key.prec) ~dims stream
           else alloc_zeros ?mode (Lazy.force key.prec) ~dims stream
         in
-        (if will_copy_from_host then
-           match key.array with
-           | (lazy (Some hosted)) ->
-               Device.from_host ~dst_ptr ~dst:parent_context hosted;
-               Hash_set.add key.devices_not_lagging_host stream.device.device_id
-           | _ -> ());
+        Option.iter host_init ~f:(fun nd ->
+            Device.from_host ~dst_ptr ~dst:parent_context (Lazy.force nd));
         dst_ptr
       in
       let add_new_exn () =
@@ -529,26 +496,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       let device = stream.device in
       (* It's the user's responsibility to ensure that constants are initialized on devices, the
          user can choose to run initialization code on multiple streams redundantly, or on the owner
-         stream only and then to use init_from_device. *)
-      if node.Low_level.read_only || Tn.known_constant key then (
-        if not node.Low_level.read_only then
-          [%log "Backends.alloc_if_needed: constant node is not read-only", (key : Tnode.t)];
-        let read_only_buffer : Device.buffer_ptr =
-          match use_host_memory with
-          | None -> Hashtbl.find_or_add device.constant_buffer_cache key ~default
-          | Some get_buffer_ptr ->
-              if
-                (not (Hashtbl.mem device.constant_buffer_cache key))
-                && Tn.known_constant key && Tn.is_hosted_force key 44
-              then
-                Hashtbl.update_and_return device.constant_buffer_cache key ~f:(fun _ ->
-                    get_buffer_ptr ~size_in_bytes:(Lazy.force key.size_in_bytes)
-                    @@ Ndarray.get_voidptr_not_managed
-                    @@ Option.value_exn ~here:[%here]
-                    @@ Lazy.force key.array)
-              else Hashtbl.find_or_add device.constant_buffer_cache key ~default
-        in
-        add_old_exn read_only_buffer)
+         stream only and then to use init_from_device. Constant / read-only buffers are shared
+         across contexts on a device via [constant_buffer_cache]; their host initialization data, if
+         any, is copied (not pointer-wrapped) into a device buffer at first use. *)
+      if node.Low_level.read_only || Tn.known_constant key then add_old_exn
+      @@ Hashtbl.find_or_add device.constant_buffer_cache key ~default
       else add_new_exn ())
     else ctx_arrays
 

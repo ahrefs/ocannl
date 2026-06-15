@@ -76,14 +76,16 @@ let shared_resource_options =
 let private_resource_options =
   Me.ResourceOptions.(storage_mode_private + hazard_tracking_mode_tracked)
 
-(* GPU-only tnodes ([Local], [Device_only], [On_device]) never need CPU access, so their buffers
-   can use private storage. Every other mode -- [Hosted _], [Materialized], [Effectively_constant],
-   the partially-resolved [Never_virtual], and the [None] default -- may be read or written by the
-   CPU (host initialization, host read-back, or [use_host_memory] wrapping) and must stay shared.
-   [Virtual] tnodes are inlined and never reach the allocator; they map to shared defensively. *)
+(* GPU-only tnodes ([Local], [Device_only], [On_device]) do not require persistent CPU-visible
+   storage. After gh-ocannl-333 there is no [Hosted] mode; on-demand host read-back / upload for
+   [On_device] nodes goes through the backend's blit-based [to_host]/[from_host], so private storage
+   remains valid for them. The materialization-request modes -- [Materialized], [Effectively_constant],
+   the partially-resolved [Never_virtual], and the [None] default -- may still be initialized or
+   wrapped via shared memory (e.g. [use_host_memory]) and stay shared. [Virtual] tnodes are inlined
+   and never reach the allocator; they map to shared defensively. *)
 let storage_mode_for_memory_mode : Tn.memory_mode option -> Me.Resource.StorageMode.t = function
   | Some (Local | Device_only | On_device) -> Me.Resource.StorageMode.Private
-  | Some (Effectively_constant | Virtual | Never_virtual | Materialized | Hosted _) | None ->
+  | Some (Effectively_constant | Virtual | Never_virtual | Materialized) | None ->
       Me.Resource.StorageMode.Shared
 
 let resource_options_for_mode (mode : Tn.memory_mode option) =
@@ -788,16 +790,10 @@ using namespace metal;|} in
             | Kparam_ptr tn when Map.mem ctx_arrays tn ->
                 let buffer = Map.find_exn ctx_arrays tn in
                 Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
-            | Kparam_ptr tn when Tn.known_constant tn && Tn.is_hosted_force tn 48 ->
-                let buffer =
-                  Hashtbl.find_or_add stream.device.constant_buffer_cache tn ~default:(fun () ->
-                      get_buffer_for_ptr device ~size_in_bytes:(Lazy.force tn.size_in_bytes)
-                      @@ Ndarray.get_voidptr_not_managed
-                      @@ Option.value_exn ~here:[%here]
-                      @@ Lazy.force tn.array)
-                in
-                Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
             | Kparam_ptr tn ->
+                (* After gh-ocannl-333 there is no host array to wrap as a constant buffer: every
+                   in-context node (including constants) is allocated in [ctx_arrays] by
+                   [alloc_if_needed], which uploads any host initialization data there. *)
                 failwith
                   [%string
                     "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]

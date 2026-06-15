@@ -9,20 +9,10 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 (* export OCANNL_LOG_LEVEL_TNODE=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_TNODE"]
 
-type memory_type =
-  | Unset_hosted
-  | Constant  (** The tensor node does not change after initialization. *)
-  | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
-  | Changed_on_devices  (** The tensor node will only change on host via a [to_host] call. *)
-  | Volatile
-      (** The tensor node will only change on any device via a [from_host] call possibly followed by
-          [device_to_device]. *)
-[@@deriving sexp, compare, equal]
-
 type memory_mode =
-  | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
+  | Effectively_constant  (** A constant, or a subset of [Virtual]. *)
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
-  | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
+  | Never_virtual  (** One of: [Local], [On_device], [Materialized]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across
           calls to compiled functions. It is not available for merging across devices. *)
@@ -30,23 +20,17 @@ type memory_mode =
   | On_device
       (** The tensor node is stored on the devices that compute with it and persisted across
           function calls. It is available for merging across devices (for devices that support
-          merging / P2P), but not (directly) for visualization or storing to disk. *)
-  | Materialized  (** One of: [On_device], [Hosted]. *)
-  | Hosted of memory_type
-      (** The tensor node is stored in a globally addressable memory, in addition to on devices
-          where it is computed with (or only on the host and not on the device, for some backends).
-          It is available for all operations, and visible to OCaml programs as an {!Ndarray} (the
-          optional [array] of {!t}). *)
+          merging / P2P). CPU-side access (printing, persistence, inspection) is on-demand via
+          context-mediated device-to-host transfers; no host copy is stored on the node. *)
+  | Materialized
+      (** An as-yet-unresolved request for a persisted (non-virtual, non-local) node; resolves to
+          [On_device]. *)
 [@@deriving sexp, compare, equal]
 
 type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
 
-type prepare = { is_done : unit -> bool; sync : unit -> unit; transfer : unit -> unit }
-[@@deriving sexp_of]
-
 type t = {
-  array : Nd.t option Lazy.t;
   prec : Ops.prec Lazy.t;
   dims : int array Lazy.t;
   padding : (Ops.axis_padding array * float option) option Lazy.t;
@@ -64,12 +48,6 @@ type t = {
   mutable memory_mode : (memory_mode * int) option;
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
-  mutable prepare_read : prepare option;
-  mutable prepare_write : prepare option;
-  mutable devices_not_lagging_host : Hash_set.M(Int).t;
-      (** The unique ids of devices that either read the most recent modification of the host
-          buffer, or computed the most recent modification of the node themselves, whether or not it
-          has been transferred to the host yet. *)
 }
 [@@deriving sexp_of]
 
@@ -113,27 +91,6 @@ let get_debug_name ?code_name ~id ~label () =
       | None when is_grad -> [%string "n%{id - 1#Int}%{opt_grad}"]
       | None -> "n" ^ Int.to_string id)
 
-let prepare ~is_done ~sync ~transfer old =
-  match old with
-  | None -> { is_done; sync; transfer }
-  | Some old ->
-      if old.is_done () then { is_done; sync; transfer }
-      else
-        {
-          is_done = (fun () -> old.is_done () && is_done ());
-          sync =
-            (fun () ->
-              old.sync ();
-              sync ());
-          transfer;
-        }
-
-let prepare_read ~is_done ~sync ~transfer tn =
-  tn.prepare_read <- Some (prepare ~is_done ~sync ~transfer tn.prepare_read)
-
-let prepare_write ~is_done ~sync tn =
-  tn.prepare_write <- Some (prepare ~is_done ~sync ~transfer:(fun () -> ()) tn.prepare_write)
-
 let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
   get_debug_name ?code_name ~id ~label ()
@@ -148,12 +105,7 @@ let debug_memory_mode = function
         | Local -> "Local"
         | Device_only -> "Dev"
         | Materialized -> "Material"
-        | On_device -> "On-dev"
-        | Hosted Constant -> "Host-const"
-        | Hosted Nonconstant -> "Host-non-const"
-        | Hosted Unset_hosted -> "Host-unset"
-        | Hosted Volatile -> "Hosted"
-        | Hosted Changed_on_devices -> "Host&dev")
+        | On_device -> "On-dev")
       ^ "/" ^ Int.to_string prov
 
 let log_debug_info ~from_log_level tn =
@@ -168,12 +120,7 @@ let log_debug_info ~from_log_level tn =
         "mem:",
         debug_memory_mode tn.memory_mode,
         "backends:",
-        (tn.backend_info : Sexp.t)];
-      if Lazy.is_val tn.array then
-        match tn.array with
-        | (lazy None) -> [%log "<not-on-host>"]
-        | (lazy (Some nd)) -> Nd.log_debug_info ~from_log_level nd
-      else [%log "<not-in-yet>"]]]
+        (tn.backend_info : Sexp.t)]]]
 
 (** Defaults to the most local memory mode compatible with the current setting. *)
 let default_to_most_local tn provenance =
@@ -195,7 +142,7 @@ let default_to_most_local tn provenance =
   | Some (Never_virtual, _) -> tn.memory_mode <- Some (local_mode, provenance)
   | Some (Device_only, _) -> tn.memory_mode <- Some (local_mode, provenance)
   | Some (Materialized, _) -> tn.memory_mode <- Some (On_device, provenance)
-  | Some ((Virtual | Local | On_device | Hosted _), _) -> ()
+  | Some ((Virtual | Local | On_device), _) -> ()
 
 let is_virtual_force tn provenance =
   match tn.memory_mode with
@@ -208,45 +155,33 @@ let is_virtual_force tn provenance =
       true
   | _ -> false
 
-let rec is_hosted_force tn provenance =
-  match tn.memory_mode with
-  | Some ((Virtual | Local | Device_only | On_device), _) -> false
-  | Some (Hosted _, _) -> true
-  | None | Some ((Never_virtual | Materialized | Effectively_constant), _) ->
-      default_to_most_local tn provenance;
-      is_hosted_force tn provenance
-
 let rec is_materialized_force tn provenance =
   match tn.memory_mode with
   | None -> assert false
   | Some ((Virtual | Local), _) -> false
-  | Some ((On_device | Hosted _ | Materialized), _) -> true
+  | Some ((On_device | Materialized), _) -> true
   | Some ((Never_virtual | Device_only | Effectively_constant), _) ->
       default_to_most_local tn provenance;
       is_materialized_force tn provenance
 
 let%debug3_sexp rec is_in_context_force ~(use_host_memory : 'a option) (tn : t) (provenance : int) :
     bool =
+  (* [use_host_memory] no longer changes whether a node is in context: there is no host-only
+     storage. It is retained as a parameter for backend-capability symmetry with the rest of the
+     pipeline. *)
+  ignore use_host_memory;
   match tn.memory_mode with
-  | Some (Hosted Changed_on_devices, _) -> true
-  | Some ((Materialized | Hosted Nonconstant), _) when Option.is_none use_host_memory -> true
-  | Some (Hosted (Constant | Volatile), _) when Option.is_some use_host_memory -> false
-  | Some (Hosted _, _) -> true
   | Some ((Virtual | Local), _) -> false
+  | Some (On_device, _) -> true
   | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
       default_to_most_local tn provenance;
       is_in_context_force ~use_host_memory tn provenance
-  | Some (On_device, _) -> true
 
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
 
 let known_constant tn =
-  match tn.memory_mode with
-  | Some ((Effectively_constant | Hosted Constant), _) -> true
-  | _ -> false
-
-let known_volatile tn = match tn.memory_mode with Some (Hosted Volatile, _) -> true | _ -> false
+  match tn.memory_mode with Some (Effectively_constant, _) -> true | _ -> false
 
 let known_non_virtual tn =
   match tn.memory_mode with None | Some ((Virtual | Effectively_constant), _) -> false | _ -> true
@@ -255,7 +190,7 @@ let known_virtual tn = match tn.memory_mode with Some (Virtual, _) -> true | _ -
 
 let mode_is_unspecified tn =
   match tn.memory_mode with
-  | None | Some ((Never_virtual | Effectively_constant | Hosted Unset_hosted), _) -> true
+  | None | Some ((Never_virtual | Effectively_constant), _) -> true
   | _ -> false
 
 let update_memory_mode tn mode provenance =
@@ -268,21 +203,14 @@ let update_memory_mode tn mode provenance =
            [%string
              "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{debug_name \
               tn}: cannot be virtual"]
-  | Some ((Virtual | Hosted Constant), _), Effectively_constant -> ()
+  | Some (Virtual, _), Effectively_constant -> ()
   | Some ((Never_virtual | Materialized), _), Effectively_constant
-  | Some (Effectively_constant, _), (Never_virtual | Materialized | Hosted Constant) ->
-      tn.memory_mode <- Some (Hosted Constant, provenance)
-  | Some (Hosted Unset_hosted, old_prov), Effectively_constant ->
-      tn.memory_mode <- Some (Hosted Constant, (old_prov * 1000) + provenance)
-  | Some (Effectively_constant, old_prov), Hosted Unset_hosted ->
-      tn.memory_mode <- Some (Hosted Constant, (old_prov * 1000) + provenance)
+  | Some (Effectively_constant, _), (Never_virtual | Materialized) ->
+      (* A constant that must be persisted is just a materialized (device-resident) node now;
+         there is no separate hosted-constant state. *)
+      tn.memory_mode <- Some (Materialized, provenance)
   | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
-  | ( Some (Hosted (Nonconstant | Unset_hosted | Changed_on_devices), _),
-      Hosted (Changed_on_devices | Volatile) ) ->
-      tn.memory_mode <- Some (mode, provenance)
-  | Some (Hosted Unset_hosted, _), Hosted (Constant | Nonconstant) ->
-      tn.memory_mode <- Some (mode, provenance)
-  | Some (Hosted (Changed_on_devices | Volatile), _), Hosted Nonconstant -> ()
+  | Some (Effectively_constant, _), On_device -> tn.memory_mode <- Some (On_device, provenance)
   | Some (Never_virtual, _), mode -> tn.memory_mode <- Some (mode, provenance)
   | Some (Virtual, prov2), Never_virtual ->
       raise
@@ -293,9 +221,9 @@ let update_memory_mode tn mode provenance =
   | Some (_, _), Never_virtual -> ()
   | Some (Device_only, _), (Local | On_device) -> tn.memory_mode <- Some (mode, provenance)
   | Some (On_device, _), On_device -> ()
-  | Some (Materialized, _), (On_device | Hosted _) -> tn.memory_mode <- Some (mode, provenance)
+  | Some (Materialized, _), On_device -> tn.memory_mode <- Some (mode, provenance)
   | Some ((Local | On_device), _), Device_only -> ()
-  | Some ((On_device | Hosted _), _), Materialized -> ()
+  | Some (On_device, _), Materialized -> ()
   | Some (Device_only, _), Materialized | Some (Materialized, _), Device_only ->
       tn.memory_mode <- Some (On_device, provenance)
   | Some (_, prov2), _ ->
@@ -421,13 +349,6 @@ let sexp_of_t_map sexp_of_v m =
   Sequence.sexp_of_t (fun (k, v) -> sexp_of_list Fn.id [ sexp_of_t k; sexp_of_v v ])
   @@ Map.to_sequence m
 
-let get_exn a =
-  match a.array with
-  | (lazy (Some nd)) -> nd
-  | _ -> invalid_arg @@ "Tnode.get_exn: array " ^ debug_name a ^ " is not hosted"
-
-let has a = match a.array with (lazy (Some _)) -> true | _ -> false
-
 let dims_to_string ?(with_axis_numbers = false) arr =
   let dims_s =
     if Lazy.is_val arr.dims then
@@ -495,12 +416,7 @@ let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
 let header tn =
   let debug = Utils.settings.log_level > 0 in
   let mem_size =
-    if Lazy.is_val tn.array then
-      match tn.array with
-      | (lazy None) -> "<not-hosted>"
-      | (lazy (Some nd)) ->
-          let size = Int.to_string_hum @@ Nd.size_in_bytes nd in
-          if debug then size ^ " @ " ^ Nd.ptr_to_string_hum nd else size
+    if Lazy.is_val tn.size_in_bytes then Int.to_string_hum @@ Lazy.force tn.size_in_bytes
     else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
@@ -524,7 +440,6 @@ let prec_of_dalayed tn =
   match tn.delayed_prec_unsafe with Default prec | Specified prec | Inferred (lazy prec) -> prec
 
 let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
-  let debug = "Host array for " ^ get_debug_name ~id ~label () in
   (* Compute padded dimensions: tn.dims stores buffer-inclusive (padded) dimensions *)
   let dims =
     lazy
@@ -534,20 +449,12 @@ let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
        | Some (padding_arr, _) ->
            Array.map2_exn unpadded padding_arr ~f:(fun d Ops.{ left; right } -> d + left + right))
   in
-  let rec array =
-    lazy
-      (if is_hosted_force tn 30 then
-         Some
-           (Nd.create_array ~debug (Lazy.force tn.prec) ~dims:(Lazy.force dims)
-              ~padding:(Lazy.force padding))
-       else None)
-  and size_in_bytes =
+  let rec size_in_bytes =
     lazy
       (let n = num_elems tn in
        n * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
     {
-      array;
       delayed_prec_unsafe = delayed_prec;
       prec = lazy (prec_of_dalayed tn);
       dims;
@@ -558,9 +465,6 @@ let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
       memory_mode = None;
       backend_info = Sexp.List [];
       code_name = None;
-      prepare_read = None;
-      prepare_write = None;
-      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   (* Note: if tensor nodes get non-trivial finalizers, remember to either add an is_finalized flag
@@ -569,13 +473,17 @@ let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
   Registry.add registry tn;
   tn
 
+(* [create_from_padded] and [create_with_reshape] return the tensor node together with a lazy host
+   buffer holding the node's initialization data. The buffer is no longer stored on the node; the
+   caller (e.g. [Tensor.term], [Persistence.load]) records it in the computation's [host_inits] map
+   so each [Context.compile] can upload it into its own context. The laziness is preserved so the
+   buffer is shaped only after shape inference completes. *)
 let create_from_padded ~id ~label ~ndarray ~padding () =
   let dims_val = Nd.dims ndarray in
   let prec_val = Nd.get_prec ndarray in
   let size_in_bytes = lazy (Nd.size_in_bytes ndarray) in
   let rec tn =
     {
-      array = lazy (Some ndarray);
       delayed_prec_unsafe = Specified prec_val;
       prec = lazy (prec_of_dalayed tn);
       dims = lazy dims_val;
@@ -583,16 +491,13 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
       size_in_bytes;
       id;
       label;
-      memory_mode = Some (Hosted Unset_hosted, 49);
+      memory_mode = Some (Materialized, 49);
       backend_info = Sexp.List [];
       code_name = None;
-      prepare_read = None;
-      prepare_write = None;
-      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   Registry.add registry tn;
-  tn
+  (tn, lazy ndarray)
 
 let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_padded () =
   let debug = "Host array for " ^ get_debug_name ~id ~label () in
@@ -606,7 +511,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
        | Some (padding_arr, _) ->
            Array.map2_exn unpadded padding_arr ~f:(fun d Ops.{ left; right } -> d + left + right))
   in
-  let rec array =
+  let rec init_buffer =
     lazy
       (let semantic_dims = Lazy.force unpadded_dims in
        let padded_dims = Lazy.force dims in
@@ -629,7 +534,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
                        elements"];
              Nd.as_array prec (Bigarray.reshape arr padded_dims)
            in
-           Some (Nd.apply_with_prec { f = f_reshape_with_prec } base_ndarray)
+           Nd.apply_with_prec { f = f_reshape_with_prec } base_ndarray
        | Some _, false ->
            (* Create new bigarray with padding and copy source into non-padding parts. semantic_dims
               are the data area dimensions (without padding). *)
@@ -646,14 +551,13 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
            (* Use C function for efficient copying *)
            let source = Nd.reshape base_ndarray semantic_dims in
            Nd.copy_with_padding ~source ~target ~padding:(Option.value_exn target_padding |> fst);
-           Some target)
+           target)
   and size_in_bytes =
     lazy
       (let n = num_elems tn in
        n * Ops.prec_in_bytes (Lazy.force tn.prec))
   and tn =
     {
-      array;
       delayed_prec_unsafe = Specified prec_val;
       prec = lazy (prec_of_dalayed tn);
       dims;
@@ -661,16 +565,13 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       size_in_bytes;
       id;
       label;
-      memory_mode = Some (Hosted Unset_hosted, 49);
+      memory_mode = Some (Materialized, 49);
       backend_info = Sexp.List [];
       code_name = None;
-      prepare_read = None;
-      prepare_write = None;
-      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   Registry.add registry tn;
-  tn
+  (tn, init_buffer)
 
 let initial_default_prec =
   Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -678,7 +579,6 @@ let initial_default_prec =
 let find =
   let mock =
     {
-      array = lazy None;
       prec = lazy initial_default_prec;
       delayed_prec_unsafe = Specified initial_default_prec;
       dims = lazy [||];
@@ -689,76 +589,15 @@ let find =
       memory_mode = None;
       backend_info = Sexp.List [];
       code_name = None;
-      prepare_read = None;
-      prepare_write = None;
-      devices_not_lagging_host = Hash_set.create (module Int);
     }
   in
   fun ~id -> Registry.find_opt registry { mock with id }
 
-(** {2 Accessors} *)
+(** {2 Accessors}
 
-let do_read tn =
-  Option.iter
-    ~f:(fun p ->
-      p.sync ();
-      if Utils.settings.automatic_host_transfers then p.transfer ())
-    tn.prepare_read;
-  tn.prepare_read <- None
-
-let do_write tn =
-  Option.iter ~f:(fun p -> p.sync ()) tn.prepare_write;
-  tn.prepare_write <- None;
-  Hash_set.clear tn.devices_not_lagging_host
-
-let points_1d ?from_axis ~xdim tn =
-  do_read tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Option.value_map ~default:[||] ~f:(fun arr -> Nd.retrieve_1d_points ?from_axis ?padding ~xdim arr)
-  @@ Lazy.force tn.array
-
-let points_2d ?from_axis ~xdim ~ydim tn =
-  do_read tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Option.value_map ~default:[||] ~f:(fun arr ->
-      Nd.retrieve_2d_points ?from_axis ?padding ~xdim ~ydim arr)
-  @@ Lazy.force tn.array
-
-let set_value tn =
-  do_write tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Nd.set_from_float ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array
-
-let get_value tn =
-  do_read tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  fun idx ->
-    try
-      let idx =
-        if Array.length (Lazy.force tn.dims) = 0 && Array.length idx = 1 then
-          if idx.(0) = 0 then [||] else invalid_arg "Tnode.get_value: index out of bounds"
-        else idx
-      in
-      Nd.get_as_float ?padding (Option.value_exn ~here:[%here] @@ Lazy.force tn.array) idx
-    with Invalid_argument _ ->
-      Stdio.printf "Tnode.get_value: array %s index out of bounds: %s for dims %s\n" (debug_name tn)
-        (Sexp.to_string_hum ([%sexp_of: int array] idx))
-        (Sexp.to_string_hum
-           ([%sexp_of: int array] @@ Nd.dims
-           @@ Option.value_exn ~here:[%here]
-           @@ Lazy.force tn.array));
-      raise @@ Utils.User_error "Tnode.get_value: index out of bounds"
-
-let set_values tn values =
-  update_memory_mode tn (Hosted Nonconstant) 51;
-  do_write tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Nd.(set_flat_values ?padding (Option.value_exn ~here:[%here] @@ Lazy.force tn.array) values)
-
-let get_values tn =
-  do_read tn;
-  let padding = Option.map ~f:fst (Lazy.force tn.padding) in
-  Nd.(retrieve_flat_values ?padding @@ Option.value_exn ~here:[%here] @@ Lazy.force tn.array)
+    Host-side value access ([get_value], [set_value], [get_values], [set_values], [points_1d],
+    [points_2d]) now lives in {!Context}: it requires an explicit context and performs an on-demand
+    device-to-host transfer. There is no host copy stored on the tensor node. *)
 
 let print_accessible_headers ?(pred = fun _ -> true) () =
   Stdio.printf "Tnode: collecting accessible arrays...%!\n";
