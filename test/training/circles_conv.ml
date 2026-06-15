@@ -102,7 +102,7 @@ let () =
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
   let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-
+  let ctx = Context.context sgd_routine in
   let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
 

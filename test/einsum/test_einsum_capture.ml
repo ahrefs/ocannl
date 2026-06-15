@@ -46,7 +46,7 @@ let capture_for_computation () =
     (match r.var_ref.solved_dim with Some d -> Int.to_string d | None -> "not resolved");
 
   let%op dim_calc = dim a + dim j + dim r in
-  let _ctx = Train.forward_once ctx dim_calc in
+  let ctx = Train.forward_once ctx dim_calc in
 
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx dim_calc
 
@@ -212,7 +212,7 @@ let capture_for_shape_validation () =
   Shape.set_equal mix n;
 
   (* Row variable mix should have total elements = p *)
-  let _ctx = Train.forward_once ctx m2 in
+  let ctx = Train.forward_once ctx m2 in
 
   Stdio.printf "\nTest 4 - Mixed row-dimension constraints:\n";
   Stdio.printf "  Input m1 shape: %s\n" (Shape.to_string_hum m1.shape);

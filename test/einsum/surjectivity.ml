@@ -21,7 +21,7 @@ let%expect_test "diagonal_tensor_initialization" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx diagonal;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:22:21
+    HERE: test/einsum/surjectivity.ml:21:21
     ┌───────────────────────────────────────┐
     │[1]: =>_diagonal shape 0:5,1:5         │
     │┌──────┬──────────────────────────────┐│
@@ -50,7 +50,7 @@ let%expect_test "sparse_assignment_with_fixed_indices" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx sparse;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:51:21
+    HERE: test/einsum/surjectivity.ml:50:21
     ┌─────────────────────────────────┐
     │[1]: =>_sparse shape 0:4,1:1,2:1 │
     │┌──────┬──────┐                  │
@@ -85,7 +85,7 @@ let%expect_test "multiple_sparse_axes" =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx sparse_multi;
   [%expect
     {|
-    HERE: test/einsum/surjectivity.ml:86:21
+    HERE: test/einsum/surjectivity.ml:85:21
     ┌───────────────────────────────────────────┐
     │[1]: =>_sparse_multi shape 0:3,1:2,2:4,3:3 │
     │┌──────┬──────────────────┐                │

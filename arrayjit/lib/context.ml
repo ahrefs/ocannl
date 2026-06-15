@@ -296,14 +296,21 @@ let to_host ctx (tn : Tn.t) : Nd.t =
   (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
   Backend.await wrapper.stream;
   let nd = host_buffer tn in
-  if not (Backend.to_host wrapper.context tn nd) then
-    raise
-    @@ Utils.User_error
-         (Printf.sprintf "Context.to_host: node %s is not present in context (backend %s)"
-            (Tn.debug_name tn) ctx.backend_name);
-  (* Ensure the device-to-host copy itself has completed before the host buffer is read. *)
-  Backend.await wrapper.stream;
-  nd
+  if Backend.to_host wrapper.context tn nd then (
+    (* Ensure the device-to-host copy itself has completed before the host buffer is read. *)
+    Backend.await wrapper.stream;
+    nd)
+  else
+    match Ir.Host_inits.find tn with
+    | Some init ->
+        (* An ndarray-backed literal that is not part of any computation in this context (so it was
+           never allocated on the device): its value is its registered host initialization data. *)
+        Lazy.force init
+    | None ->
+        raise
+        @@ Utils.User_error
+             (Printf.sprintf "Context.to_host: node %s is not present in context (backend %s)"
+                (Tn.debug_name tn) ctx.backend_name)
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)

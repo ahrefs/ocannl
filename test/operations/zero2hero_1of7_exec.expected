@@ -1,44 +1,44 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-                             #15 +_f_nd
-                              6.00e+1
-                             #16 grad_+_f_nd Virt/30
-                             <void>
-                         #13 - Virt/152                             │#2 5 Virt/40
-                         <void>                                     │<void>
-                         #14 grad_- Virt/30                         │
-                         <void>                                     │
-              #11 *. Virt/152                   │#4 *. Virt/152     │
-              <void>                            │<void>             │
-              #12 grad_*. Virt/30               │#5 grad_*. Virt/30 │
-              <void>                            │<void>             │
-#10 3 Virt/40│       #7 **. Virt/152            │#3 4 Virt/40│[#0 x]│
-<void>       │       <void>                     │<void>      │      │
-             │       #8 grad_**. Virt/30        │            │      │
-             │       <void>                     │            │      │
-             │#0 x non-emb         │#6 2 Virt/40│            │      │
-             │ 5.00                │<void>      │            │      │
-             │#1 grad_x Local/26030│            │            │      │
-             │<void>               │            │            │      │                                #32 +_f
-                                 6.00e+1
-                                #33 grad_+_f
-                                 1.00
-                          #30 -                                │#19 5 Virt/40
-                           5.50e+1                             │<void>
-                          #31 grad_-                           │
-                           1.00                                │
-               #28 *.                    │     #21 *.          │
-                7.50e+1                  │      2.00e+1        │
-               #29 grad_*.               │     #22 grad_*.     │
-                1.00                     │      -1.00          │
-#27 3 Virt/40│       #24 **.             │#20 4 Virt/40│[#17 x]│
-<void>       │        2.50e+1            │<void>       │       │
-             │       #25 grad_**.        │             │       │
-             │        3.00               │             │       │
-             │#17 x non-emb│#23 2 Virt/40│             │       │
-             │ 5.00        │<void>       │             │       │
-             │#18 grad_x   │             │             │       │
-             │ 2.60e+1     │             │             │       │┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+                                    #15 +_f_nd
+                                     6.00e+1
+                                    #16 grad_+_f_nd unknown
+                                    <not-in-context>
+                              #13 - Virt/152                                   │#2 5 Virt/40
+                              <not-in-context>                                 │<not-in-context>
+                              #14 grad_- unknown                               │
+                              <not-in-context>                                 │
+                  #11 *. Virt/152                      │  #4 *. Virt/152       │
+                  <not-in-context>                     │  <not-in-context>     │
+                  #12 grad_*. unknown                  │  #5 grad_*. unknown   │
+                  <not-in-context>                     │  <not-in-context>     │
+#10 3 Virt/40   │         #7 **. Virt/152              │#3 4 Virt/40    │[#0 x]│
+<not-in-context>│         <not-in-context>             │<not-in-context>│      │
+                │         #8 grad_**. unknown          │                │      │
+                │         <not-in-context>             │                │      │
+                │#0 x non-emb         │#6 2 Virt/40    │                │      │
+                │ 5.00                │<not-in-context>│                │      │
+                │#1 grad_x Non-virt/26│                │                │      │
+                │<not-in-context>     │                │                │      │                                      #32 +_f
+                                       6.00e+1
+                                      #33 grad_+_f
+                                       1.00
+                               #30 -                                    │#19 5 Virt/40
+                                5.50e+1                                 │<not-in-context>
+                               #31 grad_-                               │
+                                1.00                                    │
+                  #28 *.                       │      #21 *.            │
+                   7.50e+1                     │       2.00e+1          │
+                  #29 grad_*.                  │      #22 grad_*.       │
+                   1.00                        │       -1.00            │
+#27 3 Virt/40   │         #24 **.              │#20 4 Virt/40   │[#17 x]│
+<not-in-context>│          2.50e+1             │<not-in-context>│       │
+                │         #25 grad_**.         │                │       │
+                │          3.00                │                │       │
+                │#17 x non-emb│#23 2 Virt/40   │                │       │
+                │ 5.00        │<not-in-context>│                │       │
+                │#18 grad_x   │                │                │       │
+                │ 2.60e+1     │                │                │       │┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ 1.00e+2│#                                                                                                   │
 │        │                                                                                                    │
 │        │                                                                                                    │
@@ -82,16 +82,16 @@ Found 0, in the config file
 ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │        │-5.00                                                                                           4.00│
 │        │                                                 x                                                  │
-└────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘                               #9 +_f_5
-                                6.00e+1
-                        #8 -                              │#1 5 Virt/40
-                         5.50e+1                          │<void>
-           #7 *.                │        #3 *.            │
-            7.50e+1             │         2.00e+1         │
-#6 3 Virt/40│     #5 **.        │#2 4 Virt/40│#0 5 Virt/40│
-<void>      │      2.50e+1      │<void>      │<void>      │
-            │[#0 5]│#4 2 Virt/40│            │            │
-            │      │<void>      │            │            │┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+└────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘                                         #9 +_f_5
+                                          6.00e+1
+                                #8 -                                      │#1 5 Virt/40
+                                 5.50e+1                                  │<not-in-context>
+               #7 *.                    │            #3 *.                │
+                7.50e+1                 │             2.00e+1             │
+#6 3 Virt/40    │       #5 **.          │#2 4 Virt/40    │#0 5 Virt/40    │
+<not-in-context>│        2.50e+1        │<not-in-context>│<not-in-context>│
+                │[#0 5]│#4 2 Virt/40    │                │                │
+                │      │<not-in-context>│                │                │┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ 1.00e+2 │#                                                                                                   │
 │         │#                                                                                                   │
 │         │  #                                                                                                 │
@@ -183,45 +183,45 @@ Found 0, in the config file
  6.24       │ -3.36      │            │               #12 *._l
                 -8.00
                #13 grad_*._l Virt/40
-               <void>
+               <not-in-context>
          #8 +_d Virt/152              │#10 f non-emb
-         <void>                       │ -2.00
+         <not-in-context>             │ -2.00
          #9 grad_+_d Virt/151         │#11 grad_f
-         <void>                       │ 4.00
+         <not-in-context>             │ 4.00
   #4 *._e Virt/152       │#6 c non-emb│
-  <void>                 │ 1.00e+1    │
+  <not-in-context>       │ 1.00e+1    │
   #5 grad_*._e Virt/151  │#7 grad_c   │
-  <void>                 │ -2.00      │
+  <not-in-context>       │ -2.00      │
 #0 a non-emb│#2 b non-emb│            │
  2.00       │ -3.00      │            │
 #1 grad_a   │#3 grad_b   │            │
  6.00       │ -4.00      │            │               #12 *._l
                 -8.00
                #13 grad_*._l Virt/40
-               <void>
+               <not-in-context>
          #8 +_d Virt/152              │#10 f non-emb
-         <void>                       │ -2.40
+         <not-in-context>             │ -2.40
          #9 grad_+_d Virt/151         │#11 grad_f
-         <void>                       │ 4.00
+         <not-in-context>             │ 4.00
   #4 *._e Virt/152       │#6 c non-emb│
-  <void>                 │ 1.02e+1    │
+  <not-in-context>       │ 1.02e+1    │
   #5 grad_*._e Virt/151  │#7 grad_c   │
-  <void>                 │ -2.00      │
+  <not-in-context>       │ -2.00      │
 #0 a non-emb│#2 b non-emb│            │
  1.40       │ -2.60      │            │
 #1 grad_a   │#3 grad_b   │            │
  6.00       │ -4.00      │            │               #12 *._l
                 -1.57e+1
                #13 grad_*._l Virt/40
-               <void>
+               <not-in-context>
          #8 +_d Virt/152              │#10 f non-emb
-         <void>                       │ -2.40
+         <not-in-context>             │ -2.40
          #9 grad_+_d Virt/151         │#11 grad_f
-         <void>                       │ 6.56
+         <not-in-context>             │ 6.56
   #4 *._e Virt/152       │#6 c non-emb│
-  <void>                 │ 1.02e+1    │
+  <not-in-context>       │ 1.02e+1    │
   #5 grad_*._e Virt/151  │#7 grad_c   │
-  <void>                 │ -2.40      │
+  <not-in-context>       │ -2.40      │
 #0 a non-emb│#2 b non-emb│            │
  1.40       │ -2.60      │            │
 #1 grad_a   │#3 grad_b   │            │
@@ -239,11 +239,11 @@ Found 0, in the config file
  2.00  0.00  │ -3.00  1.00 │          #8 +_v
            7.00e-1
           #9 grad_+_v Virt/40
-          <void>
+          <not-in-context>
      #6 * Local/9046       │#4 b non-emb
-     <void>                │ 6.70
+     <not-in-context>      │ 6.70
      #7 grad_* Virt/40     │#5 grad_b
-     <void>                │ 1.00
+     <not-in-context>      │ 1.00
 #0 w non-emb │#2 x non-emb │
  -3.00  1.00 │ 2.00  0.00  │
 #1 grad_w    │#3 grad_x    │

@@ -150,7 +150,7 @@ let () =
   printf "\n--- Test 12: Tuple in apply preserved ---\n%!";
   let%op preserved_tuple = sin ([%oc fst] (x1, x2)) in
   Train.set_materialized preserved_tuple.value;
-  let _ctx = Train.forward_once ctx preserved_tuple in
+  let ctx = Train.forward_once ctx preserved_tuple in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx preserved_tuple;
 
   (* --- Test 13: List block tensor with input-dim components --- *)
@@ -164,7 +164,7 @@ let () =
   in
   let%op stacked_mat = [m1; m2] in
   Train.set_materialized stacked_mat.value;
-  let _ctx = Train.forward_once ctx stacked_mat in
+  let ctx = Train.forward_once ctx stacked_mat in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx stacked_mat;
 
   (* --- Test 14: Callable stack operation (no PPX block syntax) --- *)
@@ -173,7 +173,7 @@ let () =
   printf "\n--- Test 14: Callable TDSL.O.stack `Output [| x1; x2 |] ---\n%!";
   let called_stack = TDSL.O.stack `Output [| x1; x2 |] in
   Train.set_materialized called_stack.value;
-  let _ctx = Train.forward_once ctx called_stack in
+  let ctx = Train.forward_once ctx called_stack in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx called_stack;
 
   (* --- Test 15: Empty operand array raises Invalid_argument --- *)
@@ -194,7 +194,7 @@ let () =
   printf "\n--- Test 16: Tuple arg element translated ([%%oc fst] (x1 + x2, x1)) ---\n%!";
   let%op tuple_elem_translated = sin ([%oc fst] (x1 + x2, x1)) in
   Train.set_materialized tuple_elem_translated.value;
-  let _ctx = Train.forward_once ctx tuple_elem_translated in
+  let ctx = Train.forward_once ctx tuple_elem_translated in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx tuple_elem_translated;
 
   printf "\n=== Block Tensor Literal Tests Complete ===\n%!"

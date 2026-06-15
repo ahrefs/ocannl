@@ -117,7 +117,7 @@ HERE: test/einsum/test_conv_padding.ml:127:21
 │││ 2.16e+3 │            │
 │└┴─────────┘            │
 └────────────────────────┘
-grad_=>_loss <not-hosted>
+grad_=>_loss <not-in-context>
 Testing conv2d with stride=2 and use_padding=false...
 Input shape: 9x9x1
 Kernel size: 3x3
@@ -163,14 +163,7 @@ out_channels: 4
 Expected output shape: 4x4 ((9-3)/2 + 1)
 Backprop completed successfully!
 HERE: test/einsum/test_conv_padding.ml:196:21
-┌────────────────────────┐
-│[14]: =>_loss shape 0:1 │
-│┌┬─────────┐            │
-│││axis 0   │            │
-│├┼─────────┤            │
-│││ 1.14e+4 │            │
-│└┴─────────┘            │
-└────────────────────────┘
-grad_=>_loss <not-hosted>
+[14]: =>_loss shape 0:1  <not-in-context>
+grad_=>_loss <not-in-context>
 
 All conv padding tests completed!

@@ -18,56 +18,56 @@ let%expect_test "Graph drawing recompile" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx f_nd;
   [%expect
     {|
-                                 #15 +_f_nd
-                                  6.00e+1
-                                 #16 grad_+_f_nd Virt/30
-                                 <void>
-                             #13 - Virt/152                             │#2 5 Virt/40
-                             <void>                                     │<void>
-                             #14 grad_- Virt/30                         │
-                             <void>                                     │
-                  #11 *. Virt/152                   │#4 *. Virt/152     │
-                  <void>                            │<void>             │
-                  #12 grad_*. Virt/30               │#5 grad_*. Virt/30 │
-                  <void>                            │<void>             │
-    #10 3 Virt/40│       #7 **. Virt/152            │#3 4 Virt/40│[#0 x]│
-    <void>       │       <void>                     │<void>      │      │
-                 │       #8 grad_**. Virt/30        │            │      │
-                 │       <void>                     │            │      │
-                 │#0 x non-emb         │#6 2 Virt/40│            │      │
-                 │ 5.00                │<void>      │            │      │
-                 │#1 grad_x Local/26030│            │            │      │
-                 │<void>               │            │            │      │
+                                        #15 +_f_nd
+                                         6.00e+1
+                                        #16 grad_+_f_nd unknown
+                                        <not-in-context>
+                                  #13 - Virt/152                                   │#2 5 Virt/40
+                                  <not-in-context>                                 │<not-in-context>
+                                  #14 grad_- unknown                               │
+                                  <not-in-context>                                 │
+                      #11 *. Virt/152                      │  #4 *. Virt/152       │
+                      <not-in-context>                     │  <not-in-context>     │
+                      #12 grad_*. unknown                  │  #5 grad_*. unknown   │
+                      <not-in-context>                     │  <not-in-context>     │
+    #10 3 Virt/40   │         #7 **. Virt/152              │#3 4 Virt/40    │[#0 x]│
+    <not-in-context>│         <not-in-context>             │<not-in-context>│      │
+                    │         #8 grad_**. unknown          │                │      │
+                    │         <not-in-context>             │                │      │
+                    │#0 x non-emb         │#6 2 Virt/40    │                │      │
+                    │ 5.00                │<not-in-context>│                │      │
+                    │#1 grad_x Non-virt/26│                │                │      │
+                    │<not-in-context>     │                │                │      │
     |}];
   let%op f = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_materialized f;
   let f_upd = Train.grad_update f in
   let ctx = Train.init_params ctx IDX.empty f in
   let f_bprop = Train.to_routine ctx IDX.empty f_upd in
-  Train.run ctx f_bprop;
+  let ctx = Context.context f_bprop in  Train.run ctx f_bprop;
   Train.printf_tree ~with_grad:true ~depth:9 ctx f;
   [%expect
     {|
-                                    #32 +_f
-                                     6.00e+1
-                                    #33 grad_+_f
-                                     1.00
-                              #30 -                                │#19 5 Virt/40
-                               5.50e+1                             │<void>
-                              #31 grad_-                           │
-                               1.00                                │
-                   #28 *.                    │     #21 *.          │
-                    7.50e+1                  │      2.00e+1        │
-                   #29 grad_*.               │     #22 grad_*.     │
-                    1.00                     │      -1.00          │
-    #27 3 Virt/40│       #24 **.             │#20 4 Virt/40│[#17 x]│
-    <void>       │        2.50e+1            │<void>       │       │
-                 │       #25 grad_**.        │             │       │
-                 │        3.00               │             │       │
-                 │#17 x non-emb│#23 2 Virt/40│             │       │
-                 │ 5.00        │<void>       │             │       │
-                 │#18 grad_x   │             │             │       │
-                 │ 2.60e+1     │             │             │       │
+                                          #32 +_f
+                                           6.00e+1
+                                          #33 grad_+_f
+                                           1.00
+                                   #30 -                                    │#19 5 Virt/40
+                                    5.50e+1                                 │<not-in-context>
+                                   #31 grad_-                               │
+                                    1.00                                    │
+                      #28 *.                       │      #21 *.            │
+                       7.50e+1                     │       2.00e+1          │
+                      #29 grad_*.                  │      #22 grad_*.       │
+                       1.00                        │       -1.00            │
+    #27 3 Virt/40   │         #24 **.              │#20 4 Virt/40   │[#17 x]│
+    <not-in-context>│          2.50e+1             │<not-in-context>│       │
+                    │         #25 grad_**.         │                │       │
+                    │          3.00                │                │       │
+                    │#17 x non-emb│#23 2 Virt/40   │                │       │
+                    │ 5.00        │<not-in-context>│                │       │
+                    │#18 grad_x   │                │                │       │
+                    │ 2.60e+1     │                │                │       │
     |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
@@ -88,8 +88,7 @@ let%expect_test "Graph drawing recompile" =
       [ Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" } ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+2│#                                                                                                   │
     │        │                                                                                                    │
@@ -149,16 +148,16 @@ let%expect_test "Graph drawing fetch" =
   Train.printf_tree ~with_grad:false ~depth:9 ctx f5;
   [%expect
     {|
-                                   #9 +_f_5
-                                    6.00e+1
-                            #8 -                              │#1 5 Virt/40
-                             5.50e+1                          │<void>
-               #7 *.                │        #3 *.            │
-                7.50e+1             │         2.00e+1         │
-    #6 3 Virt/40│     #5 **.        │#2 4 Virt/40│#0 5 Virt/40│
-    <void>      │      2.50e+1      │<void>      │<void>      │
-                │[#0 5]│#4 2 Virt/40│            │            │
-                │      │<void>      │            │            │
+                                             #9 +_f_5
+                                              6.00e+1
+                                    #8 -                                      │#1 5 Virt/40
+                                     5.50e+1                                  │<not-in-context>
+                   #7 *.                    │            #3 *.                │
+                    7.50e+1                 │             2.00e+1             │
+    #6 3 Virt/40    │       #5 **.          │#2 4 Virt/40    │#0 5 Virt/40    │
+    <not-in-context>│        2.50e+1        │<not-in-context>│<not-in-context>│
+                    │[#0 5]│#4 2 Virt/40    │                │                │
+                    │      │<not-in-context>│                │                │
     |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -171,7 +170,7 @@ let%expect_test "Graph drawing fetch" =
   Train.set_materialized (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine ctx bindings update in
-  let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
+  let ctx = Context.context fx_routine in  let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
@@ -189,8 +188,7 @@ let%expect_test "Graph drawing fetch" =
       ]
   in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
+  [%expect {|
     ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
     │ 1.00e+2 │#                                                                                                   │
     │         │#                                                                                                   │
@@ -253,8 +251,8 @@ let%expect_test "Simple gradients hosted" =
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
-  let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
-  (* Note the initial state without running an init or forward pass can contain garbage. *)
+  let _ctx = Context.context grad_routine in  let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
+  let ctx = Context.context sgd_routine in  (* Note the initial state without running an init or forward pass can contain garbage. *)
   (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
@@ -342,7 +340,7 @@ let%expect_test "Simple gradients virtual" =
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
-  (* Note the state without running initialization can contain garbage. *)
+  let ctx = Context.context grad_routine in  (* Note the state without running initialization can contain garbage. *)
   (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
@@ -353,15 +351,15 @@ let%expect_test "Simple gradients virtual" =
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
-                   <void>
+                   <not-in-context>
              #8 +_d Virt/152              │#10 f non-emb
-             <void>                       │ -2.00
+             <not-in-context>             │ -2.00
              #9 grad_+_d Virt/151         │#11 grad_f
-             <void>                       │ 4.00
+             <not-in-context>             │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
-      <void>                 │ 1.00e+1    │
+      <not-in-context>       │ 1.00e+1    │
       #5 grad_*._e Virt/151  │#7 grad_c   │
-      <void>                 │ -2.00      │
+      <not-in-context>       │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      2.00       │ -3.00      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -369,7 +367,7 @@ let%expect_test "Simple gradients virtual" =
     |}];
   (* Only now compile the SGD update. *)
   let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
-  (* Now we update the params, but are not doing the forward and backward passes: only params values
+  let ctx = Context.context sgd_routine in  (* Now we update the params, but are not doing the forward and backward passes: only params values
      will change, compared to the above. Since virtual tensors are computed by-need, they will
      always be recomputed using the latest parameter state. *)
   let ctx = Context.run ctx sgd_routine in
@@ -379,15 +377,15 @@ let%expect_test "Simple gradients virtual" =
                    #12 *._l
                     -8.00
                    #13 grad_*._l Virt/40
-                   <void>
+                   <not-in-context>
              #8 +_d Virt/152              │#10 f non-emb
-             <void>                       │ -2.40
+             <not-in-context>             │ -2.40
              #9 grad_+_d Virt/151         │#11 grad_f
-             <void>                       │ 4.00
+             <not-in-context>             │ 4.00
       #4 *._e Virt/152       │#6 c non-emb│
-      <void>                 │ 1.02e+1    │
+      <not-in-context>       │ 1.02e+1    │
       #5 grad_*._e Virt/151  │#7 grad_c   │
-      <void>                 │ -2.00      │
+      <not-in-context>       │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -402,15 +400,15 @@ let%expect_test "Simple gradients virtual" =
                    #12 *._l
                     -1.57e+1
                    #13 grad_*._l Virt/40
-                   <void>
+                   <not-in-context>
              #8 +_d Virt/152              │#10 f non-emb
-             <void>                       │ -2.40
+             <not-in-context>             │ -2.40
              #9 grad_+_d Virt/151         │#11 grad_f
-             <void>                       │ 6.56
+             <not-in-context>             │ 6.56
       #4 *._e Virt/152       │#6 c non-emb│
-      <void>                 │ 1.02e+1    │
+      <not-in-context>       │ 1.02e+1    │
       #5 grad_*._e Virt/151  │#7 grad_c   │
-      <void>                 │ -2.40      │
+      <not-in-context>       │ -2.40      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -430,7 +428,7 @@ let%expect_test "2D neuron hosted" =
   let update = Train.grad_update v in
   let ctx = Train.init_params ctx IDX.empty v in
   let routine = Train.to_routine ctx IDX.empty update in
-  Train.run ctx routine;
+  let ctx = Context.context routine in  Train.run ctx routine;
   Train.printf_tree ~with_grad:true ~depth:9 ctx v;
   [%expect
     {|
@@ -455,18 +453,18 @@ let%expect_test "2D neuron virtual" =
   let update = Train.grad_update v in
   let ctx = Train.init_params ctx IDX.empty v in
   let routine = Train.to_routine ctx IDX.empty update in
-  Train.run ctx routine;
+  let ctx = Context.context routine in  Train.run ctx routine;
   Train.printf_tree ~with_grad:true ~depth:9 ctx v;
   [%expect
     {|
               #8 +_v
                7.00e-1
               #9 grad_+_v Virt/40
-              <void>
+              <not-in-context>
          #6 * Local/9046       │#4 b non-emb
-         <void>                │ 6.70
+         <not-in-context>      │ 6.70
          #7 grad_* Virt/40     │#5 grad_b
-         <void>                │ 1.00
+         <not-in-context>      │ 1.00
     #0 w non-emb │#2 x non-emb │
      -3.00  1.00 │ 2.00  0.00  │
     #1 grad_w    │#3 grad_x    │

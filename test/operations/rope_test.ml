@@ -12,7 +12,7 @@ let () =
       ()
   in
   let%op roundtrip = interleave (deinterleave_even x_deint) (deinterleave_odd x_deint) in
-  let _ctx = Ocannl.Train.forward_once ctx roundtrip in
+  let ctx = Ocannl.Train.forward_once ctx roundtrip in
   Stdio.printf "Original: ";
   for i = 0 to 5 do
     Stdio.printf "%.0f " At.((ctx, x_deint).@{[| i |]})
@@ -42,7 +42,7 @@ let () =
       ()
   in
   let rotated = Ocannl.Nn_blocks.rope ~freqs ~positions x in
-  let _ctx = Ocannl.Train.forward_once ctx rotated in
+  let ctx = Ocannl.Train.forward_once ctx rotated in
   (* Position 0: identity (all angles = 0) *)
   Stdio.printf "Position 0 (should match [1,2,3,4]):\n";
   for i = 0 to d_k - 1 do
@@ -60,7 +60,7 @@ let () =
   Stdio.printf "=== Test 3: Sinusoidal encoding ===\n";
   let ctx = Context.auto () in
   let enc = Ocannl.Nn_blocks.sinusoidal_position_encoding ~d_model:8 ~max_len:4 () in
-  let _ctx = Ocannl.Train.forward_once ctx enc in
+  let ctx = Ocannl.Train.forward_once ctx enc in
   Stdio.printf "PE(0,0)=%.4f PE(0,1)=%.4f PE(1,0)=%.4f PE(1,1)=%.4f\n\n"
     At.((ctx, enc).@{[| 0; 0 |]})
     At.((ctx, enc).@{[| 0; 1 |]})
@@ -124,7 +124,7 @@ let () =
   in
   let%op out = x + attn ~train_step:None x in
   let%op loss = out ++ "...|... => 0" in
-  let _ctx = Ocannl.Train.update_once ctx loss in
+  let ctx = Ocannl.Train.update_once ctx loss in
   Stdio.printf "Loss: %.4f\n" At.((ctx, loss).@{[| 0 |]});
   Stdio.printf "freqs has grad: %b (expect false)\n" (Option.is_some freqs.Tensor.diff);
   Stdio.printf "positions has grad: %b (expect false)\n" (Option.is_some positions.Tensor.diff);

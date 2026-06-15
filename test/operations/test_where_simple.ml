@@ -23,7 +23,7 @@ let () =
   let ctx = Train.init_params ctx Train.IDX.empty result in
   let update = Train.grad_update result in
   let routine = Train.to_routine ctx Train.IDX.empty update in
-
+  let ctx = Context.context routine in
   Train.run ctx routine;
 
   Stdio.printf "x = %.4g, gradient = %.4g\n" (ctx, x).@[0] (ctx, x).@%[0];
@@ -49,7 +49,7 @@ let () =
   let ctx2 = Train.init_params ctx Train.IDX.empty result2 in
   let update2 = Train.grad_update result2 in
   let routine2 = Train.to_routine ctx2 Train.IDX.empty update2 in
-
+  let ctx = Context.context routine2 in
   Train.run ctx routine2;
 
   Stdio.printf "x = %.4g, gradient = %.4g\n" (ctx, x2).@[0] (ctx, x2).@%[0];
