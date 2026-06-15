@@ -188,9 +188,15 @@ let compile ctx comp bindings =
   let name = backend_routine.name in
   Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
 
-  (* Keep existing inputs computation for initialized_nodes check *)
+  (* Keep existing inputs computation for initialized_nodes check. Nodes with registered host
+     initialization data (ndarray-backed literals, loaded tensors) self-initialize at link time from
+     [Host_inits] (gh-ocannl-333), so they are not "required inputs" that must already be
+     initialized. *)
   let context_nodes = Asgns.context_nodes ~use_host_memory:None comp.Asgns.asgns in
-  let inputs = Set.diff context_nodes comp.Asgns.embedded_nodes in
+  let inputs =
+    Set.filter (Set.diff context_nodes comp.Asgns.embedded_nodes) ~f:(fun tn ->
+        not (Ir.Host_inits.mem tn))
+  in
 
   (* Outputs are all nodes written by the computation *)
   let outputs = backend_routine.outputs in

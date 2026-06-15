@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+literal matches source in ctx1: true
+literal matches across two independent contexts: true
+out = t + t computed on device: true
+set_values/get_values round-trip: true
+At get element 3: 103.0
+At set then get element 0: 42.0

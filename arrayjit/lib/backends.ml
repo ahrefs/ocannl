@@ -272,7 +272,11 @@ let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_co
   Set.iter from_prior_context ~f:(fun tn ->
       if
         Tn.is_in_context_force ~use_host_memory tn 42
-        && not (Option.is_some @@ Map.find ctx_arrays tn)
+        && (not (Option.is_some @@ Map.find ctx_arrays tn))
+        (* Nodes with registered host initialization data (ndarray-backed literals, loaded tensors)
+           self-initialize in this context at link time from [Host_inits] (gh-ocannl-333), so they
+           need not be present in a prior context. *)
+        && not (Host_inits.mem tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
 let%debug3_sexp from_prior_context_batch ~use_host_memory (comps : Assignments.comp option array) :
