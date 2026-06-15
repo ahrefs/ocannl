@@ -12,7 +12,6 @@ output_debug_files_in_run_directory=true
 cd_ident_style=heuristic
 ll_ident_style=heuristic
 randomness_lib=for_tests
-automatic_host_transfers=true
 # only for DEBUG:
 log_level=9
 # debug_backend=db

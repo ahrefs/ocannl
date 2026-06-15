@@ -44,14 +44,6 @@ print_decimals_precision=2
 # Complains if a half-precision tensor node is a constant with absolute value exceeding this.
 check_half_prec_constants_cutoff=16384.0
 
-# If true, [from_host] and [to_host] happen automatically in specific situations:
-# - When a host array is about to be read, we transfer to host from the context that most
-#   recently updated the node.
-# - When a routine is about to be run, we transfer the routine's inputs from host to the
-#   routine's context if the host array was not yet transfered since its creation or most
-#   recent modification.
-automatic_host_transfers=true
-
 # If true, use uint64 for indexing arithmetic. If false (default), use uint32 for indexing arithmetic.
 # This affects all backends' kernel index parameters and local index variables.
 # Set to true for models with tensors larger than 2^32 elements.

@@ -188,4 +188,4 @@ still records the post-modification event on the stream for device-side ordering
 Initialization data for ndarray-backed literals (and tensors loaded by `Persistence`) is held in a
 weakly-owned side table (`arrayjit/lib/host_inits.ml`), keyed by tensor node and read — not consumed
 — at link time, so the same literal can be uploaded into multiple independent contexts. The
-`automatic_host_transfers` setting is retained but inert (it no longer gates any transfer).
+`automatic_host_transfers` setting was removed (it no longer gated anything).
