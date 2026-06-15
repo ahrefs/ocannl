@@ -188,10 +188,9 @@ let compile ctx comp bindings =
   let name = backend_routine.name in
   Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
 
-  (* Keep existing inputs computation for initialized_nodes check. Nodes with registered host
-     initialization data (ndarray-backed literals, loaded tensors) self-initialize at link time from
-     [Host_inits] (gh-ocannl-333), so they are not "required inputs" that must already be
-     initialized. *)
+  (* Required inputs for the initialization check below. Nodes with registered host initialization
+     data (ndarray-backed literals, loaded tensors) self-initialize at link time from [Host_inits]
+     (gh-ocannl-333), so they are excluded. *)
   let context_nodes = Asgns.context_nodes ~use_host_memory:None comp.Asgns.asgns in
   let inputs =
     Set.filter (Set.diff context_nodes comp.Asgns.embedded_nodes) ~f:(fun tn ->
@@ -220,9 +219,16 @@ let compile ctx comp bindings =
   (updated_ctx, routine)
 
 let run ctx routine =
-  (* Check that all required inputs are initialized. A node already allocated in the running
-     context's device buffers counts as satisfied (gh-ocannl-333): such inputs are written directly
-     by the user via {!set_values}/{!from_host}, which the [initialized_nodes] set does not track. *)
+  (* Check that all required inputs are initialized. A node counts as initialized if it was produced
+     by a prior routine ([initialized_nodes]) or is already allocated in the running context's device
+     buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which
+     write the allocated buffer in place) or zero-initialized at allocation, which is the correct
+     identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish
+     a forgotten non-zero data input from a zero-valid accumulator — both are [alloc_zeros]'d
+     read-only buffers — so a forgotten data input reads zeros rather than failing. Catching that
+     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
+     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
+     primitive_ops). *)
   let (Wrapper run_wrapper) = ctx.backend_wrapper in
   let in_backend tn = Map.mem run_wrapper.context.BI.ctx_arrays tn in
   let missing_inputs =
@@ -303,6 +309,22 @@ let for_print_proxies : Tn.t Hashtbl.M(Int).t = Hashtbl.create (module Int)
 let register_for_print ~(src : Tn.t) ~(proxy : Tn.t) =
   Hashtbl.set for_print_proxies ~key:src.Tn.id ~data:proxy
 
+(* A deep copy of a host [Ndarray] (same precision, dims, and layout). Used so reads of shared
+   initialization buffers hand the caller a private buffer it may mutate. *)
+let copy_nd (src : Nd.t) : Nd.t =
+  Nd.apply_with_prec
+    {
+      f =
+        (fun prec arr ->
+          let dst =
+            Bigarray.Genarray.create (Bigarray.Genarray.kind arr) Bigarray.c_layout
+              (Bigarray.Genarray.dims arr)
+          in
+          Bigarray.Genarray.blit arr dst;
+          Nd.as_array prec dst);
+    }
+    src
+
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
@@ -319,8 +341,10 @@ let to_host ctx (tn : Tn.t) : Nd.t =
     match Ir.Host_inits.find tn with
     | Some init ->
         (* An ndarray-backed literal that is not part of any computation in this context (so it was
-           never allocated on the device): its value is its registered host initialization data. *)
-        Lazy.force init
+           never allocated on the device): its value is its registered host initialization data.
+           Return a private copy so a mutating caller (e.g. [set_value]'s read-modify-write) cannot
+           corrupt the shared initialization buffer used to initialize other contexts. *)
+        copy_nd (Lazy.force init)
     | None -> (
         (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
         match Hashtbl.find for_print_proxies tn.Tn.id with
