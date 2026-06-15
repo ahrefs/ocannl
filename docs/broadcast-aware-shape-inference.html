@@ -87,6 +87,57 @@ write</a></li>
 </nav>
 <section id="broadcasting-is-an-order" class="level1">
 <h1>Broadcasting Is an Order</h1>
+<blockquote>
+<p><strong>Errata (June 2026).</strong> The formal development that
+followed this post — <a href="https://lukstafi.github.io/notes/ocannl-formal-core.html"><em>The
+Formal Core of OCANNL’s Shape and Projection Inference</em></a> —
+corrected several claims made below. The narrative stands as written;
+trust it for the constructions, but not on these points.</p>
+<ol type="1">
+<li><strong>There is no principal model in general.</strong> The post’s
+stated goal — a least-committed substitution <span class="math inline">\sigma_\star</span> that every model factors through
+— does not exist once a permissive cap survives solving: a single
+residual bound like <span class="math inline">3 \sqsubseteq
+\alpha</span> leaves a solution set with no least-committed element (its
+minimal models, e.g. <span class="math inline">\alpha = 3</span> and
+<span class="math inline">\alpha = 1_\emptyset</span>, are
+incomparable). The correct result is weaker and three-part: the solver’s
+answer is a substitution <em>plus a residual bound store</em>, jointly
+representing the solution set exactly, with no guessing, and most
+general among models — a principal model in the post’s sense exists
+exactly when no caps remain. (Formal core, Example 3.5 and Theorem
+5.6.)</li>
+<li><strong>The two “global facts” do not give termination.</strong> The
+deficit rule mints fresh variables, so “a variable is solved at most
+once” does not bound a run: mutually-growing row variables make the
+narrated rules diverge. Termination requires a <em>rank-cycle check</em>
+over a graph of entailed rank facts — and the check was genuinely
+missing: inequality cycles of length <span class="math inline">\ge
+3</span> made the implementation diverge until
+<code>global_rank_edges</code> was added. (Formal core, Example 4.5a,
+Def. 4.5, Theorem 5.2;
+<code>test/einsum/test_row_rank_cycle.ml</code>.)</li>
+<li><strong>Ground row equality is no longer syntactic
+identity.</strong> The post’s model relation reads each equality as
+“syntactic identity of rows.” Row-equality constraints are now judged by
+the <em>flat equivalence</em> <span class="math inline">\approx</span> —
+marker-blind and rank-preserving — while inequalities keep the marked
+order. Consequently the marker placement inside solved values is an
+order-sensitive <em>policy</em>, and uniqueness of solutions holds up to
+<span class="math inline">\approx</span> only. (Formal core, Defs. 2.9
+and 3.4, Remarks 2.11 and 2.15(v).)</li>
+<li><strong>A missing pin case:</strong> <span class="math inline">1_\emptyset \sqsubseteq \alpha</span> pins <span class="math inline">\alpha = 1_\emptyset</span> (the top refines only
+itself); the pins/caps narrative below omits it.</li>
+<li><strong>The solve/close interleave is load-bearing and
+order-sensitive.</strong> Closing leaves without re-solving is unsound
+(now a stated lemma, with a three-constraint example), and naive
+sequential closing can fail satisfiable stores depending on commitment
+order; what makes it robust is the discipline the staged implementation
+has architecturally — bounds propagate to fixpoint before any stage
+commits to them. (Formal core, Remarks 6.3 and 6.7;
+<code>test/einsum/test_closing_order.ml</code>.)</li>
+</ol>
+</blockquote>
 <p>Most tensor code is half arithmetic and half shape juggling —
 reshapes, unsqueezes, transposes, and the running mental arithmetic of
 which axis is where. OCANNL is built so you write the arithmetic and
