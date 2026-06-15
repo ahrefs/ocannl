@@ -9,7 +9,7 @@ let default_lone_param () =
   try
     let w_o = PDSL.param "w_o" () in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w_o;
+    Train.printf _ctx w_o;
     Stdio.print_endline "\nERROR: Should have raised an exception"
   with Row.Shape_error (msg, _) -> Stdio.printf "Got acceptable error: %s\n" msg
 
@@ -20,7 +20,7 @@ let lone_param_1d () =
   try
     let%op w_o = { w_o = uniform1 () } in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w_o;
+    Train.printf _ctx w_o;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got acceptable error: %s\n" msg
 
@@ -31,7 +31,7 @@ let default_linear_op () =
   try
     let%op w_o = { w = uniform1 () } * [ 3; 4; 5 ] in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w;
+    Train.printf _ctx w;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 
@@ -42,7 +42,7 @@ let default_affine_op_propagated () =
   try
     let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * [ 3; 4; 5 ]) in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w;
+    Train.printf _ctx w;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got unacceptable error: %s\n" msg
 
@@ -53,7 +53,7 @@ let default_affine_op_unknown_input () =
   try
     let%op w_o = [ 1; 2 ] + ({ w = uniform1 () } * { x = uniform1 () }) in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w;
+    Train.printf _ctx w;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 
@@ -64,7 +64,7 @@ let default_bias_param () =
   try
     let%op w_o = { x } + { y } in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w_o;
+    Train.printf _ctx w_o;
     Stdio.print_endline "\nERROR: Should have raised an exception"
   with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 
@@ -75,7 +75,7 @@ let default_bias_param_1d () =
   try
     let%op w_o = { x = uniform1 () } + { y = uniform1 () } in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
-    Train.printf w_o;
+    Train.printf _ctx w_o;
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 

@@ -15,15 +15,15 @@ let () =
   let _ctx = Ocannl.Train.forward_once ctx roundtrip in
   Stdio.printf "Original: ";
   for i = 0 to 5 do
-    Stdio.printf "%.0f " At.(x_deint.@{[| i |]})
+    Stdio.printf "%.0f " At.((ctx, x_deint).@{[| i |]})
   done;
   Stdio.printf "\nRoundtrip: ";
   for i = 0 to 5 do
-    Stdio.printf "%.0f " At.(roundtrip.@{[| i |]})
+    Stdio.printf "%.0f " At.((ctx, roundtrip).@{[| i |]})
   done;
   let ok = ref true in
   for i = 0 to 5 do
-    if Float.(abs (At.(x_deint.@{[| i |]}) - At.(roundtrip.@{[| i |]})) > 1e-5) then ok := false
+    if Float.(abs (At.((ctx, x_deint).@{[| i |]}) - At.((ctx, roundtrip).@{[| i |]})) > 1e-5) then ok := false
   done;
   Stdio.printf "\nMatch: %b\n\n" !ok
 
@@ -46,11 +46,11 @@ let () =
   (* Position 0: identity (all angles = 0) *)
   Stdio.printf "Position 0 (should match [1,2,3,4]):\n";
   for i = 0 to d_k - 1 do
-    Stdio.printf "  rotated[0,%d]=%.2f\n" i At.(rotated.@{[| 0; i |]})
+    Stdio.printf "  rotated[0,%d]=%.2f\n" i At.((ctx, rotated).@{[| 0; i |]})
   done;
   Stdio.printf "Position 1 (rotated [5,6,7,8]):\n";
   for i = 0 to d_k - 1 do
-    Stdio.printf "  rotated[1,%d]=%.4f\n" i At.(rotated.@{[| 1; i |]})
+    Stdio.printf "  rotated[1,%d]=%.4f\n" i At.((ctx, rotated).@{[| 1; i |]})
   done;
   Stdio.printf "\n"
 
@@ -62,10 +62,10 @@ let () =
   let enc = Ocannl.Nn_blocks.sinusoidal_position_encoding ~d_model:8 ~max_len:4 () in
   let _ctx = Ocannl.Train.forward_once ctx enc in
   Stdio.printf "PE(0,0)=%.4f PE(0,1)=%.4f PE(1,0)=%.4f PE(1,1)=%.4f\n\n"
-    At.(enc.@{[| 0; 0 |]})
-    At.(enc.@{[| 0; 1 |]})
-    At.(enc.@{[| 1; 0 |]})
-    At.(enc.@{[| 1; 1 |]})
+    At.((ctx, enc).@{[| 0; 0 |]})
+    At.((ctx, enc).@{[| 0; 1 |]})
+    At.((ctx, enc).@{[| 1; 0 |]})
+    At.((ctx, enc).@{[| 1; 1 |]})
 
 (* === Test 4: RoPE with multi_head_attention === *)
 let () =
@@ -125,7 +125,7 @@ let () =
   let%op out = x + attn ~train_step:None x in
   let%op loss = out ++ "...|... => 0" in
   let _ctx = Ocannl.Train.update_once ctx loss in
-  Stdio.printf "Loss: %.4f\n" At.(loss.@{[| 0 |]});
+  Stdio.printf "Loss: %.4f\n" At.((ctx, loss).@{[| 0 |]});
   Stdio.printf "freqs has grad: %b (expect false)\n" (Option.is_some freqs.Tensor.diff);
   Stdio.printf "positions has grad: %b (expect false)\n" (Option.is_some positions.Tensor.diff);
   (* Verify that learnable params exist and have gradients allocated. This proves the backward pass
@@ -135,7 +135,7 @@ let () =
   let num_with_grad = Set.count loss.Tensor.params ~f:(fun p -> Option.is_some p.Tensor.diff) in
   Stdio.printf "learnable params: %d, with grad: %d (expect >0)\n" num_params num_with_grad;
   (* Verify loss is finite and non-zero — backward pass completed without NaN/inf *)
-  let loss_val = At.(loss.@{[| 0 |]}) in
+  let loss_val = At.((ctx, loss).@{[| 0 |]}) in
   Stdio.printf "loss finite and nonzero: %b (expect true)\n\n"
     Float.(is_finite loss_val && abs loss_val > 1e-10)
 

@@ -12,10 +12,10 @@ let inline_inner () =
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 5 ] ~output_dims:[ 3 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 4 ] ~output_dims:[ 5 ] () in
   let%op c = (a * b) ++ "...|i->j => ...|ij" in
-  Train.set_hosted a.value;
-  Train.set_hosted b.value;
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  Train.set_materialized a.value;
+  Train.set_materialized b.value;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   Stdio.printf "\n%!"
 
 let inline_view () =
@@ -26,10 +26,10 @@ let inline_view () =
   let%op c1 = (a * b) ++ "...|i->j => ...|ij" in
   let%op d = c1 + 1 in
   Ir.Low_level.virtualize_settings.inline_complex_computations <- false;
-  Train.set_hosted a.value;
-  Train.set_hosted b.value;
-  ignore (Train.forward_once ctx d);
-  Train.printf_tree ~here:[%here] ~with_grad:false d;
+  Train.set_materialized a.value;
+  Train.set_materialized b.value;
+  let ctx = Train.forward_once ctx d in
+  Train.printf_tree ~here:[%here] ~with_grad:false ctx d;
   Stdio.printf "\n%!"
 
 let () =

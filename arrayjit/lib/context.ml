@@ -220,8 +220,15 @@ let compile ctx comp bindings =
   (updated_ctx, routine)
 
 let run ctx routine =
-  (* Check that all required inputs are initialized *)
-  let missing_inputs = Set.diff routine.inputs ctx.initialized_nodes in
+  (* Check that all required inputs are initialized. A node already allocated in the running
+     context's device buffers counts as satisfied (gh-ocannl-333): such inputs are written directly
+     by the user via {!set_values}/{!from_host}, which the [initialized_nodes] set does not track. *)
+  let (Wrapper run_wrapper) = ctx.backend_wrapper in
+  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_arrays tn in
+  let missing_inputs =
+    Set.filter routine.inputs ~f:(fun tn ->
+        not (Set.mem ctx.initialized_nodes tn || in_backend tn))
+  in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
        Set.to_list missing_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "

@@ -30,6 +30,6 @@ let () =
   let p2 = PDSL.ndarray [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let loss = sum_all (concat2 p1 p2) in
   let ctx = Context.auto () in
-  ignore (Train.update_once ctx loss);
+  let _ctx = Train.update_once ctx loss in
 
   Stdio.print_endline "concat %op smoke tests done"

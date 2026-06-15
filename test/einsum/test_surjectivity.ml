@@ -15,11 +15,11 @@ let test_diagonal_tensor () =
   let%op diagonal = input ++ "i=>ii" in
 
   (* Ensure the diagonal tensor is hosted *)
-  Train.set_hosted diagonal.value;
-  ignore (Train.forward_once ctx diagonal);
+  Train.set_materialized diagonal.value;
+  let ctx = Train.forward_once ctx diagonal in
 
   (* Print the diagonal tensor *)
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false diagonal;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx diagonal;
   Stdio.printf "\n"
 
 let test_sparse_fixed_index () =
@@ -30,10 +30,10 @@ let test_sparse_fixed_index () =
   let input = TDSL.range 4 in
   let%op sparse = input ++ "i=>i0" in
 
-  Train.set_hosted sparse.value;
-  ignore (Train.forward_once ctx sparse);
+  Train.set_materialized sparse.value;
+  let ctx = Train.forward_once ctx sparse in
 
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx sparse;
   Stdio.printf "\n"
 
 let test_multi_sparse () =
@@ -44,10 +44,10 @@ let test_multi_sparse () =
   let input = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op result = input ++ "ij=>i1j" in
 
-  Train.set_hosted result.value;
-  ignore (Train.forward_once ctx result);
+  Train.set_materialized result.value;
+  let ctx = Train.forward_once ctx result in
 
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result;
   Stdio.printf "\n"
 
 let _test_stride_gap () =
@@ -59,10 +59,10 @@ let _test_stride_gap () =
   let use_padding = false in
   let%op result = input ++ "ij=>i+3*j" in
 
-  Train.set_hosted result.value;
-  ignore (Train.forward_once ctx result);
+  Train.set_materialized result.value;
+  let ctx = Train.forward_once ctx result in
 
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result;
   Stdio.printf "\n"
 
 let () =

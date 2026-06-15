@@ -16,8 +16,8 @@ let%expect_test "einsum1 permute axes" =
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => o|b->i" in
-  ignore (Train.forward_once ctx ho);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
+  let ctx = Train.forward_once ctx ho in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:20:21
@@ -37,8 +37,8 @@ let%expect_test "einsum1 permute axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => cf|ae->db" in
-  ignore (Train.forward_once ctx ho2);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
+  let ctx = Train.forward_once ctx ho2 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:41:21
@@ -154,8 +154,8 @@ let%expect_test "einsum1 sum out axes" =
 
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "b|i->o => b|i" in
-  ignore (Train.forward_once ctx ho);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
+  let ctx = Train.forward_once ctx ho in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:158:21
@@ -173,10 +173,10 @@ let%expect_test "einsum1 sum out axes" =
     TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~input_dims:[ 4; 5 ] ~output_dims:[ 6; 7 ] ()
   in
   let%op ho2 = hey2 ++ "ab|cd->ef => c|a->d" in
-  ignore (Train.forward_once ctx ho2);
+  let ctx = Train.forward_once ctx ho2 in
   (* Axis 5 of hey2, i.e. d in the einsum spec, has the lowest variation (progresses by 1), that's
      why axis 1 of ho2 appears nearly constant. *)
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:179:21
@@ -202,8 +202,8 @@ let%expect_test "einsum outer product" =
   let a = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
   let%op c = a + 1 +* "i; j => i->j" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:206:21
@@ -221,8 +221,8 @@ let%expect_test "einsum outer product" =
   let a = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 5 ] ~input_dims:[ 6 ] ~output_dims:[ 7 ] () in
   let%op c = a +* "i|j->k; l|m->n => il|jm->kn" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:225:21
@@ -386,12 +386,12 @@ let%expect_test "einsum matrix/inner+outer products" =
   let%op c = b +* "b|h->o; b|i->h => b|i->o" a in
   let ctx = Train.forward_once ctx c in
   let%op d = a +* "a|i->h; b|h->o => ab|i->o" b in
-  ignore (Train.forward_once ctx d);
+  let ctx = Train.forward_once ctx d in
   let%op e = a +* "b|i->h; b|h->o => i->o" b in
-  ignore (Train.forward_once ctx e);
+  let ctx = Train.forward_once ctx e in
   let%op f = a +* "a|i->h; b|h->o => i->o" b in
-  ignore (Train.forward_once ctx f);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false a2;
+  let ctx = Train.forward_once ctx f in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx a2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:394:21
@@ -408,7 +408,7 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:411:21
@@ -426,7 +426,7 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false d;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx d;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:429:21
@@ -450,7 +450,7 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false e;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx e;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:453:21
@@ -467,7 +467,7 @@ let%expect_test "einsum matrix/inner+outer products" =
     │└──────┴───────────────────────────┘│
     └────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false f;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx f;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:470:21
@@ -491,7 +491,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|i->o => ...|o->i" in
   let ctx = Train.forward_once ctx ho in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:494:21
@@ -508,8 +508,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └─────────────────────────────────────────────────────────────────────────┘
     |}];
   let%op ho2 = hey ++ "b|...->o => o|...->b" in
-  ignore (Train.forward_once ctx ho2);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
+  let ctx = Train.forward_once ctx ho2 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:512:21
@@ -530,7 +530,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   in
   let%op ho3 = hey2 ++ "...b|...i->...o => ...i|...o->...b" in
   let ctx2 = Train.forward_once ctx ho3 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho3;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:533:21
@@ -660,7 +660,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
 
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
   ignore (Train.forward_once ctx2 ho4);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho4;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:663:21
@@ -677,14 +677,14 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}];
   let%op ho5 = hey ++ "...|...->...o => o" in
-  ignore (Train.forward_once ctx ho5);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  let ctx = Train.forward_once ctx ho5 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:681:21
     [0]: r2x4x3 shape 0:2|2:3->1:4  <not-hosted>
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho5;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho5;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:687:21
@@ -699,8 +699,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     |}];
   let hey3 = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op ho6 = hey3 ++ "...|...->...o => o" in
-  ignore (Train.forward_once ctx ho6);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho6;
+  let ctx = Train.forward_once ctx ho6 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho6;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:703:21
@@ -716,8 +716,8 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   (* Broadcast with a shift. *)
   let hey4 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3; 4 ] () in
   let%op ho7 = hey4 ++ "i->...o => ...io" in
-  ignore (Train.forward_once ctx ho7);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho7;
+  let ctx = Train.forward_once ctx ho7 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho7;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:720:21
@@ -745,8 +745,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a +* "...|i->...; ...|...->i => ...|i" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:749:21
@@ -765,8 +765,8 @@ let%expect_test "einsum broadcast or sum out prefix axes" =
   let d = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let e = TDSL.range_of_shape ~input_dims:[ 4 ] ~output_dims:[ 3 ] () in
   let%op f = d +* "i->...;j->... => ...ij" e in
-  ignore (Train.forward_once ctx f);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false f;
+  let ctx = Train.forward_once ctx f in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx f;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:769:21
@@ -794,7 +794,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let hey = TDSL.range_of_shape ~batch_dims:[ 2 ] ~input_dims:[ 3 ] ~output_dims:[ 4 ] () in
   let%op ho = hey ++ "...|1->... => ...|..." in
   let ctx = Train.forward_once ctx ho in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:797:21
@@ -809,8 +809,8 @@ let%expect_test "einsum1 fixed dim axis" =
     └─────────────────────────────────────────────┘
     |}];
   let%op ho2 = hey ++ "...|...->... => ...|...->0" in
-  ignore (Train.forward_once ctx ho2);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho2;
+  let ctx = Train.forward_once ctx ho2 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho2;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:813:21
@@ -827,7 +827,7 @@ let%expect_test "einsum1 fixed dim axis" =
   let hey2 = TDSL.range_of_shape ~input_dims:[ 2 ] ~output_dims:[ 3 ] () in
   let%op ho3 = hey2 ++ "...|...->... => 0" in
   let ctx = Train.forward_once ctx ho3 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho3;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:830:21
@@ -841,8 +841,8 @@ let%expect_test "einsum1 fixed dim axis" =
     └──────────────────────┘
     |}];
   let%op ho4 = hey2 ++ "i->j => i0j" in
-  ignore (Train.forward_once ctx ho4);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ho4;
+  let ctx = Train.forward_once ctx ho4 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ho4;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:845:21
@@ -867,8 +867,8 @@ let%expect_test "einsum with fixed dim axes" =
   let a = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 4 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~batch_dims:[ 3 ] ~input_dims:[ 1 ] ~output_dims:[ 4 ] () in
   let%op c = a +* "...|i->1; ...|...->i => ...|i" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:871:21
@@ -897,9 +897,9 @@ let%expect_test "outer_sum simulating axis concatenation" =
   let rk = TDSL.range 6 in
   let%op tk = rk ++ "k=>k2" in
   let positions = TDSL.outer_sum "ijl;kl=>ijkl" (TDSL.outer_sum "il;jl=>ijl" ti tj ()) tk () in
-  Train.set_hosted tk.value;
-  ignore (Train.forward_once ctx positions);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false positions;
+  Train.set_materialized tk.value;
+  let ctx = Train.forward_once ctx positions in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx positions;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:902:21
@@ -1042,13 +1042,13 @@ let%expect_test "outer_sum simulating axis concatenation" =
     │└──────┴──────────────────┘  │
     └─────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ti;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx ti;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:1045:21
     [1]: =>_ti shape 0:4,1:3  <not-hosted>
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false tk;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx tk;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:1051:21
@@ -1077,8 +1077,8 @@ let%expect_test "einsum with a leftmost input axis preserved as output axis" =
     TDSL.range_of_shape ~label:[ "b" ] ~batch_dims:[ 3 ] ~input_dims:[ 2; 3 ] ~output_dims:[ 4 ] ()
   in
   let%op c = a +* "...|i->1; ...|j...->i => ...|ij" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:1081:21
@@ -1103,8 +1103,8 @@ let%expect_test "einsum permuting two leftmost input axes as output axes" =
   let a = TDSL.range_of_shape ~label:[ "a" ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
   let b = TDSL.range_of_shape ~label:[ "b" ] ~input_dims:[ 2; 3; 4 ] ~output_dims:[ 2 ] () in
   let%op c = a +* "i->1; ij...->0 => ...->ji" b in
-  ignore (Train.forward_once ctx c);
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false c;
+  let ctx = Train.forward_once ctx c in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx c;
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:1107:21

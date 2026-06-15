@@ -11,4 +11,4 @@ let () =
   let ctx = Context.auto () in
 
   let _ctx = Train.forward_once ctx t in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false t
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx t

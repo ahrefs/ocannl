@@ -20,7 +20,7 @@ let%expect_test "Pointwise multiplication dims 1" =
   let%op y = 2 *. { hey = 7.0 } in
   let _ctx = Train.forward_once ctx y in
 
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx y;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:23:21
@@ -41,7 +41,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
   (* Hey is inferred to be a matrix because of matrix multiplication [*]. *)
   let%op y = ({ hey = 7.0 } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in
   let _ctx = Train.forward_once ctx y in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:44:21
@@ -54,7 +54,7 @@ let%expect_test "Matrix multiplication dims 1x1" =
     │└────────┴────────┘         │
     └────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx y;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:57:21
@@ -88,7 +88,7 @@ let%expect_test "Print tensor too early" =
   let%op c = a *. b in
 
   let _ctx = Train.forward_once ctx c in
-  Train.printf ~here:[%here] c;
+  Train.printf ~here:[%here] ctx c;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:91:21
@@ -109,7 +109,7 @@ let%expect_test "Print constant tensor" =
   let%op hey = [ (1, 2, 3); (4, 5, 6) ] in
   let ctx = Train.forward_once ctx hey in
   (* ignore (failwith @@ Tn.debug_memory_mode hey.value.memory_mode); *)
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:112:21
@@ -118,7 +118,7 @@ let%expect_test "Print constant tensor" =
       ;  4.00 , 5.00 , 6.00
     ]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:121:21
@@ -134,7 +134,7 @@ let%expect_test "Print constant tensor" =
     |}];
   let%op hoo = [| [ 1; 2; 3 ]; [ 4; 5; 6 ] |] in
   let ctx = Train.forward_once ctx hoo in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx hoo;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:137:21
@@ -143,7 +143,7 @@ let%expect_test "Print constant tensor" =
       ; [ 4.00 ; 5.00 ; 6.00 ]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hoo;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:146:21
@@ -166,7 +166,7 @@ let%expect_test "Print constant tensor" =
     ]
   in
   let ctx = Train.forward_once ctx hey2 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false @@ hey2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:169:21
@@ -183,7 +183,7 @@ let%expect_test "Print constant tensor" =
     │└──────┴───────────────────────────┴───────────────────────────┘│
     └────────────────────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:186:21
@@ -209,7 +209,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   let ctx = Train.forward_once ctx hoo2 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline hoo2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx hoo2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:212:21
@@ -220,7 +220,7 @@ let%expect_test "Print constant tensor" =
       ; [ [ 19.00 ; 20.00 ; 21.00 ] ; [ 22.00 ; 23.00 ; 24.00 ] ]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hoo2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:223:21
@@ -244,7 +244,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   let ctx = Train.forward_once ctx heyhoo in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx heyhoo;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:247:21
@@ -255,7 +255,7 @@ let%expect_test "Print constant tensor" =
       ; [| [ 19.00 ; 20.00 ; 21.00 ] ; [ 22.00 ; 23.00 ; 24.00 ] |]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx heyhoo;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:258:21
@@ -279,7 +279,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   let ctx = Train.forward_once ctx heyhoo2 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx heyhoo2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:282:21
@@ -302,7 +302,7 @@ let%expect_test "Print constant tensor" =
       |]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx heyhoo2;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:305:21
@@ -343,7 +343,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   let ctx = Train.forward_once ctx heyhoo3 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx heyhoo3;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:346:21
@@ -370,7 +370,7 @@ let%expect_test "Print constant tensor" =
       |]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx heyhoo3;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:373:21
@@ -416,7 +416,7 @@ let%expect_test "Print constant tensor" =
     |]
   in
   let _ctx = Train.forward_once ctx heyhoo4 in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline heyhoo4;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx heyhoo4;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:419:21
@@ -443,7 +443,7 @@ let%expect_test "Print constant tensor" =
       ]
     |]
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false heyhoo4;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx heyhoo4;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:446:21
@@ -484,7 +484,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
   (* Hey is inferred to be a matrix. *)
   let%op y = ({ hey = 7.0 } * [ 2; 3 ]) + [ 4; 5; 6 ] in
   let _ctx = Train.forward_once ctx y in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:487:21
@@ -499,7 +499,7 @@ let%expect_test "Matrix multiplication dims 2x3" =
     │└──────┴────────────┘   │
     └────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx y;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:502:21
@@ -522,7 +522,7 @@ let%expect_test "Big matrix" =
   let zero_to_twenty = TDSL.range 20 in
   let y = TDSL.O.((hey * zero_to_twenty) + zero_to_twenty) in
   let _ctx = Train.forward_once ctx y in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:525:21
@@ -539,7 +539,7 @@ let%expect_test "Big matrix" =
     │└──────┴─────────────────────────────────────────┘│
     └──────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false y;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx y;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:542:21
@@ -561,9 +561,9 @@ let%expect_test "Very big tensor" =
     TDSL.range_of_shape ~batch_dims:[ 6 ] ~input_dims:[ 7; 8; 9 ] ~output_dims:[ 10; 11 ] ()
   in
   let%op hoo = (hey * (1 + 1)) - 10 in
-  Train.set_hosted hey.value;
+  Train.set_materialized hey.value;
   let _ctx = Train.forward_once ctx hoo in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:566:21
@@ -700,7 +700,7 @@ let%expect_test "Very big tensor" =
     │└──────┴─────────────────────────────────────────┴─────────────────────────────────────────┴──────┴─────────────────────────────────────────┴─────────────────────────────────────────┘│
     └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
     |}];
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hoo;
   (* Disable line wrapping for viewing the output. In VSCode: `View: Toggle Word Wrap`. *)
   [%expect
     {|
@@ -726,13 +726,13 @@ let%expect_test "Embed self id" =
   let%op hey = embed_self_id () in
   let%op hoo = embed_self_id () in
   let%op bar = hoo + hey + embed_self_id () in
-  Train.set_hosted hey.value;
-  Train.set_hosted hoo.value;
-  Train.set_hosted bar.value;
+  Train.set_materialized hey.value;
+  Train.set_materialized hoo.value;
+  Train.set_materialized bar.value;
   let _ctx = Train.forward_once ctx bar in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hey;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false hoo;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false bar;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hey;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx hoo;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx bar;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:733:21
@@ -763,7 +763,7 @@ let%expect_test "Embed self id" =
     │└┴──────┘            │
     └─────────────────────┘
     |}];
-  Train.printf_tree ~here:[%here] bar;
+  Train.printf_tree ~here:[%here] ctx bar;
   [%expect
     {|
     HERE: test/operations/hello_world_op.ml:766:26

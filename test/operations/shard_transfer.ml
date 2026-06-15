@@ -42,18 +42,18 @@ let () =
 
   (* --- Part 1: shard_along / gather round-trip --- *)
   let batch = make_batch "batch" [| 0.; 1.; 2.; 3.; 4.; 5. |] in
-  ignore (Tn.get_values batch.Tensor.value : float array);
+  ignore (Parallel.host_values batch : float array);
   let shards = Parallel.shard_along ~axis:0 ~n_shards:3 batch in
   Stdio.printf "n_shards=%d\n" (Array.length shards);
   Array.iteri shards ~f:(fun i s ->
-      let vs = Tn.get_values s.Tensor.value in
+      let vs = Parallel.host_values s in
       Stdio.printf "shard %d = [%s]\n" i
         (String.concat ~sep:" " (Array.to_list (Array.map vs ~f:(Printf.sprintf "%g")))));
   let gathered = Parallel.gather ~axis:0 shards in
-  let gv = Tn.get_values gathered.Tensor.value in
+  let gv = Parallel.host_values gathered in
   Stdio.printf "gathered = [%s]\n"
     (String.concat ~sep:" " (Array.to_list (Array.map gv ~f:(Printf.sprintf "%g"))));
-  let original = Tn.get_values batch.Tensor.value in
+  let original = Parallel.host_values batch in
   Stdio.printf "round-trip identity = %b\n" (Array.equal Float.equal original gv);
 
   (* Invalid configurations must raise. *)
@@ -74,15 +74,22 @@ let () =
   (* Note: [g]/[m] are reserved shorthands in %cd, so use descriptive names. *)
   let owner_g = make_vec "owner_g" [| 0.; 0. |] in
   let tmp = make_vec "tmp" [| 0.; 0. |] in
-  Train.set_hosted owner_g.Tensor.value;
+  Train.set_materialized owner_g.Tensor.value;
   Train.set_materialized tmp.Tensor.value;
+  (* After gh-ocannl-333 host data is supplied explicitly to the backend transfers. *)
+  let host_vec vals =
+    let nd =
+      Ir.Ndarray.create_array ~debug:"shard_transfer host" Ir.Ops.single
+        ~dims:[| Array.length vals |] ~padding:None
+    in
+    Ir.Ndarray.set_flat_values nd vals;
+    nd
+  in
   (* Owner (stream0) starts at [1 2]; source (stream1) holds [3 4]. *)
-  Tn.set_values owner_g.Tensor.value [| 3.; 4. |];
   let ctx1 = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) stream1 in
-  let ctx1 = Backend.init_from_host ctx1 owner_g.Tensor.value in
-  Tn.set_values owner_g.Tensor.value [| 1.; 2. |];
+  let ctx1 = Backend.init_from_host ctx1 owner_g.Tensor.value (host_vec [| 3.; 4. |]) in
   let ctx0 = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) stream0 in
-  let ctx0 = Backend.init_from_host ctx0 owner_g.Tensor.value in
+  let ctx0 = Backend.init_from_host ctx0 owner_g.Tensor.value (host_vec [| 1.; 2. |]) in
   (* All-reduce stream1's value into stream0 via the merge buffer: owner = [1 2] + [3 4] = [4 6].
      The merge buffer is array-level (no shape inference), so it is copied into a pre-shaped temp
      [tmp] and then accumulated into the owner. *)
@@ -103,9 +110,10 @@ let () =
       let add_routine = Backend.link copy_routine.context add_code in
       Task.run add_routine.schedule);
   Backend.await stream0;
-  ignore (Backend.to_host ctx0 owner_g.Tensor.value : bool);
+  let out_nd = host_vec [| 0.; 0. |] in
+  ignore (Backend.to_host ctx0 owner_g.Tensor.value out_nd : bool);
   Backend.await stream0;
-  let summed = Tn.get_values owner_g.Tensor.value in
+  let summed = Ir.Ndarray.retrieve_flat_values out_nd in
   Stdio.printf "all-reduce sum = [%s]\n"
     (String.concat ~sep:" " (Array.to_list (Array.map summed ~f:(Printf.sprintf "%g"))));
   Stdio.printf "done\n"

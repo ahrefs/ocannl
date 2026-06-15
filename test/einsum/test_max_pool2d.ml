@@ -19,16 +19,16 @@ let test_max_pool2d_basic () =
   let%op output = max_pool2d () input in
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized input.value;
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 4x4x1\n%!";
   printf "Window size: 2x2\n%!";
   printf "Stride: 2\n%!";
   printf "Expected output spatial dims: 2x2\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test max_pool2d with stride=2, window=3.
@@ -46,15 +46,15 @@ let test_max_pool2d_window3 () =
   let%op output = max_pool2d ~stride:2 ~window_size:3 () input in
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized input.value;
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 7x7x2\n%!";
   printf "Window size: 3x3\n%!";
   printf "Stride: 2\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test max_pool2d with output dimension 1.
@@ -72,16 +72,16 @@ let test_max_pool2d_output_dim_1 () =
   let%op output = max_pool2d ~stride:2 ~window_size:3 () input in
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized input.value;
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 3x3x1\n%!";
   printf "Window size: 3x3\n%!";
   printf "Stride: 2\n%!";
   printf "Expected output spatial dims: 1x1\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test max_pool2d preserves channels.
@@ -97,13 +97,13 @@ let test_max_pool2d_channels () =
   let%op output = max_pool2d () input in
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized input.value;
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 4x4x3\n%!";
   printf "Expected output shape: 2x2x3 (channels preserved)\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test backpropagation for max_pool2d.
@@ -160,8 +160,8 @@ let test_max_pool2d_backprop () =
   let%op loss = output ++ "...|... => 0" in
 
   let ctx = Context.auto () in
-  Train.set_hosted loss.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] input.diff).grad;
+  Train.set_materialized loss.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] input.diff).grad;
   ignore (Train.update_once ~output_cd_file:false ctx loss);
 
   printf "Input shape: 4x4x1\n%!";
@@ -170,8 +170,8 @@ let test_max_pool2d_backprop () =
   printf "Expected max pool output: [[9, 8], [7, 6]]\n%!";
   printf "Expected loss (sum): 9 + 8 + 7 + 6 = 30\n%!";
   printf "Backprop completed successfully!\n%!";
-  Train.printf ~here:[%here] ~with_code:false loss;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true input
+  Train.printf ~here:[%here] ~with_code:false ctx loss;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx input
 
 let () =
   test_max_pool2d_basic ();

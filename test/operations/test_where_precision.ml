@@ -1,4 +1,3 @@
-open Base
 module Train = Ocannl.Train
 open Ocannl.Nn_blocks.DSL_modules
 module Tn = Ir.Tnode
@@ -23,11 +22,12 @@ let () =
 
   (* result is single *)
 
-  (* Initialize on host (rather than on device). *)
-  Tn.set_values cond.value [| 0.0 |];
-  Tn.set_values a.value [| 1.0 |];
-  Tn.set_values b.value [| 2.0 |];
-
-  (* Set up values and run computation *)
-  ignore (Train.forward_once ctx result);
-  Train.printf_tree result
+  (* Compile the forward computation, set the inputs on-device via the context, then run
+     (gh-ocannl-333: values live on devices, set on demand through the context). *)
+  let routine = Train.to_routine ctx Train.IDX.empty (Train.forward result) in
+  let ctx = Context.context routine in
+  let ctx = Context.set_values ctx cond.value [| 0.0 |] in
+  let ctx = Context.set_values ctx a.value [| 1.0 |] in
+  let ctx = Context.set_values ctx b.value [| 2.0 |] in
+  Train.run ctx routine;
+  Train.printf_tree ctx result

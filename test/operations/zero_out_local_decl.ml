@@ -8,7 +8,6 @@
    targets. The generated code should show [sparse[...] = {0}] in the declaration but no
    [sparse[...] = 0;] zeroing loop in the main logic. *)
 
-open Base
 module Train = Ocannl.Train
 open Ocannl.Nn_blocks.DSL_modules
 
@@ -18,6 +17,6 @@ let () =
   let input = TDSL.range 4 in
   let%op sparse = input ++ "i=>i0" in
   let%op out = (sparse ++ "i2=>i") *. (sparse ++ "i2=>i") in
-  Ocannl.Train.set_hosted out.value;
-  ignore (Ocannl.Train.forward_once ctx out);
-  Train.printf_tree out
+  Ocannl.Train.set_materialized out.value;
+  let ctx = Ocannl.Train.forward_once ctx out in
+  Train.printf_tree ctx out

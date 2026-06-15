@@ -48,7 +48,7 @@ let capture_for_computation () =
   let%op dim_calc = dim a + dim j + dim r in
   let _ctx = Train.forward_once ctx dim_calc in
 
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false dim_calc
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx dim_calc
 
 let test_set_dim_and_set_equal () =
   let open Nn_blocks.DSL_modules in

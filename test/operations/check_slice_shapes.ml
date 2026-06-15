@@ -23,7 +23,7 @@ let () =
     Nn_blocks.conv2d ~label:[ "processed" ] ~use_padding:true ~out_channels:1 () batch_images
   in
 
-  Train.set_hosted batch_images.value;
+  Train.set_materialized batch_images.value;
   let forward = Train.forward processed_images in
   (* Force shape inference and tensor allocation *)
   let ctx = Context.auto () in

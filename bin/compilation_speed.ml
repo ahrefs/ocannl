@@ -14,12 +14,12 @@ let benchmark_overhead _backend_name () =
   Stdio.prerr_endline @@ "\n\n****** Benchmarking " ^ Context.backend_name ctx ^ " ******";
   let init_time = Time_now.nanoseconds_since_unix_epoch () in
   let%op f = (3 *. ({ x; o = [ 5 ] } **. 2)) - (4 *. x) + 5 in
-  Train.set_hosted f.value;
+  Train.set_materialized f.value;
 
   let update_f = Train.grad_update f in
   let ctx = Train.init_params ctx IDX.empty f in
   let f_routine = Train.to_routine ctx IDX.empty update_f in
-  Train.printf_tree ~with_grad:true ~depth:9 f;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx f;
 
   let xs = Array.init n_data ~f:Float.(fun i -> of_int i - (of_int n_data /. 2.)) in
   let open Operation.At in
@@ -33,7 +33,7 @@ let benchmark_overhead _backend_name () =
         let assign_x = Train.to_routine (Context.context f_routine) IDX.empty update_x in
         Train.run ctx assign_x;
         Train.run ctx f_routine;
-        f.@[0])
+        (ctx, f).@[0])
   in
   let plot_box =
     PrintBox_utils.plot ~small:true ~x_label:"x" ~y_label:"f(x)"

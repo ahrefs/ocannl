@@ -46,35 +46,35 @@ let main () =
   (* TODO(#321): Define learning_rate above the call to grad_update to test the consume_forward_code
      fix *)
   let%op learning_rate = 0.1 *. ((2 *. !..steps) - !@step_n) /. !..steps in
-  (* TODO: is set_hosted needed? *)
-  Train.set_hosted learning_rate.value;
+  (* TODO: is set_materialized needed? *)
+  Train.set_materialized learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let ctx = Train.init_params ctx bindings scalar_loss in
   let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
+  let ctx = Context.context sgd_routine in  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
         Train.run ctx sgd_routine;
         let batch_ref = IDX.find_exn (Context.bindings sgd_routine) batch_n in
-        epoch_loss := !epoch_loss +. scalar_loss.@[0];
+        epoch_loss := !epoch_loss +. (ctx, scalar_loss).@[0];
         if !step_ref = steps - 5 then Stdio.printf "\n%!";
         if !step_ref < 10 || steps - !step_ref < 5 then
           Stdio.printf "Epoch=%d, step=%d, batch=%d, lr=%.3g, epoch loss=%.2f\n%!" epoch !step_ref
-            !batch_ref learning_rate.@[0] !epoch_loss;
+            !batch_ref (ctx, learning_rate).@[0] !epoch_loss;
         if !step_ref > 10 && !step_ref % 100 = 0 then Stdio.printf ".%!";
-        learning_rates := ~-.(learning_rate.@[0]) :: !learning_rates;
-        losses := scalar_loss.@[0] :: !losses;
-        log_losses := Float.max (-10.) (Float.log scalar_loss.@[0]) :: !log_losses;
+        learning_rates := ~-.((ctx, learning_rate).@[0]) :: !learning_rates;
+        losses := (ctx, scalar_loss).@[0] :: !losses;
+        log_losses := Float.max (-10.) (Float.log (ctx, scalar_loss).@[0]) :: !log_losses;
         Int.incr step_ref)
   done;
-  let points = Tn.points_2d ~xdim:0 ~ydim:1 moons_flat.value in
-  let classes = Tn.points_1d ~xdim:0 moons_classes.value in
+  let points = Context.points_2d ctx ~xdim:0 ~ydim:1 moons_flat.value in
+  let classes = Context.points_1d ctx ~xdim:0 moons_classes.value in
   let points1, points2 = Array.partitioni_tf points ~f:Float.(fun i _ -> classes.(i) > 0.) in
   (* %cd instead of %op to not get complaints about point being uninitialized. *)
   let%cd mlp_result = mlp { point } in
-  Train.set_on_host mlp_result.value;
+  Train.set_materialized mlp_result.value;
   let result_routine =
     Train.to_routine (Context.context sgd_routine) IDX.empty
       [%cd
@@ -82,9 +82,9 @@ let main () =
            mlp_result.forward)]
   in
   let callback (x, y) =
-    Tn.set_values point.value [| x; y |];
+    ignore (Context.set_values ctx point.value [| x; y |] : Context.t);
     Train.run ctx result_routine;
-    Float.(mlp_result.@[0] >= 0.)
+    Float.((ctx, mlp_result).@[0] >= 0.)
   in
   let _plot_moons =
     PrintBox_utils.plot ~as_canvas:true

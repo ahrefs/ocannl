@@ -40,7 +40,7 @@ let () =
   let%op scalar_loss = (margin_loss ++ "...|... => 0") /. !..batch_size in
   let update = Train.grad_update scalar_loss in
   let%op learning_rate = 0.1 *. ((2 *. !..len) - !@step_n) /. !..len in
-  Train.set_hosted learning_rate.value;
+  Train.set_materialized learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let ctx = Train.init_params ctx bindings scalar_loss in
   let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
@@ -49,4 +49,4 @@ let () =
 
   Tn.print_accessible_headers ();
   (* This should force liveness of more tensor nodes for accessible headers. *)
-  Train.printf_tree scalar_loss
+  Train.printf_tree ctx scalar_loss

@@ -59,9 +59,9 @@ let test_uniform_at_with_shape () =
   Ir.Tnode.update_prec uniform_values.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform_values.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_values);
-  let result = Ir.Tnode.get_values uniform_values.value in
+  Ocannl.Train.set_materialized uniform_values.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_values in
+  let result = Context.get_values ctx uniform_values.value in
 
   printf "Uniform Distribution Test (shape-inferred, scalar counter)\n";
   printf "===========================================================\n";
@@ -119,9 +119,9 @@ let test_normal_at_with_shape () =
   Ir.Tnode.update_prec normal_values.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted normal_values.value;
-  ignore (Ocannl.Train.forward_once ctx normal_values);
-  let result = Ir.Tnode.get_values normal_values.value in
+  Ocannl.Train.set_materialized normal_values.value;
+  let ctx = Ocannl.Train.forward_once ctx normal_values in
+  let result = Context.get_values ctx normal_values.value in
 
   (* Calculate statistics *)
   let n = Array.length result in
@@ -214,9 +214,9 @@ let test_counter_bifurcation () =
     let target = TDSL.range num_values in
     let%op uniform_values = O.uniform_at counter + (target *. 0.0) in
     Ir.Tnode.update_prec uniform_values.value Ir.Ops.single;
-    Ocannl.Train.set_hosted uniform_values.value;
-    ignore (Ocannl.Train.forward_once ctx uniform_values);
-    Ir.Tnode.get_values uniform_values.value
+    Ocannl.Train.set_materialized uniform_values.value;
+    let ctx = Ocannl.Train.forward_once ctx uniform_values in
+    Context.get_values ctx uniform_values.value
   in
 
   let values_0 = get_values 0 in
@@ -266,9 +266,9 @@ let test_kaiming_at_with_proper_shape () =
   Ir.Tnode.update_prec kaiming_values.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted kaiming_values.value;
-  ignore (Ocannl.Train.forward_once ctx kaiming_values);
-  let result = Ir.Tnode.get_values kaiming_values.value in
+  Ocannl.Train.set_materialized kaiming_values.value;
+  let ctx = Ocannl.Train.forward_once ctx kaiming_values in
+  let result = Context.get_values ctx kaiming_values.value in
 
   (* Expected: uniform [0,1) scaled by sqrt(6/fan_in) = sqrt(6/100) ≈ 0.245 So values should be in
      [0, 0.245) with mean ≈ 0.122 *)
@@ -324,9 +324,9 @@ let test_xavier_at_with_proper_shape () =
   Ir.Tnode.update_prec xavier_values.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted xavier_values.value;
-  ignore (Ocannl.Train.forward_once ctx xavier_values);
-  let result = Ir.Tnode.get_values xavier_values.value in
+  Ocannl.Train.set_materialized xavier_values.value;
+  let ctx = Ocannl.Train.forward_once ctx xavier_values in
+  let result = Context.get_values ctx xavier_values.value in
 
   (* Expected: uniform [0,1) scaled by sqrt(6/(fan_in + fan_out)) = sqrt(6/150) ≈ 0.2 *)
   let expected_scale = Float.sqrt (6.0 /. Float.of_int (fan_in + fan_out)) in

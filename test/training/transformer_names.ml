@@ -144,27 +144,27 @@ let () =
   (* === Compile === *)
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  Train.set_on_host input_batch.value;
-  Train.set_on_host target_batch.value;
+  Train.set_materialized input_batch.value;
+  Train.set_materialized target_batch.value;
   (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25). OCANNL's default uniform1
      init produces all-positive weights; through the transformer's Q*K^T attention scores this
      causes extreme values and exp overflow. Same mitigation as fsm_transformer.ml. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
-      Train.set_on_host tn;
-      let vals = Tn.get_values tn in
+      Train.set_materialized tn;
+      let vals = Context.get_values ctx tn in
       Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      Tn.set_values tn vals);
-  Train.set_on_host infer_logits.value;
-  Train.set_on_host infer_input.value;
+      ignore (Context.set_values ctx tn vals : Context.t));
+  Train.set_materialized infer_logits.value;
+  Train.set_materialized infer_input.value;
 
   (* Compile training routine *)
   let train_comp = Asgns.sequence [ update; sgd ] in
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_hosted;
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_materialized;
   let ctx, sgd_step = Context.compile ctx train_comp bindings in
 
   (* Compile inference routine *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_hosted;
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_materialized;
   let infer_comp =
     { infer_comp with Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
   in
@@ -174,7 +174,7 @@ let () =
   let step_ref = IDX.find_exn (Context.bindings sgd_step) step_n in
   let counter_ref = IDX.find_exn (Context.bindings infer_routine) counter_n in
   counter_ref := 0;
-  Train.set_on_host batch_loss.value;
+  Train.set_materialized batch_loss.value;
 
   (* === Training loop === Random baseline: ln(28) ≈ 3.33 per token, epoch sum ≈ 3.33 * n_batches.
      We check loss at first, middle, and last epochs. *)
@@ -185,11 +185,11 @@ let () =
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       let offset = batch * batch_size in
-      Tn.set_values input_batch.value (seqs_to_flat_one_hot train_inputs ~offset);
-      Tn.set_values target_batch.value (seqs_to_flat_one_hot train_targets ~offset);
+      ignore (Context.set_values ctx input_batch.value (seqs_to_flat_one_hot train_inputs ~offset) : Context.t);
+      ignore (Context.set_values ctx target_batch.value (seqs_to_flat_one_hot train_targets ~offset) : Context.t);
       let ctx' = Context.run ctx sgd_step in
       ignore (ctx' : Context.t);
-      epoch_loss := !epoch_loss +. batch_loss.@[0];
+      epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
       Int.incr step_ref
     done;
     if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then
@@ -209,7 +209,7 @@ let () =
       let base = t * vocab_size in
       flat.(base + context.(t)) <- 1.
     done;
-    Tn.set_values infer_input.value flat
+    ignore (Context.set_values ctx infer_input.value flat : Context.t)
   in
 
   let gen_name () =
@@ -228,11 +228,11 @@ let () =
         set_one_hot_seq context;
         Int.incr counter_ref;
         let _ctx = Context.run ctx infer_routine in
-        let dice_value = dice.@[0] in
+        let dice_value = (ctx, dice).@[0] in
 
         (* Compute softmax probabilities at position (pos-1) in the output (the model predicts token
            at position pos given input up to pos-1). *)
-        let logits = Array.init vocab_size ~f:(fun v -> infer_logits.@{[| 0; pos - 1; v |]}) in
+        let logits = Array.init vocab_size ~f:(fun v -> (ctx, infer_logits).@{[| 0; pos - 1; v |]}) in
         let max_logit = Array.fold logits ~init:Float.neg_infinity ~f:Float.max in
         let exp_logits = Array.map logits ~f:(fun l -> Float.exp (l -. max_logit)) in
         let sum_exp = Array.fold exp_logits ~init:0. ~f:( +. ) in

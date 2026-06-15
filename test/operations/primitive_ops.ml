@@ -20,8 +20,8 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   let%op fx = f x in
-  Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
+  Train.set_materialized x.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
   (* There actually are no params! Stress test the empty comp case. *)
   let ctx = Train.init_params ctx IDX.empty fx in
   let update = Train.grad_update fx in
@@ -33,7 +33,7 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
     @@ Array.mapi xs ~f:(fun i _ ->
         step_ref := i;
         Train.run ctx fx_routine;
-        (fx.@[0], x.@%[0]))
+        ((ctx, fx).@[0], (ctx, x).@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
