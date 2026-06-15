@@ -112,7 +112,7 @@ tractable at scale. (Imbue guide, checkpointing and NCCL sections; same
 pattern is described independently in llm.c.)
 
 **OCANNL status.** Tensor-node memory modes (`Virtual`, `Local`,
-`On_device`, `Hosted`) and the universal pool allocator design in
+`On_device`, `Materialized`) and the universal pool allocator design in
 [gh-ocannl-344](https://github.com/ahrefs/ocannl/issues/344) cover this for
 single-device execution. Contiguous parameter blocks (in the NCCL sense of
 "one contiguous range across all parameters") are not a goal at v0.8 single

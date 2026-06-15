@@ -432,7 +432,7 @@ for step = 1 to num_steps do
   step_ref := step;
   Train.run ctx routine;
   if step mod 100 = 0 then
-    printf "Step %d, Loss: %.4f\n" step loss.@[0]
+    printf "Step %d, Loss: %.4f\n" step (ctx, loss).@[0]
 done
 ```
 
@@ -538,10 +538,9 @@ When setting `default_param_init`, we call `PDSL.kaiming` so that the result is 
 OCANNL manages tensor memory through memory modes:
 
 ```ocaml
-(* Make a tensor's value accessible on host *)
-Train.set_hosted tensor.value
-
-(* Set as materialized (on-device only) *)
+(* Make a tensor's value persisted on-device and inspectable on demand via the context.
+   After gh-ocannl-333 there is no separate "hosted" mode; CPU access is a context-mediated
+   device-to-host transfer (Context.to_host / Context.get_values). *)
 Train.set_materialized tensor.value
 
 (* Set as virtual (inlined during compilation) *)
