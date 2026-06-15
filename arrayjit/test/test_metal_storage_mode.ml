@@ -26,12 +26,8 @@ let () =
   check "Local" (Some Tn.Local);
   check "Device_only" (Some Tn.Device_only);
   check "On_device" (Some Tn.On_device);
-  (* Host-accessible modes: the CPU initializes and/or reads these, so they must stay shared. *)
-  check "Hosted Constant" (Some (Tn.Hosted Tn.Constant));
-  check "Hosted Nonconstant" (Some (Tn.Hosted Tn.Nonconstant));
-  check "Hosted Volatile" (Some (Tn.Hosted Tn.Volatile));
-  check "Hosted Changed_on_dev" (Some (Tn.Hosted Tn.Changed_on_devices));
-  check "Hosted Unset_hosted" (Some (Tn.Hosted Tn.Unset_hosted));
+  (* Materialization-request / host-initialized modes: the CPU may initialize or wrap these (e.g.
+     [use_host_memory]), so they stay shared. After gh-ocannl-333 the [Hosted] mode is gone. *)
   check "Materialized" (Some Tn.Materialized);
   check "Effectively_constant" (Some Tn.Effectively_constant);
   (* Partially-resolved and absent modes: conservative shared default. *)

@@ -36,7 +36,6 @@ let run ~n_shards : float array =
   (* Deterministic, id-independent parameter init so the two runs start identically regardless of
      how sharding changes tnode creation order. *)
   let learning_rate = NTDSL.param ~value:0.05 "lr" () in
-  Tn.set_values learning_rate.Tensor.value [| 0.05 |];
   (* Sum-over-batch squared error. [loss_of] creates its own parameter per call, so each shard gets a
      distinct (but identically-initialized) replica, as the driver requires. *)
   let loss_of x y =
@@ -49,7 +48,7 @@ let run ~n_shards : float array =
       h.Parallel.step ();
       Stdio.printf "n_shards=%d: loss=%.4f\n" n_shards (h.Parallel.owner_loss_value ());
       h.Parallel.sync_params_to_host ();
-      Array.concat_map h.Parallel.owner_params ~f:(fun p -> Tn.get_values p.Tensor.value))
+      Array.concat_map h.Parallel.owner_params ~f:(fun p -> h.Parallel.read_values p))
     ()
 
 (* Exercise multi-step training through [set_batch]: a second step on a fresh batch must keep
@@ -58,7 +57,6 @@ let multistep_ok () : bool =
   Tensor.unsafe_reinitialize ();
   Utils.settings.fixed_state_for_init <- Some 1;
   let learning_rate = NTDSL.param ~value:0.02 "lr" () in
-  Tn.set_values learning_rate.Tensor.value [| 0.02 |];
   let loss_of x y =
     let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
     [%op (((w *. x) - y) *. ((w *. x) - y)) ++ "...|... => 0"]
@@ -83,7 +81,6 @@ let owner_loss_with_base_seed base_seed : float =
   Tensor.unsafe_reinitialize ();
   Utils.settings.fixed_state_for_init <- Some 1;
   let learning_rate = NTDSL.param ~value:0.0 "lr" () in
-  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
   let loss_of x y =
     let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
     [%op (((w *. x) + uniform1 () - y) *. ((w *. x) + uniform1 () - y)) ++ "...|... => 0"]
@@ -113,7 +110,6 @@ let driver_routes_seed_into_shards () : bool =
    regardless of the seed. *)
 let shards_seeded_distinctly () : bool =
   let learning_rate = NTDSL.param ~value:0.0 "lr" () in
-  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
   let loss_of x y =
     let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
     [%op (((w *. x) + uniform1 () - y) *. ((w *. x) + uniform1 () - y)) ++ "...|... => 0"]
@@ -134,7 +130,6 @@ let seed_singleton_preserved () : bool =
   Tensor.set_random_seed ~seed:777 ();
   let before = Tensor.get_random_seed () in
   let learning_rate = NTDSL.param ~value:0.0 "lr" () in
-  Tn.set_values learning_rate.Tensor.value [| 0.0 |];
   let loss_of x y =
     let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
     [%op (((w *. x) - y) *. ((w *. x) - y)) ++ "...|... => 0"]

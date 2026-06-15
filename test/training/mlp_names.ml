@@ -165,7 +165,7 @@ let () =
 
   (* FIXME(#344): When uncommented, this exceeds the number of buffer arguments
      supported by the Metal backend. Carried forward from bigram_mlp.ml. *)
-  (* Train.every_non_literal_on_host batch_loss; *)
+  (* Train.every_non_literal_materialized batch_loss; *)
   let update = Train.grad_update batch_loss in
   let steps = epochs * n_batches in
   let%op learning_rate = 0.1 *. ((1.5 *. !..steps) - !@step_n) /. !..steps in
@@ -178,16 +178,16 @@ let () =
      hidden preactivation saturate and traps SGD at a high-loss plateau. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
-      Train.set_on_host tn;
-      let vals = Tn.get_values tn in
+      Train.set_materialized tn;
+      let vals = Context.get_values ctx tn in
       Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      Tn.set_values tn vals);
+      ignore (Context.set_values ctx tn vals : Context.t));
 
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-
+  let ctx = Context.context sgd_step in
   let open Operation.At in
   let step_ref = IDX.find_exn (Context.bindings sgd_step) step_n in
-  Train.set_on_host batch_loss.value;
+  Train.set_materialized batch_loss.value;
 
   let ctx_buf = Array.create ~len:(batch_size * block_size * vocab_size) 0. in
   let tgt_buf = Array.create ~len:(batch_size * vocab_size) 0. in
@@ -203,10 +203,10 @@ let () =
       let offset = batch * batch_size in
       fill_ctx_one_hot ctx_buf train_ctx ~offset;
       fill_tgt_one_hot tgt_buf train_tgt ~offset;
-      Tn.set_values input_batch.value ctx_buf;
-      Tn.set_values target_batch.value tgt_buf;
+      ignore (Context.set_values ctx input_batch.value ctx_buf : Context.t);
+      ignore (Context.set_values ctx target_batch.value tgt_buf : Context.t);
       Train.run ctx sgd_step;
-      epoch_loss := !epoch_loss +. batch_loss.@[0];
+      epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
       Int.incr step_ref
     done;
     let mean_loss = !epoch_loss /. Float.of_int n_batches in
@@ -242,15 +242,15 @@ let () =
   let%cd eval_log_probs = eval_shifted - eval_lse in
   let%cd eval_nll = neg ((eval_target *. eval_log_probs) ++ "... | ... => 0") in
   let%cd eval_loss = (eval_nll ++ "... => 0") /. !..batch_size in
-  Train.set_on_host eval_loss.value;
-  Train.set_on_host eval_input.value;
-  Train.set_on_host eval_target.value;
+  Train.set_materialized eval_loss.value;
+  Train.set_materialized eval_input.value;
+  Train.set_materialized eval_target.value;
   let%cd eval_comp =
     ~~("mlp_names eval";
        eval_loss.forward)
   in
   let eval_step = Train.to_routine (Context.context sgd_step) IDX.empty eval_comp in
-
+  let ctx = Context.context eval_step in
   let mean_loss_over (ctx_arr, tgt_arr, n) =
     let nb = n / batch_size in
     if nb = 0 then 0.0
@@ -260,10 +260,10 @@ let () =
         let offset = batch * batch_size in
         fill_ctx_one_hot ctx_buf ctx_arr ~offset;
         fill_tgt_one_hot tgt_buf tgt_arr ~offset;
-        Tn.set_values eval_input.value ctx_buf;
-        Tn.set_values eval_target.value tgt_buf;
+        ignore (Context.set_values ctx eval_input.value ctx_buf : Context.t);
+        ignore (Context.set_values ctx eval_target.value tgt_buf : Context.t);
         Train.run ctx eval_step;
-        acc := !acc +. eval_loss.@[0]
+        acc := !acc +. (ctx, eval_loss).@[0]
       done;
       !acc /. Float.of_int nb
     end
@@ -296,10 +296,10 @@ let () =
        infer_logits.forward;
        { dice } =: uniform_at !@counter_n)
   in
-  Train.set_on_host infer_logits.value;
-  Train.set_on_host infer_input.value;
+  Train.set_materialized infer_logits.value;
+  Train.set_materialized infer_input.value;
   let infer_step = Train.to_routine (Context.context eval_step) infer_bindings infer_comp in
-  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
+  let ctx = Context.context infer_step in  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
   let dot_idx = Dataprep.Names.char_index '.' in
@@ -308,7 +308,7 @@ let () =
     for t = 0 to block_size - 1 do
       buf.((t * vocab_size) + context.(t)) <- 1.
     done;
-    Tn.set_values infer_input.value buf
+    ignore (Context.set_values ctx infer_input.value buf : Context.t)
   in
 
   let max_len = 20 in
@@ -321,8 +321,8 @@ let () =
         set_ctx_one_hot context;
         Int.incr counter_ref;
         Train.run ctx infer_step;
-        let dice_value = dice.@[0] in
-        let logits_arr = Array.init vocab_size ~f:(fun v -> infer_logits.@{[| 0; v |]}) in
+        let dice_value = (ctx, dice).@[0] in
+        let logits_arr = Array.init vocab_size ~f:(fun v -> (ctx, infer_logits).@{[| 0; v |]}) in
         let max_logit = Array.fold logits_arr ~init:Float.neg_infinity ~f:Float.max in
         let exp_logits = Array.map logits_arr ~f:(fun l -> Float.exp (l -. max_logit)) in
         let sum_exp = Array.fold exp_logits ~init:0. ~f:( +. ) in

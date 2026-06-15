@@ -1,4 +1,3 @@
-open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 
@@ -16,9 +15,9 @@ let () =
   let%op c = a * b in
   (* d uses c twice => two inline copies => CSE should deduplicate *)
   let%op cse_d = c *. c in
-  Train.set_hosted a.value;
-  Train.set_hosted b.value;
-  ignore (Train.forward_once ctx cse_d);
+  Train.set_materialized a.value;
+  Train.set_materialized b.value;
+  let ctx = Train.forward_once ctx cse_d in
   (* Print numerical result to verify correctness *)
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false cse_d;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx cse_d;
   Stdio.printf "\n%!"

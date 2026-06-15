@@ -271,9 +271,10 @@ The optimization process works closely with OCANNL's memory mode system:
 
 - **Virtual**: Computations are inlined, no storage allocated
 - **Never_virtual**: Tensor must be stored (provenance int indicates why)
-- **Materialized**: Tensor is stored and reused
-- **Device_only**: Stored only on device, not accessible from host
-- **Hosted**: Stored on both host and device
+- **Materialized**: An unresolved request for a persisted node; resolves to **On_device**
+- **Device_only**: Stored only on device (one of **Local** / **On_device**)
+- **On_device**: Stored on the devices that compute with it; CPU access is on-demand via
+  context-mediated device-to-host transfers (no host copy on the node, after gh-ocannl-333)
 
 The optimizer uses provenance tracking (the `int` in memory mode updates) to debug conflicts in memory mode decisions.
 

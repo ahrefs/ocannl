@@ -10,5 +10,5 @@ let () =
   (* t3 should be [1.0; 4.0; 2.0; 5.0; 3.0; 6.0] *)
   let ctx = Context.auto () in
 
-  let _ctx = Train.forward_once ctx t in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false t
+  let ctx = Train.forward_once ctx t in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx t

@@ -193,14 +193,18 @@ let compute_byte_length prec dims padding =
 
 (** {2 Public API} *)
 
-let save ~appending t_set path =
+let save ~ctx ~appending t_set path =
   let tn_list = Set.to_list t_set in
-  (* Validate all tnodes have hosted arrays and sync from device *)
+  (* Retrieve each tnode's data from its device buffer on demand (gh-ocannl-333). *)
+  let host_of = Hashtbl.create (module Int) in
   List.iter tn_list ~f:(fun tn ->
-      Tn.do_read tn;
-      match Lazy.force tn.Tn.array with
-      | None -> failwith ("save: tensor " ^ Int.to_string tn.Tn.id ^ " has no hosted array")
-      | Some _ -> ());
+      match
+        try Some (Context.to_host ctx tn) with _ -> None
+      with
+      | None ->
+          failwith
+            ("save: tensor " ^ Int.to_string tn.Tn.id ^ " is not present in the given context")
+      | Some nd -> Hashtbl.set host_of ~key:tn.Tn.id ~data:nd);
   (* Collect current tensor data *)
   let new_entries =
     List.map tn_list ~f:(fun tn ->
@@ -282,7 +286,7 @@ let save ~appending t_set path =
     List.iter entries_with_offsets ~f:(function
       | `Existing (_, payload) -> Stdlib.output_bytes oc payload
       | `New (_, tn) ->
-          let nd = Option.value_exn (Lazy.force tn.Tn.array) in
+          let nd = Hashtbl.find_exn host_of tn.Tn.id in
           let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
           let _n = Nd.write_payload_to_channel ?padding nd oc in
           ())
@@ -295,7 +299,7 @@ let save ~appending t_set path =
       (try Stdlib.Sys.remove tmp_path with _ -> ());
       raise exn
 
-let load ?prefix_namespace path =
+let load ~ctx ?prefix_namespace path =
   (match prefix_namespace with
   | None | Some "" -> ()
   | Some _ -> failwith "load: prefix_namespace is not yet supported (requires #372 namespaces)");
@@ -323,17 +327,23 @@ let load ?prefix_namespace path =
             Stdlib.seek_in ic (data_start + meta.offset);
             let padding = Option.map ~f:fst meta.padding in
             Nd.read_payload_from_channel ?padding nd ic meta.byte_length;
-            (* Create tnode *)
-            let tn =
+            (* Create the tnode (no host data is stored on it); register the loaded buffer so it is
+               uploaded into the context below (gh-ocannl-333). *)
+            let tn, init =
               Tn.create_from_padded ~id:meta.id ~label:meta.label ~ndarray:nd ~padding:meta.padding
                 ()
             in
+            Ir.Host_inits.register tn init;
             if meta.id > !max_id then max_id := meta.id;
-            tn)
+            (tn, nd))
       in
       (* Bump session ID floor *)
       if !max_id >= 0 then Ocannl_tensor.Tensor.bump_next_id !max_id;
-      Set.of_list (module Tn) loaded
+      (* Upload each loaded node into the context, returning the updated context. *)
+      let ctx =
+        List.fold loaded ~init:ctx ~f:(fun ctx (tn, nd) -> Context.from_host ctx tn nd)
+      in
+      (ctx, Set.of_list (module Tn) (List.map loaded ~f:fst))
     with
     | result ->
         Stdlib.close_in ic;
@@ -344,8 +354,8 @@ let load ?prefix_namespace path =
   in
   result
 
-let restore t_set path =
-  if Set.is_empty t_set then ()
+let restore ~ctx t_set path =
+  if Set.is_empty t_set then ctx
   else begin
     let ic = Stdlib.open_in_bin path in
     match
@@ -356,7 +366,7 @@ let restore t_set path =
       let file_tensors =
         Map.of_alist_exn (module Int) (List.map header.tensors ~f:(fun m -> (m.id, m)))
       in
-      Set.iter t_set ~f:(fun tn ->
+      Set.fold t_set ~init:ctx ~f:(fun ctx tn ->
           match Map.find file_tensors tn.Tn.id with
           | None ->
               failwith ("restore: tensor " ^ Int.to_string tn.Tn.id ^ " not found in checkpoint")
@@ -380,23 +390,19 @@ let restore t_set path =
               in
               if not padding_equal then
                 failwith ("restore: padding mismatch for tensor " ^ Int.to_string tn.Tn.id);
-              (* Get existing ndarray *)
+              (* Read the payload into a fresh host buffer and upload it into the context's device
+                 buffer (gh-ocannl-333). *)
               let nd =
-                match Lazy.force tn.Tn.array with
-                | Some nd -> nd
-                | None ->
-                    failwith ("restore: tensor " ^ Int.to_string tn.Tn.id ^ " has no hosted array")
+                Nd.create_array ~debug:"restored" meta.prec ~dims:meta.dims ~padding:meta.padding
               in
-              (* Seek and read payload *)
               Stdlib.seek_in ic (data_start + meta.offset);
               let padding = Option.map ~f:fst meta.padding in
               Nd.read_payload_from_channel ?padding nd ic meta.byte_length;
-              (* Mark host as authoritative: - Clear prepare_read to prevent stale device-to-host
-                 transfers - Call do_write to clear prepare_write and devices_not_lagging_host *)
-              tn.Tn.prepare_read <- None;
-              Tn.do_write tn)
+              Context.from_host ctx tn nd)
     with
-    | () -> Stdlib.close_in ic
+    | ctx ->
+        Stdlib.close_in ic;
+        ctx
     | exception exn ->
         Stdlib.close_in_noerr ic;
         raise exn

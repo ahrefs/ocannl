@@ -13,16 +13,16 @@ let graph_drawing_recompile () =
   let ctx = Context.auto () in
   let open Operation.At in
   let%op f_nd = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
-  Train.set_hosted x.value;
-  ignore (Train.forward_once ctx f_nd);
-  Train.printf_tree ~with_grad:true ~depth:9 f_nd;
+  Train.set_materialized x.value;
+  let ctx = Train.forward_once ctx f_nd in
+  Train.printf_tree ~with_grad:true ~depth:9 ctx f_nd;
   let%op f = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
-  Train.every_non_literal_on_host f;
+  Train.every_non_literal_materialized f;
   let f_upd = Train.grad_update f in
   let ctx = Train.init_params ctx IDX.empty f in
   let f_bprop = Train.to_routine ctx IDX.empty f_upd in
-  Train.run ctx f_bprop;
-  Train.printf_tree ~with_grad:true ~depth:9 f;
+  let ctx = Context.context f_bprop in  Train.run ctx f_bprop;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx f;
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
     Array.map xs ~f:(fun v ->
@@ -35,7 +35,7 @@ let graph_drawing_recompile () =
         in
         Train.run ctx assign_x;
         Train.run ctx f_bprop;
-        f.@[0])
+        (ctx, f).@[0])
   in
   let plot_box =
     PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
@@ -50,9 +50,9 @@ let graph_drawing_fetch () =
   CDSL.virtualize_settings.enable_device_only <- false;
   let%op f x = (3 *. (x **. 2)) - (4 *. x) + 5 in
   let%op f5 = f 5 in
-  Train.every_non_literal_on_host f5;
-  ignore (Train.forward_once ctx f5);
-  Train.printf_tree ~with_grad:false ~depth:9 f5;
+  Train.every_non_literal_materialized f5;
+  let ctx = Train.forward_once ctx f5 in
+  Train.printf_tree ~with_grad:false ~depth:9 ctx f5;
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
   (* Yay, the whole shape gets inferred! *)
@@ -60,17 +60,17 @@ let graph_drawing_fetch () =
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   let%op fx = f x in
-  Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x.diff).grad;
+  Train.set_materialized x.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x.diff).grad;
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine ctx bindings update in
-  let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
+  let ctx = Context.context fx_routine in  let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
         step_ref := i;
         Train.run ctx fx_routine;
-        (fx.@[0], x.@%[0]))
+        ((ctx, fx).@[0], (ctx, x).@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   let plot_box =
@@ -93,28 +93,28 @@ let simple_gradients_hosted () =
      rootness check. *)
   let grad = Train.grad_update l in
   let%op learning_rate = 0.1 in
-  Train.every_non_literal_on_host l;
-  Train.every_non_literal_on_host learning_rate;
+  Train.every_non_literal_materialized l;
+  Train.every_non_literal_materialized learning_rate;
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
-  let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
-  (* Note the initial state without running an init or forward pass can contain garbage. *)
+  let _ctx = Context.context grad_routine in  let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
+  let ctx = Context.context sgd_routine in  (* Note the initial state without running an init or forward pass can contain garbage. *)
   (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   let ctx = Context.run ctx grad_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   (* Now we update the params, but we are not doing the forward and backward passes: only params
      values will change, compared to the above. The update is in the opposite direction of the
      gradient. *)
   let ctx = Context.run ctx sgd_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l;
 
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
   let _ctx = Context.run ctx grad_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l
 
 let simple_gradients_virtual () =
   Tensor.unsafe_reinitialize ();
@@ -130,34 +130,34 @@ let simple_gradients_virtual () =
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
-  (* Note the state without running initialization can contain garbage. *)
+  let ctx = Context.context grad_routine in  (* Note the state without running initialization can contain garbage. *)
   (* Train.printf_tree ~with_grad:true ~depth:9 l; *)
   (* Do not update the params: all values and gradients will be at initial points, which are
      specified in the tensor in the brackets. *)
   let ctx = Context.run ctx grad_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   (* Only now compile the SGD update. *)
   let sgd_routine = Train.to_routine (Context.context grad_routine) IDX.empty sgd in
-  (* Now we update the params, but are not doing the forward and backward passes: only params values
+  let ctx = Context.context sgd_routine in  (* Now we update the params, but are not doing the forward and backward passes: only params values
      will change, compared to the above. Since virtual tensors are computed by-need, they will
      always be recomputed using the latest parameter state. *)
   let ctx = Context.run ctx sgd_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   (* Now the params will remain as above, but both param gradients and the values and gradients of
      other nodes will change thanks to the forward and backward passes. *)
   let _ctx = Context.run ctx grad_routine in
-  Train.printf_tree ~with_grad:true ~depth:9 l
+  Train.printf_tree ~with_grad:true ~depth:9 ctx l
 
 let two_d_neuron_hosted () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let%op v = ({ w = [ (-3, 1) ] } * { x = [ 2; 0 ] }) + { b = [ 6.7 ] } in
-  Train.every_non_literal_on_host v;
+  Train.every_non_literal_materialized v;
   let update = Train.grad_update v in
   let ctx = Train.init_params ctx IDX.empty v in
   let routine = Train.to_routine ctx IDX.empty update in
-  Train.run ctx routine;
-  Train.printf_tree ~with_grad:true ~depth:9 v
+  let ctx = Context.context routine in  Train.run ctx routine;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx v
 
 let two_d_neuron_virtual () =
   Tensor.unsafe_reinitialize ();
@@ -166,8 +166,8 @@ let two_d_neuron_virtual () =
   let update = Train.grad_update v in
   let ctx = Train.init_params ctx IDX.empty v in
   let routine = Train.to_routine ctx IDX.empty update in
-  Train.run ctx routine;
-  Train.printf_tree ~with_grad:true ~depth:9 v
+  let ctx = Context.context routine in  Train.run ctx routine;
+  Train.printf_tree ~with_grad:true ~depth:9 ctx v
 
 let main () =
   let () = graph_drawing_recompile () in

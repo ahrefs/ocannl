@@ -23,9 +23,9 @@ let uniform1_basic_test () =
   Ir.Tnode.update_prec uniform1_floats.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform1_floats.value;
+  Ocannl.Train.set_materialized uniform1_floats.value;
   let ctx = Ocannl.Train.forward_once ctx uniform1_floats in
-  let result1 = Ir.Tnode.get_values uniform1_floats.value in
+  let result1 = Context.get_values ctx uniform1_floats.value in
 
   (* Print first few values *)
   Stdio.printf "First 5 uniform1 random values:\n";
@@ -46,9 +46,9 @@ let uniform1_basic_test () =
   in
 
   Ir.Tnode.update_prec uniform_floats.value Ir.Ops.single;
-  Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_floats);
-  let result_vec = Ir.Tnode.get_values uniform_floats.value in
+  Ocannl.Train.set_materialized uniform_floats.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_floats in
+  let result_vec = Context.get_values ctx uniform_floats.value in
 
   Stdio.printf "\nFirst 5 uniform (vectorized) random values:\n";
   for i = 0 to Int.min 4 (Array.length result_vec - 1) do
@@ -73,9 +73,9 @@ let uniform_at1_test () =
   Ir.Tnode.update_prec uniform_at1_floats.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform_at1_floats.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_at1_floats);
-  let result = Ir.Tnode.get_values uniform_at1_floats.value in
+  Ocannl.Train.set_materialized uniform_at1_floats.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_at1_floats in
+  let result = Context.get_values ctx uniform_at1_floats.value in
 
   (* Print values *)
   Stdio.printf "uniform_at1 random values with counter:\n";
@@ -107,9 +107,9 @@ let uniform1_shape_preservation_test () =
   Ir.Tnode.update_prec uniform1_tensor.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform1_tensor.value;
+  Ocannl.Train.set_materialized uniform1_tensor.value;
   let ctx = Ocannl.Train.forward_once ctx uniform1_tensor in
-  let result = Ir.Tnode.get_values uniform1_tensor.value in
+  let result = Context.get_values ctx uniform1_tensor.value in
 
   Stdio.printf "Input size: %d elements\n" input_size;
   Stdio.printf "uniform1 output size: %d elements\n" (Array.length result);
@@ -124,9 +124,9 @@ let uniform1_shape_preservation_test () =
   in
 
   Ir.Tnode.update_prec uniform_vec.value Ir.Ops.single;
-  Ocannl.Train.set_hosted uniform_vec.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_vec);
-  let result_vec = Ir.Tnode.get_values uniform_vec.value in
+  Ocannl.Train.set_materialized uniform_vec.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_vec in
+  let result_vec = Context.get_values ctx uniform_vec.value in
 
   Stdio.printf "\nVectorized uniform output size: %d elements\n" (Array.length result_vec);
   Stdio.printf "Vectorized expands by factor of %d\n" (Array.length result_vec / input_size)

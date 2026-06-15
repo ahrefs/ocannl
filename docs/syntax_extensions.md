@@ -386,9 +386,11 @@ Inline declarations can also be used outside of assignments for creating non-dif
       [%cd ~~("mlp infer"; mlp_result.forward)]
   in
   let callback (x, y) =
-    Tn.set_values point [| x; y |];
+    (* Context-mediated value access (gh-ocannl-333): write the input on-device, then read the
+       result through the context with the [At] accessors taking a [(context, tensor)] pair. *)
+    ignore (Context.set_values ctx point [| x; y |] : Context.t);
     Train.run ctx result_routine;
-    Float.(mlp_result.@[0] >= 0.)
+    Float.((ctx, mlp_result).@[0] >= 0.)
   in
 ```
 

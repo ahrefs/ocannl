@@ -50,10 +50,10 @@ let test_tropical_kernel_forward () =
   let%op output = tropical_conv2d () input kernel in
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted kernel.value;
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized input.value;
+  Train.set_materialized kernel.value;
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 4x4x1 (values 0-15)\n%!";
   printf "Kernel shape: 2x2 (values [[0,1],[2,3]])\n%!";
@@ -66,9 +66,9 @@ let test_tropical_kernel_forward () =
   printf "  [1,0]: max(8+0, 9+1, 12+2, 13+3) = max(8, 10, 14, 16) = 16\n%!";
   printf "  [1,1]: max(10+0, 11+1, 14+2, 15+3) = max(10, 12, 16, 18) = 18\n%!";
   printf "\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false kernel;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx kernel;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test tropical conv with learnable kernel - backprop.
@@ -112,9 +112,9 @@ let test_tropical_kernel_backprop_zero_kernel () =
   let%op loss = output ++ "...|... => 0" in
 
   let ctx = Context.auto () in
-  Train.set_hosted loss.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] input.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] kernel.diff).grad;
+  Train.set_materialized loss.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] input.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] kernel.diff).grad;
   ignore (Train.update_once ~output_cd_file:false ctx loss);
 
   printf "Input shape: 4x4x1\n%!";
@@ -126,9 +126,9 @@ let test_tropical_kernel_backprop_zero_kernel () =
   printf "Expected input gradients: 1 at argmax positions, 0 elsewhere\n%!";
   printf "Expected kernel gradients: all 1s (each position is argmax once)\n%!";
   printf "\n%!";
-  Train.printf ~here:[%here] ~with_code:false loss;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true kernel;
+  Train.printf ~here:[%here] ~with_code:false ctx loss;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx kernel;
   printf "\n%!"
 
 (** Test tropical conv backprop with non-zero kernel that affects argmax.
@@ -169,9 +169,9 @@ let test_tropical_kernel_backprop_nonzero_kernel () =
   let%op loss = output ++ "...|... => 0" in
 
   let ctx = Context.auto () in
-  Train.set_hosted loss.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] input.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] kernel.diff).grad;
+  Train.set_materialized loss.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] input.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] kernel.diff).grad;
   ignore (Train.update_once ~output_cd_file:false ctx loss);
 
   printf "Input shape: 4x4x1 (all 1s)\n%!";
@@ -185,9 +185,9 @@ let test_tropical_kernel_backprop_nonzero_kernel () =
   printf "  0 elsewhere\n%!";
   printf "Expected kernel gradients: [[0,0],[0,4]] - only (1,1) was argmax\n%!";
   printf "\n%!";
-  Train.printf ~here:[%here] ~with_code:false loss;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true input;
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true kernel;
+  Train.printf ~here:[%here] ~with_code:false ctx loss;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx kernel;
   printf "\n%!"
 
 let () =

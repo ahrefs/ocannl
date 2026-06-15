@@ -124,12 +124,16 @@ parameter to `[-0.25, 0.25)`, matching the pattern
 [`transformer_names.ml`](../test/training/transformer_names.ml) uses:
 
 ```ocaml
-Set.iter batch_loss.Tensor.params ~f:(fun p ->
-    let tn = p.Tensor.value in
-    Train.set_on_host tn;
-    let vals = Tn.get_values tn in
-    Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-    Tn.set_values tn vals);
+(* Value access is context-mediated after gh-ocannl-333: read/write through the context that holds
+   the parameters, threading the updated context. *)
+let ctx =
+  Set.fold batch_loss.Tensor.params ~init:ctx ~f:(fun ctx p ->
+      let tn = p.Tensor.value in
+      Train.set_materialized tn;
+      let vals = Context.get_values ctx tn in
+      Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
+      Context.set_values ctx tn vals)
+in
 ```
 
 Karpathy's lecture handles the same pain point a different way, which is

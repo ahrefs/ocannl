@@ -286,23 +286,22 @@ module type With_buffer_retrieval_and_syncing = sig
   type context
   type event
 
-  val from_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy(^) from host to context and
-      returns true, otherwise returns false.
+  val from_host : context -> Tnode.t -> Ndarray.t -> bool
+  (** [from_host ctx tn src] schedules a copy of the explicit host buffer [src] into [tn]'s
+      in-context device buffer and returns true, or returns false if the node is not in context.
+      After [gh-ocannl-333] the host buffer is supplied by the caller (e.g. {!Context.set_values});
+      it is no longer read from the tensor node. *)
 
-      [^] On unified memory devices, the copy is not scheduled if the source and destination are the
-      same buffer (note that this depends on the memory mode of the tensor node). *)
+  val init_from_host : context -> Tnode.t -> Ndarray.t -> context
+  (** Schedules a copy from the explicit host buffer to context: a variant of {!from_host} that
+      requires the input context to not contain the tensor node, and outputs the context with the
+      tensor node. *)
 
-  val init_from_host : context -> Tnode.t -> context
-  (** Schedules a copy from host to context: a variant of {!from_host} that requires the input
-      context to not contain the tensor node, and outputs the context with the tensor node. *)
-
-  val to_host : context -> Tnode.t -> bool
-  (** If the tensor node is both hosted and in-context, schedules a copy(^) from context to host and
-      returns true, otherwise returns false.
-
-      [^] On unified memory devices, the copy is not scheduled if the source and destination are the
-      same buffer (note that this depends on the memory mode of the tensor node). *)
+  val to_host : context -> Tnode.t -> Ndarray.t -> bool
+  (** [to_host ctx tn dst] schedules a copy of [tn]'s in-context device buffer into the explicit
+      host buffer [dst] and returns true, or returns false if the node is not in context. After
+      [gh-ocannl-333] the destination buffer is supplied by the caller (e.g. {!Context.to_host}); it
+      is no longer the tensor node's own array. *)
 
   val device_to_device :
     Tnode.t ->

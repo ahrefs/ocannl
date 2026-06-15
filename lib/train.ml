@@ -41,48 +41,25 @@ end
 
 let run ctx routine = ignore (Context.run ctx routine)
 
-(* let save_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
-   is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
-   "Train.save_params: root tensor is not named") ident in let with_name p = let is_grad, ident =
-   Tn.no_grad_ident_label p.Tensor.value in assert (not is_grad); ( p.Tensor.value,
-   Option.value_or_thunk ~default:(fun () -> invalid_arg @@ "Train.save_params: parameter is not
-   named: " ^ Tn.debug_name p.Tensor.value) ident ) in let with_names = get_params t |> Set.elements
-   |> List.map ~f:with_name in let out_file = Npy.Npz.open_out file_name in List.iter with_names
-   ~f:(fun (v, name) -> let f arr = Npy.Npz.write out_file name arr in Nd.map { f } @@
-   Option.value_exn ~here:[%here] @@ Lazy.force v.array) *)
-
-(* let restore_params t = let is_grad, ident = Tn.no_grad_ident_label t.Tensor.value in assert (not
-   is_grad); let file_name = Option.value_or_thunk ~default:(fun () -> invalid_arg
-   "Train.restore_params: root tensor is not named") ident in let with_name p = let is_grad, ident =
-   Tn.no_grad_ident_label p.Tensor.value in assert (not is_grad); ( p.Tensor.value,
-   Option.value_or_thunk ~default:(fun () -> invalid_arg @@ "Train.restore_params: parameter is not
-   named: " ^ Tn.debug_name p.Tensor.value) ident ) in let with_names = get_params t |> Set.elements
-   |> List.map ~f:with_name in let in_file = Npy.Npz.open_in file_name in List.iter with_names
-   ~f:(fun (v, name) -> let f arr = Npy.Npz.restore in_file name arr in Nd.map { f } @@
-   Option.value_exn ~here:[%here] @@ Lazy.force v.array) *)
-let set_on_host ?(from_device = true) (a : Tn.t) =
-  let memtype = if from_device then Tn.Changed_on_devices else Volatile in
-  Tn.update_memory_mode a (Hosted memtype) 27
+(* Parameter persistence now lives in {!Persistence} (gh-ocannl-373) and is context-mediated; the
+   old hosted-array-based save/restore helpers were removed with the hosted memory mode
+   (gh-ocannl-333). *)
 
 let set_materialized (a : Tn.t) = Tn.update_memory_mode a Materialized 28
 
-let set_hosted (a : Tn.t) =
-  if Tn.known_constant a then Tn.update_memory_mode a (Hosted Constant) 411
-  else Tn.update_memory_mode a (Hosted Changed_on_devices) 412
-
-(** Sets the tensor's value as "fully on host", returns the tensor's forward code with a
-    label-derived comment. *)
+(** Sets the tensor's value as materialized (device-resident, inspectable on demand via the
+    context), and returns the tensor's forward code with a label-derived comment. *)
 let forward t =
   let fwd = Tensor.consume_forward_code t in
-  set_hosted t.Tensor.value;
+  set_materialized t.Tensor.value;
   let label = Tn.debug_name t.value in
   { fwd with asgns = Asgns.Block_comment (label ^ " fwd", fwd.asgns) }
 
 (** Returns the tensor's forward, zeroing gradients, and backprop code wrapped with label-derived
-    comments. Sets the tensor's value as "fully on host". If [setup_for_parallel] is true (false by
+    comments. Sets the tensor's value as materialized. If [setup_for_parallel] is true (false by
     default), sets the parameters and their gradients as "non-local" (on-device). *)
 let grad_update ?(setup_for_parallel = false) loss =
-  set_hosted loss.Tensor.value;
+  set_materialized loss.Tensor.value;
   if setup_for_parallel then
     Set.iter loss.Tensor.params ~f:(fun p ->
         set_materialized (Option.value_exn ~here:[%here] p.diff).grad);
@@ -130,14 +107,16 @@ let%track3_sexp sequential_loop ~f lowered_bindings =
 
 let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual 29
 
-let every_non_literal_on_host =
+(** Materializes every non-literal embedded tensor node of [t] (so its value is inspectable on
+    demand via the context). Replaces the old [every_non_literal_on_host] now that there is no
+    hosted memory mode (gh-ocannl-333). *)
+let every_non_literal_materialized =
   Tensor.iter_embedded ~f:(fun a ->
-      if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_hosted a)
+      if Tn.mode_is_unspecified a && not (Tn.known_constant a) then set_materialized a)
 
 module Lazy = Utils.Lazy
 
-let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted = true) bindings
-    comp =
+let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) bindings comp =
   if output_cd_file then (
     let name = Asgns.get_name_exn comp.Asgns.asgns in
     if not Utils.settings.output_debug_files_in_build_directory then
@@ -150,7 +129,9 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted 
     match cd_source with
     | None -> ()
     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () comp.Asgns.asgns));
-  if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
+  (* Materialize the guessed output nodes so they persist across calls and are inspectable on
+     demand via the context (gh-ocannl-333). *)
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
   let _ctx, routine = Context.compile ctx comp bindings in
   (* Return just the routine for backward compatibility - ctx is discarded here *)
   routine
@@ -158,7 +139,7 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?(hosted 
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
     only the parameters that are not in [ctx.ctx_arrays] are initialized. *)
-let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
+let init_params ?(reinit_all = false) ctx bindings t =
   let comp =
     if reinit_all then Tensor.init_params t
     else
@@ -170,15 +151,13 @@ let init_params ?(reinit_all = false) ?(hosted = true) ctx bindings t =
           else skip)
       |> fun skip -> Tensor.init_params ~skip t
   in
-  if hosted then Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_hosted;
-  (* Compile and run the initialization *)
+  (* Materialize the parameters being initialized so they persist and are inspectable on demand. *)
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
+  (* Compile and run the initialization. Literal/ndarray-backed embedded nodes are uploaded into the
+     context automatically at link time from [Host_inits] (gh-ocannl-333); there is no longer a
+     separate host-array copy step here. *)
   let ctx, routine = Context.compile ctx comp bindings in
-  let ctx = Context.run ctx routine in
-  (* Mark embedded nodes as initialized via init_from_host (skip those without host arrays) *)
-  Set.fold comp.Asgns.embedded_nodes ~init:ctx ~f:(fun ctx tn ->
-      if (not (Context.is_initialized ctx tn)) && Tn.has tn then
-        Context.init_from_host_deprecated ctx tn
-      else ctx)
+  Context.run ctx routine
 
 type example_train_result = {
   inputs : Tensor.t;
@@ -201,9 +180,9 @@ type example_train_result = {
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at
     [init_params]. *)
-let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init = false) ?reinit_all
+let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_all
     ?(bindings = IDX.empty) ~f ctx (t : Tensor.t) : Context.t =
-  if hosted then set_hosted t.Tensor.value;
+  set_materialized t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
   if output_cd_file then (
@@ -220,7 +199,7 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init 
     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () update.Asgns.asgns));
   let ctx =
     if skip_init || Set.is_empty t.params then ctx
-    else init_params ?reinit_all ~hosted ctx bindings t
+    else init_params ?reinit_all ctx bindings t
   in
   let ctx, routine = Context.compile ctx update bindings in
   Context.run ctx routine
@@ -228,26 +207,52 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(hosted = true) ?(skip_init 
 (** Context-based versions of training functions for the new simplified API *)
 
 (** [forward_once] is a wrapper around {!run_once} that runs the forward code of [t]. *)
-let forward_once ?output_cd_file ?(hosted = true) ?(skip_init = false) ?reinit_all
-    ?(bindings = IDX.empty) ctx t =
-  let ctx = run_once ?output_cd_file ~hosted ~skip_init ?reinit_all ~bindings ~f:forward ctx t in
+let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
+  let ctx = run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ~f:forward ctx t in
   (* FIXME: this is going away soon. *)
   Tensor.remove_bprop_root t;
   ctx
 
 (** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
     forward and backprop. *)
-let update_once ?output_cd_file ?(hosted = true) ?(skip_init = false) ?reinit_all
-    ?(bindings = IDX.empty) ctx t =
-  run_once ?output_cd_file ~hosted ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
+let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
+  run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
+
+(* For-print materialization (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's
+   value is not already materialized in the printing context, recompile a copy of it
+   ([for_print = t + 0]) into a fresh device-resident node and register that node as a for-print
+   proxy, so the printer reads the tensor's value through it.
+
+   This is best-effort: it works for recomputable (e.g. virtual / fetch-defined) tensors. For a
+   tensor that is materialized elsewhere but simply absent from this context, the copy cannot be
+   linked (its operand has no value here) — in that case we fall back to the metadata placeholder
+   rather than crash. A fresh copy is built each call because [forward_once] consumes the copy's
+   forward root; the for-print node is registered as the source's proxy for subsequent reads. *)
+let ensure_printable (ctx : Context.t) (t : Tensor.t) : Context.t =
+  if Context.mem ctx t.Tensor.value then ctx
+  else
+    try
+      let for_print =
+        let%op for_print = t + 0 in
+        for_print
+      in
+      let ctx = forward_once ctx for_print in
+      Context.register_for_print ~src:t.Tensor.value ~proxy:for_print.Tensor.value;
+      ctx
+    with _ -> ctx
 
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
-    [~with_code:false], [~with_grad:true], and [~style:`Default]. *)
+    [~with_code:false], [~with_grad:true], and [~style:`Default]. It takes an explicit context and
+    retrieves values on demand (gh-ocannl-333). If the tensor's value is not already materialized in
+    [ctx], it is recomputed via the [for_print] copy trick so real values are still shown. *)
 let%debug7_sexp printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
-    ?(style = `Default) (t : Tensor.t) : unit =
-  Tensor.print ?here ~force:true ~with_grad ~with_code ~with_low_level style t
+    ?(style = `Default) (ctx : Context.t) (t : Tensor.t) : unit =
+  let ctx = ensure_printable ctx t in
+  Tensor.print ?here ~force:true ~ctx ~with_grad ~with_code ~with_low_level style t
 
 (** [printf_tree] is a wrapper around {!Tensor.print_tree} that assumes [~force:true], and by
-    default sets [~with_value:true], [~with_grad:true], and [~depth:9]. *)
-let printf_tree ?here ?with_value ?(with_grad = true) ?(depth = 9) t =
-  Tensor.print_tree ?here ~force:true ?with_value ~with_grad ~depth t
+    default sets [~with_value:true], [~with_grad:true], and [~depth:9]. It takes an explicit context
+    and retrieves values on demand (recomputing via [for_print] if not already materialized). *)
+let printf_tree ?here ?with_value ?(with_grad = true) ?(depth = 9) (ctx : Context.t) t =
+  let ctx = ensure_printable ctx t in
+  Tensor.print_tree ?here ~force:true ~ctx ?with_value ~with_grad ~depth t

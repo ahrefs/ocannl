@@ -41,7 +41,7 @@ let () =
   check_array "Local" (Some Tn.Local);
   check_array "Device_only" (Some Tn.Device_only);
   check_array "On_device" (Some Tn.On_device);
-  check_array "Hosted" (Some (Tn.Hosted Tn.Nonconstant));
+  check_array "Effectively_constant" (Some Tn.Effectively_constant);
   check_array "Materialized" (Some Tn.Materialized);
   check_array "(no mode)" None;
 
@@ -50,9 +50,9 @@ let () =
   Stdio.printf "alloc_zeros Device_only   -> %s\n" (sm_str (sm_of_ptr zeros_priv));
 
   (* --- alloc_buffer: storage mode + reuse guard --- *)
-  let shared_buf = B.alloc_buffer ~mode:(Tn.Hosted Tn.Nonconstant) ~size_in_bytes:64 stream in
+  let shared_buf = B.alloc_buffer ~mode:Tn.Materialized ~size_in_bytes:64 stream in
   let priv_buf = B.alloc_buffer ~mode:Tn.Device_only ~size_in_bytes:64 stream in
-  Stdio.printf "alloc_buffer Hosted       -> %s\n" (sm_str (sm_of_ptr shared_buf.ptr));
+  Stdio.printf "alloc_buffer Materialized -> %s\n" (sm_str (sm_of_ptr shared_buf.ptr));
   Stdio.printf "alloc_buffer Device_only  -> %s\n" (sm_str (sm_of_ptr priv_buf.ptr));
   (* Reuse with a matching storage mode: the old buffer is handed back. *)
   let reuse_match =

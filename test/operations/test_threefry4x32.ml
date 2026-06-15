@@ -21,9 +21,9 @@ let%expect_test "threefry4x32 basic test" =
   Ir.Tnode.update_prec uniform_floats.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_floats);
-  let result = Ir.Tnode.get_values uniform_floats.value in
+  Ocannl.Train.set_materialized uniform_floats.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_floats in
+  let result = Context.get_values ctx uniform_floats.value in
 
   (* Print first few values *)
   Stdio.printf "First 5 uniform random values:\n";
@@ -59,9 +59,9 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
   let test_precision prec prec_name =
     let uniform = O.uint4x32_to_prec_uniform random_bits in
     Ir.Tnode.update_prec uniform.value prec;
-    Ocannl.Train.set_hosted uniform.value;
+    Ocannl.Train.set_materialized uniform.value;
     ctx := Ocannl.Train.forward_once !ctx uniform;
-    let result = Ir.Tnode.get_values uniform.value in
+    let result = Context.get_values !ctx uniform.value in
     Stdio.printf "%s precision - first value: %.4g, second value: %.4g\n" prec_name result.(0)
       result.(1);
     Stdio.printf "All values in [0, 1) range: %b\n"

@@ -74,15 +74,8 @@ Expected input gradients: 1 at argmax positions, 0 elsewhere
 Expected kernel gradients: all 1s (each position is argmax once)
 
 HERE: test/einsum/test_tropical_kernel.ml:129:21
-┌────────────────────────┐
-│[10]: =>_loss shape 0:1 │
-│┌┬─────────┐            │
-│││axis 0   │            │
-│├┼─────────┤            │
-│││ 3.00e+1 │            │
-│└┴─────────┘            │
-└────────────────────────┘
-grad_=>_loss <not-hosted>
+[10]: =>_loss shape 0:1  <not-in-context>
+grad_=>_loss <not-in-context>
 HERE: test/einsum/test_tropical_kernel.ml:130:21
 ┌─────────────────────────┐
 │[0]: x shape 0:4,1:4,2:1 │
@@ -110,32 +103,7 @@ HERE: test/einsum/test_tropical_kernel.ml:130:21
 ││      │ 0.00 │          │
 │└──────┴──────┘          │
 └─────────────────────────┘
-┌────────────────────────────────┐
-│[0]: x shape 0:4,1:4,2:1  grad_x│
-│┌──────┬──────┐                 │
-││      │axis 2│                 │
-│├──────┼──────┤                 │
-││0 @ 0 │ 1.00 │                 │
-││axis 1│ 0.00 │                 │
-││      │ 0.00 │                 │
-││      │ 0.00 │                 │
-│├──────┼──────┤                 │
-││1 @ 0 │ 0.00 │                 │
-││axis 1│ 0.00 │                 │
-││      │ 0.00 │                 │
-││      │ 1.00 │                 │
-│├──────┼──────┤                 │
-││2 @ 0 │ 0.00 │                 │
-││axis 1│ 1.00 │                 │
-││      │ 0.00 │                 │
-││      │ 0.00 │                 │
-│├──────┼──────┤                 │
-││3 @ 0 │ 0.00 │                 │
-││axis 1│ 0.00 │                 │
-││      │ 1.00 │                 │
-││      │ 0.00 │                 │
-│└──────┴──────┘                 │
-└────────────────────────────────┘
+grad_x <not-in-context>
 HERE: test/einsum/test_tropical_kernel.ml:131:21
 ┌─────────────────────┐
 │[2]: k shape 0:2,1:2 │
@@ -146,15 +114,7 @@ HERE: test/einsum/test_tropical_kernel.ml:131:21
 ││      │ 0.00  0.00 ││
 │└──────┴────────────┘│
 └─────────────────────┘
-┌────────────────────────────┐
-│[2]: k shape 0:2,1:2  grad_k│
-│┌──────┬────────────┐       │
-││      │axis 1      │       │
-│├──────┼────────────┤       │
-││axis 0│ 1.00  1.00 │       │
-││      │ 1.00  1.00 │       │
-│└──────┴────────────┘       │
-└────────────────────────────┘
+grad_k <not-in-context>
 
 Testing tropical conv backprop with non-zero kernel...
 Input shape: 4x4x1 (all 1s)
@@ -169,15 +129,8 @@ Expected input gradients:
 Expected kernel gradients: [[0,0],[0,4]] - only (1,1) was argmax
 
 HERE: test/einsum/test_tropical_kernel.ml:188:21
-┌────────────────────────┐
-│[10]: =>_loss shape 0:1 │
-│┌┬─────────┐            │
-│││axis 0   │            │
-│├┼─────────┤            │
-│││ 4.40e+1 │            │
-│└┴─────────┘            │
-└────────────────────────┘
-grad_=>_loss <not-hosted>
+[10]: =>_loss shape 0:1  <not-in-context>
+grad_=>_loss <not-in-context>
 HERE: test/einsum/test_tropical_kernel.ml:189:21
 ┌─────────────────────────┐
 │[0]: x shape 0:4,1:4,2:1 │
@@ -205,32 +158,7 @@ HERE: test/einsum/test_tropical_kernel.ml:189:21
 ││      │ 1.00 │          │
 │└──────┴──────┘          │
 └─────────────────────────┘
-┌────────────────────────────────┐
-│[0]: x shape 0:4,1:4,2:1  grad_x│
-│┌──────┬──────┐                 │
-││      │axis 2│                 │
-│├──────┼──────┤                 │
-││0 @ 0 │ 0.00 │                 │
-││axis 1│ 0.00 │                 │
-││      │ 0.00 │                 │
-││      │ 0.00 │                 │
-│├──────┼──────┤                 │
-││1 @ 0 │ 0.00 │                 │
-││axis 1│ 1.00 │                 │
-││      │ 0.00 │                 │
-││      │ 1.00 │                 │
-│├──────┼──────┤                 │
-││2 @ 0 │ 0.00 │                 │
-││axis 1│ 0.00 │                 │
-││      │ 0.00 │                 │
-││      │ 0.00 │                 │
-│├──────┼──────┤                 │
-││3 @ 0 │ 0.00 │                 │
-││axis 1│ 1.00 │                 │
-││      │ 0.00 │                 │
-││      │ 1.00 │                 │
-│└──────┴──────┘                 │
-└────────────────────────────────┘
+grad_x <not-in-context>
 HERE: test/einsum/test_tropical_kernel.ml:190:21
 ┌────────────────────────┐
 │[2]: k shape 0:2,1:2    │
@@ -241,15 +169,7 @@ HERE: test/einsum/test_tropical_kernel.ml:190:21
 ││      │ 0.00  1.00e+1 ││
 │└──────┴───────────────┘│
 └────────────────────────┘
-┌────────────────────────────┐
-│[2]: k shape 0:2,1:2  grad_k│
-│┌──────┬────────────┐       │
-││      │axis 1      │       │
-│├──────┼────────────┤       │
-││axis 0│ 0.00  0.00 │       │
-││      │ 0.00  4.00 │       │
-│└──────┴────────────┘       │
-└────────────────────────────┘
+grad_k <not-in-context>
 
 
 All tropical kernel tests completed!

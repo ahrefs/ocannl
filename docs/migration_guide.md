@@ -275,7 +275,7 @@ let routine = Train.to_routine ctx IDX.empty
 (* Training loop - reuse compiled routine *)
 for epoch = 1 to 100 do
   Train.run ctx routine;
-  if epoch mod 10 = 0 then Printf.printf "Loss: %.4f\n" loss.@[0]
+  if epoch mod 10 = 0 then Printf.printf "Loss: %.4f\n" (ctx, loss).@[0]
 done
 ```
 
@@ -355,7 +355,7 @@ let train_with_schedule get_batch model input_tensor target_tensor steps =
   
   (* Dynamic learning rate that decreases over time *)
   let%op learning_rate = 0.1 *. (1.0 - (!@step_n /. !..steps)) in
-  Train.set_hosted learning_rate.value;
+  Train.set_materialized learning_rate.value;
   
   (* Compile with dynamic learning rate *)
   let update = Train.grad_update loss in
@@ -363,6 +363,8 @@ let train_with_schedule get_batch model input_tensor target_tensor steps =
   let ctx = Train.init_params ctx bindings loss in
   let routine = Train.to_routine ctx bindings 
     (Asgns.sequence [update; sgd]) in
+  (* Value access is context-mediated (gh-ocannl-333): read/write through the routine's context. *)
+  let ctx = Context.context routine in
   
   (* Get reference to step counter *)
   let step_ref = IDX.find_exn (Context.bindings routine) step_n in
@@ -370,10 +372,10 @@ let train_with_schedule get_batch model input_tensor target_tensor steps =
   
   (* Training loop - update input data each step *)
   for step = 1 to steps do
-    (* Load next batch into tensors *)
+    (* Load next batch into tensors (on-device, in place) *)
     let x_data, y_data = get_batch step in
-    Tn.set_values input_tensor.value x_data;
-    Tn.set_values target_tensor.value y_data;
+    ignore (Context.set_values ctx input_tensor.value x_data : Context.t);
+    ignore (Context.set_values ctx target_tensor.value y_data : Context.t);
     
     (* Run training step *)
     Train.run ctx routine;
@@ -381,7 +383,7 @@ let train_with_schedule get_batch model input_tensor target_tensor steps =
     
     if step mod 100 = 0 then
       Printf.printf "Step %d, LR: %.4f, Loss: %.6f\n" 
-        step learning_rate.@[0] loss.@[0]
+        step (ctx, learning_rate).@[0] (ctx, loss).@[0]
   done;
   ctx
 ```
@@ -440,7 +442,7 @@ let train_batched data labels batch_size epochs =
     for batch = 0 to num_batches - 1 do
       batch_ref := batch;
       Train.run ctx routine;
-      epoch_loss := !epoch_loss +. batch_loss.@[0]
+      epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0]
     done;
     Printf.printf "Epoch %d, Avg Loss: %.6f\n" 
       epoch (!epoch_loss /. float num_batches)
@@ -464,20 +466,17 @@ def inference(model, test_input):
 let inference ctx model =
   (* Define inference computation - use %cd to avoid initialization *)
   let%cd output = model { test_input } in
-  Train.set_on_host output.value;
+  Train.set_materialized output.value;
   
-  (* Compile inference routine *)
+  (* Compile inference routine; value access goes through the returned context. *)
   let ctx, routine = Context.compile ctx output IDX.empty in
   
   fun input_data ->
-    (* Run inference *)
-    Tn.set_values test_input.value input_data;
-    Train.run ctx infer_routine;
-  
-    (* Before OCANNL v0.7, to get all cells flattened: *)
-    Tn.get_values output.value
-    (* Or starting with the future OCANNL v0.7 to get a bigarray: *)
-    Context.get ctx output.value
+    (* Run inference: write the input on-device, run, read the output back on demand. *)
+    ignore (Context.set_values ctx test_input.value input_data : Context.t);
+    let ctx = Context.run ctx routine in
+    (* Flattened (unpadded) values via an on-demand device-to-host transfer (gh-ocannl-333): *)
+    Context.get_values ctx output.value
 ```
 
 ### Key API Functions
@@ -534,7 +533,7 @@ def backward(tensors, grad_tensors=None, retain_graph=None):
 **OCANNL** (from train.ml):
 ```ocaml
 let grad_update ?(setup_for_parallel = false) loss =
-  set_hosted loss.Tensor.value;
+  set_materialized loss.Tensor.value;
   (* This just builds a computation graph, doesn't execute *)
   [%cd
     loss.forward;           (* Run forward pass *)

@@ -42,10 +42,12 @@ let () =
   let%cd consumer = out =: b.merge in
   let consumer_code = Backend.compile root.optimize_ctx Idx.Empty consumer in
 
-  (* [src] holds a.value, b.value and out.value, initialized from host. *)
-  let src = Backend.init_from_host root a.value in
-  let src = Backend.init_from_host src b.value in
-  let src = Backend.init_from_host src out.value in
+  (* [src] holds a.value, b.value and out.value, initialized from host. After gh-ocannl-333 the host
+     buffer is supplied explicitly; here it comes from each literal's registered init data. *)
+  let host_of (tn : Tn.t) = Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find tn)) in
+  let src = Backend.init_from_host root a.value (host_of a.value) in
+  let src = Backend.init_from_host src b.value (host_of b.value) in
+  let src = Backend.init_from_host src out.value (host_of out.value) in
 
   (* --- Mismatch path: producer transfers a.value, consumer expects b.value. --- *)
   (match Backend.device_to_device a.value ~into_merge_buffer:Copy ~dst:src ~src with
@@ -70,7 +72,11 @@ let () =
          back out into out.value (initialized to [9 9]). *)
       Task.run transfer_b.schedule;
       Task.run consumer_routine.schedule;
-      let vals = Tn.get_values out.value in
+      Backend.await stream;
+      let out_nd = host_of out.value in
+      ignore (Backend.to_host consumer_routine.context out.value out_nd : bool);
+      Backend.await stream;
+      let vals = Ir.Ndarray.retrieve_flat_values out_nd in
       Stdio.printf "matched: out (init [9 9]) after transfer + consumer = [%s]\n"
         (String.concat ~sep:" " (Array.to_list (Array.map vals ~f:(Printf.sprintf "%g")))));
 

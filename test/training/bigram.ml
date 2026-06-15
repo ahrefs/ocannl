@@ -55,7 +55,7 @@ let () =
      Run with the option --ocannl_output_debug_files_in_build_directory=true and check the
      build_files/ directory for the generated code. *)
   (* FIXME(#344): When uncommented, this exceeds the number of buffer arguments supported by the Metal backend. *)
-  (* Train.every_non_literal_on_host batch_loss; *)
+  (* Train.every_non_literal_materialized batch_loss; *)
   let update = Train.grad_update batch_loss in
   let%op learning_rate = 1 in
   let sgd = Train.sgd_update ~learning_rate batch_loss in
@@ -63,7 +63,7 @@ let () =
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-  (* Train.printf w ~with_grad:false; *)
+  let ctx = Context.context sgd_step in  (* Train.printf w ~with_grad:false; *)
 
   let open Operation.At in
   let batch_ref = IDX.find_exn (Context.bindings sgd_step) batch_n in
@@ -72,7 +72,7 @@ let () =
     for batch = 0 to n_batches - 1 do
       batch_ref := batch;
       Train.run ctx sgd_step;
-      let loss = batch_loss.@[0] in
+      let loss = (ctx, batch_loss).@[0] in
       epoch_loss := !epoch_loss +. loss;
       if batch % 100 = 0 then Stdio.printf "Epoch %d, batch %d, loss=%.4g\n%!" epoch batch loss
     done;
@@ -86,23 +86,23 @@ let () =
     infer_probs.forward;
     { dice } =: uniform_at !@counter_n
   in
-  Train.set_on_host infer_probs.value;
+  Train.set_materialized infer_probs.value;
   let infer_step = Train.to_routine (Context.context sgd_step) bindings infer_step in
-  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
+  let ctx = Context.context infer_step in  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
   let infer c =
     let c_one_hot = Dataprep.Names.char_to_one_hot c in
-    Tn.set_values cha.value c_one_hot;
+    ignore (Context.set_values ctx cha.value c_one_hot : Context.t);
     Int.incr counter_ref;
     Train.run ctx infer_step;
-    let dice_value = dice.@[0] in
+    let dice_value = (ctx, dice).@[0] in
 
     let max_i = List.length Dataprep.Names.letters_with_dot - 1 in
     let rec aux i sum =
       if i >= max_i then '.'
       else
-        let prob = infer_probs.@{[| i |]} in
+        let prob = (ctx, infer_probs).@{[| i |]} in
         let new_sum = sum +. prob in
         if Float.compare new_sum dice_value > 0 then List.nth_exn Dataprep.Names.letters_with_dot i
         else aux (i + 1) new_sum

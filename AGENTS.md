@@ -90,7 +90,9 @@ Key points:
 ## Backends, Contexts, and Transfers
 - Backends: sync_cc, multicore_cc, cuda, metal (if built).
 - Use `Backends.fresh_backend ()` in examples/tests or `Context` API (arrayjit/lib/context.mli).
-- Automatic host transfers are controlled by ocannl_config (automatic_host_transfers).
+- Host access is on-demand and context-mediated (`Context.to_host`/`from_host`/`get_values`/
+  `set_values`); tensor nodes hold no host array and there are no automatic host transfers
+  (gh-ocannl-333).
 - Merge buffers (`.merge`) support stream-to-stream reductions in %cd.
 
 ## Adding Features

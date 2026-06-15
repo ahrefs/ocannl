@@ -9,7 +9,7 @@ Testing default lone parameter -- corner case
 │││ 4.49e-1 │       │
 │└┴─────────┘       │
 └───────────────────┘
-grad_w_o <not-hosted>
+grad_w_o <not-in-context>
 
 ERROR: Should have raised an exception
 Testing lone parameter 1D -- corner case
@@ -21,7 +21,7 @@ Testing lone parameter 1D -- corner case
 │││ 4.49e-1 │       │
 │└┴─────────┘       │
 └───────────────────┘
-grad_w_o <not-hosted>
+grad_w_o <not-in-context>
 Testing default linear operation
 Got expected error: You forgot to specify the hidden dimension(s) 1
 Testing default affine operation with propagated dimensions
@@ -34,7 +34,7 @@ Testing default affine operation with propagated dimensions
 ││      │ 6.40e-1  1.86e-1  2.43e-1 ││
 │└──────┴───────────────────────────┘│
 └────────────────────────────────────┘
-grad_w <not-hosted>
+grad_w <not-in-context>
 Testing default affine operation with unknown input dimensions
 Got expected error: You forgot to specify the hidden dimension(s) 1
 Testing default bias parameter

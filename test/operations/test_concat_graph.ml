@@ -24,10 +24,10 @@ let () =
   let ctx = Context.auto () in
 
   (* Set tensors as hosted to enable printing *)
-  Train.set_hosted loss.value;
-  Train.set_hosted result.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x1.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] x2.diff).grad;
+  Train.set_materialized loss.value;
+  Train.set_materialized result.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] x2.diff).grad;
 
   (* Run forward and backward pass *)
   ignore (Train.update_once ~output_cd_file:false ctx loss);
@@ -37,17 +37,17 @@ let () =
   printf "x2 = [4.0, 5.0] (dim 2)\n%!";
   printf "\n--- Forward pass: sin((x1, x2) ++^ \"a; b => a^b\") ---\n%!";
   printf "Concatenated result (after sin):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result;
 
   printf "\n--- Backward pass: gradients ---\n%!";
   printf "Loss (sum of all sin values):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false loss;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx loss;
 
   printf "\nGradient of x1 (cos of original values):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true x1;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x1;
 
   printf "\nGradient of x2:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true x2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x2;
 
   printf "\n=== Three-way Concatenation Forward and Backprop Graph Test ===\n\n%!";
   (* Create three input tensors with different sizes *)
@@ -64,11 +64,11 @@ let () =
   let ctx3 = Context.auto () in
 
   (* Set tensors as hosted to enable printing *)
-  Train.set_hosted loss3.value;
-  Train.set_hosted result3.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x1_3.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] x2_3.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] x3_3.diff).grad;
+  Train.set_materialized loss3.value;
+  Train.set_materialized result3.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x1_3.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] x2_3.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] x3_3.diff).grad;
 
   (* Run forward and backward pass *)
   ignore (Train.update_once ~output_cd_file:false ctx3 loss3);
@@ -79,20 +79,20 @@ let () =
   printf "x3_3 = [6.0, 7.0] (dim 2)\n%!";
   printf "\n--- Forward pass: sin((x1_3, x2_3, x3_3) ++^ \"a; b; c => a^b^c\") ---\n%!";
   printf "Concatenated result (after sin):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result3;
 
   printf "\n--- Backward pass: gradients ---\n%!";
   printf "Loss (sum of all sin values):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false loss3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx loss3;
 
   printf "\nGradient of x1_3 (cos of original values):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true x1_3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x1_3;
 
   printf "\nGradient of x2_3:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true x2_3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x2_3;
 
   printf "\nGradient of x3_3:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true x3_3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x3_3;
 
   printf "\n=== Three-way Concat With Unit Dimension Test ===\n\n%!";
   (* One concatenated dimension is 1 to exercise Fixed_idx 0 behavior. *)
@@ -105,11 +105,11 @@ let () =
 
   let ctx_u = Context.auto () in
 
-  Train.set_hosted loss_u.value;
-  Train.set_hosted result_u.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x1_u.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] x2_u.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] x3_u.diff).grad;
+  Train.set_materialized loss_u.value;
+  Train.set_materialized result_u.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x1_u.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] x2_u.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] x3_u.diff).grad;
 
   let update_ok =
     try
@@ -127,20 +127,20 @@ let () =
     printf "x3_u = [4.0, 5.0] (dim 2)\n%!";
     printf "\n--- Forward pass: sin((x1_u, x2_u, x3_u) ++^ \"a; b; c => a^b^c\") ---\n%!";
     printf "Concatenated result (after sin):\n%!";
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:false result_u;
+    Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result_u;
 
     printf "\n--- Backward pass: gradients ---\n%!";
     printf "Loss (sum of all sin values):\n%!";
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:false loss_u;
+    Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx loss_u;
 
     printf "\nGradient of x1_u (cos of original values):\n%!";
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:true x1_u;
+    Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x1_u;
 
     printf "\nGradient of x2_u:\n%!";
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:true x2_u;
+    Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x2_u;
 
     printf "\nGradient of x3_u:\n%!";
-    Train.printf ~here:[%here] ~with_code:false ~with_grad:true x3_u);
+    Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx x3_u);
 
   printf "\n=== Nested Concatenation Test ===\n\n%!";
   (* Concatenate results of concatenations: (a^b)^c *)
@@ -155,11 +155,11 @@ let () =
 
   let ctx_n = Context.auto () in
 
-  Train.set_hosted loss_n.value;
-  Train.set_hosted nested.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] n1.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] n2.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] n3.diff).grad;
+  Train.set_materialized loss_n.value;
+  Train.set_materialized nested.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] n1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] n2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] n3.diff).grad;
 
   ignore (Train.update_once ~output_cd_file:false ctx_n loss_n);
 
@@ -169,20 +169,20 @@ let () =
   printf "n3 = [6.0, 7.0] (dim 2)\n%!";
   printf "\n--- Forward pass: sin(((n1, n2) ++^ \"a; b => a^b\", n3) ++^ \"a; b => a^b\") ---\n%!";
   printf "Nested concatenation result (after sin):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false nested;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx nested;
 
   printf "\n--- Backward pass: gradients ---\n%!";
   printf "Loss:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false loss_n;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx loss_n;
 
   printf "\nGradient of n1:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true n1;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx n1;
 
   printf "\nGradient of n2:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true n2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx n2;
 
   printf "\nGradient of n3:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true n3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx n3;
 
   printf "\n=== Boundary Unit Dim: First Component Dim 1 ===\n\n%!";
   (* First component has dim 1 (boundary position) *)
@@ -195,11 +195,11 @@ let () =
 
   let ctx_b1 = Context.auto () in
 
-  Train.set_hosted loss_b1.value;
-  Train.set_hosted result_b1.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] b1.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] b2.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] b3.diff).grad;
+  Train.set_materialized loss_b1.value;
+  Train.set_materialized result_b1.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] b1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] b2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] b3.diff).grad;
 
   ignore (Train.update_once ~output_cd_file:false ctx_b1 loss_b1);
 
@@ -209,17 +209,17 @@ let () =
   printf "b3 = [5.0, 6.0] (dim 2)\n%!";
   printf "\n--- Forward pass ---\n%!";
   printf "Concatenated result (after sin):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result_b1;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result_b1;
 
   printf "\n--- Backward pass: gradients ---\n%!";
   printf "\nGradient of b1:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b1;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx b1;
 
   printf "\nGradient of b2:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx b2;
 
   printf "\nGradient of b3:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true b3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx b3;
 
   printf "\n=== Boundary Unit Dim: Last Component Dim 1 ===\n\n%!";
   (* Last component has dim 1 (boundary position) *)
@@ -232,11 +232,11 @@ let () =
 
   let ctx_l = Context.auto () in
 
-  Train.set_hosted loss_l.value;
-  Train.set_hosted result_l.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] l1.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] l2.diff).grad;
-  Train.set_hosted (Option.value_exn ~here:[%here] l3.diff).grad;
+  Train.set_materialized loss_l.value;
+  Train.set_materialized result_l.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] l1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] l2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] l3.diff).grad;
 
   ignore (Train.update_once ~output_cd_file:false ctx_l loss_l);
 
@@ -246,16 +246,16 @@ let () =
   printf "l3 = [6.0] (dim 1)\n%!";
   printf "\n--- Forward pass ---\n%!";
   printf "Concatenated result (after sin):\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result_l;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result_l;
 
   printf "\n--- Backward pass: gradients ---\n%!";
   printf "\nGradient of l1:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true l1;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx l1;
 
   printf "\nGradient of l2:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true l2;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx l2;
 
   printf "\nGradient of l3:\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true l3;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx l3;
 
   printf "\n=== Concatenation Graph Test Complete ===\n%!"

@@ -432,7 +432,7 @@ a +* "ij; jk => ik" b
 {#debugging .remark title="Debugging Shapes"}
 > When shapes don't match:
 > 
-> * Print tensor shapes: `Tensor.print ~force:true tensor`  
+> * Print tensor shapes (values need a context: `Tensor.print ~ctx ~force:true tensor`, or `Train.printf ctx tensor`)  
 >   [but not before all relevant tensor expressions are constructed]{.unrevealed #premature-inference-finalize}
 > * Check axis kinds are correctly specified
 > * Verify broadcasting assumptions

@@ -23,8 +23,8 @@ let test_conv2d_padding_preserves_dims () =
   in
 
   let ctx = Context.auto () in
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 5x5x1\n%!";
   printf "Kernel size: 3x3\n%!";
@@ -32,7 +32,7 @@ let test_conv2d_padding_preserves_dims () =
   printf "use_padding: true\n%!";
   printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 5x5 (same as input)\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test that conv2d with use_padding=false reduces spatial dimensions.
@@ -53,8 +53,8 @@ let test_conv2d_no_padding_reduces_dims () =
   in
 
   let ctx = Context.auto () in
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 5x5x1\n%!";
   printf "Kernel size: 3x3\n%!";
@@ -62,7 +62,7 @@ let test_conv2d_no_padding_reduces_dims () =
   printf "use_padding: false\n%!";
   printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 3x3 (reduced by kernel_size-1)\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test conv2d with stride=2 and use_padding=true.
@@ -83,8 +83,8 @@ let test_conv2d_stride_with_padding () =
   in
 
   let ctx = Context.auto () in
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 6x6x1\n%!";
   printf "Kernel size: 3x3\n%!";
@@ -92,7 +92,7 @@ let test_conv2d_stride_with_padding () =
   printf "use_padding: true\n%!";
   printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 3x3 (input/stride)\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\nInput: %s\n%!" @@ Ir.Tnode.dims_to_string input.value
 
 (** Test backpropagation for conv2d with stride=2 and use_padding=true.
@@ -115,8 +115,8 @@ let test_conv2d_stride_with_padding_backprop () =
   let%op loss = output ++ "...|... => 0" in
 
   let ctx = Context.auto () in
-  Train.set_hosted loss.value;
-  ignore (Train.update_once ctx loss);
+  Train.set_materialized loss.value;
+  let ctx = Train.update_once ctx loss in
 
   printf "Input shape: 6x6x1\n%!";
   printf "Kernel size: 3x3\n%!";
@@ -124,7 +124,7 @@ let test_conv2d_stride_with_padding_backprop () =
   printf "use_padding: true\n%!";
   printf "out_channels: 4\n%!";
   printf "Backprop completed successfully!\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx loss
 
 (** Test conv2d with stride=2 and use_padding=false.
 
@@ -146,8 +146,8 @@ let test_conv2d_stride_without_padding () =
   in
 
   let ctx = Context.auto () in
-  Train.set_hosted output.value;
-  ignore (Train.forward_once ctx output);
+  Train.set_materialized output.value;
+  let ctx = Train.forward_once ctx output in
 
   printf "Input shape: 9x9x1\n%!";
   printf "Kernel size: 3x3\n%!";
@@ -155,7 +155,7 @@ let test_conv2d_stride_without_padding () =
   printf "use_padding: false\n%!";
   printf "out_channels: 4\n%!";
   printf "Expected output spatial dims: 4x4 ((9-3)/2 + 1)\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false output;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx output;
   printf "\n%!"
 
 (** Test backpropagation for conv2d with stride=2 and use_padding=false.
@@ -183,7 +183,7 @@ let test_conv2d_stride_without_padding_backprop () =
   let%op loss = output ++ "...|... => 0" in
 
   let ctx = Context.auto () in
-  Train.set_hosted loss.value;
+  Train.set_materialized loss.value;
   ignore (Train.update_once ~output_cd_file:false ctx loss);
 
   printf "Input shape: 9x9x1\n%!";
@@ -193,7 +193,7 @@ let test_conv2d_stride_without_padding_backprop () =
   printf "out_channels: 4\n%!";
   printf "Expected output shape: 4x4 ((9-3)/2 + 1)\n%!";
   printf "Backprop completed successfully!\n%!";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:true loss
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx loss
 
 let () =
   test_conv2d_padding_preserves_dims ();

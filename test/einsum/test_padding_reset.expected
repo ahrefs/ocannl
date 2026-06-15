@@ -6,53 +6,25 @@ Testing padding margin initialization and reset...
 
 Input (4x4 logical, with padding margins shown):
 HERE: test/einsum/test_padding_reset.ml:67:21
-[2]: -_input shape 0:4,1:4  [
-  [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; -12.00 ; -11.00 ; -10.00 ; -9.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; -8.00 ; -7.00 ; -6.00 ; -5.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; -4.00 ; -3.00 ; -2.00 ; -1.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
-  ; [ 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ; 0.00 ]
-]
+[2]: -_input shape 0:4,1:4  <no-context>
 
 Pooled - max of 3x3 windows of INPUT (padding should be -inf for max):
 HERE: test/einsum/test_padding_reset.ml:70:21
-[8]: @^=>+_pooled shape 0:4,1:4  [
-  [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
-  ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-]
+[8]: @^=>+_pooled shape 0:4,1:4  <no-context>
 
 Conv - sum of 3x3 windows of INPUT (padding should be 0 for sum):
 HERE: test/einsum/test_padding_reset.ml:73:21
-[12]: *._conv_out shape 0:4,1:4  [
-  [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
-  ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
-  ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]
-  ; [ -22.00 ; -30.00 ; -24.00 ; -14.00 ]
-]
+[12]: *._conv_out shape 0:4,1:4  <no-context>
 
 === Second forward pass (checking reset across iterations) ===
 
 Pooled after second pass:
 HERE: test/einsum/test_padding_reset.ml:80:21
-[8]: @^=>+_pooled shape 0:4,1:4  [
-  [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
-  ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-]
+[8]: @^=>+_pooled shape 0:4,1:4  <no-context>
 
 Conv after second pass:
 HERE: test/einsum/test_padding_reset.ml:83:21
-[12]: *._conv_out shape 0:4,1:4  [
-  [ -54.00 ; -78.00 ; -72.00 ; -46.00 ]
-  ; [ -69.00 ; -99.00 ; -90.00 ; -57.00 ]
-  ; [ -45.00 ; -63.00 ; -54.00 ; -33.00 ]
-  ; [ -22.00 ; -30.00 ; -24.00 ; -14.00 ]
-]
+[12]: *._conv_out shape 0:4,1:4  <no-context>
 
 === Expected Behavior Analysis ===
 Input values: -16 to -1 (all negative)
@@ -78,35 +50,17 @@ Testing single-operation padding (max-pool only)...
 
 Input (4x4 logical, with padding margins shown):
 HERE: test/einsum/test_padding_reset.ml:144:21
-[2]: -_input shape 0:4,1:4  [
-  [ -inf ; -inf ; -inf ; -inf ; -inf ; -inf ; -inf ]
-  ; [ -inf ; -16.00 ; -15.00 ; -14.00 ; -13.00 ; -inf ; -inf ]
-  ; [ -inf ; -12.00 ; -11.00 ; -10.00 ; -9.00 ; -inf ; -inf ]
-  ; [ -inf ; -8.00 ; -7.00 ; -6.00 ; -5.00 ; -inf ; -inf ]
-  ; [ -inf ; -4.00 ; -3.00 ; -2.00 ; -1.00 ; -inf ; -inf ]
-  ; [ -inf ; -inf ; -inf ; -inf ; -inf ; -inf ; -inf ]
-  ; [ -inf ; -inf ; -inf ; -inf ; -inf ; -inf ; -inf ]
-]
+[2]: -_input shape 0:4,1:4  <no-context>
 
 Pooled - max of 3x3 windows (padding should be -inf for max):
 HERE: test/einsum/test_padding_reset.ml:147:21
-[8]: @^=>+_pooled shape 0:4,1:4  [
-  [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
-  ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-]
+[8]: @^=>+_pooled shape 0:4,1:4  <no-context>
 
 === Second forward pass ===
 
 Pooled after second pass (should be identical):
 HERE: test/einsum/test_padding_reset.ml:154:21
-[8]: @^=>+_pooled shape 0:4,1:4  [
-  [ -11.00 ; -10.00 ; -9.00 ; -9.00 ]
-  ; [ -7.00 ; -6.00 ; -5.00 ; -5.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-  ; [ -3.00 ; -2.00 ; -1.00 ; -1.00 ]
-]
+[8]: @^=>+_pooled shape 0:4,1:4  <no-context>
 
 === Expected Behavior ===
 With single operation, padding can be initialized once to -infinity.

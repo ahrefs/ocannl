@@ -60,19 +60,10 @@ In the future, when we introduce program search, `compile` functions will return
 OCANNL classifies tensor nodes according to their memory properties:
 
  ```ocaml
-type memory_type =
-  | Constant  (** The tensor node does not change after initialization. *)
-  | Nonconstant  (** One of: [Changed_on_devices], [Volatile]. *)
-  | Changed_on_devices
-      (** The tensor node will only change on host via a [to_host] call. *)
-  | Volatile
-      (** The tensor node will only change on any device via a [from_host] call possibly followed by
-          [device_to_device]. *)
-
 type memory_mode =
-  | Effectively_constant  (** Either [Hosted Constant], or a subset of [Virtual]. *)
+  | Effectively_constant  (** A constant, or a subset of [Virtual]. *)
   | Virtual  (** The tensor node's computations are inlined on a per-scalar basis. *)
-  | Never_virtual  (** One of: [Local], [On_device], [Hosted]. *)
+  | Never_virtual  (** One of: [Local], [On_device], [Materialized]. *)
   | Local
       (** The full tensor node is cached for the duration of a computation but not persisted across
           calls to compiled functions. It is not available for merging across devices. *)
@@ -80,16 +71,16 @@ type memory_mode =
   | On_device
       (** The tensor node is stored on the devices that compute with it and persisted across
           function calls. It is available for merging across devices (for devices that support
-          merging / P2P), but not (directly) for visualization or storing to disk. *)
-  | Materialized  (** One of: [On_device], [Hosted]. *)
-  | Hosted of memory_type
-      (** The tensor node is stored in a globally addressable memory, in addition to on devices
-          where it is computed with (or only on the host and not on the device, for some backends).
-          It is available for all operations, and visible to OCaml programs as an {!Ndarray} (the
-          optional [array] of {!t}). *)
+          merging / P2P). CPU-side access (printing, persistence, inspection) is on-demand via
+          context-mediated device-to-host transfers; no host copy is stored on the node. *)
+  | Materialized
+      (** An as-yet-unresolved request for a persisted (non-virtual, non-local) node; resolves to
+          [On_device]. *)
  ```
 
- Note: the `sharing` type (`Per_stream`, `Shared_cross_streams`, `Unset`) and the cross-stream sharing algorithm were removed in the streams cleanup. `On_device` and `Changed_on_devices` are no longer parameterized by `sharing`.
+ Note: after [gh-ocannl-333] there is no `Hosted` memory mode and no `memory_type`: nothing is
+ stored on the host side of a tensor node, and `Materialized` collapses to `On_device`. (The
+ `sharing` type and the cross-stream sharing algorithm were removed earlier, in the streams cleanup.)
 
  `Tnode.update_memory_mode` verifies consistency of the updates of these modes. Currently, these properties are either set explicitly (directly or indirectly) by the user, or determined by the `Low_level` analysis and optimization process. Moreover, the `Tensor` module can influence whether the mode is constant (`Tensor.number`, `Tensor.ndarray`) or non-constant (`Tensor.param`).
 
@@ -160,28 +151,32 @@ The `Copy` mode uses physical arrays to back merge buffers. The merge buffer arr
 
 Currently, OCANNL does not support merge buffers for `from_host` transfers. But it might in the future. Currently, combining `to_host` and `from_host` is the only way to make different backends cooperate.
 
-#### Automated transfers to / from host
+#### On-demand transfers to / from host
 
-Unless disabled via setting `automatic_host_transfers` to false, `arrayjit` automates the calling of `from_host` and `to_host` functions. Tensor node objects have three contributing fields:
+As of gh-ocannl-333, OCANNL no longer keeps a host copy of tensor data and no longer automates
+host transfers. Tensor nodes have no `array`, `prepare_read`, `prepare_write`, or
+`devices_not_lagging_host` fields, and there is no `Hosted` memory mode: all materialized data lives
+exclusively on devices.
 
-- `prepare_read` for synchronization and `to_host` transfers right before a host array is read,
-- `prepare_write` for synchronization right before a host array is written to,
-- `devices_not_lagging_host` for tracking which devices have scheduled transferring the data already, or don't need transferring because they computed or scheduled computing the data themselves.
+CPU-side value access — printing, persistence, inspection — is an explicit, **on-demand**
+device-to-host (or host-to-device) transfer mediated by an explicit `Context.t`, through a temporary
+host `Ndarray`:
 
-Since currently the tagging is per-device, for per-stream, tensor nodes might need supplementary `from_host` (or `device_to_device`) calls in rare situations.
+- `Context.to_host ctx tn` allocates a temporary host buffer and copies the node's device buffer
+  into it (returning it); `Context.from_host ctx tn nd` uploads a host buffer into the node's device
+  buffer (allocating it if needed) and returns a context in which the node is marked initialized.
+- `Context.get_values`/`set_values`/`get_value`/`set_value`/`points_1d`/`points_2d` are thin
+  convenience wrappers over those. There is no cache: each call performs a fresh transfer, which is
+  expensive on non-unified-memory backends — callers should batch access rather than poll.
+- `Tensor.print` / `Tensor.print_tree` take an optional `?ctx`; with it they retrieve values on
+  demand, without it they render a metadata placeholder. `Train.printf` / `printf_tree` take an
+  explicit context and retrieve by default.
 
-There are three code components to the automation.
+The lower backend `from_host`/`to_host`/`init_from_host` take an explicit `Ndarray.t` supplied by the
+caller (no longer read from the node). `Backends.Add_buffer_retrieval_and_syncing.update_writer_event`
+still records the post-modification event on the stream for device-side ordering and merge buffers.
 
-- Within `Tnode`:
-  - The helper function `do_read` unconditionally invokes synchronization code, and if `automatic_host_transfers` it invokes data transfer code, as stored in the `prepare_read` field of a node; then clears the field.
-  - The helper function `do_write` unconditionally invokes synchronization code as stored in the `prepare_write` field of a node, then clears the field.
-  - `do_read` is invoked from `points_1d`, `points_2d`, `get_value`, `get_values` of `Tnode`; and also from `to_dag` and `print` of `Tensor`.
-  - `do_write` is invoked from `set_value`, `set_values`.
-  - `Tnode` exposes `prepare_read` and `prepare_write` for updating the fields: only the new data transfer is preserved, but the synchronization codes are combined.
-- Within `Backends.Add_buffer_retrieval_and_syncing`:
-  - The `update_writer_event` helper adds the after-modification event to synchronization and sets data transfer to `to_host` from the stream, using `prepare_read`. This happens inside the `device_to_device` transfer routine's schedule (when it is run) and for `sync_routine` (after scheduling the routine), and independently of `automatic_host_transfers`.
-  - Moreover, `sync_routine`, before scheduling the routine and only if `automatic_host_transfers`, directly schedules `from_host` for input nodes that are not tagged with the device (via `devices_not_lagging_host`). Note that input nodes are the "read only" and "read before write" nodes that are not constants.
-- Within `Backends.Raise_backend.alloc_if_needed`:
-  - If `automatic_host_transfers` and the node allocated for the context is a constant, `alloc_if_needed` directly schedules `from_host` for the node regardless of whether it is tagged with the device (via `devices_not_lagging_host`); it does add the device tag to the node (if missing).
-
-  **Note:** we do **not** invoke `Tnode.do_read` from within `Backends.Add_buffer_retrieval_and_syncing.from_host`, since to adequately handle such transfers one should deliberately use `device_to_device` functions. This can lead to confusing behavior, in particular observing (or not) a tensor node (on host) can change later computations by inserting (or not) an additional `to_host` before a `from_host`. This aspect of the design might change in the future.
+Initialization data for ndarray-backed literals (and tensors loaded by `Persistence`) is held in a
+weakly-owned side table (`arrayjit/lib/host_inits.ml`), keyed by tensor node and read — not consumed
+— at link time, so the same literal can be uploaded into multiple independent contexts. The
+`automatic_host_transfers` setting was removed (it no longer gated anything).

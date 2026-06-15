@@ -148,8 +148,8 @@ let () =
   (* === Compile === *)
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  Train.set_on_host input_batch.value;
-  Train.set_on_host target_batch.value;
+  Train.set_materialized input_batch.value;
+  Train.set_materialized target_batch.value;
   (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25). OCANNL's default uniform1
      init produces all-positive weights; through the transformer's Q*K^T attention scores this
      causes extreme values and exp overflow. Centered initialization (e.g. xavier/normal) is
@@ -157,21 +157,21 @@ let () =
      we recenter post-init. *)
   Set.iter batch_loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in
-      Train.set_on_host tn;
-      let vals = Tn.get_values tn in
+      Train.set_materialized tn;
+      let vals = Context.get_values ctx tn in
       Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      Tn.set_values tn vals);
-  Train.set_on_host infer_logits.value;
-  Train.set_on_host infer_input.value;
+      ignore (Context.set_values ctx tn vals : Context.t));
+  Train.set_materialized infer_logits.value;
+  Train.set_materialized infer_input.value;
   (* Compile the training routine. This adds all training nodes (including the shared mask constant)
      to the context via Context.compile. *)
   let train_comp = Asgns.sequence [ update; sgd ] in
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_hosted;
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_materialized;
   let ctx, sgd_step = Context.compile ctx train_comp bindings in
   (* Compile the inference routine using the context from training compilation, which already
      contains the mask constant and all model weight buffers. This is forward-only: no backprop, no
      SGD update. *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_hosted;
+  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_materialized;
   (* The mask constant is embedded in the training compilation but not in the inference compilation
      (because consume_forward_code builds embedded_nodes independently for each tensor). Add mask to
      the inference comp's embedded_nodes so Context.compile treats it as an embedded constant rather
@@ -183,7 +183,7 @@ let () =
 
   let open Operation.At in
   let step_ref = IDX.find_exn (Context.bindings sgd_step) step_n in
-  Train.set_on_host batch_loss.value;
+  Train.set_materialized batch_loss.value;
 
   (* === Training loop === Per-token random baseline: ln(8) ≈ 2.08, epoch sum ≈ 2.08 * n_batches ≈
      16.6. Optimal loss for binary FSM: ln(2) ≈ 0.693 per token, epoch sum ≈ 5.5. *)
@@ -194,13 +194,17 @@ let () =
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       let offset = batch * batch_size in
-      Tn.set_values input_batch.value
-        (seqs_to_flat_one_hot ~batch_size ~eff_seq_len train_inputs_arr ~offset);
-      Tn.set_values target_batch.value
-        (seqs_to_flat_one_hot ~batch_size ~eff_seq_len train_targets_arr ~offset);
+      ignore
+        (Context.set_values ctx input_batch.value
+           (seqs_to_flat_one_hot ~batch_size ~eff_seq_len train_inputs_arr ~offset)
+          : Context.t);
+      ignore
+        (Context.set_values ctx target_batch.value
+           (seqs_to_flat_one_hot ~batch_size ~eff_seq_len train_targets_arr ~offset)
+          : Context.t);
       let ctx' = Context.run ctx sgd_step in
       ignore (ctx' : Context.t);
-      epoch_loss := !epoch_loss +. batch_loss.@[0];
+      epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
       Int.incr step_ref
     done;
     if epoch = 0 || epoch = epochs / 2 || epoch = epochs - 1 then
@@ -219,8 +223,10 @@ let () =
      exact-match prediction of the specific successor caps at ~50%, but a model that learned the
      transition relation achieves ~100% valid-transition accuracy. Random baseline: 2/8 = 25%.
      Threshold: >= 90%. *)
-  Tn.set_values infer_input.value
-    (seqs_to_flat_one_hot ~batch_size:num_test_seqs ~eff_seq_len test_inputs_arr ~offset:0);
+  ignore
+    (Context.set_values ctx infer_input.value
+       (seqs_to_flat_one_hot ~batch_size:num_test_seqs ~eff_seq_len test_inputs_arr ~offset:0)
+      : Context.t);
   let _ctx = Context.run ctx infer_routine in
 
   let correct = ref 0 in
@@ -230,7 +236,7 @@ let () =
       let predicted = ref 0 in
       let max_logit = ref Float.neg_infinity in
       for s = 0 to num_states - 1 do
-        let logit = infer_logits.@{[| seq; t; s |]} in
+        let logit = (ctx, infer_logits).@{[| seq; t; s |]} in
         if Float.(logit > !max_logit) then (
           max_logit := logit;
           predicted := s)

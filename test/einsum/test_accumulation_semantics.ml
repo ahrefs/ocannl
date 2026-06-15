@@ -1,4 +1,3 @@
-open Base
 open Ocannl
 module IDX = Train.IDX
 module CDSL = Train.CDSL
@@ -19,17 +18,17 @@ let test_einsum_reduction () =
      same target (needs accumulation) *)
   let%op result = input ++ "b|i->o => b|i" in
 
-  Train.set_hosted input.value;
-  Train.set_hosted result.value;
-  Train.every_non_literal_on_host result;
+  Train.set_materialized input.value;
+  Train.set_materialized result.value;
+  Train.every_non_literal_materialized result;
 
-  ignore (Train.forward_once ctx result);
+  let ctx = Train.forward_once ctx result in
 
   Stdio.printf "Input tensor (shape: batch=2, input=3, output=4):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
 
   Stdio.printf "\nResult after reduction 'b|i->o => b|i' (should sum over output dimension):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false result;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result;
 
   (* Verify the accumulation is correct *)
   Stdio.printf "\nExpected values (summing over output dimension):\n";
@@ -47,14 +46,14 @@ let test_diagonal_tensor () =
   let input = TDSL.range 5 in
   let%op diagonal = input ++ "i=>ii" in
 
-  Train.set_hosted diagonal.value;
-  ignore (Train.forward_once ctx diagonal);
+  Train.set_materialized diagonal.value;
+  let ctx = Train.forward_once ctx diagonal in
 
   Stdio.printf "Input (1D tensor of size 5):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
 
   Stdio.printf "\nDiagonal tensor 'i=>ii' (5x5 with zeros off-diagonal):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false diagonal;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx diagonal;
 
   Stdio.printf "\nNote: Off-diagonal elements should be zero (initialized by Zero_out)\n"
 
@@ -70,14 +69,14 @@ let test_fixed_index_projection () =
   let%op sparse = input ++ "i=>i0" in
   let%op _ = sparse ++ "i2=>i" in
 
-  Train.set_hosted sparse.value;
-  ignore (Train.forward_once ctx sparse);
+  Train.set_materialized sparse.value;
+  let ctx = Train.forward_once ctx sparse in
 
   Stdio.printf "Input (1D tensor of size 4):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
 
   Stdio.printf "\nSparse tensor 'i=>i0' (only first column populated):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false sparse;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx sparse;
 
   Stdio.printf "\nNote: Only column 0 should have values, others should be zero\n"
 
@@ -92,14 +91,14 @@ let test_bijective_transpose () =
   let input = TDSL.range_of_shape ~output_dims:[ 3; 4 ] () in
   let%op transposed = input ++ "ij=>ji" in
 
-  Train.set_hosted transposed.value;
-  ignore (Train.forward_once ctx transposed);
+  Train.set_materialized transposed.value;
+  let ctx = Train.forward_once ctx transposed in
 
   Stdio.printf "Input (3x4 matrix):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false input;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx input;
 
   Stdio.printf "\nTransposed 'ij=>ji' (4x3 matrix):\n";
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false transposed;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx transposed;
 
   Stdio.printf "\nNote: Simple bijective mapping - no initialization or accumulation needed\n"
 

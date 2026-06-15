@@ -39,9 +39,9 @@ let test_padding_reset () =
   Shape.set_dim kw 3;
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted pooled.value;
-  Train.set_hosted conv_out.value;
+  Train.set_materialized input.value;
+  Train.set_materialized pooled.value;
+  Train.set_materialized conv_out.value;
 
   (* Compile BOTH forward passes into a single routine using sequence. This tests that input's
      padding is properly reset between the two operations. *)
@@ -130,8 +130,8 @@ let test_single_operation_padding () =
   Shape.set_dim ww 3;
 
   let ctx = Context.auto () in
-  Train.set_hosted input.value;
-  Train.set_hosted pooled.value;
+  Train.set_materialized input.value;
+  Train.set_materialized pooled.value;
 
   let ctx = Train.init_params ctx Train.IDX.empty pooled in
   let fwd_pooled = Train.forward pooled in

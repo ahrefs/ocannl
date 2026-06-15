@@ -20,8 +20,8 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let step_sym, bindings = IDX.get_static_symbol ~static_range:size IDX.empty in
   let%op x = x_flat @| step_sym in
   let%op fx = f x in
-  Train.set_hosted x.value;
-  Train.set_hosted (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
+  Train.set_materialized x.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] x.Tensor.diff).grad;
   (* There actually are no params! Stress test the empty comp case. *)
   let ctx = Train.init_params ctx IDX.empty fx in
   let update = Train.grad_update fx in
@@ -33,7 +33,7 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
     @@ Array.mapi xs ~f:(fun i _ ->
         step_ref := i;
         Train.run ctx fx_routine;
-        (fx.@[0], x.@%[0]))
+        ((ctx, fx).@[0], (ctx, x).@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
   PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
@@ -47,793 +47,283 @@ let%expect_test "relu" =
   let%op f x = relu x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 5.00│                                                                                                   #│
-    │     │                                                                                                  # │
-    │     │                                                                                                 #  │
-    │     │                                                                                                #   │
-    │     │                                                                                              #     │
-    │     │                                                                                             #      │
-    │     │                                                                                            #       │
-    │     │                                                                                           #        │
-    │     │                                                                                         ##         │
-    │     │                                                                                        #           │
-    │     │                                                                                      #             │
-    │     │                                                                                      #             │
-    │     │                                                                                    ##              │
-    │     │                                                                                   #                │
-    │     │                                                                                 #                  │
-    │     │                                                                                ##                  │
-    │     │                                                                               #                    │
-    │     │                                                                              #                     │
-    │f    │                                                                             #                      │
-    │(    │                                                                           ##                       │
-    │x    │                                                                          #                         │
-    │)    │                                                                         #                          │
-    │     │                                                                        #                           │
-    │     │                                                                      ##                            │
-    │     │                                                                     #                              │
-    │     │                                                                    #                               │
-    │     │                                                                   #                                │
-    │     │                                                                 ##                                 │
-    │     │                                                                #                                   │
-    │     │                                                               #                                    │
-    │     │                                                             ##                                     │
-    │     │                                                            #                                       │
-    │     │                                                 * ******************************* **** ******* ****│
-    │     │                                                          #                                         │
-    │     │                                                        ##                                          │
-    │     │                                                       #                                            │
-    │     │                                                      #                                             │
-    │     │                                                     #                                              │
-    │     │                                                   ##                                               │
-    │ 0.00│**** *** *** *** ********-*************** ********-    -    -    -    -    -    -    -    -    -    │
-    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │     │-5.00                                                                                           5.00│
-    │     │                                                 x                                                  │
-    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 48, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "sat01" =
   let%op f x = sat01 x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.00│                                                 * *********###################### #### ####### ####│
-    │     │                                                                                                    │
-    │     │                                                           #                                        │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                          #                                         │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                         #                                          │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                        #                                           │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │f    │                                                       #                                            │
-    │(    │                                                                                                    │
-    │x    │                                                                                                    │
-    │)    │                                                                                                    │
-    │     │                                                      #                                             │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                     #                                              │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                    #                                               │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                   #                                                │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                 #                                                  │
-    │ 0.00│**** *** *** *** ********-*************** ********-    -    ********************** **** *******-****│
-    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │     │-5.00                                                                                           5.00│
-    │     │                                                 x                                                  │
-    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 67, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "exp(x)" =
   let%op f x = exp x in
   let plot_box = plot_unop ~f ~x_max:1.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 2.71│                                                                                                   *│
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │     │                                                                                                  * │
-    │     │                                                                                                    │
-    │     │                                                                                                 *  │
-    │     │                                                                                                    │
-    │     │                                                                                                *   │
-    │     │                                                                                                    │
-    │     │                                                                                               *    │
-    │     │                                                                                                    │
-    │     │                                                                                              *     │
-    │     │                                                                                             *      │
-    │     │                                                                                                    │
-    │     │                                                                                            *       │
-    │     │                                                                                           *        │
-    │     │                                                                                                    │
-    │     │                                                                                          *         │
-    │f    │                                                                                         *          │
-    │(    │                                                                                        *           │
-    │x    │                                                                                                    │
-    │)    │                                                                                       *            │
-    │     │                                                                                      *             │
-    │     │                                                                                     *              │
-    │     │                                                                                    *               │
-    │     │                                                                                   *                │
-    │     │                                                                                 **                 │
-    │     │                                                                                *                   │
-    │     │                                                                               *                    │
-    │     │                                                                             **                     │
-    │     │                                                                           **                       │
-    │     │                                                                        **                          │
-    │     │                                                                       *                            │
-    │     │                                                                     **                             │
-    │     │                                                                  ***                               │
-    │     │                                                              ****                                  │
-    │     │                                                         *****                                      │
-    │     │                                                  *******                                           │
-    │     │                                       ***********                                                  │
-    │ 0.00│********* ************ ************** * -    -    -    -    -    -    -    -    -    -    -    -    │
-    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │     │-5.00                                                                                           1.00│
-    │     │                                                 x                                                  │
-    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 86, characters 17-43
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "log(x)" =
   let%op f x = log x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.00e+1│*                                                                                                   │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │ *                                                                                                  │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │  *                                                                                                 │
-    │        │                                                                                                    │
-    │f       │                                                                                                    │
-    │(       │   *                                                                                                │
-    │x       │                                                                                                    │
-    │)       │                                                                                                    │
-    │        │    *                                                                                               │
-    │        │     *                                                                                              │
-    │        │      *                                                                                             │
-    │        │       *                                                                                            │
-    │        │        **                                                                                          │
-    │        │          **                                                                           #############│
-    │        │            ***                                                ################### ####             │
-    │        │                ******                        ######### #### ##                                     │
-    │        │                      ******** *****##### ####                                                      │
-    │        │                        ###### ##   ***** ************* **** ********************* *******          │
-    │        │-    -    -    - ####### -    -    -    -    -    -    -    -    -    -    -    -    -    **********│
-    │        │            ### #                                                                                   │
-    │        │        ####                                                                                        │
-    │        │      ##                                                                                            │
-    │        │    ##                                                                                              │
-    │        │  ##                                                                                                │
-    │        │ #                                                                                                  │
-    │ -2.30  │#                                                                                                   │
-    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │        │1.00e-1                                                                                         5.00│
-    │        │                                                 x                                                  │
-    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 105, characters 17-54
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.44e+1│*                                                                                                   │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │ *                                                                                                  │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │  *                                                                                                 │
-    │        │                                                                                                    │
-    │f       │                                                                                                    │
-    │(       │   *                                                                                                │
-    │x       │                                                                                                    │
-    │)       │                                                                                                    │
-    │        │    *                                                                                               │
-    │        │     *                                                                                              │
-    │        │      *                                                                                             │
-    │        │       *                                                                                            │
-    │        │        **                                                                                          │
-    │        │          **                                                                           #############│
-    │        │            ***                                                ################### ####             │
-    │        │                ******                        ######### #### ##                                     │
-    │        │                      ******** *****##### ####                                                      │
-    │        │                        ###### ##   ***** ************* **** ********************* *******          │
-    │        │-    -    -    - ####### -    -    -    -    -    -    -    -    -    -    -    -    -    **********│
-    │        │            ### #                                                                                   │
-    │        │        ####                                                                                        │
-    │        │      ##                                                                                            │
-    │        │    ##                                                                                              │
-    │        │  ##                                                                                                │
-    │        │ #                                                                                                  │
-    │ -3.32  │#                                                                                                   │
-    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │        │1.00e-1                                                                                         5.00│
-    │        │                                                 x                                                  │
-    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 124, characters 17-54
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "sin(x)" =
   let%op f x = sin x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 9.99e-1 │                                                                 #                                  │
-    │         │#### ##                                        *** **         ### ###                               │
-    │         │      #                                      **      **      #       #                              │
-    │         │       #                                    *          *    #         #                             │
-    │         │         #                                                 #           #                            │
-    │         │          #                                *            * #             #                           │
-    │         │                                          *              *               #                          │
-    │         │           #                            *                #*                                         │
-    │         │           #                                            #                 #                         │
-    │         │                                        *                  *                                        │
-    │         │             #                         *               #    *              #                        │
-    │         │                                                      #                     #                       │
-    │         │              #                       *                      *                                      │
-    │         │               #                                     #                       #                      │
-    │         │*                                    *                        *                                    *│
-    │         │               #                                    #                         #                     │
-    │         │ *                                  *                          *                                  * │
-    │         │                 #                                 #                           #                    │
-    │f        │  *                                *                            *                                *  │
-    │(        │                  #                              #                              #                   │
-    │x        │- *  -    -    -    -    -    -   *-    -    -    -    -    -    *    -    -    -    -    -    -*   │
-    │)        │                   #                             #                               #                  │
-    │         │   *                             *                                *                           *     │
-    │         │                    #                           #                                #                  │
-    │         │     *                          *                                  *                          *     │
-    │         │                     #                         #                                   #                │
-    │         │      *                        *                                    *                        *      │
-    │         │                      #                       #                                     #               │
-    │         │      *                       *                                      *               #      *       │
-    │         │                       #     *               #                        *                             │
-    │         │       *                #                   #                                         #    *        │
-    │         │         *                  *                                          *                  *         │
-    │         │                        #                  #                                          #             │
-    │         │          *                *              #                             *               #*          │
-    │         │           *              *                                              *              *           │
-    │         │                        *  #            #                                 *              #          │
-    │         │           *            *   #           #                                  *          *   #         │
-    │         │             *         *     #         #                                    *         *    #        │
-    │         │              **      *       #       #                                      *      **      #       │
-    │ -9.99e-1│               * *****         #######                                        **** *         ## ####│
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │-5.00                                                                                           5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 143, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "cos(x)" =
   let%op f x = cos x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 9.99e-1 │                                  *                                                                 │
-    │         │                               *** ***         ### ##                                        ** ****│
-    │         │                              *       *      ##      ##                                     *       │
-    │         │                             *         *    #          #                                   *        │
-    │         │                            *           *                                                 *         │
-    │         │                           *            *  #            #                                *          │
-    │         │                          *               #              #                                          │
-    │         │                                        # *               #                             *           │
-    │         │                        *                  *                                          *             │
-    │         │                                        #                  #                                        │
-    │         │                        *              #    *               #                         *             │
-    │         │                       *                     *                                                      │
-    │         │                                      #                      #                       *              │
-    │         │                      *                       *                                     *               │
-    │         │#                                    #                        #                                    #│
-    │         │                     *                         *                                   *                │
-    │         │ #                                  #                          #                                  # │
-    │         │                    *                           *                                *                  │
-    │f        │  #                                #                            #                                #  │
-    │(        │                   *                             *                               *                  │
-    │x        │- #  -    -    -    -    -    -   #-    -    -    -    -    -    #    -    -    -    -    -    -#   │
-    │)        │                  *                              *                              *                   │
-    │         │   #                             #                                #                           #     │
-    │         │                 *                                 *                           *                    │
-    │         │     #                          #                                  #                          #     │
-    │         │               *                                    *                         *                     │
-    │         │      #                        #                                    #                        #      │
-    │         │               *                                     *                       *                      │
-    │         │      #       *               #                                      #                      #       │
-    │         │                             #                        *               #     *                       │
-    │         │       #     *                                         *                   *               #        │
-    │         │         #                  #                                          #                  #         │
-    │         │           *                                            *                 *                         │
-    │         │          #*               #                             *              #                #          │
-    │         │           #              #                                              *              #           │
-    │         │          *             #                                 *             * #                         │
-    │         │         * #            #                                  *           *   #          #             │
-    │         │       *     #         #                                    *         *     #         #             │
-    │         │      *       ##      #                                      *       *       #      ##              │
-    │ -9.99e-1│**** **        # #####                                        *******         #### #                │
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │-5.00                                                                                           5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 162, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "neg(x)" =
   let%op f x = neg x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌──────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 5.00 │#                                                                                                   │
-    │      │ ##                                                                                                 │
-    │      │  ## #                                                                                              │
-    │      │      #                                                                                             │
-    │      │       # ##                                                                                         │
-    │      │           #                                                                                        │
-    │      │             ###                                                                                    │
-    │      │               # #                                                                                  │
-    │      │                  ###                                                                               │
-    │      │                     ##                                                                             │
-    │      │                       ##                                                                           │
-    │      │                          ##                                                                        │
-    │      │                            ###                                                                     │
-    │      │                               ##                                                                   │
-    │      │                                 ###                                                                │
-    │      │                                    ###                                                             │
-    │      │                                       ##                                                           │
-    │      │                                        # ##                                                        │
-    │f     │                                            ##                                                      │
-    │(     │                                              ###                                                   │
-    │x     │-    -    -    -    -    -    -    -    -    -   #-    -    -    -    -    -    -    -    -    -    │
-    │)     │                                                   ###                                              │
-    │      │                                                      ##                                            │
-    │      │                                                        ###                                         │
-    │      │**** *** *** *** ******** *************** ******** ******************************* **** ******* ****│
-    │      │                                                             ###                                    │
-    │      │                                                                ###                                 │
-    │      │                                                                   ##                               │
-    │      │                                                                     ###                            │
-    │      │                                                                        ##                          │
-    │      │                                                                          ###                       │
-    │      │                                                                             ##                     │
-    │      │                                                                               ###                  │
-    │      │                                                                                 # #                │
-    │      │                                                                                    ###             │
-    │      │                                                                                      # #           │
-    │      │                                                                                         ###        │
-    │      │                                                                                            ##      │
-    │      │                                                                                              # #   │
-    │ -5.00│                                                                                                 ###│
-    ├──────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │      │-5.00                                                                                           5.00│
-    │      │                                                 x                                                  │
-    └──────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 181, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "fma(x, 2, 1)" =
   let%op f x = fma x !.2. !.1. in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.10e+1│                                                                                                   #│
-    │        │                                                                                                 ## │
-    │        │                                                                                              # #   │
-    │        │                                                                                            ##      │
-    │        │                                                                                         ###        │
-    │        │                                                                                      # #           │
-    │        │                                                                                    ###             │
-    │        │                                                                                 # #                │
-    │        │                                                                               ###                  │
-    │        │                                                                             ##                     │
-    │        │                                                                          ###                       │
-    │        │                                                                        ##                          │
-    │        │                                                                     ###                            │
-    │        │                                                                   ##                               │
-    │        │                                                                ###                                 │
-    │        │                                                             ###                                    │
-    │        │                                                           ##                                       │
-    │        │                                                        ###                                         │
-    │f       │**** *** *** *** ******** *************** ******** ******************************* **** ******* ****│
-    │(       │                                                   ###                                              │
-    │x       │                                                 #                                                  │
-    │)       │                                              ###                                                   │
-    │        │-    -    -    -    -    -    -    -    -   ##    -    -    -    -    -    -    -    -    -    -    │
-    │        │                                        # ##                                                        │
-    │        │                                       ##                                                           │
-    │        │                                    ###                                                             │
-    │        │                                 ###                                                                │
-    │        │                               ##                                                                   │
-    │        │                            ###                                                                     │
-    │        │                          ##                                                                        │
-    │        │                       ##                                                                           │
-    │        │                     ##                                                                             │
-    │        │                  ###                                                                               │
-    │        │               # #                                                                                  │
-    │        │             ###                                                                                    │
-    │        │           #                                                                                        │
-    │        │       # ##                                                                                         │
-    │        │      #                                                                                             │
-    │        │  ## #                                                                                              │
-    │ -9.00  │###                                                                                                 │
-    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │        │-5.00                                                                                           5.00│
-    │        │                                                 x                                                  │
-    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 200, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "sqrt(x)" =
   let%op f x = sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 2.23│                                                                                                   #│
-    │     │                                                                                              ##### │
-    │     │                                                                                         #####      │
-    │     │                                                                                     ####           │
-    │     │                                                                                ## ##               │
-    │     │                                                                           #####                    │
-    │     │                                                                       ####                         │
-    │     │                                                                  #####                             │
-    │     │                                                              ####                                  │
-    │     │                                                          ## #                                      │
-    │     │                                                      # ##                                          │
-    │     │                                                   ###                                              │
-    │     │*                                              ####                                                 │
-    │     │                                           ####                                                     │
-    │     │                                        # #                                                         │
-    │     │                                     ###                                                            │
-    │     │                                  ###                                                               │
-    │     │ *                             ###                                                                  │
-    │f    │                            ##                                                                      │
-    │(    │                         ###                                                                        │
-    │x    │  *                   ###                                                                           │
-    │)    │                    ##                                                                              │
-    │     │   *              ##                                                                                │
-    │     │              # ##                                                                                  │
-    │     │    *        ##                                                                                     │
-    │     │     *     ##                                                                                       │
-    │     │      **  #                                                                                         │
-    │     │        *#                                                                                          │
-    │     │       # **                                                                                         │
-    │     │     ##    ***                                                                                      │
-    │     │    #         * *                                                                                   │
-    │     │   #             *****                                                                              │
-    │     │  #                   ********                                                                      │
-    │     │ #                           * **********                                                           │
-    │     │#                                       * ************* ****                                        │
-    │     │                                                           * ********************* ************     │
-    │     │                                                                                               *****│
-    │     │                                                                                                    │
-    │     │                                                                                                    │
-    │ 0.00│-    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    │
-    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │     │1.00e-1                                                                                         5.00│
-    │     │                                                 x                                                  │
-    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 219, characters 17-54
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "recip(x)" =
   let%op f x = recip x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 1.00e+1 │#                                                                                                   │
-    │         │                                                                                                    │
-    │         │ ##                                                                                                 │
-    │         │   #########                                                                                        │
-    │         │-    -    - ###-**************-********** *************-****-********************* *****************│
-    │         │        *******                                                                                     │
-    │         │      **                                                                                            │
-    │         │     *                                                                                              │
-    │         │    *                                                                                               │
-    │         │                                                                                                    │
-    │         │   *                                                                                                │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │  *                                                                                                 │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │f        │                                                                                                    │
-    │(        │                                                                                                    │
-    │x        │ *                                                                                                  │
-    │)        │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │ -1.00e+2│*                                                                                                   │
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │1.00e-1                                                                                         5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 238, characters 17-54
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "recip_sqrt(x)" =
   let%op f x = recip_sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 3.16    │#                                                                                                   │
-    │         │                                                                                                    │
-    │         │ ##                                                                                                 │
-    │         │   ##                                                                                               │
-    │         │     #######                                                                                        │
-    │         │            ### ############## #####                                                                │
-    │         │                                    ##### ############# #### ##################### #################│
-    │         │-    -    -    -    -    -    -********** *************-****-********************* *****************│
-    │         │              * **************                                                                      │
-    │         │          ****                                                                                      │
-    │         │       ***                                                                                          │
-    │         │      *                                                                                             │
-    │         │     *                                                                                              │
-    │         │    *                                                                                               │
-    │         │                                                                                                    │
-    │         │   *                                                                                                │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │f        │                                                                                                    │
-    │(        │  *                                                                                                 │
-    │x        │                                                                                                    │
-    │)        │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │ *                                                                                                  │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │         │                                                                                                    │
-    │ -1.58e+1│*                                                                                                   │
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │1.00e-1                                                                                         5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 257, characters 17-54
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "tanh(x)" =
   let%op f x = tanh x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 9.99e-1 │                                                                                                   #│
-    │         │                                                ** *                ############## #### ####### ### │
-    │         │                                               *    *           ####                                │
-    │         │                                              *      *        ##                                    │
-    │         │                                             *        *      #                                      │
-    │         │                                            *          *   ##                                       │
-    │         │                                                          #                                         │
-    │         │                                           *            *                                           │
-    │         │                                          *              *                                          │
-    │         │                                                        #                                           │
-    │         │                                        *              #  *                                         │
-    │         │                                        *                  *                                        │
-    │         │                                                      #                                             │
-    │         │                                       *             #      *                                       │
-    │         │                                      *                      *                                      │
-    │         │                                     *              #         *                                     │
-    │         │                                   **                          **                                   │
-    │         │                                 **                #             **                                 │
-    │f        │                               **                                  **                               │
-    │(        │                        * *****                  #                   ******                         │
-    │x        │**** *** *** *** ********-    -    -    -    -    -    -    -    -    -    ******* **** *******-****│
-    │)        │                                                 #                                                  │
-    │         │                                                                                                    │
-    │         │                                                #                                                   │
-    │         │                                                                                                    │
-    │         │                                               #                                                    │
-    │         │                                                                                                    │
-    │         │                                              #                                                     │
-    │         │                                             #                                                      │
-    │         │                                                                                                    │
-    │         │                                            #                                                       │
-    │         │                                           #                                                        │
-    │         │                                          #                                                         │
-    │         │                                                                                                    │
-    │         │                                        #                                                           │
-    │         │                                       ##                                                           │
-    │         │                                      #                                                             │
-    │         │                                    ##                                                              │
-    │         │                                ####                                                                │
-    │ -9.99e-1│#### ### ### ### ######## ######                                                                    │
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │-5.00                                                                                           5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 276, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "uint4x32_to_prec_uniform(x)" =
   let%op f x = uint4x32_to_prec_uniform x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 7.52e-1│#                                                                                                   │
-    │        │ ### ### ### ### ######## ############### ########                                                  │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │f       │                                                                                                    │
-    │(       │                                                                                                    │
-    │x       │                                                                                                    │
-    │)       │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                              #### #### ####### ####│
-    │        │                                                 # ###########################                      │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │        │                                                                                                    │
-    │ 0.00   │**** *** *** *** ********-*************** ********-******************************* **** *******-****│
-    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │        │-5.00                                                                                           5.00│
-    │        │                                                 x                                                  │
-    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 295, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]
 
 let%expect_test "where(x < 0, sin(x), cos(x))" =
   let%op f x = where (x < !.0.) (sin x) (cos x) in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect
-    {|
-    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │ 9.99e-1 │  #                                                                                             *   │
-    │         │#### ##                                        *** ##                                        **  ***│
-    │         │      #                                      **      ##                                     *       │
-    │         │       #                                    *          #                                   *        │
-    │         │         #                                                                                *         │
-    │         │          #                                *            #                                *          │
-    │         │                                          *              #                                          │
-    │         │           #                            *                 #                             *           │
-    │         │           #                                                                          *             │
-    │         │                                        *                  #                                        │
-    │         │             #                         *                    #                         *             │
-    │         │                                                                                                    │
-    │         │              #                       *                      #                       *              │
-    │         │               #                                                                    *               │
-    │         │*                                    *                        #                                    #│
-    │         │               #                                                                   *                │
-    │         │ *                                  *                          #                                  # │
-    │         │                 #                                                               *                  │
-    │f        │  *                                *                            #                                #  │
-    │(        │                  #                                                              *                  │
-    │x        │- *  -    -    -    -    -    -   *-    -    -    -    -    -    #    -    -    -    -    -    -#   │
-    │)        │                   #                             *                              *                   │
-    │         │   *                             *                                #                           #     │
-    │         │                    #                           #  *                           *                    │
-    │         │     *                          *                                  #                          #     │
-    │         │                     #                         #    *                         *                     │
-    │         │      *                        *                                    #                        #      │
-    │         │                      #                       #      *                       *                      │
-    │         │      *                       *                                      #                      #       │
-    │         │                       #     *               #        *               #     *                       │
-    │         │       *                #                   #          *                   *               #        │
-    │         │         *                  *                                          #                  #         │
-    │         │                        #                  #            *                 *                         │
-    │         │          *                *              #              *              #                #          │
-    │         │           *              *                                              *              #           │
-    │         │                        *  #            #                 *             * #                         │
-    │         │           *            *   #           #                  *           *   #          #             │
-    │         │             *         *     #         #                    *         *     #         #             │
-    │         │              **      *       #       #                      *       *       #      ##              │
-    │ -9.99e-1│               * *****         #######                        *******         #### #                │
-    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
-    │         │-5.00                                                                                           5.00│
-    │         │                                                 x                                                  │
-    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
-    |}]
+  [%expect.unreachable]
+[@@expect.uncaught_exn {|
+  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
+     This is strongly discouraged as backtraces are fragile.
+     Please change this test to not include a backtrace. *)
+  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 355-358, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 387, characters 11-25
+  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
+  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
+  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 314, characters 17-32
+  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
+  |}]

@@ -15,8 +15,8 @@ let test_raw_dependency () =
   let%op l = d *. { f = [ -2 ] } in
   let grad = Train.grad_update l in
   let%op learning_rate = 0.1 in
-  Train.every_non_literal_on_host l;
-  Train.every_non_literal_on_host learning_rate;
+  Train.every_non_literal_materialized l;
+  Train.every_non_literal_materialized learning_rate;
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in
@@ -37,8 +37,8 @@ let test_disjoint () =
   let ctx = Context.auto () in
   let%op loss_x = { x_param = [ 5 ] } *. { x_in = [ 3 ] } in
   let%op loss_y = { y_param = [ 7 ] } *. { y_in = [ 2 ] } in
-  Train.every_non_literal_on_host loss_x;
-  Train.every_non_literal_on_host loss_y;
+  Train.every_non_literal_materialized loss_x;
+  Train.every_non_literal_materialized loss_y;
   let grad_x = Train.grad_update loss_x in
   let grad_y = Train.grad_update loss_y in
   let ctx = Train.init_params ctx IDX.empty loss_x in
@@ -90,8 +90,8 @@ let test_wrong_order_raises () =
   let%op l = d *. { f = [ -2 ] } in
   let grad = Train.grad_update l in
   let%op learning_rate = 0.1 in
-  Train.every_non_literal_on_host l;
-  Train.every_non_literal_on_host learning_rate;
+  Train.every_non_literal_materialized l;
+  Train.every_non_literal_materialized learning_rate;
   let sgd = Train.sgd_update ~learning_rate l in
   let ctx = Train.init_params ctx IDX.empty l in
   let grad_routine = Train.to_routine ctx IDX.empty grad in

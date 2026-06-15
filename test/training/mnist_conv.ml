@@ -110,14 +110,14 @@ let () =
   let total_steps = epochs * n_batches in
   let update = Train.grad_update batch_loss in
   let%op learning_rate = 0.01 *. ((1.2 *. !..total_steps) - !@step_n) /. !..total_steps in
-  Train.set_hosted learning_rate.value;
+  Train.set_materialized learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate batch_loss in
-  Train.set_hosted batch_loss.value;
+  Train.set_materialized batch_loss.value;
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
   let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-
+  let ctx = Context.context sgd_routine in
   let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
 
@@ -129,7 +129,7 @@ let () =
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
         Train.run ctx sgd_routine;
-        epoch_loss := !epoch_loss +. batch_loss.@[0];
+        epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
         Int.incr step_ref);
     if epoch % 10 = 0 then
       printf "Epoch %d: avg loss = %.2f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)
@@ -158,8 +158,8 @@ let () =
   let%op eval_sample_loss = neg (log (eval_correct_prob + 1e-7)) in
   let%op eval_batch_loss = (eval_sample_loss ++ "...|... => 0") /. !..batch_size in
 
-  Train.set_hosted eval_batch_loss.value;
-  Train.set_hosted eval_probs.value;
+  Train.set_materialized eval_batch_loss.value;
+  Train.set_materialized eval_probs.value;
 
   (* Forward-only routine via %cd .forward -- no grad_update, no sgd_update *)
   let eval_routine =
@@ -168,6 +168,7 @@ let () =
         ~~("eval forward";
            eval_batch_loss.forward)]
   in
+  let ctx = Context.context eval_routine in
 
   (* Compute test loss and accuracy across all test batches *)
   let test_loss = ref 0. in
@@ -175,10 +176,10 @@ let () =
   let batch_idx = ref 0 in
   Train.sequential_loop (Context.bindings eval_routine) ~f:(fun () ->
       Train.run ctx eval_routine;
-      test_loss := !test_loss +. eval_batch_loss.@[0];
+      test_loss := !test_loss +. (ctx, eval_batch_loss).@[0];
       (* Read all probability values for this batch as a flat array, then compute argmax per sample
          in OCaml. *)
-      let flat_probs = Tn.get_values eval_probs.value in
+      let flat_probs = Context.get_values ctx eval_probs.value in
       for s = 0 to batch_size - 1 do
         let max_c = ref 0 in
         let max_v = ref Float.neg_infinity in

@@ -11,9 +11,9 @@ let () =
   Ir.Tnode.update_prec uniform_floats.value Ir.Ops.single;
 
   (* Compile and run *)
-  Ocannl.Train.set_hosted uniform_floats.value;
-  ignore (Ocannl.Train.forward_once ctx uniform_floats);
-  let result = Ir.Tnode.get_values uniform_floats.value in
+  Ocannl.Train.set_materialized uniform_floats.value;
+  let ctx = Ocannl.Train.forward_once ctx uniform_floats in
+  let result = Context.get_values ctx uniform_floats.value in
 
   (* Print results *)
   Stdio.printf "Generated %d uniform random numbers:\n" (Array.length result);

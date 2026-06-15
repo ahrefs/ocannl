@@ -12,6 +12,6 @@ let () =
   Tn.update_prec b.value Ir.Ops.half;
   Tn.update_prec d.value Ir.Ops.bfloat16;
   (* Even when the default precision is single, c is bfloat16 and a is half. *)
-  Ocannl.Train.set_hosted d.value;
-  ignore (Ocannl.Train.forward_once ctx d);
-  Train.printf_tree d
+  Ocannl.Train.set_materialized d.value;
+  let ctx = Ocannl.Train.forward_once ctx d in
+  Train.printf_tree ctx d

@@ -1,6 +1,7 @@
 open Base
 module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
+module Nd = Ir.Ndarray
 module Idx = Ir.Indexing
 module BI = Ir.Backend_intf
 module Backends_deprecated = Backends
@@ -187,9 +188,14 @@ let compile ctx comp bindings =
   let name = backend_routine.name in
   Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
 
-  (* Keep existing inputs computation for initialized_nodes check *)
+  (* Required inputs for the initialization check below. Nodes with registered host initialization
+     data (ndarray-backed literals, loaded tensors) self-initialize at link time from [Host_inits]
+     (gh-ocannl-333), so they are excluded. *)
   let context_nodes = Asgns.context_nodes ~use_host_memory:None comp.Asgns.asgns in
-  let inputs = Set.diff context_nodes comp.Asgns.embedded_nodes in
+  let inputs =
+    Set.filter (Set.diff context_nodes comp.Asgns.embedded_nodes) ~f:(fun tn ->
+        not (Ir.Host_inits.mem tn))
+  in
 
   (* Outputs are all nodes written by the computation *)
   let outputs = backend_routine.outputs in
@@ -213,8 +219,22 @@ let compile ctx comp bindings =
   (updated_ctx, routine)
 
 let run ctx routine =
-  (* Check that all required inputs are initialized *)
-  let missing_inputs = Set.diff routine.inputs ctx.initialized_nodes in
+  (* Check that all required inputs are initialized. A node counts as initialized if it was produced
+     by a prior routine ([initialized_nodes]) or is already allocated in the running context's device
+     buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which
+     write the allocated buffer in place) or zero-initialized at allocation, which is the correct
+     identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish
+     a forgotten non-zero data input from a zero-valid accumulator — both are [alloc_zeros]'d
+     read-only buffers — so a forgotten data input reads zeros rather than failing. Catching that
+     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
+     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
+     primitive_ops). *)
+  let (Wrapper run_wrapper) = ctx.backend_wrapper in
+  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_arrays tn in
+  let missing_inputs =
+    Set.filter routine.inputs ~f:(fun tn ->
+        not (Set.mem ctx.initialized_nodes tn || in_backend tn))
+  in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
        Set.to_list missing_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "
@@ -261,19 +281,135 @@ let copy ~src ~dst _tnode =
 let mark_initialized ctx nodes =
   { ctx with initialized_nodes = Set.union ctx.initialized_nodes nodes }
 
-let init_from_host_deprecated ctx tnode =
+(* {2 On-demand host access (gh-ocannl-333)}
+
+   All CPU-side value access goes through these context-mediated transfers. There is no host copy
+   stored on the tensor node, and there is no cache: each call allocates a fresh temporary host
+   buffer and performs a device-to-host (or host-to-device) transfer. This is intentionally
+   expensive on non-unified-memory backends — callers should batch access rather than poll. *)
+
+(* A fresh temporary host buffer matching the node's (padded) device buffer. *)
+let host_buffer (tn : Tn.t) =
+  Nd.create_array
+    ~debug:("Context host buffer for " ^ Tn.debug_name tn)
+    (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.Tn.dims) ~padding:(Lazy.force tn.Tn.padding)
+
+(** Whether [tn] has a device buffer allocated in this context. *)
+let mem ctx (tn : Tn.t) : bool =
+  let (Wrapper wrapper) = ctx.backend_wrapper in
+  Map.mem wrapper.context.BI.ctx_arrays tn
+
+(* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
+   [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here
+   as a proxy for the source node, so {!to_host} can read the source's value through the copy. The
+   table is keyed by the source node's id and holds the proxy node; it is read-only from [to_host]'s
+   point of view and is for printing only — never a general host cache. *)
+let for_print_proxies : Tn.t Hashtbl.M(Int).t = Hashtbl.create (module Int)
+
+let register_for_print ~(src : Tn.t) ~(proxy : Tn.t) =
+  Hashtbl.set for_print_proxies ~key:src.Tn.id ~data:proxy
+
+(* A deep copy of a host [Ndarray] (same precision, dims, and layout). Used so reads of shared
+   initialization buffers hand the caller a private buffer it may mutate. *)
+let copy_nd (src : Nd.t) : Nd.t =
+  Nd.apply_with_prec
+    {
+      f =
+        (fun prec arr ->
+          let dst =
+            Bigarray.Genarray.create (Bigarray.Genarray.kind arr) Bigarray.c_layout
+              (Bigarray.Genarray.dims arr)
+          in
+          Bigarray.Genarray.blit arr dst;
+          Nd.as_array prec dst);
+    }
+    src
+
+(** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
+    not present in the context (and has no host-init data or for-print proxy). *)
+let to_host ctx (tn : Tn.t) : Nd.t =
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
-  (* Use the backend's init_from_host function *)
-  (* This assumes the node has hosted data already set *)
-  let new_backend_context = Backend.init_from_host wrapper.context tnode in
+  (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
+  Backend.await wrapper.stream;
+  let nd = host_buffer tn in
+  if Backend.to_host wrapper.context tn nd then (
+    (* Ensure the device-to-host copy itself has completed before the host buffer is read. *)
+    Backend.await wrapper.stream;
+    nd)
+  else
+    match Ir.Host_inits.find tn with
+    | Some init ->
+        (* An ndarray-backed literal that is not part of any computation in this context (so it was
+           never allocated on the device): its value is its registered host initialization data.
+           Return a private copy so a mutating caller (e.g. [set_value]'s read-modify-write) cannot
+           corrupt the shared initialization buffer used to initialize other contexts. *)
+        copy_nd (Lazy.force init)
+    | None -> (
+        (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
+        match Hashtbl.find for_print_proxies tn.Tn.id with
+        | Some proxy when Backend.to_host wrapper.context proxy nd ->
+            Backend.await wrapper.stream;
+            nd
+        | _ ->
+            raise
+            @@ Utils.User_error
+                 (Printf.sprintf "Context.to_host: node %s is not present in context (backend %s)"
+                    (Tn.debug_name tn) ctx.backend_name))
 
-  (* Update the wrapper with the new context *)
-  let updated_wrapper = Wrapper { wrapper with context = new_backend_context } in
+(** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
+    context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
+let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+  let (Wrapper wrapper) = ctx.backend_wrapper in
+  let module Backend = (val wrapper.backend) in
+  let ctx =
+    if Backend.from_host wrapper.context tn nd then ctx
+    else
+      let new_backend_context = Backend.init_from_host wrapper.context tn nd in
+      let updated_wrapper = Wrapper { wrapper with context = new_backend_context } in
+      { ctx with backend_wrapper = updated_wrapper }
+  in
+  Backend.await wrapper.stream;
+  mark_initialized ctx (Set.singleton (module Tn) tn)
 
-  (* Mark this node as initialized and update context *)
-  let updated_ctx = { ctx with backend_wrapper = updated_wrapper } in
-  mark_initialized updated_ctx (Set.singleton (module Tn) tnode)
+let get_values ctx (tn : Tn.t) : float array =
+  let nd = to_host ctx tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  Nd.retrieve_flat_values ?padding nd
+
+let set_values ctx (tn : Tn.t) (values : float array) : t =
+  let nd = host_buffer tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  Nd.set_flat_values ?padding nd values;
+  from_host ctx tn nd
+
+let get_value ctx (tn : Tn.t) (idx : int array) : float =
+  let nd = to_host ctx tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  let idx =
+    if Array.length (Lazy.force tn.Tn.dims) = 0 && Array.length idx = 1 then
+      if idx.(0) = 0 then [||] else invalid_arg "Context.get_value: index out of bounds"
+    else idx
+  in
+  Nd.get_as_float ?padding nd idx
+
+(* Reads the current device buffer, sets one element, and uploads the whole buffer back, so that
+   the other elements are preserved. *)
+let set_value ctx (tn : Tn.t) (idx : int array) (v : float) : t =
+  let nd = to_host ctx tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  Nd.set_from_float ?padding nd idx v;
+  from_host ctx tn nd
+
+let points_1d ?from_axis ~xdim ctx (tn : Tn.t) =
+  let nd = to_host ctx tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  Nd.retrieve_1d_points ?from_axis ?padding ~xdim nd
+
+let points_2d ?from_axis ~xdim ~ydim ctx (tn : Tn.t) =
+  let nd = to_host ctx tn in
+  let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+  Nd.retrieve_2d_points ?from_axis ?padding ~xdim ~ydim nd
 
 let is_initialized ctx node = Set.mem ctx.initialized_nodes node
 let backend_name ctx = ctx.backend_name

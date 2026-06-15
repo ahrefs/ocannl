@@ -183,10 +183,12 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov
         Train.run ctx sgd_routine;
         let batch_ref =
           IDX.find_exn (Context.bindings sgd_routine) batch_n in
-        epoch_loss := !epoch_loss +. scalar_loss.@[0];
+        (* Value access is context-mediated (gh-ocannl-333): the [At] accessors take a
+           [(context, tensor)] pair and read on demand from the routine's context. *)
+        epoch_loss := !epoch_loss +. (ctx, scalar_loss).@[0];
         learning_rates :=
-          ~-.(learning_rate.@[0]) :: !learning_rates;
-        losses := scalar_loss.@[0] :: !losses;
+          ~-.((ctx, learning_rate).@[0]) :: !learning_rates;
+        losses := (ctx, scalar_loss).@[0] :: !losses;
         Int.incr step_ref)
   done;
 ```
@@ -683,7 +685,7 @@ let%op learning_rate =
 (* Use the default backend (C compiler, CPU). *)
 let ctx = Context.auto () in
 (* Don't inline learning rate so we can debug its value. *)
-Train.set_hosted learning_rate.value;
+Train.set_materialized learning_rate.value;
 let sgd =
   Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
 let ctx =

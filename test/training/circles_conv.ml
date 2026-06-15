@@ -93,16 +93,16 @@ let () =
   let total_steps = epochs * n_batches in
   let update = Train.grad_update batch_loss in
   let%op learning_rate = 0.01 *. ((1.2 *. !..total_steps) - !@step_n) /. !..total_steps in
-  Train.set_hosted learning_rate.value;
+  Train.set_materialized learning_rate.value;
   let sgd = Train.sgd_update ~learning_rate batch_loss in
 
   (* Ensure we can read loss on host *)
-  Train.set_hosted batch_loss.value;
+  Train.set_materialized batch_loss.value;
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
   let sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-
+  let ctx = Context.context sgd_routine in
   let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
   step_ref := 0;
 
@@ -113,8 +113,8 @@ let () =
     let epoch_loss = ref 0. in
     Train.sequential_loop (Context.bindings sgd_routine) ~f:(fun () ->
         Train.run ctx sgd_routine;
-        (* printf "batch_loss = %.4f\n%!" batch_loss.@[0]; *)
-        epoch_loss := !epoch_loss +. batch_loss.@[0];
+        (* printf "batch_loss = %.4f\n%!" (ctx, batch_loss).@[0]; *)
+        epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
         Int.incr step_ref);
     if epoch % 10 = 0 && (epoch <= 100 || epochs - epoch <= 100) then
       printf "Epoch %d: avg loss = %.2f\n%!" epoch (!epoch_loss /. Float.of_int n_batches)
