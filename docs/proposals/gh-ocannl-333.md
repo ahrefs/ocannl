@@ -23,9 +23,9 @@ Eliminate the dual host/device memory model by removing the `array` field from `
 
 3. **`devices_not_lagging_host` removed**: The host/device sync tracking field (tnode.ml line 69) and all `prepare_read`/`prepare_write` callback machinery are removed.
 
-4. **Context-based value access**: `get_value`, `set_value`, `get_values`, `set_values` (tnode.ml lines 727-761) are replaced with context-aware versions that perform on-demand device-to-host transfers. An optional `mutable host_cache : Nd.t option` field on `Tnode.t` allows evictable caching (mutable, not lazy, per the issue author's comment about future buffer eviction).
+4. **Context-based value access**: `get_value`, `set_value`, `get_values`, `set_values` (tnode.ml lines 727-761) are replaced with context-aware versions that perform on-demand device-to-host transfers. **No `host_cache` field is added to `Tnode.t` and `tnode.ml` gains no `ndarray.ml` dependency** (decision 2026-06-15, see Decisions §1): there is no persistent host cache or staging buffer — each access transfers fresh through the context. The API documents loudly that host access is expensive on non-unified-memory backends. On unified-memory backends the backend returns the stored bigarray with no copy (Decisions §2). Any host-data association that later proves necessary lives in a side table in `context.ml`, never in the tensor node.
 
-5. **On-demand tensor printing**: `Tensor.print` works without hosted arrays. The `[%cd "for_print" =: t_to_print]` trick creates a temporary device-to-host copy. A cache of for-print tensor nodes avoids recompilation. This is off by default for `Tensor.print`, on by default for `Train.printf`.
+5. **On-demand tensor printing**: `Tensor.print` works without hosted arrays and **takes an explicit context argument** (decision 2026-06-15, Decisions §3 — no ambient context registry). The `[%cd "for_print" =: t_to_print]` trick creates a temporary device-to-host copy. A cache of for-print tensor nodes avoids recompilation. This is off by default for `Tensor.print`, on by default for `Train.printf` (which already has a context at its call sites).
 
 6. **Train.ml cleanup**: `set_on_host`, `set_hosted`, `every_non_literal_on_host` are deleted. The `?(hosted = true)` parameter is removed from `to_routine`, `init_params`, `run_once`, `forward_once`. `forward` and `grad_update` stop calling `set_hosted`.
 
@@ -66,7 +66,7 @@ The author's comments clarify the progression of thinking:
 
 **In scope**: Removing `array` field, `Hosted` variant, `memory_type` type, host/device sync tracking, Train.ml hosted helpers, updating value access to require context, implementing on-demand printing, updating all tests and examples, minimizing Ndarray.
 
-**Out of scope**: Full Ndarray module removal (still needed for precision-polymorphic host buffers), buffer eviction policy design (future work enabled by this change), unified memory optimization (orthogonal), `from_host`/`to_host` backend signature changes. *(Update 2026-06-12: "no signature changes" is only true of the implementation-facing API — `No_buffer_retrieval_or_syncing.from_host`/`to_host` already take an explicit `Ndarray.t`. The user-facing wrappers in `backends.ml` (`Add_buffer_retrieval_and_syncing`) pattern-match on `tn.array = lazy (Some hosted)` to source/sink host data, so they must change: either take an `Ndarray.t` argument or read/write the `host_cache` staging buffer.)*
+**Out of scope**: Full Ndarray module removal (still needed for precision-polymorphic host buffers), buffer eviction policy design (future work enabled by this change), unified memory optimization (orthogonal), `from_host`/`to_host` backend signature changes. *(Update 2026-06-12: "no signature changes" is only true of the implementation-facing API — `No_buffer_retrieval_or_syncing.from_host`/`to_host` already take an explicit `Ndarray.t`. The user-facing wrappers in `backends.ml` (`Add_buffer_retrieval_and_syncing`) pattern-match on `tn.array = lazy (Some hosted)` to source/sink host data, so they must change: they **take an `Ndarray.t` argument** supplied by the caller. There is no `host_cache` staging buffer to read/write (Decisions §1, 2026-06-15); on unified memory the backend may return the stored bigarray directly (Decisions §2).)*
 
 ### Impact estimate
 
@@ -75,7 +75,7 @@ This is a large refactoring touching ~50+ locations across tnode.ml, low_level.m
 ### Edge cases
 
 - **Printing without context**: Before compilation, tensor printing shows shape/metadata only (no values). A "print context" pattern or lazy printing can address interactive use.
-- **Parameter serialization**: The disabled `save_params`/`restore_params` in train.ml needs redesign around context-based device-to-host-to-disk path. *(Update 2026-06-12: tensor persistence landed as `lib/persistence.ml` (#373); the redesign should target `Persistence` rather than reviving the train.ml stubs.)*
+- **Parameter serialization**: The disabled `save_params`/`restore_params` in train.ml needs redesign around context-based device-to-host-to-disk path. *(Update 2026-06-12: tensor persistence landed as `lib/persistence.ml` (#373); the redesign should target `Persistence` rather than reviving the train.ml stubs.)* *(Decision 2026-06-15, Decisions §4: with no `host_cache`, `Persistence.load` takes a `Context.t` and returns a new context with the loaded tnode added — the same shape as running parameter initialization; `save`/`restore` become context-mediated.)*
 - **Virtual/Local tnodes**: These have no device buffers. Printing requires materializing first.
 - **C backend**: cc_backend.ml uses `Lazy.force tn.array` for compiled C function parameter binding -- must switch to context array map.
 
@@ -91,11 +91,18 @@ This is a large refactoring touching ~50+ locations across tnode.ml, low_level.m
 4. **Add missing cleanup to AC 6:** the `automatic_host_transfers` setting, `sync_routine`'s hosted pre/post hooks (`backends.ml:240-260`), and the Metal dispatch constant-wrap fallback all become dead code; `Hosted Unset_hosted` assignment in `low_level.ml:443` needs a replacement default.
 5. **AC 5 needs a context-plumbing decision for printing** (see below) — the `for_print` trick compiles and runs code, which requires a `Context.t`, but `Tensor.print` takes none today.
 
-**Open decision points for Łukasz:**
+## Decisions (resolved 2026-06-15 by Łukasz)
 
-- `host_cache` on `Tnode.t` vs. side table (rec 2).
-- Zero-copy constants on unified memory: keep via pinned staging, or drop (rec 3).
-- How does `Tensor.print`/`Train.printf` obtain a context: explicit `?ctx` argument, an ambient "most recent context" registry, or restrict value-printing to `Train.printf`-style call sites that have one?
-- Persistence API shape post-#333: `save`/`restore` gain `~ctx`; does `load` stage payloads in `host_cache` until first link, or return `(tn, Ndarray.t)` pairs for the caller to upload?
+The four open decision points above are now settled. **The unifying decision: there is no persistent staging buffer and no host cache after this refactoring.** All CPU-side value access is an on-demand device-to-host transfer mediated by an explicit context. Staging buffers may be reintroduced later in a well-motivated way; this task cleans up the design first.
+
+1. **`host_cache` location (rec 2) → side table in `Context`, and no cache at all for now.** There is **no `host_cache` field on `Tnode.t`** and **no `ndarray.ml` dependency in `tnode.ml`** — this cleanly satisfies the proposal title ("remove the Ndarray dependency from Tnode"). If any host-data association is ever needed it belongs in a side table inside `context.ml` / `Context`, not in the tensor node. But the preferred direction is **no cache**: rather than caching, the API should **loudly document that host access is expensive on non-unified-memory systems**, so callers feel the cost instead of silently paying it through a cache.
+
+2. **Zero-copy constants on unified memory (rec 3) → safe path: backend returns the stored bigarray.** The zero-copy optimization is handled *directly in the backends* on unified-memory systems by **returning the stored bigarray** (safe), **not** by wrapping a raw pointer in a freshly-constructed bigarray value (unsafe). No pinned staging buffer is introduced for constants.
+
+3. **Print context (DP3) → `Tensor.print` requires an explicit context argument.** No implicit/ambient "most recent context" registry is added now. An ambient registry at the `Train` level is a reasonable future idea but is a premature usability optimization (edge-case-unsafe); revisit only after we see how real user code reads. `Train.printf` already has a context at its call sites.
+
+4. **Persistence (DP4) → `load` takes a context and returns a new context.** With no `host_cache`, `Persistence.load` takes a `Context.t` and **returns a new context** with the loaded tnode added — structurally the same flow as running parameter initialization. (`save`/`restore` likewise become context-mediated.)
+
+These decisions **supersede recommendation 1** (the "design `host_cache` as a staging buffer with an explicit lifecycle" recommendation): no such persistent staging lifecycle is built. AC 4 below is updated accordingly (no `host_cache` field).
 
 **Ordering note:** land #333 before #344. Removing `Hosted` collapses Metal's storage-mode segregation to "private pools + small shared staging" and deletes the `use_host_memory` pointer-wrapping entries — exactly the special cases that would otherwise force a `Wrapped of buffer_ptr` escape hatch into #344's `buffer_offset` type, only to be ripped out again.
