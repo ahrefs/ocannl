@@ -288,8 +288,23 @@ let host_buffer (tn : Tn.t) =
     ~debug:("Context host buffer for " ^ Tn.debug_name tn)
     (Lazy.force tn.Tn.prec) ~dims:(Lazy.force tn.Tn.dims) ~padding:(Lazy.force tn.Tn.padding)
 
+(** Whether [tn] has a device buffer allocated in this context. *)
+let mem ctx (tn : Tn.t) : bool =
+  let (Wrapper wrapper) = ctx.backend_wrapper in
+  Map.mem wrapper.context.BI.ctx_arrays tn
+
+(* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
+   [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here
+   as a proxy for the source node, so {!to_host} can read the source's value through the copy. The
+   table is keyed by the source node's id and holds the proxy node; it is read-only from [to_host]'s
+   point of view and is for printing only — never a general host cache. *)
+let for_print_proxies : Tn.t Hashtbl.M(Int).t = Hashtbl.create (module Int)
+
+let register_for_print ~(src : Tn.t) ~(proxy : Tn.t) =
+  Hashtbl.set for_print_proxies ~key:src.Tn.id ~data:proxy
+
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
-    not present in the context. *)
+    not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
@@ -306,11 +321,17 @@ let to_host ctx (tn : Tn.t) : Nd.t =
         (* An ndarray-backed literal that is not part of any computation in this context (so it was
            never allocated on the device): its value is its registered host initialization data. *)
         Lazy.force init
-    | None ->
-        raise
-        @@ Utils.User_error
-             (Printf.sprintf "Context.to_host: node %s is not present in context (backend %s)"
-                (Tn.debug_name tn) ctx.backend_name)
+    | None -> (
+        (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
+        match Hashtbl.find for_print_proxies tn.Tn.id with
+        | Some proxy when Backend.to_host wrapper.context proxy nd ->
+            Backend.await wrapper.stream;
+            nd
+        | _ ->
+            raise
+            @@ Utils.User_error
+                 (Printf.sprintf "Context.to_host: node %s is not present in context (backend %s)"
+                    (Tn.debug_name tn) ctx.backend_name))
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)

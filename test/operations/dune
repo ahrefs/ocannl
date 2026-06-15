@@ -138,6 +138,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name for_print_test)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules for_print_test)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name zero_out_local_decl)
  (package neural_nets_lib)
  (deps

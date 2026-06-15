@@ -77,9 +77,17 @@ val copy : src:t -> dst:t -> Ir.Tnode.t -> unit
     through a temporary host buffer. There is no cache: every call performs a fresh transfer, which
     is {b expensive on non-unified-memory backends} — prefer batching over polling. *)
 
+val mem : t -> Ir.Tnode.t -> bool
+(** Whether the node has a device buffer allocated in this context. *)
+
+val register_for_print : src:Ir.Tnode.t -> proxy:Ir.Tnode.t -> unit
+(** Registers [proxy] as a for-print copy of [src] (gh-ocannl-333 AC 5): when [src] is not present in
+    a context, {!to_host}/{!get_values} on [src] read through [proxy] instead. Used by [Train.printf]
+    to render the value of a tensor that is not directly materialized in the context. *)
+
 val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
 (** Transfers the node's device buffer into a fresh host [Ndarray] and returns it. Raises if the
-    node is not present in the context. *)
+    node is not present in the context (and has no host-init data or for-print proxy). *)
 
 val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
 (** Uploads the host buffer into the node's device buffer (allocating it if needed) and returns a

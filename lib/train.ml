@@ -218,15 +218,38 @@ let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = I
 let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ctx t =
   run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
 
+(* For-print cache (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's value is
+   not materialized in the printing context, we compile and run a copy of it ([for_print = t + 0])
+   into a fresh device-resident node, and register that node as a for-print proxy so the printer can
+   read the tensor's value through it. The copy tensor is cached by source-node id so the for-print
+   node is reused across repeated prints (the proposal's "cache of for-print tensor nodes"). *)
+let for_print_cache : (int, Tensor.t) Hashtbl.t = Hashtbl.create (module Int)
+
+let ensure_printable (ctx : Context.t) (t : Tensor.t) : Context.t =
+  if Context.mem ctx t.Tensor.value then ctx
+  else begin
+    let for_print =
+      Hashtbl.find_or_add for_print_cache t.Tensor.value.Tn.id ~default:(fun () ->
+          let%op for_print = t + 0 in
+          for_print)
+    in
+    let ctx = forward_once ctx for_print in
+    Context.register_for_print ~src:t.Tensor.value ~proxy:for_print.Tensor.value;
+    ctx
+  end
+
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. It takes an explicit context and
-    retrieves values on demand (gh-ocannl-333): the tensor must have been run in [ctx]. *)
+    retrieves values on demand (gh-ocannl-333). If the tensor's value is not already materialized in
+    [ctx], it is recomputed via the [for_print] copy trick so real values are still shown. *)
 let%debug7_sexp printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
     ?(style = `Default) (ctx : Context.t) (t : Tensor.t) : unit =
+  let ctx = ensure_printable ctx t in
   Tensor.print ?here ~force:true ~ctx ~with_grad ~with_code ~with_low_level style t
 
 (** [printf_tree] is a wrapper around {!Tensor.print_tree} that assumes [~force:true], and by
     default sets [~with_value:true], [~with_grad:true], and [~depth:9]. It takes an explicit context
-    and retrieves values on demand. *)
+    and retrieves values on demand (recomputing via [for_print] if not already materialized). *)
 let printf_tree ?here ?with_value ?(with_grad = true) ?(depth = 9) (ctx : Context.t) t =
+  let ctx = ensure_printable ctx t in
   Tensor.print_tree ?here ~force:true ~ctx ?with_value ~with_grad ~depth t
