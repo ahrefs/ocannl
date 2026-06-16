@@ -106,7 +106,7 @@ opam install cudajit  # for CUDA backend
 - A handful of `test/training/` runs are minutes-long each (`cifar_conv`, `mnist_conv`, `mlp_bn_names`, `mlp_names`, `circles_conv`) and dominate total test time. They are kept out of the `runtest` alias so `dune runtest` stays fast.
 - They are still ordinary executables: `dune build @check` compiles them, so they cannot bit-rot.
 - Run them on demand with `dune build @slow` (uses their `.expected` files; `dune promote` to accept changes). Use `dune build @runtest @slow` to run the entire suite.
-- To gate a new slow test, in its `test/.../dune` replace its `(test ...)` stanza with an `(executable ...)` plus a `(rule (alias slow) ...)` that runs the exe and diffs against `<name>.expected` (see `test/training/dune` for the pattern).
+- To gate a new slow test, in its `test/.../dune` replace its `(test ...)` stanza with an `(executable ...)` plus a `(rule (alias slow) ...)` that runs the exe and diffs against `<name>.expected` (see `test/training/dune` for the pattern). Wrap the rule's action in `(no-infer ...)` so the `<name>.actual` output is NOT registered as a build target — otherwise a plain `dune build` (the `@all` alias builds every file target) would run the slow exe anyway.
 
 **Test Types**:
 - **Inline tests**: Files included in library `modules` field with `inline_tests` stanza (e.g., `test_threefry4x32.ml` in `operations_tutorials` library)
