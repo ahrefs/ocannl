@@ -37,7 +37,12 @@ for (uint32_t i12 = 0; i12 <= 3; ++i12) {
   {
     float new_set_local_v = (v700_src + src[i12]);
     if (log_file_name && log_file) fprintf(log_file, "# local v700_src := (v700_src + src[i12])\n");
-    if (log_file_name && log_file) fprintf(log_file, "v700_src{=%g} = %g = (v700_src{=%g} + src[%u]{=%g})\n", v700_src, new_set_local_v, v700_src, i12, src[i12]);
+    if (log_file_name && log_file) fprintf(log_file, "v700_src{=%g} = %g = (v700_src{=%g} + src[%u]{=%g})\n",
+        v700_src,
+        new_set_local_v,
+        v700_src,
+        i12,
+        src[i12]);
     fflush(log_file);
     v700_src = new_set_local_v;
   }
@@ -45,14 +50,22 @@ for (uint32_t i12 = 0; i12 <= 3; ++i12) {
 {
   float new_set_v = v700_src;
   if (log_file_name && log_file) fprintf(log_file, "# out1[0] := v700_src;\n");
-  if (log_file_name && log_file) fprintf(log_file, "out1[%u]{=%g} = %g = v700_src{=%g}\n", 0, out1[0], new_set_v, v700_src);
+  if (log_file_name && log_file) fprintf(log_file, "out1[%u]{=%g} = %g = v700_src{=%g}\n",
+      0,
+      out1[0],
+      new_set_v,
+      v700_src);
   fflush(log_file);
   out1[0] = new_set_v;
 }
 {
   float new_set_v = v700_src;
   if (log_file_name && log_file) fprintf(log_file, "# out2[0] := v700_src;\n");
-  if (log_file_name && log_file) fprintf(log_file, "out2[%u]{=%g} = %g = v700_src{=%g}\n", 0, out2[0], new_set_v, v700_src);
+  if (log_file_name && log_file) fprintf(log_file, "out2[%u]{=%g} = %g = v700_src{=%g}\n",
+      0,
+      out2[0],
+      new_set_v,
+      v700_src);
   fflush(log_file);
   out2[0] = new_set_v;
 }
