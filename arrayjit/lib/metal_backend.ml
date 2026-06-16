@@ -111,9 +111,11 @@ module Slab = struct
     track_allocation buffer;
     Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
 
-  (* Rely on ARC and the finalizer attached in track_allocation; re-allocating a pool overwrites the
-     table entry, dropping the old buffer to ARC. *)
-  let free_pool = None
+  (* Rely on ARC and the finalizer attached in track_allocation for the actual reclamation, but still
+     drop the private table entry on finalization so the strong reference is released (otherwise ARC
+     can never reclaim a context's tnode buffers). Re-allocating a pool also overwrites the entry. *)
+  let free_pool =
+    Some (fun (device : device) ~pool_id -> Hashtbl.remove pools (device.device_id, pool_id))
 
   let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
     let buffer = Hashtbl.find_exn pools (device.device_id, pool_id) in

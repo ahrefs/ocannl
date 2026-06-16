@@ -161,10 +161,16 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
     let ptr = Raw.alloc_pool_raw ~size_in_bytes in
     Hashtbl.set pools ~key ~data:ptr
 
+  (* Always [Some]: even backends whose raw allocations are reclaimed by GC ([free_pool_raw = None])
+     must drop the private table entry on finalization, otherwise [pools] keeps a strong reference to
+     every tnode buffer for the lifetime of the backend module and the GC finalizer never runs.
+     Removing the entry releases that reference (and eagerly frees via the raw deallocator if any). *)
   let free_pool =
-    Option.map Raw.free_pool_raw ~f:(fun memfree device ~pool_id ->
+    Some
+      (fun device ~pool_id ->
         let key = (device.device_id, pool_id) in
-        Option.iter (Hashtbl.find pools key) ~f:memfree;
+        Option.iter (Hashtbl.find pools key) ~f:(fun ptr ->
+            Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree ptr));
         Hashtbl.remove pools key)
 
   let memset_zero device ~pool_id ~offset ~size_in_bytes =
