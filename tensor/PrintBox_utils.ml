@@ -99,32 +99,52 @@ type table_row_spec =
 
 let nolines = String.substr_replace_all ~pattern:"\n" ~with_:";"
 
+let render_group result_label group_rows =
+  let titles = List.map group_rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
+  let times = List.map group_rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
+  let sizes = List.map group_rows ~f:(fun (Benchmark { mem_in_bytes; _ }) -> mem_in_bytes) in
+  let max_time = List.reduce_exn ~f:Float.max times in
+  let max_size = List.reduce_exn ~f:Int.max sizes in
+  let speedups = List.map times ~f:(fun x -> max_time /. x) in
+  let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
+  let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
+  let results =
+    List.map group_rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result)
+  in
+  PrintBox.(
+    record
+      [
+        ("Benchmarks", vlist_map ~bars:false line titles);
+        ("Time in sec", vlist_map ~bars:false float_ times);
+        ("Memory in bytes", vlist_map ~bars:false int_ sizes);
+        ("Speedup", vlist_map ~bars:false small_float speedups);
+        ("Mem gain", vlist_map ~bars:false small_float mem_gains);
+        (result_label, vlist_map ~bars:false line results);
+      ])
+
 let table rows =
   if List.is_empty rows then PrintBox.empty
   else
-    let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
-    let times = List.map rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
-    let sizes = List.map rows ~f:(fun (Benchmark { mem_in_bytes; _ }) -> mem_in_bytes) in
-    let max_time = List.reduce_exn ~f:Float.max times in
-    let max_size = List.reduce_exn ~f:Int.max sizes in
-    let speedups = List.map times ~f:(fun x -> max_time /. x) in
-    let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
-    let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
-    let results =
-      List.map rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result)
+    (* Accumulate all rows with the same label into one group, preserving first-seen label order.
+       Using Map rather than List.group so that interleaved labels (ms, MB, ms) don't produce
+       duplicate sub-tables with metrics computed against different local maxima. *)
+    let groups =
+      let map, order_rev =
+        List.fold rows ~init:(Map.empty (module String), []) ~f:(fun (acc, order) row ->
+          let (Benchmark { result_label; _ }) = row in
+          let label = nolines result_label in
+          let order' = if Map.mem acc label then order else label :: order in
+          let acc' =
+            Map.update acc label ~f:(function None -> [ row ] | Some rs -> row :: rs)
+          in
+          (acc', order'))
+      in
+      List.rev_map order_rev ~f:(fun label -> (label, List.rev (Map.find_exn map label)))
     in
-    let result_labels =
-      List.map rows ~f:(fun (Benchmark { result_label; _ }) -> nolines result_label)
-    in
-    (* TODO(#140): partition by unique result_label and output a vlist of records. *)
+    let group_boxes = List.map groups ~f:(fun (label, group_rows) -> render_group label group_rows) in
     PrintBox.(
       frame
-      @@ record
-           [
-             ("Benchmarks", vlist_map ~bars:false line titles);
-             ("Time in sec", vlist_map ~bars:false float_ times);
-             ("Memory in bytes", vlist_map ~bars:false int_ sizes);
-             ("Speedup", vlist_map ~bars:false small_float speedups);
-             ("Mem gain", vlist_map ~bars:false small_float mem_gains);
-             (List.hd_exn result_labels, vlist_map ~bars:false line results);
-           ])
+      @@
+      match group_boxes with
+      | [ single ] -> single
+      | multiple -> vlist ~bars:true multiple)

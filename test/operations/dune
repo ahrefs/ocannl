@@ -1,6 +1,15 @@
 (copy_files
  (files ../config/ocannl_config))
 
+(test
+ (name printbox_utils_test)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules printbox_utils_test)
+ (libraries base ocannl stdio printbox-text)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executable
  (name micrograd_demo_logging)
  (package neural_nets_lib)
