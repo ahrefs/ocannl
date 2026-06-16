@@ -4,40 +4,40 @@
 
 open Base
 
-type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
-type 'buffer_ptr ctx_arrays = 'buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
+(** A backend-agnostic, deterministic per-device buffer location: a [pool_id] into the device's
+    backend-private [pool_id -> 'base] pool table, plus a byte [offset] within that pool. The
+    concrete backend pointer ([Metal.Buffer.t] / [CUdeviceptr] / [void*]) lives only in that private
+    table -- it never appears in any type of this shared interface -- so [buffer_loc] (pure integers)
+    is stable across runs, diffable, and meaningful in logs and [.expected] files. Phase-1 policy is
+    one pool per tnode at [offset = 0], byte-for-byte equivalent to per-tnode allocation. An alias
+    (future work) is the parent's [{ pool_id; offset = offset + delta }]. *)
+type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equal]
 
-module Buffer_types (Buffer_ptr : sig
-  type buffer_ptr [@@deriving sexp_of]
-end) =
-struct
-  type nonrec buffer = Buffer_ptr.buffer_ptr buffer [@@deriving sexp_of]
-  type nonrec ctx_arrays = Buffer_ptr.buffer_ptr ctx_arrays [@@deriving sexp_of]
-end
+type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
 
-module type Buffer = sig
-  type buffer_ptr [@@deriving sexp_of]
+(** The backend slab allocator, replacing the per-tnode [Alloc_buffer] interface. The shared
+    allocator seam (see {!Backends}) mints deterministic per-device [pool_id]s and calls these
+    int-in / int-out primitives; the backend keeps the [pool_id -> 'base] table private. The
+    [pool_id -> 'base] resolution (then [base + offset]) stays inside the backend. *)
+module type Slab_alloc = sig
+  type device
 
-  include module type of Buffer_types (struct
-    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
-  end)
-end
+  val alloc_pool :
+    ?mode:Tnode.memory_mode ->
+    device ->
+    pool_id:int ->
+    size_in_bytes:int ->
+    alignment:int ->
+    unit
+  (** Allocates the slab for [pool_id] on [device]. The optional [?mode] carries the tnode's memory
+      mode so backends can pick a storage mode (Metal private vs. shared); backends that do not care
+      ignore it. *)
 
-module type Alloc_buffer = sig
-  include Buffer
+  val free_pool : (device -> pool_id:int -> unit) option
+  (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC. *)
 
-  type stream
-
-  (** The optional [?mode] argument carries the tnode's memory mode so that backends can pick a
-      storage mode that matches whether the CPU needs to access the buffer (used by the Metal
-      backend to select private vs. shared storage). Backends that do not care ignore it. *)
-
-  val alloc_buffer :
-    ?old_buffer:buffer -> ?mode:Tnode.memory_mode -> size_in_bytes:int -> stream -> buffer
-
-  val alloc_array : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> stream -> buffer_ptr
-  val alloc_zeros : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> stream -> buffer_ptr
-  val free_buffer : (stream -> buffer_ptr -> unit) option
+  val memset_zero : device -> pool_id:int -> offset:int -> size_in_bytes:int -> unit
+  (** Zero-initializes [size_in_bytes] at [base_of pool_id + offset]. *)
 end
 
 type merge_buffer_use = No | Copy [@@deriving sexp_of]
@@ -63,8 +63,6 @@ type 'context routine = {
 [@@deriving sexp_of]
 
 module type Device_config_common = sig
-  include Buffer
-
   type dev [@@deriving sexp_of]
   (** Interface to a device driver. *)
 
@@ -72,9 +70,9 @@ module type Device_config_common = sig
   (** Interface to a stream driver. *)
 
   type event [@@deriving sexp_of]
-  (** An event tracks if a stream finished computing past a particular point in its schedue. These
-      values are used internally for scheduling across streams of the backend, and can be used for
-      explicit scheduling. *)
+  (** An event tracks if a device's runner finished computing past a particular point in its
+      schedule. These values are used internally for scheduling across devices/queues of the
+      backend, and can be used for explicit scheduling. *)
 
   val name : string
 end
@@ -89,33 +87,12 @@ module type Device_config = sig
   val empty_optimize_ctx : unit -> optimize_ctx
 end
 
-type ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
-  dev : 'dev;
-  ordinal : int;
-  device_id : int;
-  constant_buffer_cache : 'buffer_ptr Hashtbl.M(Tnode).t;
-      (** Per-device cache for read-only/constant buffer allocations. Also contains buffer/pointer
-          wrappers for hosted tnodes on unified memory systems. *)
-  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
-      (** All (live) streams created on the device. *)
-}
-
-and ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
-  device : ('buffer_ptr, 'dev, 'runner, 'event) device_ref;
-  runner : 'runner;
-  merge_buffer : 'buffer_ptr buffer option ref;
-  stream_id : int;
-  mutable allocated_buffer : 'buffer_ptr buffer option;
-  updating_for : 'event Hashtbl.M(Tnode).t;
-  mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
-}
-
-let sexp_of_device_ref _ _ _ _ device = [%sexp_of: string * int] ("ordinal", device.ordinal)
-let sexp_of_stream_ref _ _ _ _ stream = [%sexp_of: string * int] ("stream_id", stream.stream_id)
-let equal_stream_ref s1 s2 = s1.stream_id = s2.stream_id && s1.device.ordinal = s2.device.ordinal
-
-type ('buffer_ptr, 'dev, 'runner, 'event) device =
-      ('buffer_ptr, 'dev, 'runner, 'event) device_ref = {
+(** A device folds in the (formerly per-stream) single compute runner and its buffer/event tracking:
+    with one compute stream per device, the surviving [runner] / [merge_buffer] / [updating_for] /
+    [updating_for_merge_buffer] fields live on the device. The [updating_for] writer-event tracking
+    and {!Backend.device_to_device} coherence are preserved (relocated here), now for cross-device
+    coherence, and are forward-compatible with a future fixed-role prefetch/transfer runner. *)
+type ('dev, 'runner, 'event) device = {
   dev : 'dev;
   ordinal : int;
       (** The number of the represented backend's device, in the range from 0 to the number of the
@@ -123,45 +100,41 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device =
   device_id : int;
       (** A unique identifier among all device instances of all backends. Note that multiple
           [device_id] (distinct device instances) might refer to the same physical device. *)
-  constant_buffer_cache : 'buffer_ptr Hashtbl.M(Tnode).t;
-      (** Per-device cache for read-only/constant buffer allocations. Also contains buffer/pointer
-          wrappers for hosted tnodes on unified memory systems. *)
-  mutable streams : ('buffer_ptr, 'dev, 'runner, 'event) stream_ref Utils.weak_dynarray;
-      (** All (live) streams created on the device. *)
-}
-[@@deriving sexp_of]
-
-type ('buffer_ptr, 'dev, 'runner, 'event) stream =
-      ('buffer_ptr, 'dev, 'runner, 'event) stream_ref = {
-  device : ('buffer_ptr, 'dev, 'runner, 'event) device_ref;
   runner : 'runner;
-  merge_buffer : 'buffer_ptr buffer option ref;
-      (** Depending on backend implementations, either the currently used merge buffer, or the one
-          most recently scheduled. Note that the pointer can be reused for nodes that fit in an
-          already allocated buffer. *)
-  stream_id : int;  (** An ID unique within the device for the lifetime of the stream. *)
-  mutable allocated_buffer : 'buffer_ptr buffer option;
+  merge_buffer : buffer_loc option ref;
+      (** The merge buffer's reserved single-tenant pool location, or [None] if not yet allocated.
+          The slab can be reused (grown in place) for nodes that fit. *)
+  mutable merge_buffer_capacity : int;
+      (** Byte capacity of the reserved merge-buffer pool; drives the grow decision. *)
   updating_for : 'event Hashtbl.M(Tnode).t;
-      (** The completion event for the most recent updating (writing to) a node via this stream. *)
+      (** The completion event for the most recent updating (writing to) a node via this device. *)
   mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
-      (** The tensor node that was most recently scheduled to be in the [stream]'s merge buffer. See
+      (** The tensor node that was most recently scheduled to be in the device's merge buffer. See
           also {!field-updating_for}. *)
+  constant_buffer_cache : buffer_loc Hashtbl.M(Tnode).t;
+      (** Per-device cache for read-only/constant buffer allocations. *)
+  mutable next_pool_id : int;
+      (** Deterministic per-device pool-id counter, advanced by the shared allocator seam in tnode
+          iteration order. Pool id 0 is reserved for the merge buffer; tnode pools start at 1. *)
 }
-[@@deriving sexp_of]
 
-let equal_stream = equal_stream_ref
+let sexp_of_device _ _ _ device = [%sexp_of: string * int] ("device_id", device.device_id)
+let equal_device d1 d2 = d1.device_id = d2.device_id
 
-type ('buffer_ptr, 'stream, 'optimize_ctx) context = {
-  stream : 'stream;
-  parent : ('buffer_ptr, 'stream, 'optimize_ctx) context option;
-  ctx_arrays : 'buffer_ptr ctx_arrays;
-      (** This map contains arrays used in this context or an ancestor context (they might be unique
-          but might also be cross-stream shared). *)
+(** Pool id 0 on every device is reserved for the (single-tenant) merge buffer. *)
+let merge_buffer_pool_id = 0
+
+type ('dev, 'runner, 'event, 'optimize_ctx) context = {
+  device : ('dev, 'runner, 'event) device;
+  parent : ('dev, 'runner, 'event, 'optimize_ctx) context option;
+  ctx_buffers : ctx_buffers;
+      (** This map contains the deterministic buffer locations used in this context or an ancestor
+          context. *)
   finalized : Utils.atomic_bool;
   optimize_ctx : 'optimize_ctx;
   merge_buffer_node : Tnode.t option;
       (** The tensor node that a {!Backend.device_to_device} transfer with [into_merge_buffer:Copy]
-          placed (or will place) into this context's stream's merge buffer. It is a static,
+          placed (or will place) into this context's device's merge buffer. It is a static,
           immutably-chained fact carried producer -> consumer: linking a consumer whose code expects
           a merge-buffer node verifies it against this field at link time. A transfer with
           [into_merge_buffer:No] does not touch the merge buffer and inherits the parent's value. *)
@@ -171,39 +144,39 @@ type ('buffer_ptr, 'stream, 'optimize_ctx) context = {
 module type Device_types = sig
   include Device_config
 
-  type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, stream, optimize_ctx) context [@@deriving sexp_of]
+  type nonrec device = (dev, runner, event) device [@@deriving sexp_of]
+  type nonrec context = (dev, runner, event, optimize_ctx) context [@@deriving sexp_of]
 end
 
 module type Device = sig
   include Device_types
-  include Alloc_buffer with type buffer_ptr := buffer_ptr and type stream := stream
+  include Slab_alloc with type device := device
 
-  val make_device : dev -> ordinal:int -> device
-  val make_stream : device -> runner -> stream
+  (* [pool_id -> base] resolution is intentionally NOT part of this shared signature: the concrete
+     backend pointer never appears in a shared type. Resolution lives backend-side (see
+     {!Backend_impl.Make_slab} / each backend's private [Slab]). *)
 
-  val make_context : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> stream -> context
+  val make_device : dev -> runner -> ordinal:int -> device
+
+  val make_context : ?ctx_buffers:ctx_buffers -> ?optimize_ctx:optimize_ctx -> device -> context
   (** Returns a context without a parent. *)
 
   val make_child :
-    ?ctx_arrays:ctx_arrays ->
+    ?ctx_buffers:ctx_buffers ->
     ?optimize_ctx:optimize_ctx ->
     ?merge_buffer_node:Tnode.t option ->
     context ->
     context
-  (** Returns a context with the same {!field:Backend_intf.context.stream}, and
-      {!field:Backend_intf.context.ctx_arrays}, {!field:Backend_intf.context.optimize_ctx},
+  (** Returns a context with the same {!field:Backend_intf.context.device},
+      {!field:Backend_intf.context.ctx_buffers}, {!field:Backend_intf.context.optimize_ctx},
       {!field:Backend_intf.context.merge_buffer_node} if omitted, as the given context's, which is
       also the {!field:Backend_intf.context.parent}. *)
 
-  val get_name : stream -> string
+  val get_name : device -> string
 end
 
 (** Parts shared by assignments-level backend interfaces. *)
 module type Backend_common = sig
-  include Buffer
-
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
   type optimize_ctx [@@deriving sexp_of]
@@ -248,7 +221,7 @@ module type Backend_device_common = sig
   (** Whether the event completed. *)
 
   val will_wait_for : context -> event -> unit
-  (** Schedules waiting for the given event on the context's stream.
+  (** Schedules waiting for the given event on the context's device.
 
       NOTE: it should rarely be needed to call [will_wait_for] explicitly, because it should always
       be called internally when necessary. *)
@@ -262,23 +235,27 @@ module type Backend_device_common = sig
   val get_global_debug_info : unit -> Sexp.t
   (** Global debug information; backend-specific and might evolve independently on the backends. *)
 
-  val get_debug_info : stream -> Sexp.t
-  (** Per-stream debug information; backend-specific and might evolve independently on the backends
+  val get_debug_info : device -> Sexp.t
+  (** Per-device debug information; backend-specific and might evolve independently on the backends
   *)
 
-  val await : stream -> unit
-  (** Blocks till the stream becomes idle, i.e. synchronizes the stream. *)
+  val await : device -> unit
+  (** Blocks till the device becomes idle, i.e. synchronizes the device's runner. *)
 
-  val all_work : stream -> event
-  (** Returns the event indicating if any currently running or scheduled computations on the stream
+  val all_work : device -> event
+  (** Returns the event indicating if any currently running or scheduled computations on the device
       have completed. *)
 
-  val is_idle : stream -> bool
-  (** Whether the stream is currently waiting for work. *)
+  val is_idle : device -> bool
+  (** Whether the device's runner is currently waiting for work. *)
 
   val get_device : ordinal:int -> device
   val num_devices : unit -> int
-  val new_stream : device -> stream
+
+  val new_stream : device -> device
+  (** After the stream-into-device fold there is one compute stream per device, so the device is its
+      own single stream; [new_stream] returns the device unchanged. Retained for call-site
+      compatibility (callers create a fresh {!context} per logical stream via {!make_context}). *)
 end
 
 module type With_buffer_retrieval_and_syncing = sig
@@ -335,8 +312,7 @@ end
 module type Backend = sig
   include Backend_common
 
-  include
-    Backend_device_common with type buffer_ptr := buffer_ptr and type optimize_ctx := optimize_ctx
+  include Backend_device_common with type optimize_ctx := optimize_ctx
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context.

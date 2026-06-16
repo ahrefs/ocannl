@@ -49,6 +49,15 @@
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
 
+(test
+ (name test_slab_free_on_grow)
+ (package arrayjit)
+ (modules test_slab_free_on_grow)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base stdio arrayjit.ir))
+
 ; Built and run only on macOS, where the Metal backend (the `metal` package)
 ; is available; skipped on other systems via `enabled_if`.
 (test

@@ -129,6 +129,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_buffer_loc)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules test_buffer_loc)
+ (libraries base ocannl stdio arrayjit.utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name shard_transfer)
  (package neural_nets_lib)
  (deps ocannl_config)

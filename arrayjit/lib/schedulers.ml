@@ -58,7 +58,7 @@ module Multicore (Backend : For_add_scheduler) :
   end
 
   module Device_types = Device_types_ll (Device_config)
-  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
+  include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
   let sync { stream_state; is_done } =
@@ -72,29 +72,29 @@ module Multicore (Backend : For_add_scheduler) :
   let is_done { stream_state = _; is_done } = Atomic.get is_done
   let get_used_memory _device = get_used_memory ()
   let is_dev_queue_empty state = Queue.size state.queue = 0
-  let is_idle stream = is_dev_queue_empty stream.runner.state && stream.runner.state.is_ready
+  let is_idle device = is_dev_queue_empty device.runner.state && device.runner.state.is_ready
 
-  let await stream =
+  let await device =
     assert (Domain.is_main_domain ());
-    let d = stream.runner.state in
-    if (not @@ is_idle stream) && d.keep_spinning then (
+    let d = device.runner.state in
+    if (not @@ is_idle device) && d.keep_spinning then (
       Mut.lock d.mut;
-      while (not @@ is_idle stream) && d.keep_spinning do
-        (* If the stream "is ready", it needs to be woken up first to finish the work. *)
+      while (not @@ is_idle device) && d.keep_spinning do
+        (* If the runner "is ready", it needs to be woken up first to finish the work. *)
         if d.is_ready then Stdlib.Condition.broadcast d.dev_wait_for_work;
         Stdlib.Condition.wait d.host_wait_for_idle d.mut
       done;
       Mut.unlock d.mut;
-      Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream))
+      Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name device))
 
-  let schedule_task stream task =
+  let schedule_task device task =
     assert (Domain.is_main_domain ());
-    (* [%log_result "schedule_task", Ir.Task.describe task, get_name stream]; *)
-    let d = stream.runner.state in
-    Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name stream);
-    if not d.keep_spinning then invalid_arg "Multicore_scheduler: stream not available";
+    (* [%log_result "schedule_task", Ir.Task.describe task, get_name device]; *)
+    let d = device.runner.state in
+    Option.iter d.stream_error ~f:(fun e -> Exn.reraise e @@ get_name device);
+    if not d.keep_spinning then invalid_arg "Multicore_scheduler: device not available";
     if not @@ Queue.try_push d.queue task then (
-      await stream;
+      await device;
       Queue.push_exn d.queue task);
     if d.is_ready then (
       Mut.lock d.mut;
@@ -102,7 +102,6 @@ module Multicore (Backend : For_add_scheduler) :
       Mut.unlock d.mut)
 
   let global_run_no = ref 0
-  let device : device = make_device CPU ~ordinal:0
 
   let will_wait_for ctx ({ stream_state; is_done = _ } as event) =
     let work () = sync event in
@@ -111,15 +110,15 @@ module Multicore (Backend : For_add_scheduler) :
         {
           context_lifetime = ();
           description =
-            [%string "wait on %{get_name ctx.stream} for 0:%{stream_state.stream_id#Int}"];
+            [%string "wait on %{get_name ctx.device} for 0:%{stream_state.stream_id#Int}"];
           work;
         }
     in
-    schedule_task ctx.stream task
+    schedule_task ctx.device task
 
-  let all_work stream =
+  let all_work device =
     assert (Domain.is_main_domain ());
-    let stream_state = stream.runner.state in
+    let stream_state = device.runner.state in
     let is_done = Atomic.make false in
     let work () =
       assert (Atomic.compare_and_set is_done false true);
@@ -127,10 +126,10 @@ module Multicore (Backend : For_add_scheduler) :
       Stdlib.Condition.broadcast stream_state.clock_tick;
       Mut.unlock stream_state.clock_mut
     in
-    schedule_task stream @@ Task { context_lifetime = (); description = "clock tick"; work };
+    schedule_task device @@ Task { context_lifetime = (); description = "clock tick"; work };
     { stream_state; is_done }
 
-  let spinup_stream () : stream =
+  let spinup_runner () : runner =
     let create stream_id =
       Int.incr global_run_no;
       let state =
@@ -173,18 +172,37 @@ module Multicore (Backend : For_add_scheduler) :
       in
       { state; domain = Domain.spawn worker }
     in
-    (* We cannot use make_stream because runner needs stream_id. *)
-    Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
-        let runner = create stream_id in
-        {
-          device;
-          runner;
-          merge_buffer = ref None;
-          stream_id;
-          allocated_buffer = None;
-          updating_for = Hashtbl.create (module Ir.Tnode);
-          updating_for_merge_buffer = None;
-        })
+    create !global_run_no
+
+  let%track7_sexp cleanup_device (device : device) : unit =
+    (* Allow running in parallel. *)
+    (* assert (Domain.is_main_domain ()); *)
+    [%log "cleanup_device: await device"];
+    await device;
+    let r : runner = device.runner in
+    r.state.keep_spinning <- false;
+    [%log "cleanup_device: broadcasting r.state.dev_wait_for_work to wake up the worker"];
+    Stdlib.Condition.broadcast r.state.dev_wait_for_work;
+    [%log "cleanup_device: joining the domain"];
+    Domain.join r.domain
+
+  (* With one compute stream per device, the runner (worker domain) is created with the device.
+     [get_device] memoizes the single CPU device so repeated calls return the same device. *)
+  let the_device : device option ref = ref None
+
+  let get_device ~ordinal =
+    if ordinal <> 0 then
+      invalid_arg [%string "Multicore_scheduler.get_device %{ordinal#Int}: only device 0 exists"];
+    match !the_device with
+    | Some device -> device
+    | None ->
+        assert (Domain.is_main_domain ());
+        let device = make_device CPU (spinup_runner ()) ~ordinal:0 in
+        Stdlib.Gc.finalise cleanup_device device;
+        the_device := Some device;
+        device
+
+  let new_stream device = device
 
   let num_devices () = 1
 
@@ -205,31 +223,8 @@ module Multicore (Backend : For_add_scheduler) :
           ];
       ]
 
-  let%track7_sexp cleanup_stream (stream : stream) : unit =
-    (* Allow running in parallel. *)
-    (* assert (Domain.is_main_domain ()); *)
-    [%log "cleanup_stream: await stream"];
-    await stream;
-    let r : runner = stream.runner in
-    r.state.keep_spinning <- false;
-    [%log "cleanup_stream: broadcasting r.state.dev_wait_for_work to wake up the worker"];
-    Stdlib.Condition.broadcast r.state.dev_wait_for_work;
-    [%log "cleanup_stream: joining the domain"];
-    Domain.join r.domain
-
-  let get_device ~ordinal =
-    if ordinal <> 0 then
-      invalid_arg [%string "Multicore_scheduler.get_device %{ordinal#Int}: only device 0 exists"];
-    device
-
-  let%track5_sexp new_stream _device =
-    assert (Domain.is_main_domain ());
-    let stream = spinup_stream () in
-    Stdlib.Gc.finalise cleanup_stream stream;
-    stream
-
   let get_global_debug_info () = Sexp.message "global_debug" []
-  let get_debug_info (stream : stream) = sexp_of_runner stream.runner
+  let get_debug_info (device : device) = sexp_of_runner device.runner
 end
 
 (** A minimalisitc wrapper creating backends where all calls run synchronously on the main thread.
@@ -249,17 +244,13 @@ module Sync (Backend : For_add_scheduler) = struct
   end
 
   module Device_types = Device_types_ll (Device_config)
-  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
+  include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
   let sync () = ()
   let is_done () = true
   let will_wait_for _context () = ()
-
-  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _stream =
-    Backend.alloc_buffer ?old_buffer ?mode ~size_in_bytes ()
-
-  let device : device = make_device CPU ~ordinal:0
+  let device : device = make_device CPU () ~ordinal:0
 
   let get_device ~ordinal =
     if ordinal <> 0 then
@@ -269,10 +260,10 @@ module Sync (Backend : For_add_scheduler) = struct
 
   let num_devices () = 1
   let get_used_memory _ = Backend.get_used_memory ()
-  let new_stream device = make_stream device ()
-  let all_work _stream = ()
-  let is_idle _stream = true
-  let await _stream = ()
+  let new_stream device = device
+  let all_work _device = ()
+  let is_idle _device = true
+  let await _device = ()
 
   let static_properties =
     Sexp.List
@@ -291,7 +282,7 @@ module Sync (Backend : For_add_scheduler) = struct
       ]
 
   (* let global_run_no = ref 0 *)
-  let schedule_task _stream task = Ir.Task.run task
+  let schedule_task _device task = Ir.Task.run task
   let get_global_debug_info () = Sexp.message "global_debug" []
-  let get_debug_info (stream : stream) = sexp_of_runner stream.runner
+  let get_debug_info (device : device) = sexp_of_runner device.runner
 end

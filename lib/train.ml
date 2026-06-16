@@ -138,7 +138,7 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) bindings 
 
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
-    only the parameters that are not in [ctx.ctx_arrays] are initialized. *)
+    only the parameters that are not in [ctx.ctx_buffers] are initialized. *)
 let init_params ?(reinit_all = false) ctx bindings t =
   let comp =
     if reinit_all then Tensor.init_params t
@@ -175,7 +175,7 @@ type example_train_result = {
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
-    parameters that are not in [ctx.ctx_arrays] are initialized.
+    parameters that are not in [ctx.ctx_buffers] are initialized.
 
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at

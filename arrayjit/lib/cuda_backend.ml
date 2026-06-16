@@ -29,7 +29,7 @@ module Backend_buffer = struct
 
   let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
-  include Buffer_types (struct
+  include Backend_impl.Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 end
@@ -55,36 +55,43 @@ open Device_config
 
 let set_ctx ctx = Cu.Context.set_current ctx
 
-module Alloc_buffer = struct
-  include Device_stream
+(* The CUDA slab allocator: a private [(device_id, pool_id) -> CUdeviceptr] table backing the shared
+   {!Backend_intf.Slab_alloc}. *)
+module Slab = struct
+  open Backend_intf
 
-  (* It's not actually used, but it's required by the [Backend] interface. *)
-  let alloc_buffer ?old_buffer ?mode:_ ~size_in_bytes stream =
-    match old_buffer with
-    | Some ({ size_in_bytes = old_size; _ } as buffer) when size_in_bytes <= old_size -> buffer
-    | Some { ptr; _ } ->
-        set_ctx stream.device.dev.primary_context;
-        Cu.Deviceptr.mem_free ptr;
-        { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
-    | None ->
-        set_ctx stream.device.dev.primary_context;
-        { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes }
+  type device = Device_stream.device
+  type buffer_ptr = Cu.Deviceptr.t
 
-  let alloc_array ?mode:_ prec ~dims stream =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    set_ctx stream.device.dev.primary_context;
-    Cu.Deviceptr.mem_alloc ~size_in_bytes
+  let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
-  let alloc_zeros ?mode:_ prec ~dims stream =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    set_ctx stream.device.dev.primary_context;
-    let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes in
-    (* Zero-initialize the memory *)
+  let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
+    set_ctx device.dev.primary_context;
+    let key = (device.device_id, pool_id) in
+    (* Free any prior allocation under this key before replacing it, so device memory stays
+       equivalent to the pre-refactor path. Unique tnode pool ids never pre-exist; this only fires on
+       the reserved merge pool growing in place. *)
+    Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
+    let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes:(max 1 size_in_bytes) in
+    Hashtbl.set pools ~key ~data:ptr
+
+  let free_pool =
+    Some
+      (fun (device : device) ~pool_id ->
+        let key = (device.device_id, pool_id) in
+        Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
+        Hashtbl.remove pools key)
+
+  let memset_zero (device : device) ~pool_id ~offset:_ ~size_in_bytes =
+    (* Phase-1 offset is 0, so zero the slab from its base. *)
+    let ptr = Hashtbl.find_exn pools (device.device_id, pool_id) in
     if size_in_bytes > 0 then
-      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes stream.runner;
-    ptr
+      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
 
-  let free_buffer = Some (fun _stream ptr -> Cu.Deviceptr.mem_free ptr)
+  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
+    (* Phase-1 policy: one pool per tnode at offset 0. *)
+    assert (offset = 0);
+    Hashtbl.find_exn pools (device.device_id, pool_id)
 end
 
 (* [initialized_devices] never forgets its entries. *)
@@ -92,14 +99,18 @@ let initialized_devices = Hash_set.create (module Int)
 let initialized = ref false
 
 module Fresh () : Ir.Backend_impl.Lowered_backend = struct
-  include Backend_impl.Device (Device_stream) (Alloc_buffer)
+  include Backend_impl.Device (Device_stream) (Slab)
+
+  (* The concrete [buffer_ptr]/[buffer] + sexps for the impl-facing interface (no longer carried by
+     the shared [Device_config_common]). *)
+  include Backend_buffer
 
   let use_host_memory = None
-  let ctx_of (context : context) = context.stream.device.dev.primary_context
+  let ctx_of (context : context) = context.device.dev.primary_context
   let is_done event = Cu.Delimited_event.query event
-  let will_wait_for context event = Cu.Delimited_event.wait context.stream.runner event
+  let will_wait_for context event = Cu.Delimited_event.wait context.device.runner event
   let sync event = Cu.Delimited_event.synchronize event
-  let all_work stream = Cu.Delimited_event.record stream.runner
+  let all_work device = Cu.Delimited_event.record device.runner
 
   let () =
     if not !initialized then (
@@ -116,21 +127,20 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     let free, total = Cu.Device.get_free_and_total_mem () in
     total - free
 
-  let opt_alloc_merge_buffer ~size_in_bytes dev stream : unit =
-    if
-      Option.value_map ~default:true !(stream.merge_buffer) ~f:(fun buffer ->
-          buffer.size_in_bytes < size_in_bytes)
-    then (
-      set_ctx dev.primary_context;
-      Option.iter !(stream.merge_buffer) ~f:(fun buffer -> Cu.Deviceptr.mem_free buffer.ptr);
-      stream.merge_buffer := Some { ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes; size_in_bytes })
+  (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
+     it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
+  let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
+    if device.merge_buffer_capacity < size_in_bytes then (
+      Slab.alloc_pool device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1;
+      device.merge_buffer_capacity <- size_in_bytes);
+    device.merge_buffer := Some { pool_id = merge_buffer_pool_id; offset = 0 }
 
   let%track4_sexp finalize_device (device : device) =
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
     (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-    Hashtbl.iter device.constant_buffer_cache ~f:(fun buffer_ptr ->
-        Cu.Deviceptr.mem_free buffer_ptr)
+    Hashtbl.iter device.constant_buffer_cache ~f:(fun (loc : Backend_intf.buffer_loc) ->
+        Cu.Deviceptr.mem_free (Slab.resolve_pool device loc))
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
     let name_cu = name ^ ".cu" in
@@ -214,18 +224,16 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
         Int.of_string_opt @@ Utils.get_global_arg ~arg_name:"cuda_printf_fifo_size" ~default:""
         |> Option.iter ~f:Cu.Context.(set_limit PRINTF_FIFO_SIZE);
       Hash_set.add initialized_devices ordinal;
-      let result = make_device dev ~ordinal in
+      (* With one compute stream per device, the runner (CUDA stream) is created with the device. *)
+      let cu_stream = Cu.Stream.create ~non_blocking:true () in
+      let result = make_device dev cu_stream ~ordinal in
       Stdlib.Gc.finalise finalize_device result;
       !devices.(ordinal) <- Some result;
       result
     in
     Option.value_or_thunk !devices.(ordinal) ~default
 
-  let%track3_sexp new_stream (device : device) : stream =
-    (* Strange that we need ctx_set_current even with a single device! *)
-    set_ctx device.dev.primary_context;
-    let cu_stream = Cu.Stream.create ~non_blocking:true () in
-    make_stream device cu_stream
+  let new_stream (device : device) : device = device
 
   let cuda_properties =
     let cache =
@@ -241,45 +249,50 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     in
     get_props
 
-  let await stream : unit =
-    set_ctx stream.device.dev.primary_context;
-    Cu.Stream.synchronize stream.runner
+  let await device : unit =
+    set_ctx device.dev.primary_context;
+    Cu.Stream.synchronize device.runner
 
-  let is_idle stream = Cu.Stream.is_ready stream.runner
+  let is_idle device = Cu.Stream.is_ready device.runner
 
-  let from_host ~dst_ptr ~dst hosted =
+  (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
+     against the device's private pool table. *)
+  let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
-    let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.stream.runner in
+    let dst_ptr = Slab.resolve_pool dst.device dst_loc in
+    let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.device.runner in
     Ndarray.apply { f } hosted
 
-  let to_host ~src_ptr ~src hosted =
+  let to_host ~src ~src_loc hosted =
     set_ctx @@ ctx_of src;
-    let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.stream.runner in
+    let src_ptr = Slab.resolve_pool src.device src_loc in
+    let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.device.runner in
     Ndarray.apply { f } hosted
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
-    let dev = dst.stream.device in
-    let same_device = dev.ordinal = src.stream.device.ordinal in
+  let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
+    let dev = dst.device in
+    let same_device = dev.ordinal = src.device.ordinal in
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let src_ptr = Slab.resolve_pool src.device src_loc in
     let memcpy ~dst_ptr =
       (* FIXME: coming in cudajit.0.6.2. *)
       (* if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then () else *)
       if same_device then
-        Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.stream.runner
+        Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.device.runner
       else
         Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
-          ~src_ctx:(ctx_of src) dst.stream.runner
+          ~src_ctx:(ctx_of src) dst.device.runner
     in
-    match (into_merge_buffer, dst_ptr) with
-    | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr ->
+    match (into_merge_buffer, dst_loc) with
+    | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_loc"
+    | No, Some dst_loc ->
         set_ctx @@ ctx_of dst;
-        memcpy ~dst_ptr
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
     | Copy, _ ->
         set_ctx @@ ctx_of dst;
-        opt_alloc_merge_buffer ~size_in_bytes dev.dev dst.stream;
-        let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-        memcpy ~dst_ptr:buffer.ptr
+        opt_alloc_merge_buffer ~size_in_bytes dst.device;
+        let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
 
   type code = {
     traced_store : Low_level.traced_store;
@@ -920,8 +933,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list) ~ctx_arrays
       lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name in
-    let stream = prior_context.stream in
-    let stream_name = get_name stream in
+    let device = prior_context.device in
+    let stream_name = get_name device in
     let%diagn3_sexp work () : unit =
       let log_id = get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -942,8 +955,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
               S.Tensor arr
           | _name, Log_file_name -> S.Int log_id
           | _name, Merge_buffer ->
-              let buf = Option.value_exn ~here:[%here] !(stream.merge_buffer) in
-              S.Tensor buf.ptr
+              let loc = Option.value_exn ~here:[%here] !(device.merge_buffer) in
+              S.Tensor (Slab.resolve_pool device loc)
           | _name, Static_idx s ->
               let i = Indexing.find_exn lowered_bindings s in
               if !i < 0 then
@@ -967,7 +980,7 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       (if Utils.debug_log_from_routines () then
          Utils.add_log_processor ~prefix:log_id_prefix @@ fun log_contents ->
          Utils.log_debug_routine_logs ~log_contents ~stream_name);
-      S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 stream.runner args;
+      S.launch_kernel func ~grid_dim_x:1 ~block_dim_x:1 ~shared_mem_bytes:0 device.runner args;
       [%log "kernel launched"]
     in
     Task.Task
@@ -977,22 +990,23 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
         work;
       }
 
-  let%track3_sexp link prior_context (code : code) ctx_arrays =
+  let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code.ptx (run_options ()) in
-    prior_context.stream.device.dev.set_builtins_in run_module;
+    prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
     in
+    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
       link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~ctx_arrays lowered_bindings
         run_module
     in
     (lowered_bindings, task)
 
-  let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_arrays =
+  let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_buffers =
     let idx_params = Indexing.bound_symbols code_batch.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
@@ -1000,11 +1014,12 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     let ctx = ctx_of prior_context in
     set_ctx ctx;
     let run_module = Cu.Module.load_data_ex code_batch.ptx (run_options ()) in
-    prior_context.stream.device.dev.set_builtins_in run_module;
+    prior_context.device.dev.set_builtins_in run_module;
     let procs =
       Array.mapi code_batch.kparams_and_names ~f:(fun i pns ->
           Option.value ~default:None
-          @@ Option.map2 pns ctx_arrays.(i) ~f:(fun (kparams, name) ctx_arrays ->
+          @@ Option.map2 pns ctx_buffers.(i) ~f:(fun (kparams, name) ctx_buffers ->
+              let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
               let task =
                 link_proc ~prior_context ~name ~kparams ~ctx_arrays lowered_bindings run_module
               in
@@ -1038,8 +1053,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     in
     Sexp.List (Sexp.Atom "cuda_devices" :: Array.to_list device_properties)
 
-  let get_debug_info (stream : stream) =
-    let tot, unr, unf = Cu.Stream.total_unreleased_unfinished_delimited_events stream.runner in
+  let get_debug_info (device : device) =
+    let tot, unr, unf = Cu.Stream.total_unreleased_unfinished_delimited_events device.runner in
     let i2s = [%sexp_of: int] in
     Sexp.message "cuda_stream_debug"
       [ ("total_events", i2s tot); ("unreleased_events", i2s unr); ("unfinished_events", i2s unf) ]

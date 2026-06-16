@@ -376,7 +376,7 @@ let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized opt
       Option.bind opt_params_and_doc ~f:(fun (kparams, _doc) ->
           Option.map names.(i) ~f:(fun name -> { result = result_library; kparams; bindings; name })))
 
-let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : procedure) =
+let%track3_sexp link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers (code : procedure) =
   let name : string = code.name in
   let log_file_name = Utils.diagn_log_file [%string "debug-%{runner_label}-%{code.name}.log"] in
   let run_variadic =
@@ -397,15 +397,18 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            let get_ptr buf = buf.ptr in
-            Param_2f (get_ptr, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
+            (* The device's merge buffer is a [buffer_loc] set (lazily) by a transfer routine; resolve
+               it to the backend pointer at execution time. *)
+            Param_2f (resolve, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Kparam_ptr tn :: ps ->
             let c_ptr =
-              match Map.find ctx_arrays tn with
-              | Some arr -> arr
+              match Map.find ctx_buffers tn with
+              | Some loc -> resolve loc
               | None ->
                   (* After gh-ocannl-333 there is no host array to fall back on: every in-context
-                     node must be present in [ctx_arrays] (allocated by [alloc_if_needed]). *)
+                     node must be present in [ctx_buffers] (allocated by [alloc_if_needed]). The
+                     [buffer_loc -> base] resolution is backend-private (the shared layer hands us
+                     locations, never pointers). *)
                   raise
                   @@ Utils.User_error
                        [%string
@@ -431,7 +434,7 @@ let%track3_sexp link_compiled ~merge_buffer ~runner_label ctx_arrays (code : pro
     Task.Task
       {
         (* In particular, keep code alive so it doesn't get unloaded. *)
-        context_lifetime = (ctx_arrays, code);
+        context_lifetime = (ctx_buffers, code);
         description = "executes " ^ code.name ^ " on " ^ runner_label;
         work;
       } )

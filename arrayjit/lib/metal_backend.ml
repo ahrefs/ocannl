@@ -23,7 +23,7 @@ module Backend_buffer = struct
   (* Provide a sexp_of for Me.Buffer.t *)
   let sexp_of_buffer_ptr = Me.Buffer.sexp_of_t
 
-  include Buffer_types (struct
+  include Impl.Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 end
@@ -93,71 +93,68 @@ let resource_options_for_mode (mode : Tn.memory_mode option) =
   | Me.Resource.StorageMode.Private -> private_resource_options
   | Shared | Managed | Memoryless -> shared_resource_options
 
-module Alloc_buffer = struct
-  include Device_stream
+(* The Metal slab allocator: a private [(device_id, pool_id) -> Metal.Buffer.t] table backing the
+   shared {!Backend_intf.Slab_alloc}. Storage mode (private vs. shared) is a per-pool property carried
+   by [?mode]. *)
+module Slab = struct
+  open Backend_intf
 
-  let alloc_buffer ?old_buffer ?mode ~size_in_bytes (stream : stream) =
-    let device = stream.device.dev in
-    let requested_storage = storage_mode_for_memory_mode mode in
-    match old_buffer with
-    | Some ({ size_in_bytes = old_size; ptr; _ } as buffer)
-      when size_in_bytes <= old_size
-           && Poly.equal requested_storage
-                (Me.Resource.get_storage_mode (Me.Buffer.super ptr)) ->
-        (* Only reuse the old buffer when its storage mode matches the requested one: storage mode
-           is fixed at allocation time, so a shared buffer must not be handed back for a private
-           request, nor vice versa. *)
-        buffer
-    | _ ->
-        (* ARC should handle the old buffer *)
-        let new_buffer_obj =
-          Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
-        in
-        track_allocation new_buffer_obj;
-        { ptr = new_buffer_obj; size_in_bytes }
+  type device = Device_stream.device
+  type buffer_ptr = Me.Buffer.t
 
-  let%track7_sexp alloc_array ?mode (prec : Ops.prec) ~(dims : int array) (stream : stream) =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    let device = stream.device.dev in
+  let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+
+  let alloc_pool ?mode (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     let buffer =
-      Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
+      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) (resource_options_for_mode mode)
     in
     track_allocation buffer;
-    buffer
+    Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
 
-  let%track7_sexp alloc_zeros ?mode (prec : Ops.prec) ~(dims : int array) (stream : stream) =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    let device = stream.device.dev in
-    let buffer =
-      Me.Buffer.on_device device ~length:size_in_bytes (resource_options_for_mode mode)
-    in
-    track_allocation buffer;
-    (* Zero initialize the buffer using a blit command encoder *)
-    let command_buffer = Me.CommandBuffer.on_queue stream.runner.queue in
+  (* Rely on ARC and the finalizer attached in track_allocation for the actual reclamation, but still
+     drop the private table entry on finalization so the strong reference is released (otherwise ARC
+     can never reclaim a context's tnode buffers). Re-allocating a pool also overwrites the entry. *)
+  let free_pool =
+    Some (fun (device : device) ~pool_id -> Hashtbl.remove pools (device.device_id, pool_id))
+
+  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
+    let buffer = Hashtbl.find_exn pools (device.device_id, pool_id) in
+    let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
     let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
     Me.BlitCommandEncoder.fill_buffer blit_encoder buffer
-      { location = 0; length = size_in_bytes }
+      { location = offset; length = size_in_bytes }
       ~value:0;
     Me.BlitCommandEncoder.end_encoding blit_encoder;
     Me.CommandBuffer.commit command_buffer;
-    Me.CommandBuffer.wait_until_completed command_buffer;
-    buffer
+    Me.CommandBuffer.wait_until_completed command_buffer
 
-  (* Rely on ARC and the finalizer attached in track_allocation *)
-  let free_buffer = None
+  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
+    (* Phase-1 policy: one pool per tnode at offset 0. *)
+    assert (offset = 0);
+    Hashtbl.find_exn pools (device.device_id, pool_id)
+
+  let storage_mode_of_pool (device : device) ~pool_id =
+    Me.Resource.get_storage_mode
+      (Me.Buffer.super (Hashtbl.find_exn pools (device.device_id, pool_id)))
 end
 
-(* Functor defining the backend *)
-module Fresh () :
-  Ir.Backend_impl.Lowered_backend with type buffer_ptr = Me.Buffer.t = struct
+(* Functor defining the backend. The exact public signature (Lowered_backend + storage_mode_of_pool)
+   is sealed by metal_backend.mli. *)
+module Fresh () = struct
   (* Include the device setup with types and allocation *)
-  include Backend_impl.Device (Device_stream) (Alloc_buffer)
+  include Backend_impl.Device (Device_stream) (Slab)
+
+  (* The concrete [buffer_ptr]/[buffer] + sexps for the impl-facing interface (no longer carried by
+     the shared [Device_config_common]). *)
+  include Backend_buffer
+
+  let storage_mode_of_pool = Slab.storage_mode_of_pool
 
   (* Global state for Metal devices *)
   let metal_devices : Me.Device.t array = Me.Device.copy_all_devices ()
   let () = assert (Array.length metal_devices > 0)
 
-  (* Store for captured logs per stream_id *)
+  (* Store for captured logs per device_id (the device is its own single compute stream). *)
   let stream_logs : (int, string list ref) Hashtbl.t = Hashtbl.create (module Int)
 
   (* Metal has unified memory on Apple Silicon, so we can use host memory *)
@@ -171,24 +168,9 @@ module Fresh () :
   let num_devs = Array.length metal_devices
   let devices_cache = Array.create ~len:num_devs None
 
-  let get_device ~(ordinal : int) : device =
-    if ordinal < 0 || num_devs <= ordinal then
-      invalid_arg [%string "Metal_backend.get_device %{ordinal#Int}: invalid ordinal"];
-    let default () =
-      let metal_device = metal_devices.(ordinal) in
-      let result_device = make_device metal_device ~ordinal in
-      devices_cache.(ordinal) <- Some result_device;
-      result_device
-    in
-    Option.value_or_thunk devices_cache.(ordinal) ~default
-
-  let num_devices () =
-    (* FIXME: refactor the whole backend interface to use constant num_devices per backend
-       instance *)
-    num_devs
-
-  let new_stream (device_wrapper : device) : stream =
-    let metal_device = device_wrapper.dev in
+  (* Builds the device's single compute runner (command queue + sync event), optionally with a
+     debug-log-capturing queue. Returns the runner and the captured-log ref (if logging is on). *)
+  let spinup_runner metal_device =
     let queue =
       if Utils.debug_log_from_routines () then (
         let log_entries_ref = ref [] in
@@ -206,8 +188,6 @@ module Fresh () :
         (* The log_state and its handler (capturing log_entries_ref) are kept alive by the
            queue_desc / queue itself. *)
         let created_q = Me.CommandQueue.on_device_with_descriptor metal_device queue_desc in
-        (* Store the log_entries_ref for later retrieval, associated with the stream_id which will
-           be assigned by make_stream shortly. We'll add it after make_stream. *)
         (created_q, Some log_entries_ref))
       else (Me.CommandQueue.on_device metal_device, None)
     in
@@ -215,13 +195,30 @@ module Fresh () :
     let shared_event_obj = Me.SharedEvent.on_device metal_device in
     let counter = Unsigned.ULLong.one in
     (* Next value = 1 *)
-    let runner = { queue = actual_queue; event = shared_event_obj; counter } in
-    let stream_obj = make_stream device_wrapper runner in
-    (* Finalize linking log_entries_ref to stream_id and set up GC finalizer *)
-    Option.iter opt_log_entries_ref ~f:(fun log_ref ->
-        Hashtbl.add_exn stream_logs ~key:stream_obj.stream_id ~data:log_ref);
-    Stdlib.Gc.finalise (fun s -> Hashtbl.remove stream_logs s.stream_id) stream_obj;
-    stream_obj
+    ({ queue = actual_queue; event = shared_event_obj; counter }, opt_log_entries_ref)
+
+  let get_device ~(ordinal : int) : device =
+    if ordinal < 0 || num_devs <= ordinal then
+      invalid_arg [%string "Metal_backend.get_device %{ordinal#Int}: invalid ordinal"];
+    let default () =
+      let metal_device = metal_devices.(ordinal) in
+      let runner, opt_log_entries_ref = spinup_runner metal_device in
+      let result_device = make_device metal_device runner ~ordinal in
+      (* The device is its own single compute stream; key captured logs by [device_id]. *)
+      Option.iter opt_log_entries_ref ~f:(fun log_ref ->
+          Hashtbl.add_exn stream_logs ~key:result_device.device_id ~data:log_ref);
+      Stdlib.Gc.finalise (fun d -> Hashtbl.remove stream_logs d.device_id) result_device;
+      devices_cache.(ordinal) <- Some result_device;
+      result_device
+    in
+    Option.value_or_thunk devices_cache.(ordinal) ~default
+
+  let num_devices () =
+    (* FIXME: refactor the whole backend interface to use constant num_devices per backend
+       instance *)
+    num_devs
+
+  let new_stream (device : device) : device = device
 
   (* --- Event Handling --- *)
   let is_done event =
@@ -236,20 +233,20 @@ module Fresh () :
            ~timeout_ms:timeout_max)
 
   let will_wait_for context event =
-    let stream = context.stream in
-    let queue = stream.runner.queue in
+    let device = context.device in
+    let queue = device.runner.queue in
     let command_buffer = Me.CommandBuffer.on_queue queue in
     Me.CommandBuffer.encode_wait_for_event command_buffer
       (Me.SharedEvent.super event.shared)
       event.value;
     Me.CommandBuffer.commit command_buffer
 
-  let all_work stream =
-    let queue = stream.runner.queue in
-    let shared_event = stream.runner.event in
-    let counter = stream.runner.counter in
+  let all_work device =
+    let queue = device.runner.queue in
+    let shared_event = device.runner.event in
+    let counter = device.runner.counter in
     let next_value = Unsigned.ULLong.add counter Unsigned.ULLong.one in
-    stream.runner.counter <- next_value;
+    device.runner.counter <- next_value;
     let command_buffer = Me.CommandBuffer.on_queue queue in
     Me.CommandBuffer.encode_signal_event command_buffer
       (Me.SharedEvent.super shared_event)
@@ -257,26 +254,26 @@ module Fresh () :
     Me.CommandBuffer.commit command_buffer;
     { shared = shared_event; value = next_value }
 
-  let await stream =
+  let await device =
     (* Signal an event after all current work and wait for it. This ensures all previously submitted
        command buffers complete. *)
-    let event = all_work stream in
+    let event = all_work device in
     sync event;
     (* Process captured logs if any *)
     if Utils.debug_log_from_routines () then
-      match Hashtbl.find stream_logs stream.stream_id with
+      match Hashtbl.find stream_logs device.device_id with
       | Some log_entries_ref ->
           let logs_to_process = List.rev !log_entries_ref in
           if not (List.is_empty logs_to_process) then
             Utils.log_debug_routine_logs ~log_contents:logs_to_process
-              ~stream_name:(get_name stream);
+              ~stream_name:(get_name device);
           log_entries_ref := [] (* Clear processed logs *)
-      | None -> () (* No log bucket for this stream, logging likely not enabled for it *)
+      | None -> () (* No log bucket for this device, logging likely not enabled for it *)
 
-  let is_idle stream =
-    (* FIXME: store the latest CommandBuffer with the stream runner and check that it's completed *)
-    let counter = stream.runner.counter in
-    let current_signaled = Me.SharedEvent.get_signaled_value stream.runner.event in
+  let is_idle device =
+    (* FIXME: store the latest CommandBuffer with the device runner and check that it's completed *)
+    let counter = device.runner.counter in
+    let current_signaled = Me.SharedEvent.get_signaled_value device.runner.event in
     let expected_signaled = Unsigned.ULLong.pred counter in
     Unsigned.ULLong.equal current_signaled expected_signaled
 
@@ -343,21 +340,23 @@ module Fresh () :
 
   let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
 
-  let get_debug_info stream =
+  let get_debug_info device =
     let num_pending_logs =
-      match Hashtbl.find stream_logs stream.stream_id with None -> 0 | Some r -> List.length !r
+      match Hashtbl.find stream_logs device.device_id with None -> 0 | Some r -> List.length !r
     in
-    Sexp.message "Metal stream debug info"
+    Sexp.message "Metal device debug info"
       [
-        ("stream_id", sexp_of_int stream.stream_id);
+        ("device_id", sexp_of_int device.device_id);
         ("pending_shader_logs", sexp_of_int num_pending_logs);
       ]
 
-  (* --- Copy Operations --- *)
-  let from_host ~dst_ptr ~dst hosted =
+  (* --- Copy Operations --- (transfers take {!Backend_intf.buffer_loc} and resolve to the concrete
+     [Metal.Buffer.t] here, against the device's private pool table.) *)
+  let from_host ~dst ~dst_loc hosted =
     (* Copy from host memory to Metal buffer *)
+    let dst_ptr = Slab.resolve_pool dst.device dst_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue dst.stream.runner.queue in
+    let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
 
     (* Get host memory pointer *)
     let host_ptr = Ndarray.get_fatptr_not_managed hosted in
@@ -365,7 +364,7 @@ module Fresh () :
     if Ctypes_ptr.Fat.compare dst_fatptr host_ptr <> 0 then (
       (* Create a temporary host buffer to bridge the gap *)
       let temp_buffer =
-        Me.Buffer.on_device_with_bytes_no_copy dst.stream.device.dev
+        Me.Buffer.on_device_with_bytes_no_copy dst.device.dev
           ~bytes:(Ctypes_static.CPointer host_ptr) ~length:size_in_bytes
           Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
       in
@@ -375,10 +374,11 @@ module Fresh () :
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let to_host ~src_ptr ~src hosted =
+  let to_host ~src ~src_loc hosted =
     (* Copy from Metal buffer to host memory *)
+    let src_ptr = Slab.resolve_pool src.device src_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue src.stream.runner.queue in
+    let command_buffer = Me.CommandBuffer.on_queue src.device.runner.queue in
 
     (* Get host memory pointer *)
     let host_ptr = Ndarray.get_fatptr_not_managed hosted in
@@ -386,7 +386,7 @@ module Fresh () :
     if Ctypes_ptr.Fat.compare src_fatptr host_ptr <> 0 then (
       (* Create a temporary host buffer to bridge the gap *)
       let temp_buffer =
-        Me.Buffer.on_device_with_bytes_no_copy src.stream.device.dev
+        Me.Buffer.on_device_with_bytes_no_copy src.device.dev
           ~bytes:(Ctypes_static.CPointer host_ptr) ~length:size_in_bytes
           Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
       in
@@ -396,16 +396,22 @@ module Fresh () :
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let opt_alloc_merge_buffer ?mode ~size_in_bytes stream : unit =
-    stream.merge_buffer :=
-      Some (alloc_buffer ?old_buffer:!(stream.merge_buffer) ?mode ~size_in_bytes stream)
+  (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow it
+     in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The merge
+     buffer holds a copy of [tn], so it inherits [tn]'s storage-mode classification. *)
+  let opt_alloc_merge_buffer ?mode ~size_in_bytes (device : device) : unit =
+    if device.merge_buffer_capacity < size_in_bytes then (
+      Slab.alloc_pool ?mode device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1;
+      device.merge_buffer_capacity <- size_in_bytes);
+    device.merge_buffer := Some { pool_id = merge_buffer_pool_id; offset = 0 }
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
+  let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let src_ptr = Slab.resolve_pool src.device src_loc in
 
     let memcpy ~dst_ptr =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
-      let command_buffer = Me.CommandBuffer.on_queue dst.stream.runner.queue in
+      let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
       Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr ~source_offset:0
         ~destination_buffer:dst_ptr ~destination_offset:0 ~size:size_in_bytes;
@@ -413,17 +419,15 @@ module Fresh () :
       Me.CommandBuffer.commit command_buffer
     in
 
-    match (into_merge_buffer, dst_ptr) with
-    | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr -> memcpy ~dst_ptr
+    match (into_merge_buffer, dst_loc) with
+    | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_loc"
+    | No, Some dst_loc -> memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
     | Copy, _ ->
-        (* The merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode
-           classification: a GPU-only [tn] gets a private merge buffer. *)
         opt_alloc_merge_buffer
           ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
-          ~size_in_bytes dst.stream;
-        let buffer = Option.value_exn ~here:[%here] !(dst.stream.merge_buffer) in
-        memcpy ~dst_ptr:buffer.ptr
+          ~size_in_bytes dst.device;
+        let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
 
   (* --- Compilation and Linking --- *)
   type code = {
@@ -768,12 +772,12 @@ using namespace metal;|} in
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
       ~(kparams : (string * kparam_source) list) ~lowered_bindings
       ~(ctx_arrays : buffer_ptr Tn.t_map) : Task.t =
-    let stream = prior_context.stream in
-    let device = stream.device.dev in
-    let queue = stream.runner.queue in
-    let runner_label = get_name stream in
+    let dev = prior_context.device in
+    let metal_device = dev.dev in
+    let queue = dev.runner.queue in
+    let runner_label = get_name dev in
     let func = Me.Library.new_function_with_name library func_name in
-    let pso, _ = Me.ComputePipelineState.on_device_with_function device func in
+    let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label];
@@ -804,8 +808,9 @@ using namespace metal;|} in
                 let bytes_ptr = Ctypes.(allocate int value |> to_voidp) in
                 Me.ComputeCommandEncoder.set_bytes encoder ~bytes:bytes_ptr ~length:size ~index
             | Merge_buffer -> (
-                match !(stream.merge_buffer) with
-                | Some merge_buf -> Me.ComputeCommandEncoder.set_buffer encoder ~index merge_buf.ptr
+                match !(dev.merge_buffer) with
+                | Some loc ->
+                    Me.ComputeCommandEncoder.set_buffer encoder ~index (Slab.resolve_pool dev loc)
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
                 (* TODO:We could tag logs with a run id. *)
@@ -837,20 +842,21 @@ using namespace metal;|} in
         work;
       }
 
-  let link prior_context code ctx_arrays =
-    let device = prior_context.stream.device.dev in
+  let link prior_context code ctx_buffers =
+    let device = prior_context.device.dev in
     let library = compile_metal_source ~name:code.func_name ~source:code.metal_source ~device in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
+    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
         ~lowered_bindings ~ctx_arrays
     in
     (lowered_bindings, task)
 
-  let link_batch prior_context code_batch ctx_arrays_opts =
-    let device = prior_context.stream.device.dev in
+  let link_batch prior_context code_batch ctx_buffers_opts =
+    let device = prior_context.device.dev in
     let library = compile_metal_source ~name:"batch" ~source:code_batch.metal_source ~device in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
@@ -859,7 +865,10 @@ using namespace metal;|} in
     let tasks =
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, kparams) ->
-              Option.map ctx_arrays_opts.(i) ~f:(fun ctx_arrays ->
+              Option.map ctx_buffers_opts.(i) ~f:(fun ctx_buffers ->
+                  let ctx_arrays =
+                    Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device)
+                  in
                   link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings
                     ~ctx_arrays)))
     in

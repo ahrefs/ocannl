@@ -11,16 +11,13 @@ type backend_wrapper =
   | Wrapper : {
       backend :
         (module BI.Backend
-           with type buffer_ptr = 'buffer_ptr
-            and type dev = 'dev
+           with type dev = 'dev
             and type runner = 'runner
             and type event = 'event
             and type optimize_ctx = 'optimize_ctx);
-      device : ('buffer_ptr, 'dev, 'runner, 'event) BI.device;
+      device : ('dev, 'runner, 'event) BI.device;
       device_id : int;
-      stream : ('buffer_ptr, 'dev, 'runner, 'event) BI.stream;
-      context :
-        ('buffer_ptr, ('buffer_ptr, 'dev, 'runner, 'event) BI.stream, 'optimize_ctx) BI.context;
+      context : ('dev, 'runner, 'event, 'optimize_ctx) BI.context;
     }
       -> backend_wrapper
 
@@ -81,11 +78,10 @@ let create_from_backend_name ~device_id backend_name =
   let backend_module = Backends.fresh_backend ~backend_name () in
   let module Backend = (val backend_module : Ir.Backend_intf.Backend) in
   let device = Backend.get_device ~ordinal:device_id in
-  let stream = Backend.new_stream device in
-  let context = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) stream in
+  let context = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) device in
 
   let backend_wrapper =
-    Wrapper { backend = (module Backend); device; device_id; stream; context }
+    Wrapper { backend = (module Backend); device; device_id; context }
   in
 
   {
@@ -230,7 +226,7 @@ let run ctx routine =
      stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
      primitive_ops). *)
   let (Wrapper run_wrapper) = ctx.backend_wrapper in
-  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_arrays tn in
+  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_buffers tn in
   let missing_inputs =
     Set.filter routine.inputs ~f:(fun tn ->
         not (Set.mem ctx.initialized_nodes tn || in_backend tn))
@@ -274,7 +270,6 @@ let copy ~src ~dst _tnode =
     failwith "Context.copy: cross-backend copy not yet supported";
 
   (* This is a simplified placeholder - proper implementation needs device_to_device *)
-  (* The challenge is that src and dst may have different buffer_ptr types *)
   failwith "Context.copy: not yet implemented - needs proper device_to_device integration"
 
 (* Internal helper - not exposed in interface to maintain invariants *)
@@ -297,7 +292,7 @@ let host_buffer (tn : Tn.t) =
 (** Whether [tn] has a device buffer allocated in this context. *)
 let mem ctx (tn : Tn.t) : bool =
   let (Wrapper wrapper) = ctx.backend_wrapper in
-  Map.mem wrapper.context.BI.ctx_arrays tn
+  Map.mem wrapper.context.BI.ctx_buffers tn
 
 (* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
    [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here
@@ -331,11 +326,11 @@ let to_host ctx (tn : Tn.t) : Nd.t =
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
-  Backend.await wrapper.stream;
+  Backend.await wrapper.context.device;
   let nd = host_buffer tn in
   if Backend.to_host wrapper.context tn nd then (
     (* Ensure the device-to-host copy itself has completed before the host buffer is read. *)
-    Backend.await wrapper.stream;
+    Backend.await wrapper.context.device;
     nd)
   else
     match Ir.Host_inits.find tn with
@@ -349,7 +344,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
         (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
         match Hashtbl.find for_print_proxies tn.Tn.id with
         | Some proxy when Backend.to_host wrapper.context proxy nd ->
-            Backend.await wrapper.stream;
+            Backend.await wrapper.context.device;
             nd
         | _ ->
             raise
@@ -369,7 +364,7 @@ let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
       let updated_wrapper = Wrapper { wrapper with context = new_backend_context } in
       { ctx with backend_wrapper = updated_wrapper }
   in
-  Backend.await wrapper.stream;
+  Backend.await wrapper.context.device;
   mark_initialized ctx (Set.singleton (module Tn) tn)
 
 let get_values ctx (tn : Tn.t) : float array =

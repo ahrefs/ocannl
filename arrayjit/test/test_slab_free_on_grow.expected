@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+grow freed the old pool = true
+grow installed a new pool = true
+freed count after grow = 1
+freed count after unique-id alloc = 1
+gc backend exposes free_pool (not None) = true
+gc backend entry present before free = true, after free = false
