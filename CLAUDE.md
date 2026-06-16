@@ -97,10 +97,16 @@ opam install cudajit  # for CUDA backend
 - Tutorial files, i.e. `%expect` tests, in `test/` serve as both documentation and integration tests, should only be used when the outputs are illustrative
 
 **Running Tests**:
-- `dune runtest` - runs all tests including inline tests and cram-style tests
+- `dune runtest` - runs all tests including inline tests and cram-style tests, EXCEPT the slow training runs (see below)
 - `dune runtest test/operations/` - runs all tests in operations directory
 - `dune exec test/operations/test_name.exe` - ONLY works for standalone tests with `test` stanza and `.expected` files
 - Inline tests (like those in `test_threefry4x32.ml`) are part of library modules and run via `dune runtest`, not `dune exec`
+
+**Slow training tests (the `slow` alias)**:
+- A handful of `test/training/` runs are minutes-long each (`cifar_conv`, `mnist_conv`, `mlp_bn_names`, `mlp_names`, `circles_conv`) and dominate total test time. They are kept out of the `runtest` alias so `dune runtest` stays fast.
+- They are still ordinary executables: `dune build @check` compiles them, so they cannot bit-rot.
+- Run them on demand with `dune build @slow` (uses their `.expected` files; `dune promote` to accept changes). Use `dune build @runtest @slow` to run the entire suite.
+- To gate a new slow test, in its `test/.../dune` replace its `(test ...)` stanza with an `(executable ...)` plus a `(rule (alias slow) ...)` that runs the exe and diffs against `<name>.expected` (see `test/training/dune` for the pattern).
 
 **Test Types**:
 - **Inline tests**: Files included in library `modules` field with `inline_tests` stanza (e.g., `test_threefry4x32.ml` in `operations_tutorials` library)
