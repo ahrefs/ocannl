@@ -670,7 +670,20 @@
  (deps ocannl_config)
  (action
   (with-stdout-to %{target}
-   (run %{dep:test_config_consistency.exe} %{dep:../../ocannl_config.reference}))))
+   (run
+    %{dep:test_config_consistency.exe}
+    %{dep:../../ocannl_config.reference}
+    %{dep:../../arrayjit/lib/utils.ml}
+    %{dep:../../arrayjit/lib/backends.ml}
+    %{dep:../../arrayjit/lib/c_syntax.ml}
+    %{dep:../../arrayjit/lib/cc_backend.ml}
+    %{dep:../../arrayjit/lib/context.ml}
+    %{dep:../../arrayjit/lib/cuda_backend.ml}
+    %{dep:../../arrayjit/lib/low_level.ml}
+    %{dep:../../arrayjit/lib/tnode.ml}
+    %{dep:../../arrayjit/lib/assignments.ml}
+    %{dep:../../tensor/tensor.ml}
+    %{dep:../../tensor/row.ml}))))
 
 (rule
  (alias runtest)
