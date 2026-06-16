@@ -11,14 +11,14 @@ learning framework with an optimizing compiler. The repo contains two main packa
 - arrayjit/: compiler + backends (IR, indexing, assignments, backends, schedulers).
 - bin/: runnable examples and demos.
 - test/: tutorials and tests (ppx_expect and standalone .expected tests).
-- docs/: slides and reference docs; ocannl_config.example is the configuration source of truth.
+- docs/: slides and reference docs; ocannl_config.reference is the configuration source of truth.
 - build_files/ and log_files/: generated artifacts when debug settings are enabled.
 
 Key reference files:
 - docs/syntax_extensions.md (authoritative for %op/%cd)
 - docs/shape_inference.md (shape/projection inference pipeline)
 - arrayjit/lib/context.mli (context-based runtime API)
-- ocannl_config.example (all configuration keys and defaults)
+- ocannl_config.reference (all configuration keys and defaults)
 
 ## Conceptual Map (How It Fits Together)
 - Tensor expressions (%op, Tensor.t) build a graph with shape inference and backprop rules.
@@ -104,5 +104,5 @@ Key points:
 
 ## Debugging & Logs
 - Enable `output_debug_files_in_build_directory=true` to emit .ll/.c/.cu/.metal.
-- Enable `debug_log_from_routines=true` for kernel logging; see ocannl_config.example.
+- Enable `debug_log_from_routines=true` for kernel logging; see ocannl_config.reference.
 - CUDA routine logs may require `Utils.capture_stdout_logs` (see README).

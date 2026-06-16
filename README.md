@@ -42,7 +42,7 @@ A possible route to learning OCANNL:
 6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml) and the training recipes [lib/train.ml](lib/train.ml).
   * Work through the [makemore tutorial](docs/makemore_tutorial.md) — a character-level language-model progression mirroring Andrej Karpathy's *Neural Networks: Zero to Hero* lectures.
 7. Read the introductory part of the shape inference documentation [docs/shape_inference.md](docs/shape_inference.md).
-8. Skim the configuration documentation [ocannl_config.example](ocannl_config.example).
+8. Skim the configuration documentation [ocannl_config.reference](ocannl_config.reference).
 9. Improve your understanding by reading or skimming the framework internals: [tensor/shape.mli](tensor/shape.mli), [tensor/tensor.mli](tensor/tensor.mli), [tensor/operation.ml](tensor/operation.ml), [arrayjit/lib/context.mli](arrayjit/lib/context.mli).
 10. Read the implementation overview:
    1. The various tests.
@@ -53,7 +53,7 @@ A possible route to learning OCANNL:
 
 To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` backend, you need to wrap the code scheduling tasks and synchronizing `cuda` devices with `Utils.capture_stdout_logs`. The reason is that CUDA kernels are allowed to use `printf`, but not `fprintf` -- the driver dumps the printing buffer of a device to `stdout` at certain times (e.g. when synchronizing the device). For an example, see the implementation of `Train.example_train_loop`. Specifically, it wraps two sections: the call to `Train.parallel_update`, and the body of the returned `infer_callback`.
 
-NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves another thread (domain) intercepting and filtering `stdout`. If facing issues, try the setting `never_capture_stdout=true` (see [ocannl_config.example](ocannl_config.example)).
+NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves another thread (domain) intercepting and filtering `stdout`. If facing issues, try the setting `never_capture_stdout=true` (see [ocannl_config.reference](ocannl_config.reference)).
 
 ## Upcoming milestones
 
