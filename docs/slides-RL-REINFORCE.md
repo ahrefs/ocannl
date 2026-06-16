@@ -23,6 +23,14 @@ Instead of learning from labeled examples, an **agent** learns by **acting** in 
 > 
 > **Rewards**: Feedback signal (positive or negative)
 
+{pause}
+
+```mermaid
+flowchart LR
+    A["Agent (θ)"] -->|action| E["Environment"]
+    E -->|"state, reward"| A
+```
+
 {pause up=rl-framework}
 
 {.example title="Concrete Example: Sokoban Puzzle"}
