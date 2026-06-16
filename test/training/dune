@@ -32,38 +32,75 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
+; mlp_names is a slow training run: gated behind the `slow` alias (see cifar_conv).
+(executable
  (name mlp_names)
- (package neural_nets_lib)
  (modules mlp_names)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
+(rule
+ (alias slow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; no-infer keeps mlp_names.actual from becoming a build target, so plain
+ ; `dune build` (@all) does not run this slow exe -- only `dune build @slow` does.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     mlp_names.actual
+     (run %{dep:mlp_names.exe}))
+    (diff mlp_names.expected mlp_names.actual)))))
+
+; mlp_bn_names is a slow training run: gated behind the `slow` alias (see cifar_conv).
+(executable
  (name mlp_bn_names)
- (package neural_nets_lib)
  (modules mlp_bn_names)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name circles_conv)
+(rule
+ (alias slow)
  (package neural_nets_lib)
- (modules circles_conv)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; no-infer keeps mlp_bn_names.actual from becoming a build target (see mlp_names).
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     mlp_bn_names.actual
+     (run %{dep:mlp_bn_names.exe}))
+    (diff mlp_bn_names.expected mlp_bn_names.actual)))))
+
+; circles_conv is a slow training run: gated behind the `slow` alias (see cifar_conv).
+(executable
+ (name circles_conv)
+ (modules circles_conv)
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; no-infer keeps circles_conv.actual from becoming a build target (see mlp_names).
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     circles_conv.actual
+     (run %{dep:circles_conv.exe}))
+    (diff circles_conv.expected circles_conv.actual)))))
 
 (library
  (name conv_data)
@@ -71,27 +108,53 @@
  (modules conv_data)
  (libraries unix))
 
-(test
+; mnist_conv is a slow training run: gated behind the `slow` alias (see cifar_conv).
+(executable
  (name mnist_conv)
- (package neural_nets_lib)
  (modules mnist_conv)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (libraries ocannl dataprep conv_data unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name cifar_conv)
+(rule
+ (alias slow)
  (package neural_nets_lib)
- (modules cifar_conv)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; no-infer keeps mnist_conv.actual from becoming a build target (see mlp_names).
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     mnist_conv.actual
+     (run %{dep:mnist_conv.exe}))
+    (diff mnist_conv.expected mnist_conv.actual)))))
+
+; cifar_conv is a slow training run: gated behind the `slow` alias instead of
+; `runtest` so `dune runtest` stays fast. Still compiled by `dune build @check`.
+; Run with: dune build @slow (or `dune build @runtest @slow` for everything).
+(executable
+ (name cifar_conv)
+ (modules cifar_conv)
  (libraries ocannl dataprep conv_data unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; no-infer keeps cifar_conv.actual from becoming a build target (see mlp_names).
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     cifar_conv.actual
+     (run %{dep:cifar_conv.exe}))
+    (diff cifar_conv.expected cifar_conv.actual)))))
 
 (test
  (name fsm_transformer)
