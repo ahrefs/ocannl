@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+single component, no suffix: PASS (attention)
+two consecutive, suffix 2: PASS (attention2)
+three consecutive, suffix 3: PASS (attention3)
+mixed: encoder + attention×2 + output: PASS (encoder_attention2_output)
+non-consecutive duplicates unchanged: PASS (a_b_a)
+empty label, falls back to n0: PASS (n0)
+all-same long run: PASS (foo5)
+singleton after run: a×2 then b: PASS (a2_b)
+run then singleton: a then b×2: PASS (a_b2)

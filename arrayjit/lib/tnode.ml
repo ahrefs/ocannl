@@ -71,6 +71,18 @@ let label a = String.concat ~sep:"_" a.label
 let is_alphanum_ s =
   (not (String.is_empty s)) && String.for_all s ~f:(fun c -> Char.equal c '_' || Char.is_alphanum c)
 
+let collapse_consecutive = function
+  | [] -> []
+  | first :: rest ->
+      let emit ident count acc =
+        (if count = 1 then ident else ident ^ Int.to_string count) :: acc
+      in
+      let acc, last_ident, last_count =
+        List.fold rest ~init:([], first, 1) ~f:(fun (acc, cur, cnt) s ->
+            if String.equal s cur then (acc, cur, cnt + 1) else (emit cur cnt acc, s, 1))
+      in
+      List.rev (emit last_ident last_count acc)
+
 let get_debug_name ?code_name ~id ~label () =
   match code_name with
   | Some code_name -> (
@@ -82,6 +94,7 @@ let get_debug_name ?code_name ~id ~label () =
       let components, is_grad =
         match components with "grad" :: components -> (components, true) | _ -> (components, false)
       in
+      let components = collapse_consecutive components in
       let ident_label =
         if List.is_empty components then None else Some (String.concat ~sep:"_" components)
       in
