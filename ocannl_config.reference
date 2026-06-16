@@ -1,8 +1,11 @@
 # This file lists all the current configurations. It can be used as documentation
-# or as a template for writing `ocannl_config` files. Config names must be prefixed
-# by `ocannl_`, except in `ocannl_config` files where it is optional. The names are
-# case-insensitive. The values are case-sensitive and should be lowercase where case
-# is irrelevant. The configuration is read from a few sources, from highest priority:
+# or as a template for writing `ocannl_config` files. The `ocannl_` prefix is optional
+# everywhere: commandline arguments accept both `--ocannl_<name>=<value>` and
+# `--<name>=<value>`; environment variables still require the `OCANNL_` prefix (to
+# avoid conflicts with other tools); in `ocannl_config` files the prefix has always
+# been optional. The names are case-insensitive. The values are case-sensitive and
+# should be lowercase where case is irrelevant. The configuration is read from a few
+# sources, from highest priority:
 # 1. Commandline arguments.
 # 2. Environment variables.
 # 3. `ocannl_config` files.
@@ -15,6 +18,15 @@
 #
 # Repeating fields are disallowed. If the value is an empty string, the default value
 # is used (as if the config was not present).
+
+# Bootstrap configurations (read before the config file search begins):
+
+# If true, suppresses the "Welcome to OCANNL!" startup message.
+suppress_welcome_message=false
+
+# If true, disables reading any ocannl_config file; only commandline and environment
+# variable configuration is used.
+no_config_file=false
 
 # Configurations that are stored as `Utils.settings`:
 
@@ -44,6 +56,10 @@ print_decimals_precision=2
 # Complains if a half-precision tensor node is a constant with absolute value exceeding this.
 check_half_prec_constants_cutoff=16384.0
 
+# The default variant of threefry4x32 PRNG to use. Options: "crypto" (20 rounds) or
+# "light" (2 rounds). Defaults to "light" for better performance.
+default_prng_variant=light
+
 # If true, use uint64 for indexing arithmetic. If false (default), use uint32 for indexing arithmetic.
 # This affects all backends' kernel index parameters and local index variables.
 # Set to true for models with tensors larger than 2^32 elements.
@@ -64,7 +80,7 @@ clean_up_log_files_on_startup=true
 # Other configurations:
 
 # The default backend for computations, if `Backends.fresh_backend` isn't passed `backend_name`.
-bacend=multicore_cc
+backend=multicore_cc
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
@@ -129,12 +145,11 @@ inline_simple_computations=true
 # FIXME(#351): avoid excessive inlining while CSE is not implemented
 inline_complex_computations=false
 
-# The random number library. Options: `stdlib` -- `Base.Random`;
-# `for_tests` -- simplistic randomness with 32 bit seed, focused on reproducibility.
-randomness_lib=stdlib
-
 # Low-level-code identifier syntax. Options: heuristic, name_and_label, name_only.
 ll_ident_style=heuristic
+
+# Computation DSL identifier syntax. Options: heuristic, name_and_label, name_only.
+cd_ident_style=heuristic
 
 # For ppx_minidebug non-flushing static backends, when non-empty, enables snapshotting of ongoing
 # logging into a file, with the given frequency.

@@ -8,10 +8,8 @@ toc_entry_minimal_depth=0
 toc_entry_minimal_span=1ms
 virtualize_max_visits=2
 inline_scalar_constexprs=true
-output_debug_files_in_run_directory=true
 cd_ident_style=heuristic
 ll_ident_style=heuristic
-randomness_lib=for_tests
 # only for DEBUG:
 log_level=9
 # debug_backend=db

@@ -658,3 +658,21 @@
  (preprocess
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))
+
+(executable
+ (name test_config_consistency)
+ (modules test_config_consistency)
+ (libraries base arrayjit.utils stdio))
+
+(rule
+ (target test_config_consistency.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to %{target}
+   (run %{dep:test_config_consistency.exe} %{dep:../../ocannl_config.reference}))))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action (diff test_config_consistency.expected test_config_consistency.actual)))

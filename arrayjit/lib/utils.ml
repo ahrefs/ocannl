@@ -42,15 +42,58 @@ let accessed_global_args = Hash_set.create (module String)
 let str_nonempty ~f s = if String.is_empty s then None else Some (f s)
 let pair a b = (a, b)
 
+let known_config_keys =
+  Set.of_list
+    (module String)
+    [
+      (* Bootstrap keys (read before config file via read_cmdline_or_env_var directly) *)
+      "suppress_welcome_message"; "no_config_file";
+      (* Utils.settings *)
+      "log_level"; "debug_log_from_routines"; "output_debug_files_in_build_directory";
+      "fixed_state_for_init"; "print_decimals_precision"; "check_half_prec_constants_cutoff";
+      "default_prng_variant"; "big_models";
+      (* Cleanup / startup *)
+      "build_files_prefix"; "clean_up_build_files_on_startup"; "clean_up_log_files_on_startup";
+      "never_capture_stdout";
+      (* ppx_minidebug *)
+      "snapshot_every_sec"; "time_tagged"; "elapsed_times"; "location_format"; "debug_backend";
+      "hyperlink_prefix"; "logs_print_scope_ids"; "logs_verbose_scope_ids";
+      "log_main_domain_to_stdout"; "log_file_stem"; "prev_run_prefix"; "toc_entry_minimal_depth";
+      "toc_entry_minimal_size"; "toc_entry_minimal_span"; "debug_highlights";
+      "debug_highlight_pcre"; "diff_ignore_pattern_pcre"; "diff_max_distance_factor";
+      "debug_scope_id_pairs"; "debug_log_truncate_children"; "debug_log_prune_upto";
+      "debug_log_to_stream_files";
+      (* Backends *)
+      "backend"; "prefer_backend_uniformity"; "cc_backend_optimization_level";
+      "cc_backend_compiler_command"; "cc_backend_arch_flags"; "cc_backend_fast_math";
+      "cc_backend_post_compile_timeout"; "cc_backend_verify_codesign";
+      "output_dlls_in_build_directory"; "cuda_printf_fifo_size";
+      (* Low-level / optimization *)
+      "virtualize_max_visits"; "virtualize_max_tracing_dim"; "enable_device_only";
+      "inline_scalar_constexprs"; "inline_simple_computations"; "inline_complex_computations";
+      "output_prec_in_ll_files"; "stack_threshold_in_bytes";
+      (* Identifiers and other *)
+      "ll_ident_style"; "cd_ident_style"; "default_prec"; "limit_constant_fill_size";
+      "max_shape_error_origins";
+    ]
+
 let read_cmdline_or_env_var n =
   let with_debug =
     (settings.log_level > 0 || equal_string n "log_level")
     && not (Hash_set.mem accessed_global_args n)
   in
+  let n_dash = String.tr ~target:'_' ~replacement:'-' n in
   let env_variants = [ "ocannl_" ^ n; "ocannl-" ^ n ] in
   let env_variants = List.concat_map env_variants ~f:(fun n -> [ n; String.uppercase n ]) in
-  let cmd_variants = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
-  let cmd_variants = List.concat_map cmd_variants ~f:(fun n -> [ n ^ "_"; n ^ "-"; n ^ "="; n ]) in
+  (* Prefixed commandline variants first (backward compat), then prefix-free *)
+  let cmd_prefixed = List.concat_map env_variants ~f:(fun n -> [ "-" ^ n; "--" ^ n; n ]) in
+  let cmd_unprefixed =
+    let keys = if String.equal n n_dash then [ n ] else [ n; n_dash ] in
+    List.concat_map keys ~f:(fun k -> [ "--" ^ k; "-" ^ k ])
+  in
+  let cmd_variants =
+    List.concat_map (cmd_prefixed @ cmd_unprefixed) ~f:(fun n -> [ n ^ "_"; n ^ "-"; n ^ "="; n ])
+  in
   match
     Array.find_map Stdlib.Sys.argv ~f:(fun arg ->
         List.find_map cmd_variants ~f:(fun prefix ->
@@ -136,6 +179,10 @@ let config_file_args =
         | `Duplicate_key key ->
             failwith @@ "OCANNL: duplicate key in config file " ^ fname ^ ": " ^ key
       in
+      if String.length fname > 0 then
+        Hashtbl.iter_keys result ~f:(fun key ->
+          if not (Set.mem known_config_keys key) then
+            Stdio.eprintf "OCANNL warning: unknown config key %S in %s\n%!" key fname);
       if
         String.length fname > 0
         && (not (suppress_welcome_message ()))
@@ -482,6 +529,19 @@ let restore_settings () =
   settings.big_models <- get_global_flag ~default:false ~arg_name:"big_models"
 
 let () = restore_settings ()
+
+let () =
+  let ocannl_prefixes = [ "--ocannl_"; "--ocannl-"; "-ocannl_"; "-ocannl-" ] in
+  Array.iter Stdlib.Sys.argv ~f:(fun arg ->
+    match List.find ocannl_prefixes ~f:(fun p -> String.is_prefix ~prefix:p arg) with
+    | None -> ()
+    | Some prefix ->
+        let rest = String.drop_prefix arg (String.length prefix) in
+        let raw_key = match String.lsplit2 rest ~on:'=' with Some (k, _) -> k | None -> rest in
+        let key = String.tr ~target:'-' ~replacement:'_' @@ String.lowercase raw_key in
+        if not (Set.mem known_config_keys key) then
+          Stdio.eprintf "OCANNL warning: unknown commandline argument %S\n%!" arg)
+
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
 let never_capture_stdout () = get_global_flag ~default:false ~arg_name:"never_capture_stdout"

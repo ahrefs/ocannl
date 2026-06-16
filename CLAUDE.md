@@ -136,7 +136,7 @@ opam install cudajit  # for CUDA backend
 
 ### Configuration
 
-- See `ocannl_config.example` for documentation of all settings
+- See `ocannl_config.reference` for documentation of all settings
 - Key configs: backend selection, debug logging, optimization levels
 
 **Configuration Methods** (in order of precedence):
@@ -243,7 +243,7 @@ When outputs differ between backends:
 1. Implement device-specific module following `Backend_impl` signatures
 2. Add compilation logic in `arrayjit/lib/backends.ml`
 3. Handle memory management and synchronization
-4. Add configuration options in `ocannl_config.example`
+4. Add configuration options in `ocannl_config.reference`
 
 ### Shape Inference Extensions
 
