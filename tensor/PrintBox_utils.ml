@@ -125,17 +125,23 @@ let render_group result_label group_rows =
 let table rows =
   if List.is_empty rows then PrintBox.empty
   else
+    (* Accumulate all rows with the same label into one group, preserving first-seen label order.
+       Using Map rather than List.group so that interleaved labels (ms, MB, ms) don't produce
+       duplicate sub-tables with metrics computed against different local maxima. *)
     let groups =
-      List.group rows ~break:(fun (Benchmark { result_label = a; _ }) (Benchmark { result_label = b; _ }) ->
-        not (String.equal a b))
+      let map, order_rev =
+        List.fold rows ~init:(Map.empty (module String), []) ~f:(fun (acc, order) row ->
+          let (Benchmark { result_label; _ }) = row in
+          let label = nolines result_label in
+          let order' = if Map.mem acc label then order else label :: order in
+          let acc' =
+            Map.update acc label ~f:(function None -> [ row ] | Some rs -> row :: rs)
+          in
+          (acc', order'))
+      in
+      List.rev_map order_rev ~f:(fun label -> (label, List.rev (Map.find_exn map label)))
     in
-    let group_boxes =
-      List.map groups ~f:(fun group ->
-        let result_label =
-          match List.hd_exn group with Benchmark { result_label; _ } -> nolines result_label
-        in
-        render_group result_label group)
-    in
+    let group_boxes = List.map groups ~f:(fun (label, group_rows) -> render_group label group_rows) in
     PrintBox.(
       frame
       @@

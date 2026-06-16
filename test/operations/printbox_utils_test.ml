@@ -63,3 +63,22 @@ let () =
   assert (String.is_substring s ~substring:"4.000");
   (* Global-max would produce 40.000 as A's first-row speedup/mem_gain -- must not appear. *)
   assert (not (String.is_substring s ~substring:"40.000"))
+
+let () =
+  (* Non-consecutive same label: rows [ms, MB, ms] must be merged into one ms group,
+     not split into two. Merged ms group has times [1.0; 3.0], max=3.0, so first-row
+     speedup = 3.000. If split into two consecutive groups, each has max=its-only-row,
+     so all speedups would be 1.000 and "3.000" would never appear -- the falsifier. *)
+  let rows =
+    [
+      bench ~bench_title:"a" ~time_in_sec:1.0 ~mem_in_bytes:10 ~result_label:"ms";
+      bench ~bench_title:"b" ~time_in_sec:2.0 ~mem_in_bytes:20 ~result_label:"MB";
+      bench ~bench_title:"c" ~time_in_sec:3.0 ~mem_in_bytes:30 ~result_label:"ms";
+    ]
+  in
+  let s = render rows in
+  Stdio.printf "=== Non-consecutive same label ===\n%s\n" s;
+  assert (String.is_substring s ~substring:"ms");
+  assert (String.is_substring s ~substring:"MB");
+  (* Merged ms group: speedup for row "a" = 3.0/1.0 = 3.000 *)
+  assert (String.is_substring s ~substring:"3.000")
