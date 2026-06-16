@@ -77,7 +77,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* No cross-stream writer synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no
            concurrent cross-stream writes to wait for before this device-to-host copy. *)
-        Backend.to_host ~src_ptr:(Backend.resolve_pool ctx.device loc) ~src:ctx hosted;
+        Backend.to_host ~src:ctx ~src_loc:loc hosted;
         true
     | None -> false
 
@@ -97,7 +97,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
            cross-stream readers to wait for before this host-to-device upload. *)
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
-        Backend.from_host ~dst_ptr:(Backend.resolve_pool ctx.device dst) ~dst:ctx hosted;
+        Backend.from_host ~dst:ctx ~dst_loc:dst hosted;
         update_writer_event ctx @@ Node tn;
         true
     | None -> false
@@ -108,7 +108,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* No zero-init: we are immediately copying from host. *)
         let dst = allocate ctx.device tn ~zero_init:false in
         [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
-        Backend.from_host ~dst_ptr:(Backend.resolve_pool ctx.device dst) ~dst:ctx hosted;
+        Backend.from_host ~dst:ctx ~dst_loc:dst hosted;
         update_writer_event ctx @@ Node tn;
         { ctx with ctx_buffers = Map.add_exn ctx.ctx_buffers ~key:tn ~data:dst }
     | Some _ ->
@@ -142,11 +142,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   in
                   let work () =
                     wait_for_ready ~dst ~src tn;
-                    let s_arr = Backend.resolve_pool src.device s_loc in
-                    let d_arr = Backend.resolve_pool dst.device d_loc in
                     Backend.(
-                      device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst
-                        ~src_ptr:s_arr ~src);
+                      device_to_device tn ~into_merge_buffer ~dst_loc:(Some d_loc) ~dst
+                        ~src_loc:s_loc ~src);
                     update_writer_event dst @@ Node tn;
                     [%log
                       "copying",
@@ -177,9 +175,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             in
             let work () =
               wait_for_ready ~dst ~src tn;
-              let s_arr = Backend.resolve_pool src.device s_loc in
               Backend.(
-                device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
+                device_to_device tn ~into_merge_buffer ~dst_loc:None ~dst ~src_loc:s_loc ~src);
               update_writer_event dst @@ Merge_buffer tn;
               [%log "copy into merge buffer", Tn.debug_name tn, "from", Backend.get_name src.device]
             in
@@ -215,10 +212,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             (* No zero-init: we are immediately copying from another device. *)
             let d_loc = allocate dst.device tn ~zero_init:false in
             Backend.(
-              device_to_device tn ~into_merge_buffer:No
-                ~dst_ptr:(Some (resolve_pool dst.device d_loc))
-                ~dst
-                ~src_ptr:(resolve_pool src.device s_loc)
+              device_to_device tn ~into_merge_buffer:No ~dst_loc:(Some d_loc) ~dst ~src_loc:s_loc
                 ~src);
             update_writer_event dst @@ Node tn;
             [%log
@@ -334,18 +328,15 @@ struct
     let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
 
-  (* Resolve the context's [buffer_loc] map to the backend's concrete pointers before handing it to
-     the backend-side [link_compiled]; the pools were allocated by the shared seam in
-     [Raise_backend.link] before this runs. *)
-  let resolve_ctx device ctx_buffers = Map.map ctx_buffers ~f:(resolve_pool device)
-
   let link context (code : code) ctx_buffers : Indexing.lowered_bindings * Task.t =
     let runner_label = get_name context.device in
     let merge_buffer = context.device.merge_buffer in
+    (* [resolve] is the device's backend-private [buffer_loc -> base] lookup; [link_compiled] does the
+       (eager) [ctx_buffers] and (lazy) merge-buffer resolution with it, backend-side. The generic
+       shared layer never sees a raw pointer. *)
     let resolve = resolve_pool context.device in
-    let ctx_arrays = resolve_ctx context.device ctx_buffers in
     let bindings, to_schedule =
-      link_compiled ~merge_buffer ~resolve ~runner_label ctx_arrays code.proc
+      link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers code.proc
     in
     let schedule =
       Task.enschedule ~schedule_task ~get_stream_name:get_name context.device to_schedule
@@ -359,11 +350,9 @@ struct
     let bindings, schedules =
       Array.fold_mapi code_batch.procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
-            let ctx_arrays =
-              resolve_ctx context.device (Option.value_exn ~here:[%here] ctx_buffers.(i))
-            in
+            let ctx_buffers = Option.value_exn ~here:[%here] ctx_buffers.(i) in
             let bindings', to_schedule =
-              link_compiled ~merge_buffer ~resolve ~runner_label ctx_arrays proc
+              link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers proc
             in
             Option.iter bindings ~f:(fun bindings -> assert (phys_equal bindings bindings'));
             let schedule =
@@ -374,27 +363,32 @@ struct
     in
     (Option.value_exn ~here:[%here] bindings, schedules)
 
-  let from_host ~dst_ptr ~dst hosted =
+  (* Transfers take {!Backend_intf.buffer_loc} and resolve to the backend pointer here, against the
+     device's private pool table -- the resolution is backend-side, not in the generic shared layer. *)
+  let from_host ~dst ~dst_loc hosted =
+    let dst_ptr = resolve_pool dst.device dst_loc in
     let work () = host_to_buffer hosted ~dst:dst_ptr in
-    (* TODO: pass description to from_host. *)
     schedule_task dst.device
       (Task.Task
          { context_lifetime = dst; description = "from_host on " ^ get_name dst.device; work })
 
-  let to_host ~src_ptr ~src hosted =
+  let to_host ~src ~src_loc hosted =
+    let src_ptr = resolve_pool src.device src_loc in
     let work () = buffer_to_host hosted ~src:src_ptr in
-    (* TODO: pass description to to_host. *)
     schedule_task src.device
       (Task.Task { context_lifetime = src; description = "to_host on " ^ get_name src.device; work })
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let s = dst.device in
     let size_in_bytes = Lazy.force tn.Tnode.size_in_bytes in
+    let src_ptr = resolve_pool src.device src_loc in
     let work =
       (* TODO: log the operation if [Utils.settings.with_log_level > 1]. *)
-      match (into_merge_buffer, dst_ptr) with
-      | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_ptr"
-      | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
+      match (into_merge_buffer, dst_loc) with
+      | No, None -> invalid_arg "Multicore_scheduler.device_to_device: missing dst_loc"
+      | No, Some dst_loc ->
+          let dst_ptr = resolve_pool dst.device dst_loc in
+          fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
       | Copy, _ ->
           fun () ->
             (* The merge buffer is the device's reserved single-tenant pool; grow it in place when a
@@ -500,8 +494,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         let zero_init = not (will_copy_from_host || node.Low_level.zero_initialized_by_code) in
         let loc = allocate device key ~zero_init in
         Option.iter host_init ~f:(fun nd ->
-            Device.from_host ~dst_ptr:(Device.resolve_pool device loc) ~dst:parent_context
-              (Lazy.force nd));
+            Device.from_host ~dst:parent_context ~dst_loc:loc (Lazy.force nd));
         loc
       in
       let add_new_exn () =

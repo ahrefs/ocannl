@@ -63,10 +63,10 @@ let () =
     Nd.set_from_float src [| i |] (Float.of_int (i + 1))
   done;
   let dev_pool = fresh_pool ~mode:Tn.Device_only () in
-  let dev_ptr = B.resolve_pool device { pool_id = dev_pool; offset = 0 } in
-  B.from_host ~dst_ptr:dev_ptr ~dst:ctx src;
+  let dev_loc = { Ir.Backend_intf.pool_id = dev_pool; offset = 0 } in
+  B.from_host ~dst:ctx ~dst_loc:dev_loc src;
   let dst = Nd.create_array ~debug:"dst" prec ~dims ~padding:None in
-  B.to_host ~src_ptr:dev_ptr ~src:ctx dst;
+  B.to_host ~src:ctx ~src_loc:dev_loc dst;
   B.await device;
   let roundtrip_ok =
     Array.for_all [| 0; 1; 2; 3 |] ~f:(fun i ->
@@ -79,7 +79,7 @@ let () =
   for i = 0 to 3 do
     Nd.set_from_float zdst [| i |] 99.0
   done;
-  B.to_host ~src_ptr:(B.resolve_pool device { pool_id = zeros_priv; offset = 0 }) ~src:ctx zdst;
+  B.to_host ~src:ctx ~src_loc:{ Ir.Backend_intf.pool_id = zeros_priv; offset = 0 } zdst;
   B.await device;
   let zeros_ok =
     Array.for_all [| 0; 1; 2; 3 |] ~f:(fun i -> Float.equal (Nd.get_as_float zdst [| i |]) 0.0)

@@ -29,7 +29,7 @@ module Backend_buffer = struct
 
   let sexp_of_buffer_ptr ptr = Sexp.Atom (Cu.Deviceptr.string_of ptr)
 
-  include Buffer_types (struct
+  include Backend_impl.Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 end
@@ -61,8 +61,9 @@ module Slab = struct
   open Backend_intf
 
   type device = Device_stream.device
+  type buffer_ptr = Cu.Deviceptr.t
 
-  let pools : (int * int, Cu.Deviceptr.t) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     set_ctx device.dev.primary_context;
@@ -82,7 +83,7 @@ module Slab = struct
     if size_in_bytes > 0 then
       Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
 
-  let resolve_pool (device : device) { pool_id; offset } =
+  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
     (* Phase-1 policy: one pool per tnode at offset 0. *)
     assert (offset = 0);
     Hashtbl.find_exn pools (device.device_id, pool_id)
@@ -94,6 +95,10 @@ let initialized = ref false
 
 module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   include Backend_impl.Device (Device_stream) (Slab)
+
+  (* The concrete [buffer_ptr]/[buffer] + sexps for the impl-facing interface (no longer carried by
+     the shared [Device_config_common]). *)
+  include Backend_buffer
 
   let use_host_memory = None
   let ctx_of (context : context) = context.device.dev.primary_context
@@ -245,20 +250,25 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
 
   let is_idle device = Cu.Stream.is_ready device.runner
 
-  let from_host ~dst_ptr ~dst hosted =
+  (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
+     against the device's private pool table. *)
+  let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
+    let dst_ptr = Slab.resolve_pool dst.device dst_loc in
     let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.device.runner in
     Ndarray.apply { f } hosted
 
-  let to_host ~src_ptr ~src hosted =
+  let to_host ~src ~src_loc hosted =
     set_ctx @@ ctx_of src;
+    let src_ptr = Slab.resolve_pool src.device src_loc in
     let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.device.runner in
     Ndarray.apply { f } hosted
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src =
+  let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let dev = dst.device in
     let same_device = dev.ordinal = src.device.ordinal in
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let src_ptr = Slab.resolve_pool src.device src_loc in
     let memcpy ~dst_ptr =
       (* FIXME: coming in cudajit.0.6.2. *)
       (* if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then () else *)
@@ -268,11 +278,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
         Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
           ~src_ctx:(ctx_of src) dst.device.runner
     in
-    match (into_merge_buffer, dst_ptr) with
-    | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr ->
+    match (into_merge_buffer, dst_loc) with
+    | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_loc"
+    | No, Some dst_loc ->
         set_ctx @@ ctx_of dst;
-        memcpy ~dst_ptr
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
     | Copy, _ ->
         set_ctx @@ ctx_of dst;
         opt_alloc_merge_buffer ~size_in_bytes dst.device;

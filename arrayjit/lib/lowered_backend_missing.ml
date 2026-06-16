@@ -43,9 +43,6 @@ struct
   let memset_zero _device ~pool_id:_ ~offset:_ ~size_in_bytes:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let resolve_pool _device _loc =
-    failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
-
   let make_device _dev _runner ~ordinal:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
@@ -61,7 +58,7 @@ struct
   let sexp_of_buffer_ptr _buffer_ptr =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  type nonrec buffer = buffer_ptr Backend_intf.buffer
+  type nonrec buffer = buffer_ptr Backend_impl.buffer
 
   let sexp_of_buffer _buffer =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
@@ -112,10 +109,10 @@ struct
   let new_stream _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let from_host ~dst_ptr:_ ~dst:_ _nd =
+  let from_host ~dst:_ ~dst_loc:_ _nd =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let to_host ~src_ptr:_ ~src:_ _nd =
+  let to_host ~src:_ ~src_loc:_ _nd =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let device_to_device _tn =

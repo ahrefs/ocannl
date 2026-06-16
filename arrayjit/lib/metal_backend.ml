@@ -23,7 +23,7 @@ module Backend_buffer = struct
   (* Provide a sexp_of for Me.Buffer.t *)
   let sexp_of_buffer_ptr = Me.Buffer.sexp_of_t
 
-  include Buffer_types (struct
+  include Impl.Buffer_types (struct
     type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
   end)
 end
@@ -100,8 +100,9 @@ module Slab = struct
   open Backend_intf
 
   type device = Device_stream.device
+  type buffer_ptr = Me.Buffer.t
 
-  let pools : (int * int, Me.Buffer.t) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+  let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
   let alloc_pool ?mode (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     let buffer =
@@ -125,7 +126,7 @@ module Slab = struct
     Me.CommandBuffer.commit command_buffer;
     Me.CommandBuffer.wait_until_completed command_buffer
 
-  let resolve_pool (device : device) { pool_id; offset } =
+  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
     (* Phase-1 policy: one pool per tnode at offset 0. *)
     assert (offset = 0);
     Hashtbl.find_exn pools (device.device_id, pool_id)
@@ -140,6 +141,10 @@ end
 module Fresh () = struct
   (* Include the device setup with types and allocation *)
   include Backend_impl.Device (Device_stream) (Slab)
+
+  (* The concrete [buffer_ptr]/[buffer] + sexps for the impl-facing interface (no longer carried by
+     the shared [Device_config_common]). *)
+  include Backend_buffer
 
   let storage_mode_of_pool = Slab.storage_mode_of_pool
 
@@ -343,9 +348,11 @@ module Fresh () = struct
         ("pending_shader_logs", sexp_of_int num_pending_logs);
       ]
 
-  (* --- Copy Operations --- *)
-  let from_host ~dst_ptr ~dst hosted =
+  (* --- Copy Operations --- (transfers take {!Backend_intf.buffer_loc} and resolve to the concrete
+     [Metal.Buffer.t] here, against the device's private pool table.) *)
+  let from_host ~dst ~dst_loc hosted =
     (* Copy from host memory to Metal buffer *)
+    let dst_ptr = Slab.resolve_pool dst.device dst_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
     let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
 
@@ -365,8 +372,9 @@ module Fresh () = struct
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let to_host ~src_ptr ~src hosted =
+  let to_host ~src ~src_loc hosted =
     (* Copy from Metal buffer to host memory *)
+    let src_ptr = Slab.resolve_pool src.device src_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
     let command_buffer = Me.CommandBuffer.on_queue src.device.runner.queue in
 
@@ -395,8 +403,9 @@ module Fresh () = struct
       device.merge_buffer_capacity <- size_in_bytes);
     device.merge_buffer := Some { pool_id = merge_buffer_pool_id; offset = 0 }
 
-  let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
+  let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
+    let src_ptr = Slab.resolve_pool src.device src_loc in
 
     let memcpy ~dst_ptr =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
@@ -408,9 +417,9 @@ module Fresh () = struct
       Me.CommandBuffer.commit command_buffer
     in
 
-    match (into_merge_buffer, dst_ptr) with
-    | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
-    | No, Some dst_ptr -> memcpy ~dst_ptr
+    match (into_merge_buffer, dst_loc) with
+    | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_loc"
+    | No, Some dst_loc -> memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
     | Copy, _ ->
         opt_alloc_merge_buffer
           ?mode:(Option.map tn.Tn.memory_mode ~f:fst)

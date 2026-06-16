@@ -270,7 +270,6 @@ let copy ~src ~dst _tnode =
     failwith "Context.copy: cross-backend copy not yet supported";
 
   (* This is a simplified placeholder - proper implementation needs device_to_device *)
-  (* The challenge is that src and dst may have different buffer_ptr types *)
   failwith "Context.copy: not yet implemented - needs proper device_to_device integration"
 
 (* Internal helper - not exposed in interface to maintain invariants *)

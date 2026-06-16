@@ -4,33 +4,16 @@
 
 open Base
 
-type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
-
 (** A backend-agnostic, deterministic per-device buffer location: a [pool_id] into the device's
     backend-private [pool_id -> 'base] pool table, plus a byte [offset] within that pool. The
     concrete backend pointer ([Metal.Buffer.t] / [CUdeviceptr] / [void*]) lives only in that private
-    table, so [buffer_loc] -- pure integers -- is stable across runs, diffable, and meaningful in
-    logs and [.expected] files. Phase-1 policy is one pool per tnode at [offset = 0], byte-for-byte
-    equivalent to per-tnode allocation. An alias (future work) is the parent's
-    [{ pool_id; offset = offset + delta }]. *)
+    table -- it never appears in any type of this shared interface -- so [buffer_loc] (pure integers)
+    is stable across runs, diffable, and meaningful in logs and [.expected] files. Phase-1 policy is
+    one pool per tnode at [offset = 0], byte-for-byte equivalent to per-tnode allocation. An alias
+    (future work) is the parent's [{ pool_id; offset = offset + delta }]. *)
 type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equal]
 
 type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
-
-module Buffer_types (Buffer_ptr : sig
-  type buffer_ptr [@@deriving sexp_of]
-end) =
-struct
-  type nonrec buffer = Buffer_ptr.buffer_ptr buffer [@@deriving sexp_of]
-end
-
-module type Buffer = sig
-  type buffer_ptr [@@deriving sexp_of]
-
-  include module type of Buffer_types (struct
-    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
-  end)
-end
 
 (** The backend slab allocator, replacing the per-tnode [Alloc_buffer] interface. The shared
     allocator seam (see {!Backends}) mints deterministic per-device [pool_id]s and calls these
@@ -80,8 +63,6 @@ type 'context routine = {
 [@@deriving sexp_of]
 
 module type Device_config_common = sig
-  include Buffer
-
   type dev [@@deriving sexp_of]
   (** Interface to a device driver. *)
 
@@ -171,10 +152,9 @@ module type Device = sig
   include Device_types
   include Slab_alloc with type device := device
 
-  val resolve_pool : device -> buffer_loc -> buffer_ptr
-  (** Resolves a {!buffer_loc} to the concrete backend pointer at [base_of pool_id + offset], looking
-      [pool_id] up in the device's backend-private pool table. The pointer never leaves the backend
-      layer in a shared type; this is the single resolution seam used by [link] / host transfers. *)
+  (* [pool_id -> base] resolution is intentionally NOT part of this shared signature: the concrete
+     backend pointer never appears in a shared type. Resolution lives backend-side (see
+     {!Backend_impl.Make_slab} / each backend's private [Slab]). *)
 
   val make_device : dev -> runner -> ordinal:int -> device
 
@@ -197,8 +177,6 @@ end
 
 (** Parts shared by assignments-level backend interfaces. *)
 module type Backend_common = sig
-  include Buffer
-
   type code [@@deriving sexp_of]
   type code_batch [@@deriving sexp_of]
   type optimize_ctx [@@deriving sexp_of]
@@ -334,8 +312,7 @@ end
 module type Backend = sig
   include Backend_common
 
-  include
-    Backend_device_common with type buffer_ptr := buffer_ptr and type optimize_ctx := optimize_ctx
+  include Backend_device_common with type optimize_ctx := optimize_ctx
 
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context.

@@ -14,6 +14,26 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 
 open Backend_intf
 
+(* The backend's concrete buffer handle (`'base`) and its helpers live here, in the implementation-
+   facing layer -- NOT in the shared {!Backend_intf}, which only ever speaks {!Backend_intf.buffer_loc}.
+   These are used by the raw allocator and the backend-private pool tables. *)
+type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
+
+module Buffer_types (Buffer_ptr : sig
+  type buffer_ptr [@@deriving sexp_of]
+end) =
+struct
+  type nonrec buffer = Buffer_ptr.buffer_ptr buffer [@@deriving sexp_of]
+end
+
+module type Buffer = sig
+  type buffer_ptr [@@deriving sexp_of]
+
+  include module type of Buffer_types (struct
+    type nonrec buffer_ptr = buffer_ptr [@@deriving sexp_of]
+  end)
+end
+
 module type No_device_buffer_and_copying = sig
   include Buffer
 
@@ -121,16 +141,12 @@ end
 
 (** Backs the device-level slab interface with a backend's raw byte-buffer primitives and a private
     [(device_id, pool_id) -> 'base] table. Replaces the old [Alloc_buffer_ignore_stream]. *)
-module Make_slab
-    (Device_types : Device_types)
-    (Raw : No_device_buffer_and_copying with type buffer_ptr = Device_types.buffer_ptr) :
-  Device_slab
-    with type device = Device_types.device
-     and type buffer_ptr = Device_types.buffer_ptr = struct
+module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copying) :
+  Device_slab with type device = Device_types.device and type buffer_ptr = Raw.buffer_ptr = struct
   open Backend_intf
 
   type device = Device_types.device
-  type buffer_ptr = Device_types.buffer_ptr
+  type buffer_ptr = Raw.buffer_ptr
 
   (* Private pool table keyed by (device_id, pool_id). *)
   let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
@@ -160,10 +176,7 @@ let next_global_device_id : Utils.atomic_int = Atomic.make 0
 
 module Device
     (Device_types : Device_types)
-    (Slab :
-      Device_slab
-        with type buffer_ptr := Device_types.buffer_ptr
-         and type device := Device_types.device) =
+    (Slab : Device_slab with type device := Device_types.device) =
 struct
   include Device_types
   include Slab
@@ -214,7 +227,7 @@ end
 
 (** Parts shared by backend implementations. *)
 module type Backend_impl_common = sig
-  include Backend_intf.Buffer
+  include Buffer
 
   val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   (** If not [None], the backend will read from and write to the host memory directly whenever
@@ -251,44 +264,56 @@ module type Lowered_no_device_backend = sig
     merge_buffer:Backend_intf.buffer_loc option ref ->
     resolve:(Backend_intf.buffer_loc -> buffer_ptr) ->
     runner_label:string ->
-    buffer_ptr Map.M(Tnode).t ->
+    Backend_intf.ctx_buffers ->
     procedure ->
     Indexing.lowered_bindings * Task.t
-  (** The [buffer_ptr] map already contains the resolved pointers of the resulting context (the
-      shared layer resolves [ctx_buffers] before calling). [resolve] resolves the (lazily set)
-      [merge_buffer] location at execution time. [runner_label] is [get_name device] of the device
-      holding the resulting buffers. *)
+  (** [resolve] is the device's backend-private [buffer_loc -> base] lookup, supplied at the backend
+      boundary so that the {e shared} layer never handles a raw pointer: this function resolves both
+      the context's [ctx_buffers] (eagerly, at link time) and the lazily-set [merge_buffer] (at
+      execution time). [runner_label] is [get_name device] of the device holding the buffers. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
 
+(** The transfer/sync seam the shared {!Backends} layer consumes. It speaks {!Backend_intf.buffer_loc}
+    only -- the concrete backend pointer never crosses this boundary; each backend resolves
+    [buffer_loc -> base] internally. *)
 module type No_buffer_retrieval_or_syncing = sig
   include Backend_impl_common
-  include Backend_device_common with type buffer_ptr := buffer_ptr
+  include Backend_device_common
 
-  val from_host : dst_ptr:buffer_ptr -> dst:context -> Ndarray.t -> unit
-  (** Like {!Backend_intf.Backend.from_host}, but without synchronization and buffer retrieval. *)
+  val from_host : dst:context -> dst_loc:Backend_intf.buffer_loc -> Ndarray.t -> unit
+  (** Like {!Backend_intf.Backend.from_host}, but without synchronization and buffer retrieval; the
+      backend resolves [dst_loc] against [dst.device]'s private pool table. *)
 
-  val to_host : src_ptr:buffer_ptr -> src:context -> Ndarray.t -> unit
-  (** Like {!Backend_intf.Backend.to_host}, but without synchronization events and buffer retrieval.
-  *)
+  val to_host : src:context -> src_loc:Backend_intf.buffer_loc -> Ndarray.t -> unit
+  (** Like {!Backend_intf.Backend.to_host}, but without synchronization events and buffer retrieval;
+      the backend resolves [src_loc] against [src.device]'s private pool table. *)
 
   val device_to_device :
     Tnode.t ->
     into_merge_buffer:merge_buffer_use ->
-    dst_ptr:buffer_ptr option ->
+    dst_loc:Backend_intf.buffer_loc option ->
     dst:context ->
-    src_ptr:buffer_ptr ->
+    src_loc:Backend_intf.buffer_loc ->
     src:context ->
     unit
   (** Like {!Backend_intf.Backend.device_to_device}, but without synchronization events and buffer
-      retrieval. Raises [Invalid_argument] if [into_merge_buffer = No] and [dst_ptr = None]. *)
+      retrieval; the backend resolves the locations internally. Raises [Invalid_argument] if
+      [into_merge_buffer = No] and [dst_loc = None]. *)
 end
 
 (** An intermediate stage for converting {!Lowered_no_device_backend} backends into
-    {!Lowered_backend}. It could potentially be used for assignments-level backends too. *)
+    {!Lowered_backend}. It could potentially be used for assignments-level backends too. This
+    impl-facing stage may carry the backend-private [resolve_pool] (its base type does not escape to
+    {!Backend_intf}). *)
 module type With_scheduler = sig
   include Backend_device_common
+  include Buffer
+
+  val resolve_pool : device -> Backend_intf.buffer_loc -> buffer_ptr
+  (** Backend-private [buffer_loc -> base] resolution, used by the backend's own transfer/link
+      implementations. Not part of {!Backend_intf}. *)
 
   val schedule_task : device -> Task.t -> unit
 end
@@ -300,8 +325,7 @@ module type Lowered_backend = sig
 
   include
     No_buffer_retrieval_or_syncing
-      with type buffer_ptr := buffer_ptr
-       and type dev := dev
+      with type dev := dev
        and type runner := runner
        and type event := event
        and type optimize_ctx := Low_level.optimize_ctx
