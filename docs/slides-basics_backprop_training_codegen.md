@@ -473,7 +473,7 @@ Half-moons scatterplot and decision boundary:
 
 {pause}
 
-```mermaid
+```=mermaid
 flowchart LR
     subgraph fwd ["Forward pass"]
         x --> yx["y(x)"] --> fyx["f(y(x))"]

@@ -25,7 +25,7 @@ Instead of learning from labeled examples, an **agent** learns by **acting** in 
 
 {pause}
 
-```mermaid
+```=mermaid
 flowchart LR
     A["Agent (θ)"] -->|action| E["Environment"]
     E -->|"state, reward"| A
