@@ -53,14 +53,31 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
         if not (equal_device s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
+  (* Shared allocator seam: mints a deterministic per-device [pool_id] (advancing
+     [device.next_pool_id] in the caller's tnode-iteration order), allocates the slab through the
+     backend's int-in/int-out API, and returns the [buffer_loc]. Phase-1 policy is one pool per tnode
+     at offset 0 -- byte-for-byte equivalent to the old per-tnode allocation. [zero_init] selects the
+     old [alloc_zeros] vs [alloc_array] behavior. *)
+  let allocate (device : _ Backend_intf.device) (tn : Tn.t) ~zero_init : Backend_intf.buffer_loc =
+    let pool_id = device.next_pool_id in
+    device.next_pool_id <- pool_id + 1;
+    let prec = Lazy.force tn.Tn.prec in
+    (* Compute the byte size from dims*prec rather than forcing [tn.size_in_bytes], to keep the
+       node's debug printout (and lazy-forcing behavior) byte-for-byte as before. *)
+    let size_in_bytes = Array.fold (Lazy.force tn.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+    let mode = Option.map tn.Tn.memory_mode ~f:fst in
+    Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes ~alignment:(Ops.prec_in_bytes prec);
+    if zero_init then Backend.memset_zero device ~pool_id ~offset:0 ~size_in_bytes;
+    { pool_id; offset = 0 }
+
   let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
-    match Map.find ctx.ctx_arrays tn with
-    | Some src ->
-        [%log "copying", Tn.debug_name tn, "at", (src : Backend.buffer_ptr), "to host"];
+    match Map.find ctx.ctx_buffers tn with
+    | Some loc ->
+        [%log "copying", Tn.debug_name tn, "at", (loc : Backend_intf.buffer_loc), "to host"];
         (* No cross-stream writer synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no
            concurrent cross-stream writes to wait for before this device-to-host copy. *)
-        Backend.to_host ~src_ptr:src ~src:ctx hosted;
+        Backend.to_host ~src_ptr:(Backend.resolve_pool ctx.device loc) ~src:ctx hosted;
         true
     | None -> false
 
@@ -74,36 +91,31 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
   let%track3_sexp from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
-    match Map.find ctx.ctx_arrays tn with
+    match Map.find ctx.ctx_buffers tn with
     | Some dst ->
         (* No cross-stream reader synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
            cross-stream readers to wait for before this host-to-device upload. *)
-        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
-        Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
+        [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
+        Backend.from_host ~dst_ptr:(Backend.resolve_pool ctx.device dst) ~dst:ctx hosted;
         update_writer_event ctx @@ Node tn;
         true
     | None -> false
 
   let%track3_sexp init_from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
-    match Map.find ctx.ctx_arrays tn with
+    match Map.find ctx.ctx_buffers tn with
     | None ->
-        let dims = Lazy.force tn.dims in
-        (* Use alloc_array since we're immediately copying from host *)
-        let dst =
-          Backend.alloc_array
-            ?mode:(Option.map tn.memory_mode ~f:fst)
-            (Lazy.force tn.prec) ~dims ctx.device
-        in
-        [%log "copying", Tn.debug_name tn, "to", (dst : Backend.buffer_ptr), "from host"];
-        Backend.from_host ~dst_ptr:dst ~dst:ctx hosted;
+        (* No zero-init: we are immediately copying from host. *)
+        let dst = allocate ctx.device tn ~zero_init:false in
+        [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
+        Backend.from_host ~dst_ptr:(Backend.resolve_pool ctx.device dst) ~dst:ctx hosted;
         update_writer_event ctx @@ Node tn;
-        { ctx with ctx_arrays = Map.add_exn ctx.ctx_arrays ~key:tn ~data:dst }
+        { ctx with ctx_buffers = Map.add_exn ctx.ctx_buffers ~key:tn ~data:dst }
     | Some _ ->
         raise
         @@ Utils.User_error
              ("init_from_host: input context already contains tensor node " ^ Tn.debug_name tn
-            ^ ", for stream " ^ Backend.get_name ctx.device)
+            ^ ", for device " ^ Backend.get_name ctx.device)
 
   (* [device_to_device] builds a transfer routine instead of scheduling the copy directly. The
      caller schedules it (via [Task.run r.schedule]) or links a consumer against [r.context]. For
@@ -112,15 +124,16 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
      "static verification in the right direction" of gh-ocannl-288. *)
   let%track3_sexp device_to_device (tn : Tn.t) ~into_merge_buffer ~(dst : Backend.context)
       ~(src : Backend.context) : Backend.context routine option =
-    match Map.find src.ctx_arrays tn with
+    match Map.find src.ctx_buffers tn with
     | None -> None
-    | Some s_arr -> (
+    | Some s_loc -> (
         match into_merge_buffer with
         | No -> (
-            match Map.find dst.ctx_arrays tn with
+            match Map.find dst.ctx_buffers tn with
             | None -> None
-            | Some d_arr ->
-                if phys_equal s_arr d_arr then None
+            | Some d_loc ->
+                (* Same device + same location => physically the same buffer; nothing to copy. *)
+                if equal_device src.device dst.device && [%equal: buffer_loc] s_loc d_loc then None
                 else
                   let context = Backend.make_child dst in
                   let description =
@@ -129,6 +142,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   in
                   let work () =
                     wait_for_ready ~dst ~src tn;
+                    let s_arr = Backend.resolve_pool src.device s_loc in
+                    let d_arr = Backend.resolve_pool dst.device d_loc in
                     Backend.(
                       device_to_device tn ~into_merge_buffer ~dst_ptr:(Some d_arr) ~dst
                         ~src_ptr:s_arr ~src);
@@ -162,6 +177,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             in
             let work () =
               wait_for_ready ~dst ~src tn;
+              let s_arr = Backend.resolve_pool src.device s_loc in
               Backend.(
                 device_to_device tn ~into_merge_buffer ~dst_ptr:None ~dst ~src_ptr:s_arr ~src);
               update_writer_event dst @@ Merge_buffer tn;
@@ -180,31 +196,29 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               })
 
   let%track3_sexp init_from_device (tn : Tn.t) ~(dst : Backend.context) ~(src : Backend.context) =
-    match Map.find src.ctx_arrays tn with
+    match Map.find src.ctx_buffers tn with
     | None ->
         raise
         @@ Utils.User_error
              ("init_from_device: tensor node " ^ Tn.debug_name tn ^ " is not in input context "
-            ^ Backend.get_name src.device ^ ", for stream " ^ Backend.get_name dst.device)
-    | Some s_arr -> (
+            ^ Backend.get_name src.device ^ ", for device " ^ Backend.get_name dst.device)
+    | Some s_loc -> (
         wait_for_ready ~dst ~src tn;
-        match Map.find dst.ctx_arrays tn with
+        match Map.find dst.ctx_buffers tn with
         | Some _ ->
             raise
             @@ Utils.User_error
                  ("init_from_device: tensor node " ^ Tn.debug_name tn
-                ^ " already in output context " ^ Backend.get_name dst.device ^ ", for stream "
+                ^ " already in output context " ^ Backend.get_name dst.device ^ ", for device "
                 ^ Backend.get_name src.device)
         | None ->
-            let dims = Lazy.force tn.dims in
-            (* Use alloc_array since we're immediately copying from another device *)
-            let d_arr =
-              Backend.alloc_array
-                ?mode:(Option.map tn.memory_mode ~f:fst)
-                (Lazy.force tn.prec) ~dims dst.device
-            in
+            (* No zero-init: we are immediately copying from another device. *)
+            let d_loc = allocate dst.device tn ~zero_init:false in
             Backend.(
-              device_to_device tn ~into_merge_buffer:No ~dst_ptr:(Some d_arr) ~dst ~src_ptr:s_arr
+              device_to_device tn ~into_merge_buffer:No
+                ~dst_ptr:(Some (resolve_pool dst.device d_loc))
+                ~dst
+                ~src_ptr:(resolve_pool src.device s_loc)
                 ~src);
             update_writer_event dst @@ Node tn;
             [%log
@@ -214,7 +228,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
               Backend.get_name src.device,
               "to",
               Backend.get_name dst.device];
-            { dst with ctx_arrays = Map.add_exn dst.ctx_arrays ~key:tn ~data:d_arr })
+            { dst with ctx_buffers = Map.add_exn dst.ctx_buffers ~key:tn ~data:d_loc })
 
   type r = Backend.context routine [@@deriving sexp_of]
 
@@ -320,24 +334,36 @@ struct
     let procs = compile_batch ~names bindings lowereds in
     { lowereds; procs }
 
-  let link context (code : code) ctx_arrays : Indexing.lowered_bindings * Task.t =
+  (* Resolve the context's [buffer_loc] map to the backend's concrete pointers before handing it to
+     the backend-side [link_compiled]; the pools were allocated by the shared seam in
+     [Raise_backend.link] before this runs. *)
+  let resolve_ctx device ctx_buffers = Map.map ctx_buffers ~f:(resolve_pool device)
+
+  let link context (code : code) ctx_buffers : Indexing.lowered_bindings * Task.t =
     let runner_label = get_name context.device in
     let merge_buffer = context.device.merge_buffer in
-    let bindings, to_schedule = link_compiled ~merge_buffer ~runner_label ctx_arrays code.proc in
+    let resolve = resolve_pool context.device in
+    let ctx_arrays = resolve_ctx context.device ctx_buffers in
+    let bindings, to_schedule =
+      link_compiled ~merge_buffer ~resolve ~runner_label ctx_arrays code.proc
+    in
     let schedule =
       Task.enschedule ~schedule_task ~get_stream_name:get_name context.device to_schedule
     in
     (bindings, schedule)
 
-  let link_batch context (code_batch : code_batch) ctx_arrays =
+  let link_batch context (code_batch : code_batch) ctx_buffers =
     let runner_label = get_name context.device in
     let merge_buffer = context.device.merge_buffer in
+    let resolve = resolve_pool context.device in
     let bindings, schedules =
       Array.fold_mapi code_batch.procs ~init:None ~f:(fun i bindings -> function
         | Some proc ->
-            let ctx_arrays = Option.value_exn ~here:[%here] ctx_arrays.(i) in
+            let ctx_arrays =
+              resolve_ctx context.device (Option.value_exn ~here:[%here] ctx_buffers.(i))
+            in
             let bindings', to_schedule =
-              link_compiled ~merge_buffer ~runner_label ctx_arrays proc
+              link_compiled ~merge_buffer ~resolve ~runner_label ctx_arrays proc
             in
             Option.iter bindings ~f:(fun bindings -> assert (phys_equal bindings bindings'));
             let schedule =
@@ -371,18 +397,17 @@ struct
       | No, Some dst_ptr -> fun () -> buffer_to_buffer ~dst:dst_ptr ~src:src_ptr ~size_in_bytes
       | Copy, _ ->
           fun () ->
-            let allocated_capacity =
-              match s.allocated_buffer with None -> 0 | Some buf -> buf.size_in_bytes
-            in
-            if allocated_capacity < size_in_bytes then
-              s.allocated_buffer <-
-                Some
-                  (alloc_buffer ?old_buffer:s.allocated_buffer
-                     ?mode:(Option.map tn.Tnode.memory_mode ~f:fst)
-                     ~size_in_bytes dst.device);
-            let merge_ptr = (Option.value_exn ~here:[%here] s.allocated_buffer).ptr in
-            s.merge_buffer := s.allocated_buffer;
-            buffer_to_buffer ~dst:merge_ptr ~src:src_ptr ~size_in_bytes
+            (* The merge buffer is the device's reserved single-tenant pool; grow it in place when a
+               larger node arrives ([alloc_pool] overwrites the reserved pool-id entry). *)
+            if s.merge_buffer_capacity < size_in_bytes then (
+              alloc_pool
+                ?mode:(Option.map tn.Tnode.memory_mode ~f:fst)
+                s ~pool_id:merge_buffer_pool_id ~size_in_bytes
+                ~alignment:(Ops.prec_in_bytes (Lazy.force tn.Tnode.prec));
+              s.merge_buffer_capacity <- size_in_bytes);
+            let loc = { pool_id = merge_buffer_pool_id; offset = 0 } in
+            s.merge_buffer := Some loc;
+            buffer_to_buffer ~dst:(resolve_pool s loc) ~src:src_ptr ~size_in_bytes
     in
     let description =
       "device_to_device " ^ Tnode.debug_name tn ^ " dst " ^ get_name s ^ " src "
@@ -459,8 +484,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
     }
 
-  let%track3_sexp alloc_if_needed parent_context ~key ~data:node ctx_arrays =
-    if Tnode.is_in_context_force ~use_host_memory key 43 && not (Map.mem ctx_arrays key) then (
+  let%track3_sexp alloc_if_needed parent_context ~key ~data:node ctx_buffers =
+    if Tnode.is_in_context_force ~use_host_memory key 43 && not (Map.mem ctx_buffers key) then (
       let device = parent_context.device in
       [%log Tn.debug_name key];
       [%log (key : Tnode.t)];
@@ -468,30 +493,25 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          weakly-owned [Host_inits] table (gh-ocannl-333). It is read (not consumed) here, so the
          same node can be initialized into multiple independent contexts. *)
       let host_init = Host_inits.find key in
-      let default () =
-        let dims = Lazy.force key.dims in
-        (* Use alloc_array when zero initialization is not needed: - When copying from host
-           immediately after allocation - When the node has explicit Zero_out operations in the
-           lowered code *)
+      let default () : buffer_loc =
+        (* Zero-initialize unless the node will be copied from host immediately after allocation, or
+           has explicit Zero_out operations in the lowered code. *)
         let will_copy_from_host = Option.is_some host_init in
-        let mode = Option.map key.memory_mode ~f:fst in
-        let dst_ptr =
-          if will_copy_from_host || node.Low_level.zero_initialized_by_code then
-            alloc_array ?mode (Lazy.force key.prec) ~dims device
-          else alloc_zeros ?mode (Lazy.force key.prec) ~dims device
-        in
+        let zero_init = not (will_copy_from_host || node.Low_level.zero_initialized_by_code) in
+        let loc = allocate device key ~zero_init in
         Option.iter host_init ~f:(fun nd ->
-            Device.from_host ~dst_ptr ~dst:parent_context (Lazy.force nd));
-        dst_ptr
+            Device.from_host ~dst_ptr:(Device.resolve_pool device loc) ~dst:parent_context
+              (Lazy.force nd));
+        loc
       in
       let add_new_exn () =
-        try Map.add_exn ctx_arrays ~key ~data:(default ())
+        try Map.add_exn ctx_buffers ~key ~data:(default ())
         with exn ->
           [%log "Backends.alloc_if_needed: failed to add new node to context", (key : Tnode.t)];
           raise exn
       in
       let add_old_exn data =
-        try Map.add_exn ctx_arrays ~key ~data
+        try Map.add_exn ctx_buffers ~key ~data
         with exn ->
           [%log "Backends.alloc_if_needed: failed to add old node to context", (key : Tnode.t)];
           raise exn
@@ -504,10 +524,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       if node.Low_level.read_only || Tn.known_constant key then add_old_exn
       @@ Hashtbl.find_or_add device.constant_buffer_cache key ~default
       else add_new_exn ())
-    else ctx_arrays
+    else ctx_buffers
 
   let%debug3_sexp link context (code : code) =
-    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
+    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_buffers
       ~from_prior_context:code.from_prior_context;
     (* Static merge-buffer verification "in the right direction" (gh-ocannl-288): the linked
        context carries the merge-buffer node of the producing [device_to_device] transfer routine;
@@ -515,12 +535,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
       ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
-    let ctx_arrays =
-      Hashtbl.fold code.lowered.traced_store ~init:context.ctx_arrays ~f:(alloc_if_needed context)
+    let ctx_buffers =
+      Hashtbl.fold code.lowered.traced_store ~init:context.ctx_buffers ~f:(alloc_if_needed context)
     in
     let optimize_ctx = code.lowered.optimize_ctx in
-    let bindings, schedule = link context code.code ctx_arrays in
-    let context = make_child ~ctx_arrays ~optimize_ctx context in
+    let bindings, schedule = link context code.code ctx_buffers in
+    let context = make_child ~ctx_buffers ~optimize_ctx context in
     let schedule =
       Task.prepend schedule ~work:(fun () ->
           check_merge_buffer context.device ~code_node:code.expected_merge_node)
@@ -529,27 +549,27 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs }
 
   let%debug3_sexp link_batch context code_batch =
-    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_arrays
+    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_buffers
       ~from_prior_context:code_batch.from_prior_context;
-    let ctx_arrays =
+    let ctx_buffers =
       Array.map code_batch.lowereds
         ~f:
           (Option.map ~f:(fun l ->
-               Hashtbl.fold l.Low_level.traced_store ~init:context.ctx_arrays
+               Hashtbl.fold l.Low_level.traced_store ~init:context.ctx_buffers
                  ~f:(alloc_if_needed context)))
     in
-    let bindings, schedules = link_batch context code_batch.code_batch ctx_arrays in
+    let bindings, schedules = link_batch context code_batch.code_batch ctx_buffers in
     Array.fold_mapi schedules ~init:context ~f:(fun i context -> function
       | None -> (context, None)
       | Some schedule ->
-          let ctx_arrays = Option.value_exn ctx_arrays.(i) in
+          let ctx_buffers = Option.value_exn ctx_buffers.(i) in
           let optimize_ctx = (Option.value_exn code_batch.lowereds.(i)).Low_level.optimize_ctx in
           let expected_merge_node = code_batch.expected_merge_nodes.(i) in
           (* Static merge-buffer verification at link time (gh-ocannl-288): check the node provided
              by the fold-current context before deriving the consumer's child context. *)
           check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
             ~code_node:expected_merge_node;
-          let context = make_child ~ctx_arrays ~optimize_ctx context in
+          let context = make_child ~ctx_buffers ~optimize_ctx context in
           let (inputs, outputs), merge_buffer_input =
             Low_level.input_and_output_nodes @@ Option.value_exn code_batch.lowereds.(i)
           in
@@ -577,21 +597,20 @@ struct
   include Backend_device
 end
 
-let finalize (type buffer_ptr dev runner event optimize_ctx)
+let finalize (type dev runner event optimize_ctx)
     (module Backend : Backend
-      with type buffer_ptr = buffer_ptr
-       and type dev = dev
+      with type dev = dev
        and type runner = runner
        and type event = event
        and type optimize_ctx = optimize_ctx) (ctx : Backend.context) : unit =
-  Option.iter Backend.free_buffer ~f:(fun mem_free ->
+  Option.iter Backend.free_pool ~f:(fun free_pool ->
       if Atomic.compare_and_set ctx.finalized false true then (
         Backend.await ctx.device;
-        Map.iteri ctx.ctx_arrays ~f:(fun ~key ~data ->
+        Map.iteri ctx.ctx_buffers ~f:(fun ~key ~data:(loc : Ir.Backend_intf.buffer_loc) ->
             if
-              (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_arrays key)))
+              (not (Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key)))
               && not (Hashtbl.mem ctx.device.constant_buffer_cache key)
-            then mem_free ctx.device data)))
+            then free_pool ctx.device ~pool_id:loc.pool_id)))
 
 let%track5_sexp fresh_backend ?backend_name () =
   Stdlib.Gc.full_major ();

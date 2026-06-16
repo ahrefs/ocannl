@@ -93,65 +93,55 @@ let resource_options_for_mode (mode : Tn.memory_mode option) =
   | Me.Resource.StorageMode.Private -> private_resource_options
   | Shared | Managed | Memoryless -> shared_resource_options
 
-module Alloc_buffer = struct
-  include Device_stream
+(* The Metal slab allocator: a private [(device_id, pool_id) -> Metal.Buffer.t] table backing the
+   shared {!Backend_intf.Slab_alloc}. Storage mode (private vs. shared) is a per-pool property carried
+   by [?mode]. *)
+module Slab = struct
+  open Backend_intf
 
-  let alloc_buffer ?old_buffer ?mode ~size_in_bytes (device : device) =
-    let metal_device = device.dev in
-    let requested_storage = storage_mode_for_memory_mode mode in
-    match old_buffer with
-    | Some ({ size_in_bytes = old_size; ptr; _ } as buffer)
-      when size_in_bytes <= old_size
-           && Poly.equal requested_storage
-                (Me.Resource.get_storage_mode (Me.Buffer.super ptr)) ->
-        (* Only reuse the old buffer when its storage mode matches the requested one: storage mode
-           is fixed at allocation time, so a shared buffer must not be handed back for a private
-           request, nor vice versa. *)
-        buffer
-    | _ ->
-        (* ARC should handle the old buffer *)
-        let new_buffer_obj =
-          Me.Buffer.on_device metal_device ~length:size_in_bytes (resource_options_for_mode mode)
-        in
-        track_allocation new_buffer_obj;
-        { ptr = new_buffer_obj; size_in_bytes }
+  type device = Device_stream.device
 
-  let%track7_sexp alloc_array ?mode (prec : Ops.prec) ~(dims : int array) (device : device) =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    let metal_device = device.dev in
+  let pools : (int * int, Me.Buffer.t) Hashtbl.Poly.t = Hashtbl.Poly.create ()
+
+  let alloc_pool ?mode (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     let buffer =
-      Me.Buffer.on_device metal_device ~length:size_in_bytes (resource_options_for_mode mode)
+      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) (resource_options_for_mode mode)
     in
     track_allocation buffer;
-    buffer
+    Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
 
-  let%track7_sexp alloc_zeros ?mode (prec : Ops.prec) ~(dims : int array) (device : device) =
-    let size_in_bytes = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
-    let metal_device = device.dev in
-    let buffer =
-      Me.Buffer.on_device metal_device ~length:size_in_bytes (resource_options_for_mode mode)
-    in
-    track_allocation buffer;
-    (* Zero initialize the buffer using a blit command encoder *)
+  (* Rely on ARC and the finalizer attached in track_allocation; re-allocating a pool overwrites the
+     table entry, dropping the old buffer to ARC. *)
+  let free_pool = None
+
+  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
+    let buffer = Hashtbl.find_exn pools (device.device_id, pool_id) in
     let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
     let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
     Me.BlitCommandEncoder.fill_buffer blit_encoder buffer
-      { location = 0; length = size_in_bytes }
+      { location = offset; length = size_in_bytes }
       ~value:0;
     Me.BlitCommandEncoder.end_encoding blit_encoder;
     Me.CommandBuffer.commit command_buffer;
-    Me.CommandBuffer.wait_until_completed command_buffer;
-    buffer
+    Me.CommandBuffer.wait_until_completed command_buffer
 
-  (* Rely on ARC and the finalizer attached in track_allocation *)
-  let free_buffer = None
+  let resolve_pool (device : device) { pool_id; offset } =
+    (* Phase-1 policy: one pool per tnode at offset 0. *)
+    assert (offset = 0);
+    Hashtbl.find_exn pools (device.device_id, pool_id)
+
+  let storage_mode_of_pool (device : device) ~pool_id =
+    Me.Resource.get_storage_mode
+      (Me.Buffer.super (Hashtbl.find_exn pools (device.device_id, pool_id)))
 end
 
-(* Functor defining the backend *)
-module Fresh () :
-  Ir.Backend_impl.Lowered_backend with type buffer_ptr = Me.Buffer.t = struct
+(* Functor defining the backend. The exact public signature (Lowered_backend + storage_mode_of_pool)
+   is sealed by metal_backend.mli. *)
+module Fresh () = struct
   (* Include the device setup with types and allocation *)
-  include Backend_impl.Device (Device_stream) (Alloc_buffer)
+  include Backend_impl.Device (Device_stream) (Slab)
+
+  let storage_mode_of_pool = Slab.storage_mode_of_pool
 
   (* Global state for Metal devices *)
   let metal_devices : Me.Device.t array = Me.Device.copy_all_devices ()
@@ -396,9 +386,14 @@ module Fresh () :
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
-  let opt_alloc_merge_buffer ?mode ~size_in_bytes device : unit =
-    device.merge_buffer :=
-      Some (alloc_buffer ?old_buffer:!(device.merge_buffer) ?mode ~size_in_bytes device)
+  (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow it
+     in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The merge
+     buffer holds a copy of [tn], so it inherits [tn]'s storage-mode classification. *)
+  let opt_alloc_merge_buffer ?mode ~size_in_bytes (device : device) : unit =
+    if device.merge_buffer_capacity < size_in_bytes then (
+      Slab.alloc_pool ?mode device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1;
+      device.merge_buffer_capacity <- size_in_bytes);
+    device.merge_buffer := Some { pool_id = merge_buffer_pool_id; offset = 0 }
 
   let device_to_device tn ~into_merge_buffer ~dst_ptr ~dst ~src_ptr ~src:_ =
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
@@ -417,13 +412,11 @@ module Fresh () :
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_ptr"
     | No, Some dst_ptr -> memcpy ~dst_ptr
     | Copy, _ ->
-        (* The merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode
-           classification: a GPU-only [tn] gets a private merge buffer. *)
         opt_alloc_merge_buffer
           ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
           ~size_in_bytes dst.device;
-        let buffer = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
-        memcpy ~dst_ptr:buffer.ptr
+        let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
 
   (* --- Compilation and Linking --- *)
   type code = {
@@ -805,7 +798,8 @@ using namespace metal;|} in
                 Me.ComputeCommandEncoder.set_bytes encoder ~bytes:bytes_ptr ~length:size ~index
             | Merge_buffer -> (
                 match !(dev.merge_buffer) with
-                | Some merge_buf -> Me.ComputeCommandEncoder.set_buffer encoder ~index merge_buf.ptr
+                | Some loc ->
+                    Me.ComputeCommandEncoder.set_buffer encoder ~index (Slab.resolve_pool dev loc)
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
                 (* TODO:We could tag logs with a run id. *)
@@ -837,19 +831,20 @@ using namespace metal;|} in
         work;
       }
 
-  let link prior_context code ctx_arrays =
+  let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
     let library = compile_metal_source ~name:code.func_name ~source:code.metal_source ~device in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
+    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
         ~lowered_bindings ~ctx_arrays
     in
     (lowered_bindings, task)
 
-  let link_batch prior_context code_batch ctx_arrays_opts =
+  let link_batch prior_context code_batch ctx_buffers_opts =
     let device = prior_context.device.dev in
     let library = compile_metal_source ~name:"batch" ~source:code_batch.metal_source ~device in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -859,7 +854,10 @@ using namespace metal;|} in
     let tasks =
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, kparams) ->
-              Option.map ctx_arrays_opts.(i) ~f:(fun ctx_arrays ->
+              Option.map ctx_buffers_opts.(i) ~f:(fun ctx_buffers ->
+                  let ctx_arrays =
+                    Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device)
+                  in
                   link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings
                     ~ctx_arrays)))
     in

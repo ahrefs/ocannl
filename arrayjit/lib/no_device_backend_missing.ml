@@ -19,7 +19,7 @@ struct
   let compile_batch ~names:_ _unit_bindings _optimizeds =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let link_compiled ~merge_buffer:_ ~runner_label:_ _ctx_arrays _procedure =
+  let link_compiled ~merge_buffer:_ ~resolve:_ ~runner_label:_ _ctx_arrays _procedure =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
   let sexp_of_buffer_ptr _buffer_ptr = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
@@ -28,19 +28,14 @@ struct
 
   let sexp_of_buffer _buffer = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  type nonrec ctx_arrays = buffer_ptr Backend_intf.ctx_arrays
-
-  let sexp_of_ctx_arrays _ctx_arrays = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
-
-  let alloc_buffer ?old_buffer:_ ?mode:_ ~size_in_bytes:_ () =
+  let alloc_pool_raw ~size_in_bytes:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let alloc_array ?mode:_ _prec ~dims:_ () =
+  let free_pool_raw = None
+
+  let memset_zero_raw _ptr ~offset:_ ~size_in_bytes:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
-  let alloc_zeros ?mode:_ _prec ~dims:_ () =
-    failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
-  let free_buffer = None
   let get_used_memory () = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
   let buffer_to_buffer ~dst:_ ~src:_ ~size_in_bytes:_ =

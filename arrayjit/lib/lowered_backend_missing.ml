@@ -25,34 +25,34 @@ struct
 
   let name = Config.name
 
-  type nonrec device = (buffer_ptr, dev, runner, event) Backend_intf.device
+  type nonrec device = (dev, runner, event) Backend_intf.device
 
   let sexp_of_device _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  type nonrec context = (buffer_ptr, dev, runner, event, Low_level.optimize_ctx) Backend_intf.context
+  type nonrec context = (dev, runner, event, Low_level.optimize_ctx) Backend_intf.context
 
   let sexp_of_context _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_buffer ?old_buffer:_ ?mode:_ ~size_in_bytes:_ _device =
+  let alloc_pool ?mode:_ _device ~pool_id:_ ~size_in_bytes:_ ~alignment:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_array ?mode:_ _prec ~dims:_ _device =
+  let free_pool = None
+
+  let memset_zero _device ~pool_id:_ ~offset:_ ~size_in_bytes:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let alloc_zeros ?mode:_ _prec ~dims:_ _device =
+  let resolve_pool _device _loc =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
-
-  let free_buffer = None
 
   let make_device _dev _runner ~ordinal:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let make_context ?ctx_arrays:_ ?optimize_ctx:_ _device =
+  let make_context ?ctx_buffers:_ ?optimize_ctx:_ _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
-  let make_child ?ctx_arrays:_ ?optimize_ctx:_ ?merge_buffer_node:_ _context =
+  let make_child ?ctx_buffers:_ ?optimize_ctx:_ ?merge_buffer_node:_ _context =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let get_name _device =
@@ -64,11 +64,6 @@ struct
   type nonrec buffer = buffer_ptr Backend_intf.buffer
 
   let sexp_of_buffer _buffer =
-    failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
-
-  type nonrec ctx_arrays = buffer_ptr Backend_intf.ctx_arrays
-
-  let sexp_of_ctx_arrays _ctx_arrays =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let sync _event =

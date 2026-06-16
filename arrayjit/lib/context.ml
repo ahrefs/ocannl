@@ -11,14 +11,13 @@ type backend_wrapper =
   | Wrapper : {
       backend :
         (module BI.Backend
-           with type buffer_ptr = 'buffer_ptr
-            and type dev = 'dev
+           with type dev = 'dev
             and type runner = 'runner
             and type event = 'event
             and type optimize_ctx = 'optimize_ctx);
-      device : ('buffer_ptr, 'dev, 'runner, 'event) BI.device;
+      device : ('dev, 'runner, 'event) BI.device;
       device_id : int;
-      context : ('buffer_ptr, 'dev, 'runner, 'event, 'optimize_ctx) BI.context;
+      context : ('dev, 'runner, 'event, 'optimize_ctx) BI.context;
     }
       -> backend_wrapper
 
@@ -227,7 +226,7 @@ let run ctx routine =
      stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
      primitive_ops). *)
   let (Wrapper run_wrapper) = ctx.backend_wrapper in
-  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_arrays tn in
+  let in_backend tn = Map.mem run_wrapper.context.BI.ctx_buffers tn in
   let missing_inputs =
     Set.filter routine.inputs ~f:(fun tn ->
         not (Set.mem ctx.initialized_nodes tn || in_backend tn))
@@ -294,7 +293,7 @@ let host_buffer (tn : Tn.t) =
 (** Whether [tn] has a device buffer allocated in this context. *)
 let mem ctx (tn : Tn.t) : bool =
   let (Wrapper wrapper) = ctx.backend_wrapper in
-  Map.mem wrapper.context.BI.ctx_arrays tn
+  Map.mem wrapper.context.BI.ctx_buffers tn
 
 (* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
    [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here

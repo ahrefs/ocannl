@@ -5,14 +5,23 @@
 open Base
 
 type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
-type 'buffer_ptr ctx_arrays = 'buffer_ptr Map.M(Tnode).t [@@deriving sexp_of]
+
+(** A backend-agnostic, deterministic per-device buffer location: a [pool_id] into the device's
+    backend-private [pool_id -> 'base] pool table, plus a byte [offset] within that pool. The
+    concrete backend pointer ([Metal.Buffer.t] / [CUdeviceptr] / [void*]) lives only in that private
+    table, so [buffer_loc] -- pure integers -- is stable across runs, diffable, and meaningful in
+    logs and [.expected] files. Phase-1 policy is one pool per tnode at [offset = 0], byte-for-byte
+    equivalent to per-tnode allocation. An alias (future work) is the parent's
+    [{ pool_id; offset = offset + delta }]. *)
+type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equal]
+
+type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
 
 module Buffer_types (Buffer_ptr : sig
   type buffer_ptr [@@deriving sexp_of]
 end) =
 struct
   type nonrec buffer = Buffer_ptr.buffer_ptr buffer [@@deriving sexp_of]
-  type nonrec ctx_arrays = Buffer_ptr.buffer_ptr ctx_arrays [@@deriving sexp_of]
 end
 
 module type Buffer = sig
@@ -23,21 +32,29 @@ module type Buffer = sig
   end)
 end
 
-module type Alloc_buffer = sig
-  include Buffer
-
+(** The backend slab allocator, replacing the per-tnode [Alloc_buffer] interface. The shared
+    allocator seam (see {!Backends}) mints deterministic per-device [pool_id]s and calls these
+    int-in / int-out primitives; the backend keeps the [pool_id -> 'base] table private. The
+    [pool_id -> 'base] resolution (then [base + offset]) stays inside the backend. *)
+module type Slab_alloc = sig
   type device
 
-  (** The optional [?mode] argument carries the tnode's memory mode so that backends can pick a
-      storage mode that matches whether the CPU needs to access the buffer (used by the Metal
-      backend to select private vs. shared storage). Backends that do not care ignore it. *)
+  val alloc_pool :
+    ?mode:Tnode.memory_mode ->
+    device ->
+    pool_id:int ->
+    size_in_bytes:int ->
+    alignment:int ->
+    unit
+  (** Allocates the slab for [pool_id] on [device]. The optional [?mode] carries the tnode's memory
+      mode so backends can pick a storage mode (Metal private vs. shared); backends that do not care
+      ignore it. *)
 
-  val alloc_buffer :
-    ?old_buffer:buffer -> ?mode:Tnode.memory_mode -> size_in_bytes:int -> device -> buffer
+  val free_pool : (device -> pool_id:int -> unit) option
+  (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC. *)
 
-  val alloc_array : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> device -> buffer_ptr
-  val alloc_zeros : ?mode:Tnode.memory_mode -> Ops.prec -> dims:int array -> device -> buffer_ptr
-  val free_buffer : (device -> buffer_ptr -> unit) option
+  val memset_zero : device -> pool_id:int -> offset:int -> size_in_bytes:int -> unit
+  (** Zero-initializes [size_in_bytes] at [base_of pool_id + offset]. *)
 end
 
 type merge_buffer_use = No | Copy [@@deriving sexp_of]
@@ -94,7 +111,7 @@ end
     [updating_for_merge_buffer] fields live on the device. The [updating_for] writer-event tracking
     and {!Backend.device_to_device} coherence are preserved (relocated here), now for cross-device
     coherence, and are forward-compatible with a future fixed-role prefetch/transfer runner. *)
-type ('buffer_ptr, 'dev, 'runner, 'event) device = {
+type ('dev, 'runner, 'event) device = {
   dev : 'dev;
   ordinal : int;
       (** The number of the represented backend's device, in the range from 0 to the number of the
@@ -103,29 +120,35 @@ type ('buffer_ptr, 'dev, 'runner, 'event) device = {
       (** A unique identifier among all device instances of all backends. Note that multiple
           [device_id] (distinct device instances) might refer to the same physical device. *)
   runner : 'runner;
-  merge_buffer : 'buffer_ptr buffer option ref;
-      (** Depending on backend implementations, either the currently used merge buffer, or the one
-          most recently scheduled. Note that the pointer can be reused for nodes that fit in an
-          already allocated buffer. *)
-  mutable allocated_buffer : 'buffer_ptr buffer option;
+  merge_buffer : buffer_loc option ref;
+      (** The merge buffer's reserved single-tenant pool location, or [None] if not yet allocated.
+          The slab can be reused (grown in place) for nodes that fit. *)
+  mutable merge_buffer_capacity : int;
+      (** Byte capacity of the reserved merge-buffer pool; drives the grow decision. *)
   updating_for : 'event Hashtbl.M(Tnode).t;
       (** The completion event for the most recent updating (writing to) a node via this device. *)
   mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
       (** The tensor node that was most recently scheduled to be in the device's merge buffer. See
           also {!field-updating_for}. *)
-  constant_buffer_cache : 'buffer_ptr Hashtbl.M(Tnode).t;
-      (** Per-device cache for read-only/constant buffer allocations. Also contains buffer/pointer
-          wrappers for hosted tnodes on unified memory systems. *)
+  constant_buffer_cache : buffer_loc Hashtbl.M(Tnode).t;
+      (** Per-device cache for read-only/constant buffer allocations. *)
+  mutable next_pool_id : int;
+      (** Deterministic per-device pool-id counter, advanced by the shared allocator seam in tnode
+          iteration order. Pool id 0 is reserved for the merge buffer; tnode pools start at 1. *)
 }
 
-let sexp_of_device _ _ _ _ device = [%sexp_of: string * int] ("device_id", device.device_id)
+let sexp_of_device _ _ _ device = [%sexp_of: string * int] ("device_id", device.device_id)
 let equal_device d1 d2 = d1.device_id = d2.device_id
 
-type ('buffer_ptr, 'dev, 'runner, 'event, 'optimize_ctx) context = {
-  device : ('buffer_ptr, 'dev, 'runner, 'event) device;
-  parent : ('buffer_ptr, 'dev, 'runner, 'event, 'optimize_ctx) context option;
-  ctx_arrays : 'buffer_ptr ctx_arrays;
-      (** This map contains arrays used in this context or an ancestor context. *)
+(** Pool id 0 on every device is reserved for the (single-tenant) merge buffer. *)
+let merge_buffer_pool_id = 0
+
+type ('dev, 'runner, 'event, 'optimize_ctx) context = {
+  device : ('dev, 'runner, 'event) device;
+  parent : ('dev, 'runner, 'event, 'optimize_ctx) context option;
+  ctx_buffers : ctx_buffers;
+      (** This map contains the deterministic buffer locations used in this context or an ancestor
+          context. *)
   finalized : Utils.atomic_bool;
   optimize_ctx : 'optimize_ctx;
   merge_buffer_node : Tnode.t option;
@@ -140,27 +163,32 @@ type ('buffer_ptr, 'dev, 'runner, 'event, 'optimize_ctx) context = {
 module type Device_types = sig
   include Device_config
 
-  type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, dev, runner, event, optimize_ctx) context [@@deriving sexp_of]
+  type nonrec device = (dev, runner, event) device [@@deriving sexp_of]
+  type nonrec context = (dev, runner, event, optimize_ctx) context [@@deriving sexp_of]
 end
 
 module type Device = sig
   include Device_types
-  include Alloc_buffer with type buffer_ptr := buffer_ptr and type device := device
+  include Slab_alloc with type device := device
+
+  val resolve_pool : device -> buffer_loc -> buffer_ptr
+  (** Resolves a {!buffer_loc} to the concrete backend pointer at [base_of pool_id + offset], looking
+      [pool_id] up in the device's backend-private pool table. The pointer never leaves the backend
+      layer in a shared type; this is the single resolution seam used by [link] / host transfers. *)
 
   val make_device : dev -> runner -> ordinal:int -> device
 
-  val make_context : ?ctx_arrays:ctx_arrays -> ?optimize_ctx:optimize_ctx -> device -> context
+  val make_context : ?ctx_buffers:ctx_buffers -> ?optimize_ctx:optimize_ctx -> device -> context
   (** Returns a context without a parent. *)
 
   val make_child :
-    ?ctx_arrays:ctx_arrays ->
+    ?ctx_buffers:ctx_buffers ->
     ?optimize_ctx:optimize_ctx ->
     ?merge_buffer_node:Tnode.t option ->
     context ->
     context
-  (** Returns a context with the same {!field:Backend_intf.context.device}, and
-      {!field:Backend_intf.context.ctx_arrays}, {!field:Backend_intf.context.optimize_ctx},
+  (** Returns a context with the same {!field:Backend_intf.context.device},
+      {!field:Backend_intf.context.ctx_buffers}, {!field:Backend_intf.context.optimize_ctx},
       {!field:Backend_intf.context.merge_buffer_node} if omitted, as the given context's, which is
       also the {!field:Backend_intf.context.parent}. *)
 

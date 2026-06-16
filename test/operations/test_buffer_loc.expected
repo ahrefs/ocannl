@@ -1,0 +1,9 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+run1: a              -> { pool_id = 1; offset = 0 }
+run1: b              -> { pool_id = 3; offset = 0 }
+run1: out            -> { pool_id = 2; offset = 0 }
+run2: a              -> { pool_id = 1; offset = 0 }
+run2: b              -> { pool_id = 3; offset = 0 }
+run2: out            -> { pool_id = 2; offset = 0 }
+done

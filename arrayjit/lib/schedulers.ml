@@ -58,7 +58,7 @@ module Multicore (Backend : For_add_scheduler) :
   end
 
   module Device_types = Device_types_ll (Device_config)
-  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
+  include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
   let sync { stream_state; is_done } =
@@ -244,16 +244,12 @@ module Sync (Backend : For_add_scheduler) = struct
   end
 
   module Device_types = Device_types_ll (Device_config)
-  include Device (Device_types) (Alloc_buffer_ignore_stream (Device_types) (Backend))
+  include Device (Device_types) (Make_slab (Device_types) (Backend))
   open Device_config
 
   let sync () = ()
   let is_done () = true
   let will_wait_for _context () = ()
-
-  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _device =
-    Backend.alloc_buffer ?old_buffer ?mode ~size_in_bytes ()
-
   let device : device = make_device CPU () ~ordinal:0
 
   let get_device ~ordinal =
