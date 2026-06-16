@@ -67,8 +67,13 @@ module Slab = struct
 
   let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     set_ctx device.dev.primary_context;
+    let key = (device.device_id, pool_id) in
+    (* Free any prior allocation under this key before replacing it, so device memory stays
+       equivalent to the pre-refactor path. Unique tnode pool ids never pre-exist; this only fires on
+       the reserved merge pool growing in place. *)
+    Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes:(max 1 size_in_bytes) in
-    Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:ptr
+    Hashtbl.set pools ~key ~data:ptr
 
   let free_pool =
     Some

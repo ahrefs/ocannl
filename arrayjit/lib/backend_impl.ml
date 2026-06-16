@@ -152,8 +152,14 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
   let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
   let alloc_pool ?mode:_ device ~pool_id ~size_in_bytes ~alignment:_ =
+    let key = (device.device_id, pool_id) in
+    (* Free any prior allocation under this key before replacing it (only the reserved merge pool is
+       ever re-allocated; unique tnode pool ids never pre-exist). Backends whose [free_pool_raw] is
+       [None] rely on GC and the dropped table entry, so this is a no-op for them. *)
+    Option.iter Raw.free_pool_raw ~f:(fun memfree ->
+        Option.iter (Hashtbl.find pools key) ~f:memfree);
     let ptr = Raw.alloc_pool_raw ~size_in_bytes in
-    Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:ptr
+    Hashtbl.set pools ~key ~data:ptr
 
   let free_pool =
     Option.map Raw.free_pool_raw ~f:(fun memfree device ~pool_id ->
