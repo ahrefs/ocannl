@@ -8,6 +8,14 @@ However, the **internal backend infrastructure** for multi-streaming still perme
 
 Related: [#320](https://github.com/ahrefs/ocannl/issues/320) (cross-stream sharing) is likely obsoleted by this cleanup.
 
+Companion: [backend-buffer-addressing.md](backend-buffer-addressing.md) does the *positive*
+consolidation that this cleanup's "merge `stream` into `device`" item (Proposed Change / AC 3)
+implies — folding the surviving `runner` / `merge_buffer` / `updating_for` fields onto `device`
+— and, on the same `backend_intf.ml` churn, replaces `buffer_ptr` with
+`buffer_loc = { pool_id; offset }`. This proposal stays scoped to *dead-code removal* (config
+type, `sharing` variants, `round_robin`, `suggested_num_streams`, residual hashtables); the fold
+and the buffer-addressing contract live there. Land together or this one first.
+
 ## Current State
 
 The stream infrastructure spans 8+ files with ~478 total occurrences of "stream" across `.ml` files. Key areas:

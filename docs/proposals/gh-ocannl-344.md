@@ -13,6 +13,49 @@ GitHub issue: [ahrefs/ocannl#344](https://github.com/ahrefs/ocannl/issues/344)
 - Tensor persistence (`lib/persistence.ml`, #373) landed; it restores into *hosted* buffers, orthogonal to device pooling.
 - Cited line numbers drifted; refreshed in place below as of 2026-06-12. The core design remains valid and is still the prerequisite for the alias-view work (task-e4003e5f) noted under "Relationship to other work".
 
+## Status update (2026-06-16): scope split — foundation extracted
+
+A design deep-dive re-sequenced this work. The behavior-preserving **foundation** — folding
+`stream` into `device`, replacing `buffer_ptr` with `buffer_loc = { pool_id; offset }`, moving
+the backend pointer into a device-private `pool_id → 'base` table (dropping the `'buffer_ptr`
+type parameter from the shared types), and introducing a shared **allocator seam** with a
+trivial one-pool-per-tnode policy — is extracted into a new proposal:
+[backend-buffer-addressing.md](backend-buffer-addressing.md). **#344 now depends on it.**
+
+This proposal is **trimmed to the pooling capability**: the bump-arena allocation policy and the
+Metal 31-binding fix, landing as a *policy swap behind the seam* that
+backend-buffer-addressing.md establishes. Key reframings from the deep-dive:
+
+- **The contract type and rename moved out.** AC 2 (`buffer_offset` type — now `buffer_loc`) and
+  AC 3 (`ctx_arrays → ctx_buffers`) are realized in backend-buffer-addressing.md. AC 1 splits:
+  the seam + trivial policy land there; only the **bump-arena policy body** stays here.
+- **Bump-only scope, no reuse (parity with today).** The allocator is a non-reuse bump
+  allocator: peak pool size = Σ(all materialized tnodes in a context), the same as today's
+  per-tnode allocation. This is *not* a memory-saving change. Liveness-based offset reuse and
+  eviction (the "thick allocator") are deferred — the forcing function is "Σ-tnodes exceeds
+  device memory while the working set would fit."
+- **Lifecycle collapses under bump + context-tied lifetimes.** No free-list, no slab
+  refcounting, no runtime exhaustion *policy* beyond "current slab full → append another." The
+  pool classes are: per-**context** working arena (freed at `finalize`, the only release point
+  under bump; nested via the parent-context chain) + per-**device** constant pool (dedup across
+  contexts) + merge/staging kept out of pools. Note this is per-*context*, not per-*stream*:
+  with one compute stream per device, a per-stream working pool would never free until device
+  teardown.
+- **Codegen change is Metal-only (AC 5 over-scoped).** Only Metal has a binding limit. CUDA/C
+  keep per-tnode pointer kernel params computed host-side as `pool_base + offset` at dispatch;
+  their generated `.c`/`.cu` stays byte-identical. Only Metal emits in-shader `pool_base +
+  offset`, binds pools once, and passes offsets as runtime args (`set_bytes` / offsets-table
+  buffer — never source constants, since `code` objects are reused across contexts).
+- **Deferred and decoupled.** AC 7 (`large_models` / uint64): cap each pool at ≤4 GB, keep
+  uint32 offsets, open another pool past that; only a single >4 GB tnode needs uint64 — defer
+  it, error clearly meanwhile. AC 9: keep merge buffers **out** of pools (pointer stability),
+  not "integrated."
+- **Retained Metal design wisdom (still in scope here):** untracked hazard mode for pool
+  buffers, storage-mode pool segregation (private vs shared), offsets-as-runtime-args.
+
+The acceptance criteria and design review below are kept for that retained capability; read AC
+1/2/3 and recommendation framing through the lens of this split.
+
 ## Goal
 
 Replace per-tensor-node individual buffer allocations with a pool allocator that consolidates tensors into a small number of large pool buffers shared across all backends (Metal, CUDA, C). Each tensor is addressed as a `(pool_id, byte_offset)` pair within a pool buffer, rather than holding its own device pointer. This solves Metal's ~31 argument buffer binding limit, reduces allocation overhead, improves memory locality, and provides a natural place to introduce configurable 32-bit vs 64-bit index arithmetic via the `large_models` setting.

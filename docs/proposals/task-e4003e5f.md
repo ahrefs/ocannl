@@ -2,8 +2,11 @@
 
 **Task**: task-e4003e5f (subtask 293a of [gh-ocannl-293](gh-ocannl-293.md))
 **Date**: 2026-06-12 (supersedes the 2026-04-25 harness elaboration)
-**Status**: Blocked on [#344](https://github.com/ahrefs/ocannl/issues/344) (universal pool
-allocator — see [gh-ocannl-344.md](gh-ocannl-344.md)); design ready otherwise.
+**Status**: Blocked on the `buffer_loc` addressing contract in
+[backend-buffer-addressing.md](backend-buffer-addressing.md) — **not** on the full #344 pool
+allocator. (Re-pointed 2026-06-16: the 2026-06-12 design deep-dive split #344, extracting the
+behavior-preserving addressing contract that alias views actually need from the bump-pooling
+capability that they don't.) Design ready otherwise.
 
 ## Goal
 
@@ -12,20 +15,29 @@ sliced sub-tensor via a set/get copy loop. Convert it to alias the parent's buff
 offset: the sub-tensor shares backing storage with its parent, and slicing performs no
 copy.
 
-## Why blocked on #344
+## Why blocked on the `buffer_loc` contract (not on #344 pooling)
 
 The current `'buffer_ptr buffer = { ptr; size_in_bytes }` (`backend_intf.ml:7`, verified
 2026-06-12) carries no offset; `buffer_ptr` is an opaque per-backend pointer. Without the
-#344 refactor (tensors addressed as `(pool_id, byte_offset)` within pool buffers), every
-backend would need ad-hoc offset bolted onto its pointer type (CUDA `CUdeviceptr +
-size_t`, Metal `MTLBuffer + NSUInteger`, C `void* + size_t`). With #344, alias resolution
-becomes one branch in the buffer-resolution layer: an alias is the parent's
-`(pool_id, offset + delta)`.
+addressing refactor (tensors addressed as `buffer_loc = { pool_id; offset }`), every backend
+would need ad-hoc offset bolted onto its pointer type (CUDA `CUdeviceptr + size_t`, Metal
+`MTLBuffer + NSUInteger`, C `void* + size_t`). With `buffer_loc`, alias resolution becomes one
+branch in the buffer-resolution layer: an alias is the parent's `{ pool_id; offset + delta }` —
+the same record, no per-backend offset plumbing.
 
-**Constraint to flag into #344's design**: the pool allocator's free/reclaim pass must be
-alias-aware — it must not reclaim a slab while alias entries reference it, and must skip
-alias entries themselves (they don't own backing storage). If #344's implementation
-doesn't account for this, this task effectively becomes a co-PR with it.
+That contract is delivered by [backend-buffer-addressing.md](backend-buffer-addressing.md)
+(behavior-preserving, lands before the bump-pooling capability). Alias views need **only** that
+contract — they do **not** need bump arenas, Metal binding-limit work, or any of the #344
+capability. So the gate is the addressing proposal, not #344.
+
+**Constraint to flag into backend-buffer-addressing.md / #344**: any pass that frees backing
+storage must be alias-aware — it must not free a slab/arena while alias entries reference it, and
+must skip alias entries themselves (they don't own backing storage). Under the phase-1 trivial
+allocator (one pool per tnode, no reclaim) and the alias's strong reference to its parent (see
+"Lifetime" below), this is GC-safe automatically. It becomes load-bearing when #344's bump
+arenas free a per-context arena: a parent context's arena must not be freed while a child
+context holds an alias into it — the parent-context reference chain already enforces this, but
+the arena-free pass in #344 must skip alias entries rather than double-free.
 
 ## Design
 
@@ -104,8 +116,9 @@ can be proven — requires write-tracking and is not proposed here.
 
 ## Open questions
 
-1. Confirm the gate: wait for #344, or absorb the minimal `buffer_ptr → (base, offset)`
-   plumbing here? Default: stay blocked on #344 (the milestone chain v0.7 → v1.0 already
-   implies the ordering).
+1. Gate **resolved** (2026-06-16): block on the `buffer_loc` contract in
+   [backend-buffer-addressing.md](backend-buffer-addressing.md), not the full #344 pooling. That
+   contract is itself a behavior-preserving refactor landing early, so the wait is short and the
+   "absorb minimal plumbing here" alternative is moot — the plumbing now has its own proposal.
 2. `alias_of` as a `Tnode.t` field vs side-table (default: field).
 3. Aliasing-as-semantics vs aliasing-as-optimization (default: semantics, documented).
