@@ -221,11 +221,13 @@ struct
         String.drop_suffix res 1 ^ "\\n"
       else res
     in
-    log_file_check ^^ string "fprintf(log_file, "
-    ^^ dquotes (string base_message_literal)
-    ^^ (if List.is_empty args_docs then empty else comma ^^ space)
-    ^^ separate (comma ^^ space) args_docs
-    ^^ rparen ^^ semi
+    log_file_check
+    ^^ group
+         (string "fprintf(log_file, "
+         ^^ dquotes (string base_message_literal)
+         ^^ (if List.is_empty args_docs then empty
+             else comma ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) args_docs))
+         ^^ rparen ^^ semi)
 end
 
 module C_syntax (B : C_syntax_config) = struct

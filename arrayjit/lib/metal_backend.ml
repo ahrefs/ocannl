@@ -679,9 +679,10 @@ module Fresh () :
       if List.is_empty args_docs then
         string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ rparen ^^ semi
       else
-        string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma ^^ space
-        ^^ separate (comma ^^ space) args_docs
-        ^^ rparen ^^ semi
+        group
+          (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc
+          ^^ comma ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) args_docs)
+          ^^ rparen ^^ semi)
   end
 
   let%diagn_sexp compile_metal_source ~name ~source ~device =

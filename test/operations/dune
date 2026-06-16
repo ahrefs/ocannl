@@ -613,6 +613,39 @@
  (preprocess
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
+(executable
+ (name test_log_stmt_format)
+ (modules test_log_stmt_format)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (target test_log_stmt_format.c.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:test_log_stmt_format.exe}
+     "--ocannl_backend=sync_cc"
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_debug_log_from_routines=true"
+     "--ocannl_log_level=2"
+     "--ocannl_build_files_prefix=test_log_stmt_format")
+    (copy
+     build_files/test_log_stmt_format/c_fwd.c
+     test_log_stmt_format.c.actual)))))
+
+(rule
+ (alias runtest)
+ (package neural_nets_lib)
+ (action
+  (diff
+   "test_log_stmt_format.c.expected"
+   "test_log_stmt_format.c.actual")))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

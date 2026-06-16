@@ -825,11 +825,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
         | Some doc -> doc :: args_docs
         | None -> args_docs (* Should not happen if kernel_log_param is Some *)
       in
-      string "printf("
-      ^^ dquotes (string format_string_literal)
-      ^^ comma ^^ space
-      ^^ separate (comma ^^ space) all_args
-      ^^ rparen ^^ semi
+      group
+        (string "printf("
+        ^^ dquotes (string format_string_literal)
+        ^^ comma ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) all_args)
+        ^^ rparen ^^ semi)
   end
 
   let%diagn2_sexp compile ~name bindings ({ Low_level.traced_store; _ } as lowered) =
