@@ -1,0 +1,4 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+c = [4 10]
+expected = [4 10]
