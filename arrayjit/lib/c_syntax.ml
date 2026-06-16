@@ -105,9 +105,31 @@ struct
       string "(int)(" ^^ doc ^^ string " * 1000.0)"
 
   let ident_blacklist =
-    let remove_paren s = String.substr_replace_all s ~pattern:"(" ~with_:"" in
+    (* Extract all maximal identifier-like substrings (starting with a letter or underscore,
+       consisting of alphanumeric chars and underscores) from an op syntax prefix string.
+       This correctly decomposes composite prefixes like "(fabsf(floorf(" into ["fabsf"; "floorf"]
+       rather than the old remove_paren approach that produced the wrong concatenation "fabsffloorf". *)
+    let extract_fn_names s =
+      let n = String.length s in
+      let result = ref [] in
+      let i = ref 0 in
+      while !i < n do
+        if Char.is_alpha s.[!i] || Char.equal s.[!i] '_' then begin
+          let j = ref !i in
+          while !j < n && (Char.is_alphanum s.[!j] || Char.equal s.[!j] '_') do
+            Int.incr j
+          done;
+          result := String.sub s ~pos:!i ~len:(!j - !i) :: !result;
+          i := !j
+        end else Int.incr i
+      done;
+      !result
+    in
+    let add_from_prefix functions prefix =
+      List.iter (extract_fn_names prefix) ~f:(fun name -> functions := Set.add !functions name)
+    in
     let functions = ref (Set.empty (module String)) in
-    let precs = Ops.[ byte; half; single; double ] in
+    let precs = Ops.[ byte; int32; uint32; half; bfloat16; fp8; single; double ] in
     List.iter precs ~f:(fun prec ->
         List.iter
           Ops.[ Where; FMA ]
@@ -115,7 +137,7 @@ struct
             let p, _, _, _ =
               try Ops.ternop_c_syntax prec op with Invalid_argument _ -> ("", "", "", "")
             in
-            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+            add_from_prefix functions p);
         List.iter
           Ops.
             [
@@ -141,7 +163,7 @@ struct
             let p, _, _ =
               try Ops.binop_c_syntax prec op with Invalid_argument _ -> ("", "", "")
             in
-            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+            add_from_prefix functions p);
         List.iter
           Ops.
             [
@@ -160,16 +182,30 @@ struct
               Neg;
               Tanh_approx;
               Not;
+              Uint4x32_to_prec_uniform1;
             ]
           ~f:(fun op ->
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
-            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p));
+            add_from_prefix functions p);
         List.iter
           Ops.[ Uint4x32_to_prec_uniform ]
           ~f:(fun op ->
             let p, _ = try Ops.vec_unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
-            if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
-    Set.to_list !functions
+            add_from_prefix functions p));
+    let c_keywords =
+      [
+        (* C89 keywords *)
+        "auto"; "break"; "case"; "char"; "const"; "continue"; "default"; "do"; "double"; "else";
+        "enum"; "extern"; "float"; "for"; "goto"; "if"; "int"; "long"; "register"; "return";
+        "short"; "signed"; "sizeof"; "static"; "struct"; "switch"; "typedef"; "union"; "unsigned";
+        "void"; "volatile"; "while";
+        (* C99 additions *)
+        "inline"; "restrict"; "_Bool"; "_Complex"; "_Imaginary";
+        (* Scaffolding names emitted by generated code that must not clash with variable names *)
+        "log_file"; "log_file_name"; "uint32_t"; "uint64_t";
+      ]
+    in
+    Set.to_list !functions @ c_keywords
 
   let ternop_syntax prec op v1 v2 v3 =
     let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in

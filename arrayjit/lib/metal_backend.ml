@@ -476,6 +476,17 @@ module Fresh () = struct
         "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
       ]
 
+    let ident_blacklist =
+      ident_blacklist
+      @ [
+          (* MSL address-space qualifiers and function attributes — highly plausible tensor labels *)
+          "kernel"; "device"; "constant"; "thread"; "threadgroup"; "threadgroup_imageblock";
+          (* MSL primitive types that differ from C and would shadow type declarations *)
+          "half"; "uint"; "ushort"; "uchar"; "ulong"; "bfloat";
+          (* MSL built-in variables *)
+          "gid"; "lid";
+        ]
+
     let metal_log_object_name = "os_log_default"
 
     let typ_of_prec = function
