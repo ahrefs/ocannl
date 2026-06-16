@@ -737,6 +737,16 @@ generalization of the einsum notation, allowing arbitrary permutations
 and reductions of axes. If no information is given, the default depends
 on the primitive operation, but it is almost always a pointwise
 operation.</p>
+<p><strong>Restriction</strong>: Using <code>~logic:&quot;@&quot;</code> with
+<code>/</code> (<code>div</code>) or <code>**</code> (<code>pow</code>)
+is a compile-time error: those combinations read like matrix inverse or
+matrix power but compute neither
+(e.g. <code>sum_k a[i,k] / b[k,j]</code>). Use <code>~logic:&quot;.&quot;</code>
+for pointwise division/power, or an explicit einsum string for a custom
+contraction. Other binary ops with <code>~logic:&quot;@&quot;</code> (including
+<code>*</code>, <code>+</code>, <code>max</code>, etc.) remain accepted
+— semiring-style contraction over non-multiply ops is intentional
+(cf. the tropical <code>@^+</code> operator).</p>
 <p>Here we see an example of tensor multiplication – extending matrix
 multiplication to arbitrary number of axes – multiplying <code>a</code>
 by <code>b</code> to get <code>c</code>. In <code>=:+</code>,
@@ -1005,10 +1015,12 @@ parameter would introduce:</p>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>      [%cd ~~(<span class="st">&quot;mlp infer&quot;</span>; mlp_result.forward)]</span>
 <span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
 <span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> callback (x, y) =</span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    Tn.set_values point [| x; y |];</span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    Train.run ctx result_routine;</span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>    Float.(mlp_result.@[<span class="dv">0</span>] &gt;= <span class="dv">0</span>.)</span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span></code></pre></div>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Context-mediated value access (gh-ocannl-333): write the input on-device, then read the</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co">       result through the context with the [At] accessors taking a [(context, tensor)] pair. *)</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">ignore</span> (Context.set_values ctx point [| x; y |] : Context.t);</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>    Train.run ctx result_routine;</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    Float.((ctx, mlp_result).@[<span class="dv">0</span>] &gt;= <span class="dv">0</span>.)</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span></code></pre></div>
 <p>For <code>%op</code>, the declaration is allowed anywhere. If there
 is a unit <code>()</code> parameter in the function, the scope of
 inline-declared tensors is delimited at that parameter. The tensors are

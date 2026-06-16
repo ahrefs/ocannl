@@ -599,7 +599,7 @@ from smaller parts - <strong>Partial updates</strong>:
 <span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop - reuse compiled routine *)</span></span>
 <span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="kw">for</span> epoch = <span class="dv">1</span> <span class="kw">to</span> <span class="dv">100</span> <span class="kw">do</span></span>
 <span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  Train.run ctx routine;</span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> epoch <span class="kw">mod</span> <span class="dv">10</span> = <span class="dv">0</span> <span class="kw">then</span> <span class="dt">Printf</span>.printf <span class="st">&quot;Loss: %.4f</span><span class="ch">\n</span><span class="st">&quot;</span> loss.@[<span class="dv">0</span>]</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">if</span> epoch <span class="kw">mod</span> <span class="dv">10</span> = <span class="dv">0</span> <span class="kw">then</span> <span class="dt">Printf</span>.printf <span class="st">&quot;Loss: %.4f</span><span class="ch">\n</span><span class="st">&quot;</span> (ctx, loss).@[<span class="dv">0</span>]</span>
 <span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="kw">done</span></span></code></pre></div>
 <h2 id="training-with-the-context-api-v0.6.1">Training with the Context
 API (v0.6.1+)</h2>
@@ -665,7 +665,7 @@ with Per-Step Data</h4>
 <span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Dynamic learning rate that decreases over time *)</span></span>
 <span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op learning_rate = <span class="fl">0.1</span> *. (<span class="fl">1.0</span> - (!@step_n /. !..steps)) <span class="kw">in</span></span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>  Train.set_hosted learning_rate.value;</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>  Train.set_materialized learning_rate.value;</span>
 <span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Compile with dynamic learning rate *)</span></span>
 <span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span></span>
@@ -673,27 +673,29 @@ with Per-Step Data</h4>
 <span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = Train.init_params ctx bindings loss <span class="kw">in</span></span>
 <span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> routine = Train.to_routine ctx bindings </span>
 <span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  </span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get reference to step counter *)</span></span>
-<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
-<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>  step_ref := <span class="dv">0</span>;</span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  </span>
-<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Training loop - update input data each step *)</span></span>
-<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">for</span> step = <span class="dv">1</span> <span class="kw">to</span> steps <span class="kw">do</span></span>
-<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Load next batch into tensors *)</span></span>
-<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x_data, y_data = get_batch step <span class="kw">in</span></span>
-<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>    Tn.set_values input_tensor.value x_data;</span>
-<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>    Tn.set_values target_tensor.value y_data;</span>
-<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>    </span>
-<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Run training step *)</span></span>
-<span id="cb19-32"><a href="#cb19-32" aria-hidden="true" tabindex="-1"></a>    Train.run ctx routine;</span>
-<span id="cb19-33"><a href="#cb19-33" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Int</span>.<span class="dt">incr</span> step_ref;</span>
-<span id="cb19-34"><a href="#cb19-34" aria-hidden="true" tabindex="-1"></a>    </span>
-<span id="cb19-35"><a href="#cb19-35" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> step <span class="kw">mod</span> <span class="dv">100</span> = <span class="dv">0</span> <span class="kw">then</span></span>
-<span id="cb19-36"><a href="#cb19-36" aria-hidden="true" tabindex="-1"></a>      <span class="dt">Printf</span>.printf <span class="st">&quot;Step %d, LR: %.4f, Loss: %.6f</span><span class="ch">\n</span><span class="st">&quot;</span> </span>
-<span id="cb19-37"><a href="#cb19-37" aria-hidden="true" tabindex="-1"></a>        step learning_rate.@[<span class="dv">0</span>] loss.@[<span class="dv">0</span>]</span>
-<span id="cb19-38"><a href="#cb19-38" aria-hidden="true" tabindex="-1"></a>  <span class="kw">done</span>;</span>
-<span id="cb19-39"><a href="#cb19-39" aria-hidden="true" tabindex="-1"></a>  ctx</span></code></pre></div>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Value access is context-mediated (gh-ocannl-333): read/write through the routine&#39;s context. *)</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = Context.context routine <span class="kw">in</span></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get reference to step counter *)</span></span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  step_ref := <span class="dv">0</span>;</span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Training loop - update input data each step *)</span></span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>  <span class="kw">for</span> step = <span class="dv">1</span> <span class="kw">to</span> steps <span class="kw">do</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Load next batch into tensors (on-device, in place) *)</span></span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> x_data, y_data = get_batch step <span class="kw">in</span></span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>    <span class="dt">ignore</span> (Context.set_values ctx input_tensor.value x_data : Context.t);</span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">ignore</span> (Context.set_values ctx target_tensor.value y_data : Context.t);</span>
+<span id="cb19-32"><a href="#cb19-32" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb19-33"><a href="#cb19-33" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Run training step *)</span></span>
+<span id="cb19-34"><a href="#cb19-34" aria-hidden="true" tabindex="-1"></a>    Train.run ctx routine;</span>
+<span id="cb19-35"><a href="#cb19-35" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Int</span>.<span class="dt">incr</span> step_ref;</span>
+<span id="cb19-36"><a href="#cb19-36" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb19-37"><a href="#cb19-37" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> step <span class="kw">mod</span> <span class="dv">100</span> = <span class="dv">0</span> <span class="kw">then</span></span>
+<span id="cb19-38"><a href="#cb19-38" aria-hidden="true" tabindex="-1"></a>      <span class="dt">Printf</span>.printf <span class="st">&quot;Step %d, LR: %.4f, Loss: %.6f</span><span class="ch">\n</span><span class="st">&quot;</span> </span>
+<span id="cb19-39"><a href="#cb19-39" aria-hidden="true" tabindex="-1"></a>        step (ctx, learning_rate).@[<span class="dv">0</span>] (ctx, loss).@[<span class="dv">0</span>]</span>
+<span id="cb19-40"><a href="#cb19-40" aria-hidden="true" tabindex="-1"></a>  <span class="kw">done</span>;</span>
+<span id="cb19-41"><a href="#cb19-41" aria-hidden="true" tabindex="-1"></a>  ctx</span></code></pre></div>
 <h3 id="batched-training-example">Batched Training Example</h3>
 <p><strong>PyTorch:</strong></p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> train_batched(model, data, labels, batch_size, epochs):</span>
@@ -743,7 +745,7 @@ with Per-Step Data</h4>
 <span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">for</span> batch = <span class="dv">0</span> <span class="kw">to</span> num_batches - <span class="dv">1</span> <span class="kw">do</span></span>
 <span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>      batch_ref := batch;</span>
 <span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>      Train.run ctx routine;</span>
-<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>      epoch_loss := !epoch_loss +. batch_loss.@[<span class="dv">0</span>]</span>
+<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>      epoch_loss := !epoch_loss +. (ctx, batch_loss).@[<span class="dv">0</span>]</span>
 <span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">done</span>;</span>
 <span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Printf</span>.printf <span class="st">&quot;Epoch %d, Avg Loss: %.6f</span><span class="ch">\n</span><span class="st">&quot;</span> </span>
 <span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>      epoch (!epoch_loss /. <span class="dt">float</span> num_batches)</span>
@@ -760,20 +762,17 @@ with Per-Step Data</h4>
 <div class="sourceCode" id="cb23"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> inference ctx model =</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Define inference computation - use %cd to avoid initialization *)</span></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd <span class="dt">output</span> = model { test_input } <span class="kw">in</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  Train.set_on_host <span class="dt">output</span>.value;</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  Train.set_materialized <span class="dt">output</span>.value;</span>
 <span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  </span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Compile inference routine *)</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Compile inference routine; value access goes through the returned context. *)</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx, routine = Context.compile ctx <span class="dt">output</span> IDX.empty <span class="kw">in</span></span>
 <span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> input_data -&gt;</span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Run inference *)</span></span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    Tn.set_values test_input.value input_data;</span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>    Train.run ctx infer_routine;</span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>  </span>
-<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Before OCANNL v0.7, to get all cells flattened: *)</span></span>
-<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>    Tn.get_values <span class="dt">output</span>.value</span>
-<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Or starting with the future OCANNL v0.7 to get a bigarray: *)</span></span>
-<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>    Context.get ctx <span class="dt">output</span>.value</span></code></pre></div>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Run inference: write the input on-device, run, read the output back on demand. *)</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">ignore</span> (Context.set_values ctx test_input.value input_data : Context.t);</span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> ctx = Context.run ctx routine <span class="kw">in</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">(* Flattened (unpadded) values via an on-demand device-to-host transfer (gh-ocannl-333): *)</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>    Context.get_values ctx <span class="dt">output</span>.value</span></code></pre></div>
 <h3 id="key-api-functions">Key API Functions</h3>
 <ul>
 <li><strong><code>Context.auto ()</code></strong>: Automatically selects
@@ -837,7 +836,7 @@ autograd/<strong>init</strong>.py</a>):</p>
 <span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 3. Walk computation graph backwards accumulating gradients</span></span></code></pre></div>
 <p><strong>OCANNL</strong> (from train.ml):</p>
 <div class="sourceCode" id="cb26"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> grad_update ?(setup_for_parallel = <span class="kw">false</span>) loss =</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  set_hosted loss.Tensor.value;</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  set_materialized loss.Tensor.value;</span>
 <span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* This just builds a computation graph, doesn&#39;t execute *)</span></span>
 <span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  [%cd</span>
 <span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>    loss.forward;           <span class="co">(* Run forward pass *)</span></span>

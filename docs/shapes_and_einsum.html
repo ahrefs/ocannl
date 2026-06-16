@@ -2186,7 +2186,7 @@ a +* &amp;quot;ij; jk =&amp;gt; ik&amp;quot; b
 &lt;div id=&quot;debugging&quot; class=&quot;remark&quot; title=&quot;Debugging Shapes&quot;&gt;
 &lt;p&gt;&lt;span&gt;When shapes don't match:&lt;/span&gt;&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;span&gt;Print tensor shapes: &lt;/span&gt;&lt;code&gt;Tensor.print ~force:true tensor&lt;/code&gt;&lt;br&gt;
+&lt;li&gt;&lt;span&gt;Print tensor shapes (values need a context: &lt;/span&gt;&lt;code&gt;Tensor.print ~ctx ~force:true tensor&lt;/code&gt;&lt;span&gt;, or &lt;/span&gt;&lt;code&gt;Train.printf ctx tensor&lt;/code&gt;&lt;span&gt;)&lt;/span&gt;&lt;br&gt;
 &lt;span id=&quot;premature-inference-finalize&quot; class=&quot;unrevealed&quot;&gt;&lt;span&gt;but not before all relevant tensor expressions are constructed&lt;/span&gt;&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;span&gt;Check axis kinds are correctly specified&lt;/span&gt;&lt;/li&gt;
 &lt;li&gt;&lt;span&gt;Verify broadcasting assumptions&lt;/span&gt;&lt;/li&gt;
