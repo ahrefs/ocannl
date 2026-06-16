@@ -646,6 +646,13 @@
    "test_log_stmt_format.c.expected"
    "test_log_stmt_format.c.actual")))
 
+(test
+ (name test_debug_name_collapse)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules test_debug_name_collapse)
+ (libraries base arrayjit.ir stdio))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)
