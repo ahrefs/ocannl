@@ -57,7 +57,7 @@ let () =
          stream's [updating_for_merge_buffer] immediately via [update_writer_event]. With the
          routine-returning form it stays unset until [transfer_a.schedule] is run. *)
       Stdio.printf "no eager side effect (updating_for_merge_buffer still None) = %b\n"
-        (Option.is_none src.stream.updating_for_merge_buffer);
+        (Option.is_none src.device.updating_for_merge_buffer);
       try
         let _ = Backend.link transfer_a.context consumer_code in
         Stdio.printf "UNEXPECTED: mismatched link did not raise\n"

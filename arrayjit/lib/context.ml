@@ -18,9 +18,7 @@ type backend_wrapper =
             and type optimize_ctx = 'optimize_ctx);
       device : ('buffer_ptr, 'dev, 'runner, 'event) BI.device;
       device_id : int;
-      stream : ('buffer_ptr, 'dev, 'runner, 'event) BI.stream;
-      context :
-        ('buffer_ptr, ('buffer_ptr, 'dev, 'runner, 'event) BI.stream, 'optimize_ctx) BI.context;
+      context : ('buffer_ptr, 'dev, 'runner, 'event, 'optimize_ctx) BI.context;
     }
       -> backend_wrapper
 
@@ -81,11 +79,10 @@ let create_from_backend_name ~device_id backend_name =
   let backend_module = Backends.fresh_backend ~backend_name () in
   let module Backend = (val backend_module : Ir.Backend_intf.Backend) in
   let device = Backend.get_device ~ordinal:device_id in
-  let stream = Backend.new_stream device in
-  let context = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) stream in
+  let context = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) device in
 
   let backend_wrapper =
-    Wrapper { backend = (module Backend); device; device_id; stream; context }
+    Wrapper { backend = (module Backend); device; device_id; context }
   in
 
   {
@@ -331,11 +328,11 @@ let to_host ctx (tn : Tn.t) : Nd.t =
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
-  Backend.await wrapper.stream;
+  Backend.await wrapper.context.device;
   let nd = host_buffer tn in
   if Backend.to_host wrapper.context tn nd then (
     (* Ensure the device-to-host copy itself has completed before the host buffer is read. *)
-    Backend.await wrapper.stream;
+    Backend.await wrapper.context.device;
     nd)
   else
     match Ir.Host_inits.find tn with
@@ -349,7 +346,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
         (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
         match Hashtbl.find for_print_proxies tn.Tn.id with
         | Some proxy when Backend.to_host wrapper.context proxy nd ->
-            Backend.await wrapper.stream;
+            Backend.await wrapper.context.device;
             nd
         | _ ->
             raise
@@ -369,7 +366,7 @@ let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
       let updated_wrapper = Wrapper { wrapper with context = new_backend_context } in
       { ctx with backend_wrapper = updated_wrapper }
   in
-  Backend.await wrapper.stream;
+  Backend.await wrapper.context.device;
   mark_initialized ctx (Set.singleton (module Tn) tn)
 
 let get_values ctx (tn : Tn.t) : float array =

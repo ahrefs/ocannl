@@ -15,7 +15,7 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 open Backend_intf
 
 module type No_device_buffer_and_copying = sig
-  include Alloc_buffer with type stream := unit
+  include Alloc_buffer with type device := unit
 
   val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
 
@@ -102,8 +102,7 @@ module Device_types (Device_config : Device_config) = struct
   include Device_config
 
   type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, stream, optimize_ctx) context [@@deriving sexp_of]
+  type nonrec context = (buffer_ptr, dev, runner, event, optimize_ctx) context [@@deriving sexp_of]
 end
 
 module Device_types_ll (Device_config : Device_config_common) = struct
@@ -114,8 +113,9 @@ module Device_types_ll (Device_config : Device_config_common) = struct
   let empty_optimize_ctx () = { Low_level.computations = Hashtbl.create (module Tnode) }
 
   type nonrec device = (buffer_ptr, dev, runner, event) device [@@deriving sexp_of]
-  type nonrec stream = (buffer_ptr, dev, runner, event) stream [@@deriving sexp_of]
-  type nonrec context = (buffer_ptr, stream, Low_level.optimize_ctx) context [@@deriving sexp_of]
+
+  type nonrec context = (buffer_ptr, dev, runner, event, Low_level.optimize_ctx) context
+  [@@deriving sexp_of]
 end
 
 let next_global_device_id : Utils.atomic_int = Atomic.make 0
@@ -125,39 +125,31 @@ module Device
     (Alloc_buffer :
       Alloc_buffer
         with type buffer_ptr := Device_types.buffer_ptr
-         and type stream := Device_types.stream) =
+         and type device := Device_types.device) =
 struct
   include Device_types
   include Alloc_buffer
 
-  let make_device dev ~ordinal =
+  let make_device dev runner ~ordinal =
     let device_id = Atomic.fetch_and_add next_global_device_id 1 in
     {
       dev;
       ordinal;
       device_id;
+      runner;
+      merge_buffer = ref None;
+      allocated_buffer = None;
+      updating_for = Hashtbl.create (module Tnode);
+      updating_for_merge_buffer = None;
       constant_buffer_cache = Hashtbl.create (module Tnode);
-      streams = Utils.weak_create ();
     }
 
-  let make_stream device runner =
-    Utils.register_new device.streams ~grow_by:8 (fun stream_id ->
-        {
-          device;
-          runner;
-          merge_buffer = ref None;
-          stream_id;
-          allocated_buffer = None;
-          updating_for = Hashtbl.create (module Tnode);
-          updating_for_merge_buffer = None;
-        })
+  let get_name device = [%string "%{name}:%{device.ordinal#Int}:%{device.device_id#Int}"]
 
-  let get_name stream = [%string "%{name}:%{stream.device.ordinal#Int}:%{stream.stream_id#Int}"]
-
-  let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?optimize_ctx stream =
+  let make_context ?(ctx_arrays = Map.empty (module Tnode)) ?optimize_ctx device =
     let optimize_ctx = Option.value_or_thunk optimize_ctx ~default:empty_optimize_ctx in
     {
-      stream;
+      device;
       parent = None;
       ctx_arrays;
       finalized = Atomic.make false;
@@ -172,7 +164,7 @@ struct
       Option.value merge_buffer_node ~default:parent.merge_buffer_node
     in
     {
-      stream = parent.stream;
+      device = parent.device;
       parent = Some parent;
       ctx_arrays;
       finalized = Atomic.make false;
@@ -223,7 +215,7 @@ module type Lowered_no_device_backend = sig
     procedure ->
     Indexing.lowered_bindings * Task.t
   (** The [ctx_arrays] already contain the arrays of the resulting context. [runner_label] will be
-      [get_name stream] of the stream holding the resulting [ctx_arrays]. *)
+      [get_name device] of the device holding the resulting [ctx_arrays]. *)
 
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
@@ -256,7 +248,7 @@ end
 module type With_scheduler = sig
   include Backend_device_common
 
-  val schedule_task : stream -> Task.t -> unit
+  val schedule_task : device -> Task.t -> unit
 end
 
 (** Lowered-level backend interface: implementation-facing API for device-based (GPU, or CPU after
@@ -299,15 +291,15 @@ end
 
 module Alloc_buffer_ignore_stream
     (Device_types : Device_types)
-    (Backend : Alloc_buffer with type buffer_ptr = Device_types.buffer_ptr and type stream := unit) :
-  Alloc_buffer with type buffer_ptr = Backend.buffer_ptr and type stream = Device_types.stream =
+    (Backend : Alloc_buffer with type buffer_ptr = Device_types.buffer_ptr and type device := unit) :
+  Alloc_buffer with type buffer_ptr = Backend.buffer_ptr and type device = Device_types.device =
 struct
   include Device_types
 
-  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _stream =
+  let alloc_buffer ?old_buffer ?mode ~size_in_bytes _device =
     Backend.alloc_buffer ?old_buffer ?mode ~size_in_bytes ()
 
-  let alloc_array ?mode prec ~dims _stream = Backend.alloc_array ?mode prec ~dims ()
-  let alloc_zeros ?mode prec ~dims _stream = Backend.alloc_zeros ?mode prec ~dims ()
-  let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _stream ptr -> memfree () ptr)
+  let alloc_array ?mode prec ~dims _device = Backend.alloc_array ?mode prec ~dims ()
+  let alloc_zeros ?mode prec ~dims _device = Backend.alloc_zeros ?mode prec ~dims ()
+  let free_buffer = Option.map Backend.free_buffer ~f:(fun memfree _device ptr -> memfree () ptr)
 end
