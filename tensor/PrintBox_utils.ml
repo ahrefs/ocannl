@@ -99,32 +99,46 @@ type table_row_spec =
 
 let nolines = String.substr_replace_all ~pattern:"\n" ~with_:";"
 
+let render_group result_label group_rows =
+  let titles = List.map group_rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
+  let times = List.map group_rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
+  let sizes = List.map group_rows ~f:(fun (Benchmark { mem_in_bytes; _ }) -> mem_in_bytes) in
+  let max_time = List.reduce_exn ~f:Float.max times in
+  let max_size = List.reduce_exn ~f:Int.max sizes in
+  let speedups = List.map times ~f:(fun x -> max_time /. x) in
+  let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
+  let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
+  let results =
+    List.map group_rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result)
+  in
+  PrintBox.(
+    record
+      [
+        ("Benchmarks", vlist_map ~bars:false line titles);
+        ("Time in sec", vlist_map ~bars:false float_ times);
+        ("Memory in bytes", vlist_map ~bars:false int_ sizes);
+        ("Speedup", vlist_map ~bars:false small_float speedups);
+        ("Mem gain", vlist_map ~bars:false small_float mem_gains);
+        (result_label, vlist_map ~bars:false line results);
+      ])
+
 let table rows =
   if List.is_empty rows then PrintBox.empty
   else
-    let titles = List.map rows ~f:(fun (Benchmark { bench_title; _ }) -> nolines bench_title) in
-    let times = List.map rows ~f:(fun (Benchmark { time_in_sec; _ }) -> time_in_sec) in
-    let sizes = List.map rows ~f:(fun (Benchmark { mem_in_bytes; _ }) -> mem_in_bytes) in
-    let max_time = List.reduce_exn ~f:Float.max times in
-    let max_size = List.reduce_exn ~f:Int.max sizes in
-    let speedups = List.map times ~f:(fun x -> max_time /. x) in
-    let mem_gains = List.map sizes ~f:Float.(fun x -> of_int max_size / of_int x) in
-    let small_float = Fn.compose PrintBox.line (Printf.sprintf "%.3f") in
-    let results =
-      List.map rows ~f:(fun (Benchmark { result; _ }) -> nolines @@ Sexp.to_string_hum result)
+    let groups =
+      List.group rows ~break:(fun (Benchmark { result_label = a; _ }) (Benchmark { result_label = b; _ }) ->
+        not (String.equal a b))
     in
-    let result_labels =
-      List.map rows ~f:(fun (Benchmark { result_label; _ }) -> nolines result_label)
+    let group_boxes =
+      List.map groups ~f:(fun group ->
+        let result_label =
+          match List.hd_exn group with Benchmark { result_label; _ } -> nolines result_label
+        in
+        render_group result_label group)
     in
-    (* TODO(#140): partition by unique result_label and output a vlist of records. *)
     PrintBox.(
       frame
-      @@ record
-           [
-             ("Benchmarks", vlist_map ~bars:false line titles);
-             ("Time in sec", vlist_map ~bars:false float_ times);
-             ("Memory in bytes", vlist_map ~bars:false int_ sizes);
-             ("Speedup", vlist_map ~bars:false small_float speedups);
-             ("Mem gain", vlist_map ~bars:false small_float mem_gains);
-             (List.hd_exn result_labels, vlist_map ~bars:false line results);
-           ])
+      @@
+      match group_boxes with
+      | [ single ] -> single
+      | multiple -> vlist ~bars:true multiple)
