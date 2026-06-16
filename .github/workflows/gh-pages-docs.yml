@@ -17,7 +17,7 @@ jobs:
 
       - name: Install slipshow
         run: |
-          wget https://github.com/panglesd/slipshow/releases/download/v0.6.0/slipshow-linux-x86_64.tar
+          wget https://github.com/panglesd/slipshow/releases/download/v0.11.0/slipshow-linux-x86_64.tar
           tar -xvf slipshow-linux-x86_64.tar --strip-components=1
           sudo mv slipshow /usr/local/bin/slipshow
 

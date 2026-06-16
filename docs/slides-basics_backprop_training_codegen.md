@@ -471,6 +471,19 @@ Half-moons scatterplot and decision boundary:
 >   * The order of computation is reversed: $x \rightarrow y(x) \rightarrow f(y(x))$ but $df \rightarrow \frac{df}{dy} \rightarrow \frac{df}{dx}$.
 >   * The composition order remains bottom-up; we prepend the $\frac{df}{dy}$ code to the backward code of $y$ to build the backward code for $f$.
 
+{pause}
+
+```=mermaid
+flowchart LR
+    subgraph fwd ["Forward pass"]
+        x --> yx["y(x)"] --> fyx["f(y(x))"]
+    end
+    subgraph bwd ["Backward pass"]
+        df["df"] --> dfy["df/dy"] --> dfx["df/dx"]
+    end
+    fyx -.->|produces| df
+```
+
 {pause .example}
 > **Example**: For $f(t(t_1, t_2))$ where $t = t_1 \cdot t_2$, let $g = \frac{df}{dt}$ be the incoming gradient.
 >   * $\frac{dt}{dt_1} = t_2$, therefore $\frac{df}{dt_1} = \frac{df}{dt} \cdot \frac{dt}{dt_1} = g \cdot t_2$.
