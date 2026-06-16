@@ -160,6 +160,7 @@ struct
               Neg;
               Tanh_approx;
               Not;
+              Uint4x32_to_prec_uniform1;
             ]
           ~f:(fun op ->
             let p, _ = try Ops.unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
@@ -169,7 +170,20 @@ struct
           ~f:(fun op ->
             let p, _ = try Ops.vec_unop_c_syntax prec op with Invalid_argument _ -> ("", "") in
             if String.is_suffix p ~suffix:"(" then functions := Set.add !functions (remove_paren p)));
-    Set.to_list !functions
+    let c_keywords =
+      [
+        (* C89 keywords *)
+        "auto"; "break"; "case"; "char"; "const"; "continue"; "default"; "do"; "double"; "else";
+        "enum"; "extern"; "float"; "for"; "goto"; "if"; "int"; "long"; "register"; "return";
+        "short"; "signed"; "sizeof"; "static"; "struct"; "switch"; "typedef"; "union"; "unsigned";
+        "void"; "volatile"; "while";
+        (* C99 additions *)
+        "inline"; "restrict"; "_Bool"; "_Complex"; "_Imaginary";
+        (* Scaffolding names emitted by generated code that must not clash with variable names *)
+        "log_file"; "log_file_name"; "uint32_t"; "uint64_t";
+      ]
+    in
+    Set.to_list !functions @ c_keywords
 
   let ternop_syntax prec op v1 v2 v3 =
     let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in

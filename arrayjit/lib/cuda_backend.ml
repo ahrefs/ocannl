@@ -325,6 +325,13 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
         not @@ Utils.get_global_flag ~default:false ~arg_name:"prefer_backend_uniformity"
     end)
 
+    let ident_blacklist =
+      ident_blacklist
+      @ [
+          (* CUDA built-in variables — would shadow per-thread or per-block context *)
+          "threadIdx"; "blockIdx"; "blockDim"; "gridDim"; "warpSize";
+        ]
+
     let main_kernel_prefix = "extern \"C\" __global__"
 
     let kernel_prep_line =
