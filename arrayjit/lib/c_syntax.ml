@@ -129,7 +129,7 @@ struct
       List.iter (extract_fn_names prefix) ~f:(fun name -> functions := Set.add !functions name)
     in
     let functions = ref (Set.empty (module String)) in
-    let precs = Ops.[ byte; half; single; double ] in
+    let precs = Ops.[ byte; int32; uint32; half; bfloat16; fp8; single; double ] in
     List.iter precs ~f:(fun prec ->
         List.iter
           Ops.[ Where; FMA ]
