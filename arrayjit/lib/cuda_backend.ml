@@ -343,10 +343,10 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
 
     (* Use native CUDA types for loop indices and arguments instead of stdint.h types *)
     let loop_index_type =
-      if Utils.settings.big_models then "unsigned long long " else "unsigned int "
+      if Utils.settings.large_models then "unsigned long long " else "unsigned int "
 
     let arg_int_prefix =
-      if Utils.settings.big_models then "const unsigned long long " else "const unsigned int "
+      if Utils.settings.large_models then "const unsigned long long " else "const unsigned int "
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"

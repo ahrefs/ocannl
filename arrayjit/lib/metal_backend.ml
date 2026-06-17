@@ -466,7 +466,7 @@ module Fresh () = struct
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
 
     let arg_int_prefix =
-      if Utils.settings.big_models then "const uint64_t& " else "const uint32_t& "
+      if Utils.settings.large_models then "const uint64_t& " else "const uint32_t& "
 
     let extra_args =
       [

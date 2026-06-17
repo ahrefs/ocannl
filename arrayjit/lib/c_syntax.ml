@@ -88,8 +88,8 @@ struct
   let kernel_prep_line = ""
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
-  let arg_int_prefix = if Utils.settings.big_models then "const uint64_t " else "const uint32_t "
-  let loop_index_type = if Utils.settings.big_models then "uint64_t " else "uint32_t "
+  let arg_int_prefix = if Utils.settings.large_models then "const uint64_t " else "const uint32_t "
+  let loop_index_type = if Utils.settings.large_models then "uint64_t " else "uint32_t "
   let extra_args = []
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec

@@ -63,7 +63,7 @@ default_prng_variant=light
 # If true, use uint64 for indexing arithmetic. If false (default), use uint32 for indexing arithmetic.
 # This affects all backends' kernel index parameters and local index variables.
 # Set to true for models with tensors larger than 2^32 elements.
-big_models=false
+large_models=false
 
 # If non-empty, generated code files are placed in build_files/<prefix>/ instead of
 # build_files/. This prevents filename collisions when multiple test executables run

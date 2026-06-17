@@ -20,9 +20,11 @@ type settings = {
   mutable default_prng_variant : string;
       (** The default variant of threefry4x32 PRNG to use. Options: "crypto" (20 rounds) or "light"
           (2 rounds). Defaults to "light" for better performance. *)
-  mutable big_models : bool;
+  mutable large_models : bool;
       (** If true, use uint64 for indexing arithmetic. If false, use uint32 for indexing arithmetic.
-          This affects all backends' kernel index parameters and local index variables. *)
+          This affects all backends' kernel index parameters and local index variables, and gates the
+          per-pool offset width (uint32 caps a pool at 4 GB; see the pool allocator). Decoupled in
+          intent from element indexing within a single tensor, though both currently follow it. *)
 }
 [@@deriving sexp]
 
@@ -35,7 +37,7 @@ let settings =
     print_decimals_precision = 2;
     check_half_prec_constants_cutoff = Some (2. **. 14.);
     default_prng_variant = "light";
-    big_models = false;
+    large_models = false;
   }
 
 let accessed_global_args = Hash_set.create (module String)
@@ -51,7 +53,7 @@ let known_config_keys =
       (* Utils.settings *)
       "log_level"; "debug_log_from_routines"; "output_debug_files_in_build_directory";
       "fixed_state_for_init"; "print_decimals_precision"; "check_half_prec_constants_cutoff";
-      "default_prng_variant"; "big_models";
+      "default_prng_variant"; "large_models";
       (* Cleanup / startup *)
       "build_files_prefix"; "clean_up_build_files_on_startup"; "clean_up_log_files_on_startup";
       "never_capture_stdout";
@@ -526,7 +528,7 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant";
-  settings.big_models <- get_global_flag ~default:false ~arg_name:"big_models"
+  settings.large_models <- get_global_flag ~default:false ~arg_name:"large_models"
 
 let () = restore_settings ()
 
