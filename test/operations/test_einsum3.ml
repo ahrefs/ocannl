@@ -1,8 +1,13 @@
-(** Tests for ternary einsum: einsum3 and where with einsum spec. *)
+(** Tests for ternary einsum: einsum3 and where with einsum spec.
+
+    Notation: OCANNL's single-char einsum specs ("ij;jk=>ik") treat all named
+    axes as output axes. Tensors must be shaped accordingly (output-only, no
+    input_dims). For matrices use output_dims:=[rows; cols], e.g. 2x2 as [2;2]. *)
 
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
+
 let get_vals ctx t = Context.get_values ctx t.Tensor.value
 
 let get_grad ctx t =
@@ -14,24 +19,26 @@ let fmt_arr vals =
 (* ---- Test 1: einsum3 chain contraction matches binary chain (falsifier test) ---- *)
 let () =
   Stdio.printf "Test 1: chain contraction\n";
-  (* a = [[1,2],[3,4]] stored i=2(output), j=2(input), b = swap, c = identity *)
-  (* Ternary: sum_{j,k} a[i,j]*b[j,k]*c[k,m]; Binary: (a @ b) @ c *)
+  (* a[i,j], b[j,k], c[k,m]: all output-only 2x2 matrices. *)
+  (* Ternary: sum_{j,k} a[i,j]*b[j,k]*c[k,m] = chain contraction. *)
+  (* a = [[1,2],[3,4]], b = swap [[0,1],[1,0]], c = identity [[1,0],[0,1]] *)
+  (* Result = a*b*c = a*swap = [[2,1],[4,3]] *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let a = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+  let a = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  let b = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~output_dims:[ 2; 2 ] () in
+  let c = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   let tern = Operation.einsum3 "ij;jk;km=>im" ~grad_spec:Prohibit_grad a b c () in
   let ctx = Train.forward_once ~output_cd_file:false ctx tern in
   Stdio.printf "einsum3 = %s\n" (fmt_arr (get_vals ctx tern));
 
   Tensor.unsafe_reinitialize ();
   let ctx2 = Context.auto () in
-  let a2 = NTDSL.ndarray [| 1.; 2.; 3.; 4. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b2 = NTDSL.ndarray [| 0.; 1.; 1.; 0. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c2 = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let ab2 = Operation.einsum "ij;jk=>ik" a2 b2 ~grad_spec:Prohibit_grad () in
-  let bin = Operation.einsum "ik;km=>im" ab2 c2 ~grad_spec:Prohibit_grad () in
+  let a2 = NTDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  let b2 = NTDSL.ndarray [| 0.; 1.; 1.; 0. |] ~output_dims:[ 2; 2 ] () in
+  let c2 = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let ab2 = Operation.einsum "ij;jk=>ik" ~grad_spec:Prohibit_grad a2 b2 () in
+  let bin = Operation.einsum "ik;km=>im" ~grad_spec:Prohibit_grad ab2 c2 () in
   let ctx2 = Train.forward_once ~output_cd_file:false ctx2 bin in
   Stdio.printf "binary chain = %s\n" (fmt_arr (get_vals ctx2 bin));
   Stdio.printf "chain contraction match: %b\n"
@@ -40,14 +47,15 @@ let () =
 (* ---- Test 2: batched einsum3 matches binary chain ---- *)
 let () =
   Stdio.printf "\nTest 2: batched chain contraction\n";
+  (* batch=2, i=j=k=m=2 output-only matrices stacked along batch dim *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let a = PDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |]
-            ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+            ~output_dims:[ 2; 2; 2 ] () in
   let b = PDSL.ndarray [| 0.; 1.; 1.; 0.; 1.; 0.; 0.; 1. |]
-            ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+            ~output_dims:[ 2; 2; 2 ] () in
   let c = PDSL.ndarray [| 1.; 0.; 0.; 1.; 0.; 1.; 1.; 0. |]
-            ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+            ~output_dims:[ 2; 2; 2 ] () in
   let tern = Operation.einsum3 "bij;bjk;bkm=>bim" ~grad_spec:Prohibit_grad a b c () in
   let ctx = Train.forward_once ~output_cd_file:false ctx tern in
   Stdio.printf "batched einsum3 = %s\n" (fmt_arr (get_vals ctx tern));
@@ -55,13 +63,13 @@ let () =
   Tensor.unsafe_reinitialize ();
   let ctx2 = Context.auto () in
   let a2 = NTDSL.ndarray [| 1.; 2.; 3.; 4.; 5.; 6.; 7.; 8. |]
-             ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+             ~output_dims:[ 2; 2; 2 ] () in
   let b2 = NTDSL.ndarray [| 0.; 1.; 1.; 0.; 1.; 0.; 0.; 1. |]
-             ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+             ~output_dims:[ 2; 2; 2 ] () in
   let c2 = NTDSL.ndarray [| 1.; 0.; 0.; 1.; 0.; 1.; 1.; 0. |]
-             ~batch_dims:[ 2 ] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let ab2 = Operation.einsum "bij;bjk=>bik" a2 b2 ~grad_spec:Prohibit_grad () in
-  let bin = Operation.einsum "bik;bkm=>bim" ab2 c2 ~grad_spec:Prohibit_grad () in
+             ~output_dims:[ 2; 2; 2 ] () in
+  let ab2 = Operation.einsum "bij;bjk=>bik" ~grad_spec:Prohibit_grad a2 b2 () in
+  let bin = Operation.einsum "bik;bkm=>bim" ~grad_spec:Prohibit_grad ab2 c2 () in
   let ctx2 = Train.forward_once ~output_cd_file:false ctx2 bin in
   Stdio.printf "batched binary chain = %s\n" (fmt_arr (get_vals ctx2 bin));
   Stdio.printf "batched chain contraction match: %b\n"
@@ -70,12 +78,12 @@ let () =
 (* ---- Test 3: einsum3 gradient agreement with binary chain ---- *)
 let () =
   Stdio.printf "\nTest 3: gradient agreement\n";
-  (* a = I, b = swap, c = I: (a@b)@c = swap. With loss=sum(out), grads should match. *)
+  (* a=I, b=swap, c=I; result = a*b*c = swap. With loss=sum(out), grads should match. *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let a = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+  let a = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let b = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~output_dims:[ 2; 2 ] () in
+  let c = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   Train.set_materialized (Option.value_exn ~here:[%here] a.diff).grad;
   Train.set_materialized (Option.value_exn ~here:[%here] b.diff).grad;
   Train.set_materialized (Option.value_exn ~here:[%here] c.diff).grad;
@@ -90,14 +98,14 @@ let () =
 
   Tensor.unsafe_reinitialize ();
   let ctx2 = Context.auto () in
-  let a2 = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b2 = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c2 = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+  let a2 = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let b2 = PDSL.ndarray [| 0.; 1.; 1.; 0. |] ~output_dims:[ 2; 2 ] () in
+  let c2 = PDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   Train.set_materialized (Option.value_exn ~here:[%here] a2.diff).grad;
   Train.set_materialized (Option.value_exn ~here:[%here] b2.diff).grad;
   Train.set_materialized (Option.value_exn ~here:[%here] c2.diff).grad;
-  let ab2 = Operation.einsum "ij;jk=>ik" a2 b2 ~grad_spec:If_needed () in
-  let bin = Operation.einsum "ik;km=>im" ab2 c2 ~grad_spec:Require_grad () in
+  let ab2 = Operation.einsum "ij;jk=>ik" ~grad_spec:If_needed a2 b2 () in
+  let bin = Operation.einsum "ik;km=>im" ~grad_spec:Require_grad ab2 c2 () in
   let ctx2 = Train.update_once ~output_cd_file:false ctx2 bin in
   let ga_bin = get_grad ctx2 a2 in
   let gb_bin = get_grad ctx2 b2 in
@@ -112,6 +120,8 @@ let () =
 (* ---- Test 4: where with einsum spec "i;i;i=>i" equals pointwise where ---- *)
 let () =
   Stdio.printf "\nTest 4: where with einsum spec\n";
+  (* pred=[1,0,1,0], a=[10,20,30,40], b=[1,2,3,4] *)
+  (* where pointwise: [10,2,30,4] *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let pred = NTDSL.ndarray [| 1.; 0.; 1.; 0. |] ~output_dims:[ 4 ] () in
@@ -152,11 +162,12 @@ let () =
 (* ---- Test 6: %cd dispatch fix -- mul3 with einsum spec compiles and runs ---- *)
 let () =
   Stdio.printf "\nTest 6: %%cd dispatch fix\n";
+  (* identity * swap * identity = swap *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  let a = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b = NTDSL.ndarray [| 0.; 1.; 1.; 0. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+  let a = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let b = NTDSL.ndarray [| 0.; 1.; 1.; 0. |] ~output_dims:[ 2; 2 ] () in
+  let c = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   let%cd fwd = { out } =:+ mul3 a b c ~logic:"ij;jk;km=>im" in
   Train.set_materialized out.value;
   let ctx = Train.init_params ctx Train.IDX.empty out in
@@ -171,9 +182,9 @@ let () =
 let () =
   Stdio.printf "\nTest 7: wrong-arity spec raises Shape_error\n";
   Tensor.unsafe_reinitialize ();
-  let a = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let b = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
-  let c = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~input_dims:[ 2 ] ~output_dims:[ 2 ] () in
+  let a = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let b = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let c = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   (try
      let _ = Operation.einsum3 "ij;jk=>im" ~grad_spec:If_needed a b c () in
      Stdio.printf "FAIL: expected Shape_error for two-RHS spec in einsum3\n"
