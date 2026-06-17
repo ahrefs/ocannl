@@ -57,26 +57,25 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 ## Upcoming milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Target: **v0.9 at ICFP 2026 week (August 24, 2026)**.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Headline target: **ICFP 2026 week (August 24, 2026)**.
 
-* **0.6.4 (End Dec 2025): Shape concatenation and position embeddings.**
-  - [x] Add concatenation to the einsum syntax (an axis that is a concatenation of two axes each from another tensor); it's a generalization of stacking tensors.
-    - [x] Handle shifting and explicit padding as special cases of concatenating with a fixed index: e.g. `1^i=>i` is shifting left by 1, and `i=>1^i` is padding on the left by 1.
-  - [x] Sokoban CNN building block.
-  - [ ] RoPE embeddings.
-  - [ ] Transformer for the Names dataset (bigram MLP exists, not full transformer).
-* **0.7.0 (End Feb 2026): Frontend finalization.** Paper-ready release for workshop submissions (OCaml Workshop, FProPer).
-  - [ ] Cleanup of deprecated streams functionality.
-  - [ ] Migrating from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly.
-  - [ ] Tensor saving, loading, and restoring.
-* **0.7.1 (Mid-Mar 2026): Real world examples.**
-  - [ ] Add convnet examples: MNIST and CIFAR.
+> Note (June 2026): the schedule drifted because of a slowdown from January to May; we are catching up. **v0.6.4 is skipped as a release** — its work (concatenation, RoPE, transformer toy) ships inside v0.7 — and **v0.7.2 is consolidated into v0.7**. The last tagged release is 0.6.3. The sequence is now `0.6.3 → 0.7 → 0.7.1 → 0.8 → 0.9 → 1.0`.
+
+* **0.7 (Late Jun 2026): Frontend finalization + compiler optimizations.** The consolidated paper-ready release for workshop submissions (OCaml Workshop, FProPer). Absorbs the former v0.6.4/v0.6.5/v0.7.0 frontend work and the former v0.7.2 optimization work.
+  - [x] Migrate from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly; remove the `array` field of `Tnode.t` and the hosted memory mode (#333).
+  - [x] Tensor saving, loading, and restoring (#373).
+  - [x] Axis concatenation in the einsum syntax (`a^b`), generalizing tensor stacking; shifting (`1^i=>i`) and padding (`i=>1^i`) as fixed-index special cases (#49).
+  - [x] RoPE and other non-learned position embeddings (#398); decoder-only autoregressive transformer toy (#57).
+  - [x] Ternary einsum notation (#305); loop-invariant hoisting (#350) and common subexpression elimination (#351).
+  - [ ] Universal Pool Allocator across backends (#344).
+  - [ ] Sharding and slicing with minimal copying (#293); MSVC on the native-Windows C backend (#313).
+* **0.7.1 (Jul 2026): AMD HIP backend and real-world examples.**
+  - [ ] HIP backend for AMD hardware (#411) — a major effort on par with the CUDA and Metal backends. The HIP bindings ship as an independent GitHub project and opam package (same as `cudajit` for CUDA and `metal` for Metal), usable by the community on their own; the `arrayjit` backend then depends on those bindings.
+  - [x] makemore progression (bigram → MLP → BatchNorm → transformer), mirroring Karpathy's lectures (#59).
+  - [ ] Convnet examples: MNIST and CIFAR (#54); LSTM example (#60).
+  - [ ] Transformer inference for a small open-weights model (one of GPT-2, LLaMA, Gemma) (#377).
   - [ ] Tokenizers are being developed in the spin-off project [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) (opam package `dataprep`, currently unreleased).
-  - [ ] Transformer inference for a small open-weights model (one of GPT2, LLaMA, Gemma).
-* **0.7.2 (Mid-Apr 2026): Compiler optimizations.**
-  - [ ] Optimizations: loop invariant lifting and common subexpression elimination.
-  - [ ] Universal Pool Allocator.
-* **0.8 (Mid-Jun 2026): GPU-style performance -- low hanging fruit.**
+* **0.8 (Summer 2026): GPU-style performance -- low hanging fruit.**
   - [ ] First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   - [ ] Finally from [llm.c](https://github.com/karpathy/llm.c).

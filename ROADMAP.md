@@ -1,216 +1,149 @@
 # OCANNL Roadmap to v1.0
 
-**Target: ICFP 2026 week (August 24, 2026)**
+**Headline target: ICFP 2026 week (August 24, 2026)**
 
 This roadmap outlines the development plan for OCANNL from the current state to version 1.0, incorporating academic paper milestones for workshops collocated with ICFP 2026 (OCaml Workshop, FProPer). Dates indicate **end of period** targets.
 
----
-
-## Late 2025: Foundation Stabilization
-
-### v0.6.2 — End of November 2025
-**Theme: Parser fixes and shape error detection**
-
-- **Menhir einsum parser stabilization**
-  - Fix any remaining issues with the recently migrated Menhir-based parser
-  - Ensure proper error messages for malformed einsum specifications
-
-- **Missing hidden dimensions detection** ✓ (implemented)
-  - Verify the existing implementation works as expected
-  - Fix/validate the failing test case
-
-### v0.6.3 — Mid-December 2025
-**Theme: Convolution padding**
-
-- **Padding inference for convolutions** (#354, #386)
-  - Integrate padding inference into shape inference pipeline
-  - Refactor `use_padding` from global setting to `Conv_input` constructor field
-  - Synthetic toy CNN example: counting
-
-- **Example: Sokoban RL** (stretch goal)
-  - Policy gradient example with CNN architecture
-
-- **HIP backend** (#411) — parallel / background task, can slip to v0.6.4
-  - Standalone bindings package for HIP (AMD hardware)
-  - Backend implementation
+> **Schedule note (June 2026):** the roadmap drifted from its original dating because of a slowdown between January and May 2026. We are now catching up. Two structural changes follow from that:
+>
+> - **v0.6.4 is skipped as a release.** Its scope — axis concatenation/block tensors (#49), RoPE and non-learned position embeddings (#398), the decoder-only transformer toy (#57) — is complete (the GitHub milestone is closed), but it ships inside **v0.7** rather than as a separate tagged release. The last tagged release is **0.6.3**.
+> - **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone. **v0.7.1** keeps a distinct, examples-oriented scope.
+>
+> The version sequence is now: `0.6.3 → 0.7 → 0.7.1 → 0.8 → 0.9 → 1.0 → 1.1`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth.
 
 ---
 
-## Q1 2026: Frontend Maturity and Workshop Paper
+## Released: Foundation (through 0.6.3)
 
-### v0.6.4 — End of December 2025
-**Theme: Shape concatenation and position embeddings**
-
-- **Axis concatenation in einsum** (#49)
-  - Implement `^` syntax for tensor stacking/concatenation
-  - Handle shifting as special case: `1^i=>i` for left shift
-  - Handle padding as special case: `i=>1^i` for left padding
-
-- **Dimension basis vs axis labels** (#298)
-  - Clarify design decisions
-  - Document rationale
-
-- **RoPE and position embeddings** (#398)
-  - Rotary Position Embeddings implementation
-  - Other non-learned position embedding variants
-
-- **Transformer toy example** (#57)
-  - Fully working decoder-only autoregressive transformer
-  - Names dataset language model
-
-### v0.7.0 — End of February 2026
-**Theme: Frontend finalization (paper-ready for workshop submissions)**
-
-This is the "paper-ready" release with mature frontend API.
-
-- **Context handling finalization**
-  - Migrate from "hosted tensor" idea to always requiring context
-  - Clean, consistent API for tensor access and device handling
-
-- **Remove hosted tensor mode** (#333)
-  - Get rid of `array` field of `Tnode.t`
-  - Remove or minimize `Ndarray` module
-
-- **Deprecated streams cleanup**
-  - Remove legacy streams functionality
-
-- **Tensor persistence** (#373)
-  - Tensor saving, loading, and restoring
-
-- **Documentation**
-  - Context API slides (README item 3)
-
-Paper should use v0.7.0 examples demonstrating the mature frontend. Target venues: OCaml Workshop and FProPer (if it happens), both collocated with ICFP 2026. Workshop submission deadlines are typically May–June.
+The 0.6.x line stabilized the frontend: the Menhir einsum parser and "missing hidden dimensions" error detection (0.6.2), then padding inference for convolutions with a toy CNN (0.6.3). See [CHANGES.md](CHANGES.md) for details.
 
 ---
 
-## Q2 2026: Examples and Optimizations
+## v0.7 — Late June 2026
+**Theme: Frontend finalization and compiler optimizations (paper-ready)**
 
-### v0.7.1 — Mid-March 2026
-**Theme: Real-world examples and backend polish**
+This is the consolidated "paper-ready" release. It absorbs the frontend-finalization work originally split across v0.6.4/v0.6.5/v0.7.0 and the compiler-optimization work originally planned as v0.7.2. GitHub milestone scope: *"inlining- and simplification-related optimizations, memory management, session management."*
 
-- **Tokenizer bindings**
-  - Bindings to tokenizer from llama.cpp or equivalent
+**Frontend finalization (done):**
+- **Remove the hosted tensor mode** (#333) — got rid of the `array` field of `Tnode.t` and the "hosted" memory mode; value access and printing are now context-mediated.
+- **Tensor persistence** (#373) — tensor saving, loading, and restoring.
+- **Tensor-node ID namespaces** (#372).
+- **Axis concatenation / block tensors** (#49) — `a^b` einsum syntax for stacking/concatenation, with shifting (`1^i=>i`) and padding (`i=>1^i`) as fixed-index special cases; n-ary block-tensor specs.
+- **RoPE and non-learned position embeddings** (#398).
+- **Decoder-only autoregressive transformer toy example** (#57).
+- **Ternary einsum notation** (#305) and ternary projection inference.
+- **Sasha Rush Tensor Puzzles** (#308) in extended einsum notation.
+- **uint32/uint64 indexing precisions** (#349, #177) driven by the `big_models` setting.
+- Identifier hygiene: blacklist primitive-operator/reserved names (#383); collapse repeated label components in `debug_name` (#281).
+- Configuration: relax the required `ocannl_` CLI prefix and validate config keys (#409).
+- `-march=native` C-compiler flag (#311); restore CUDA pre-loaded builtins via a cudajit helper (#353); remove remaining unnecessary buffer zeroing (#382); rename routine/kernel params to `kparam`/`kparams` (#356).
 
-- **Transformer inference demo** (#377)
-  - Inference for a small open-weights model (GPT-2, LLaMA, or Gemma)
+**Compiler optimizations (done):**
+- **Loop-invariant code motion** (#350), prior to visit counting.
+- **Common subexpression elimination** after inlining (#351).
+- Extend virtual-node inlining to non-scalar constants and ranges (#142).
 
-- **CNN training examples**
-  - MNIST training setup
-  - CIFAR-10 training setup
+**Still open in v0.7:**
+- **Universal Pool Allocator across backends** (#344) — in progress (buffer-addressing seam landed; full pooling scoped).
+- **`Local_scope` initialization tracking** (#340).
+- **MSVC support for the native-Windows C backend** (#313).
+- **Sharding and slicing with minimal copying** (#293) — the data-parallel driver with merge-buffer all-reduce has landed; remaining work continues here.
+- **Documentation:** flesh out `lowering_and_inlining.md` and audit `low_level.ml` (#296).
+- Inlining stretch goals: share one `for` loop across virtual tensors (#134); inline virtual nodes with non-linear index symbols (#133).
 
-- **Backend improvements**
-  - Resolve multicore_cc non-determinism (#341)
-  - MSVC support for Windows C backend (#313)
-  - Add `-march=native` optimization (#311)
-
-### v0.7.2 — Mid-April 2026
-**Theme: Compiler optimizations**
-
-- **Optimizations**
-  - Loop invariant hoisting (#350)
-  - Common subexpression elimination (#351)
-  - Local scope initialization tracking (#340)
-
-- **Memory management**
-  - Universal Pool Allocator (#344)
-
-### v0.8 — Mid-June 2026
-**Theme: GPU-style performance**
-
-This is a substantial milestone requiring ~2 months.
-
-- **Tiling optimizations** (inspired by #412)
-  - Fast matrix multiplication patterns from Böhm's CPU article
-  - CUDA matmul optimizations from Böhm's CUDA article
-  - Lessons from llm.c
-
-- **Megakernel exploration** (#318)
-  - Investigate megakernel approach alignment with OCANNL design
-  - May require splitting routines into multiple kernels
-
-- **Metal optimizations** (#320)
-  - Use private mode appropriately
+This release is the basis for the workshop paper examples: a clean context-based API (no hosted tensors), shape concatenation, and a complete transformer with RoPE.
 
 ---
 
-## Summer 2026: Search and Completion
+## v0.7.1 — July 2026
+**Theme: AMD HIP backend and real-world examples**
 
-### v0.9 — August 24, 2026 (ICFP)
+Two distinct, substantial tracks. GitHub milestone scope: *"Tokenization, transformer inference demo. HIP backend (AMD hardware)."*
+
+**AMD HIP backend** (#411) — a major effort, comparable to the CUDA and Metal backends:
+- **Standalone HIP bindings** — an independent GitHub project and opam package, following the same pattern as the CUDA bindings (`cudajit`) and the Metal bindings (`metal`). Kept separate so the OCaml community can use the HIP bindings on their own, without taking on the weight of OCANNL.
+- The HIP backend implementation in `arrayjit`, **depending on** those bindings, with the usual code-generation, memory-management, and synchronization plumbing.
+
+**Real-world examples:**
+- **makemore progression** (#59, done) — the character-level language-model series mirroring Karpathy's *Neural Networks: Zero to Hero* (see [docs/makemore_tutorial.md](docs/makemore_tutorial.md)); includes the Bengio-style MLP and BatchNorm variants.
+- **CNN classifiers** (#54) — MNIST and CIFAR-10 training examples.
+- **LSTM example** (#60).
+- **Transformer inference demo** (#377) — inference for a small open-weights model (GPT-2, LLaMA, or Gemma).
+- **Tokenizer bindings** — developed in the spin-off [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) project (opam package `dataprep`).
+
+---
+
+## v0.8 — Summer 2026
+**Theme: GPU-style performance — low-hanging fruit**
+
+A substantial milestone (~2 months). GitHub milestone scope: *"GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now."*
+
+- **Matmul tiling** (#412) — fast multidimensional matrix multiplication, first from Böhm's CPU article, then the CUDA worklog, then lessons from llm.c (#253).
+- **Megakernel exploration** (#318, done as a study) — may require splitting routines into multiple kernels.
+- **Metal private mode** (#320, done).
+- Stretch / study: AVX/AVX2 intrinsics for the C backend (#164); `ggml` efficiency lessons (#163); restore CUDA `__constant__` arrays (#195); small-Transformer digit-addition reproduction (#427).
+
+> **Date note:** the GitHub milestone still carries a stale 2026-02-28 due date from before the slip; treat the date above (post-v0.7.1) as authoritative.
+
+---
+
+## v0.9 — August 24, 2026 (ICFP week)
 **Theme: Program search and optimization**
 
-This is a research-heavy milestone requiring ~2.5 months.
+A research-heavy milestone (~2.5 months). GitHub milestone scope: *"Program search with execution-based per-backend or aggregate-of-backends cost functions; broadening code-graph rewriting rules."*
 
-- **Static scheduling via program search**
-  - Alternative to tinygrad's dynamic scheduling
-  - Halide-inspired search strategies
+- **Static scheduling via program search** — an alternative to tinygrad's dynamic scheduling; Halide-inspired search.
+- **Cost functions** — per-backend execution-based metrics and aggregate cost functions across backends.
+- **Code-graph rewriting** — a broader range of rewriting rules, augmenting the v0.8 tiling/layout mechanisms.
+- Study tracks: Tiramisu (#267), Candle (#265), superoptimizers for tensor programs (#261).
 
-- **Cost functions**
-  - Per-backend execution-based metrics
-  - Aggregate cost functions across backends
-
-- **Code graph rewriting**
-  - Broader range of rewriting rules
-  - Tiling and layout mechanism augmentation
-
-### v1.0 — End of October 2026
-**Theme: Documentation, completeness, ergonomics**
-
-- **Documentation completeness**
-  - Lowering and inlining documentation (#296)
-  - einops.rocks comparison documentation (#413)
-
-- **Feature completeness**
-  - Address select "explore" issues to demonstrate capability
-  - Sharding and slicing with minimal copying (#293)
-
-- **Ergonomics**
-  - Concise syntax for merge buffer transfers
-  - Execution dependency tracking (mirroring compilation)
-  - Improve configuration handling (#409)
-
-- **Safety**
-  - Merge buffer static verification (#288)
-  - Memory mode sharing audit (#291)
+> **Date note:** the GitHub milestone carries a stale 2026-05-30 due date; the ICFP-week anchor above is authoritative.
 
 ---
 
-## Post-1.0 Considerations (v1.1+)
+## v1.0 — Q4 2026
+**Theme: Documentation, completeness, ergonomics, safety**
 
-- **Shape inference enhancements**
-  - Shape schemes for tensor functions (#404, post-workshop-paper)
+GitHub milestone scope: *"Few documentation gaps, some degree of feature completeness, ergonomics, safety."* Already largely de-risked — key items below are done.
 
-- **Advanced examples**
-  - BERT/ModernBERT implementation (#297, after v0.7.1 transformer inference)
-  - LLM101n replication (#275)
-  - DisTrO distributed training (#278, see docs/proposals/distro-feasibility-study.md)
+- **Safety (done):** static verification of merge-buffer nodes "in the right direction" (#288); rank-cycle detection for row variables (#247).
+- **Determinism (done):** resolve `multicore_cc` non-determinism and restore it as the primary testing target (#341).
+- **`%cd` ergonomics (done):** simplify translations from `%cd` (#348); accept `:=` for the `Fetch` constructor (#209).
+- **Open — ergonomics:** concise syntax for merge-buffer transfers; execution dependency tracking (mirroring compilation); local let-bindings in `%cd` (#80).
+- **Open — completeness:** demonstrate model surgery (#33); training checkpointing (#96); inference plugin/binary generation (#97); experiment tracking and plot improvements (#122, #103); `polars-ocaml` integration (#219).
 
-- **Performance explorations**
-  - Lean Attention / Flash Attention (#263)
-  - XLA backend (#300)
+---
+
+## v1.1 and beyond
+**Theme: Shape-inference and safety enhancements; advanced examples**
+
+GitHub milestone scope: *"Consider introducing axis labels. Consider introducing shape schemes."*
+
+- **Shape schemes for tensor functions** (#404).
+- **Axis labels** (vs. the dimension basis) — design exploration.
+- **Advanced examples:** BERT / ModernBERT (#297); DisTrO low-communication distributed data parallelism (#278).
 
 ---
 
 ## Key Milestones Summary
 
-| Version | Target | Duration | Key Deliverables |
-|---------|--------|----------|------------------|
-| v0.6.2  | End Nov 2025 | now | Menhir parser fixes, hidden dimension errors |
-| v0.6.3  | Mid-Dec 2025 | 2.5 weeks | Padding inference |
-| v0.6.4  | End Dec 2025 | 2 weeks | Shape concatenation |
-| v0.6.5  | Mid-Jan 2026 | 2 weeks | RoPE, transformer toy example |
-| v0.7.0  | End Feb 2026 | 2 weeks | **Frontend finalization (workshop paper-ready)** |
-| v0.7.1  | Mid-Mar 2026 | 6 weeks | Real-world examples, backend polish |
-| v0.7.2  | Mid-Apr 2026 | 4 weeks | Compiler optimizations, pool allocator |
-| v0.8    | Mid-Jun 2026 | 2 months | GPU tiling, megakernels |
-| v0.9    | Aug 24, 2026 | 2.5 months | Program search **(ICFP week)** |
-| v1.0    | End Oct 2026 | 2 months | Documentation, completeness, safety |
+| Version | Target | Status | Key Deliverables |
+|---------|--------|--------|------------------|
+| 0.6.2  | Nov 2025 | released | Menhir parser, hidden-dimension errors |
+| 0.6.3  | Dec 2025 | released | Padding inference, toy CNN |
+| ~~0.6.4~~ | — | **skipped** (folds into 0.7) | Concatenation, RoPE, transformer toy |
+| **0.7** | Late Jun 2026 | **in progress** | **Frontend finalization + compiler optimizations** (consolidates 0.7.2) |
+| 0.7.1  | Jul 2026 | planned | AMD HIP backend (major); examples: makemore, MNIST/CIFAR, LSTM, transformer inference |
+| 0.8    | Summer 2026 | planned | GPU tiling, megakernels, matmul |
+| 0.9    | Aug 24, 2026 | planned | Program search **(ICFP week)** |
+| 1.0    | Q4 2026 | mostly de-risked | Docs, completeness, ergonomics, safety |
+| 1.1+   | post-1.0 | backlog | Shape schemes, axis labels, BERT, DisTrO |
 
 ---
 
 ## Workshop Paper Plan (OCaml Workshop / FProPer at ICFP 2026)
 
-**Target deadline: May–June 2026** (exact dates TBD per workshop CFP)
+**Target deadline: per each workshop's CFP (typically May–June 2026).**
 
 ### Proposed Title
 *"Generalized Einsum with Row Variables: Shape Inference for Deep Learning in OCaml"*
@@ -219,26 +152,20 @@ This is a research-heavy milestone requiring ~2.5 months.
 1. **Generalized einsum notation** with convolutions, strided iteration, and concatenation
 2. **Row variables** for flexible axis handling ("principle of least commitment")
 3. **Constraint-based shape inference** with provenance tracking for error messages
-4. **Dimension basis** design rationale (vs axis labels)
+4. **Dimension basis** design rationale (vs. axis labels)
 5. **Integration with OCaml's type system** via syntax extensions
 
 ### Related Work to Address
 - einops (#413)
-- torchdim/DumPy (#316)
+- torchdim / DumPy (#316)
 - Named tensors in PyTorch/JAX
 - Dependent types for tensor shapes
 
-### Development Timeline
-- **Nov 2025**: Release v0.6.2
-- **Dec 2025**: Finish v0.6.3; outline paper, literature review
-- **Jan–Feb 2026**: Finish v0.6.4–0.6.5 (concatenation, RoPE, transformer)
-- **Feb–Mar 2026**: Finish v0.7.0 (frontend finalization); first draft with v0.7.0 examples
-- **Apr–May 2026**: Paper revision and polish
-- **May–June 2026**: **Workshop submission deadline** (OCaml Workshop / FProPer)
-
-### Why v0.7.0 Before Paper
-The paper needs working examples with OCANNL's mature frontend:
+### Why v0.7 Before the Paper
+The paper needs working examples on OCANNL's mature frontend, all delivered by v0.7:
 - Clean context-based API (no hosted tensors)
 - Shape concatenation syntax (`^`)
 - Complete transformer example with RoPE
 - Consistent, documented API surface
+
+The deep semantic groundwork for the paper (the two-sorted ground algebra, the rank-fact graph and rank-cycle check, ≈-semantics for row equality) has been developing alongside v0.7 in the in-progress proposals.
