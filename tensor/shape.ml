@@ -379,7 +379,8 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
     [bio_rhs_list] are the batch/input/output row triples for the LHS and each
     RHS — needed by [Block] to compute discardable vars. *)
 let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
-    ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list) =
+    ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
+    ?(lhs_constraints_first = false) () =
   let row_var_env = Hashtbl.create (module String) in
   let dim_var_env = Hashtbl.create (module String) in
   let rhs_results =
@@ -508,10 +509,14 @@ let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_label
     ]
   in
   let bio_rhs_list = List.map rhs_results ~f:(fun (_, _, _, _, bio) -> bio) in
+  let ordered_constraints =
+    if lhs_constraints_first then lhs_constraints @ rhs_constraints
+    else rhs_constraints @ lhs_constraints
+  in
   ( proj_env,
     bio_lhs,
     bio_rhs_list,
-    extras_dim_refs @ extras_lhs @ lhs_constraints @ rhs_constraints )
+    extras_dim_refs @ extras_lhs @ ordered_constraints )
 
 (* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
    discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
@@ -1236,6 +1241,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
           ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT"
           ~error_shapes:[ cur_sh; sh1; sh2 ]
+          ~lhs_constraints_first:true ()
       in
       (proj_env, dim_var_set_empty, inequalities)
   | Block { spec; delayed_vars; rhses } ->
@@ -1259,6 +1265,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
           ~result_label:"Block RESULT"
           ~arg_label_prefix:"Block ARGUMENT"
           ~error_shapes:(cur_sh :: rhses)
+          ()
       in
       (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
       let rhs_shapes : Row.t list list =
@@ -1298,6 +1305,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
           ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT"
           ~error_shapes:[ cur_sh; sh1; sh2; sh3 ]
+          ()
       in
       (proj_env, dim_var_set_empty, inequalities)
 
