@@ -191,3 +191,72 @@ let () =
    with Row.Shape_error (msg, _) ->
      Stdio.printf "Negative test (wrong arity): got expected Shape_error: %s\n"
        (String.prefix msg 60))
+
+(* ---- Test 8: where with reduction-bearing spec, verified against decomposed reference ---- *)
+(* spec "ij;ij;ij=>i" reduces axis j.
+   pred=[[1,0],[0,1]], a=[[10,20],[30,40]], b=[[1,2],[3,4]]
+   result[i] = sum_j(where(pred[i,j], a[i,j], b[i,j]))
+   result[0] = where(1,10,1) + where(0,20,2) = 10 + 2 = 12
+   result[1] = where(0,30,3) + where(1,40,4) =  3 + 40 = 43
+   Decomposed ref: w=pointwise where(pred,a,b)=[[10,2],[3,40]]; out=einsum1 "ij=>i" w=[12,43] *)
+let () =
+  Stdio.printf "\nTest 8: where with reduction-bearing spec (select-before-reduce)\n";
+  Tensor.unsafe_reinitialize ();
+  let ctx = Context.auto () in
+  let pred = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let a    = PDSL.ndarray [| 10.; 20.; 30.; 40. |] ~output_dims:[ 2; 2 ] () in
+  let b    = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  let wein = Operation.where ~spec:"ij;ij;ij=>i" ~grad_spec:Prohibit_grad pred a b () in
+  let ctx = Train.forward_once ~output_cd_file:false ctx wein in
+  Stdio.printf "where einsum 'ij;ij;ij=>i' = %s\n" (fmt_arr (get_vals ctx wein));
+  (* Decomposed reference: pointwise where then einsum1 reduce *)
+  Tensor.unsafe_reinitialize ();
+  let ctx2 = Context.auto () in
+  let pred2 = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let a2    = PDSL.ndarray [| 10.; 20.; 30.; 40. |] ~output_dims:[ 2; 2 ] () in
+  let b2    = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  let w2    = Operation.where ~grad_spec:Prohibit_grad pred2 a2 b2 () in
+  let ref2  = Operation.einsum1 "ij=>i" ~grad_spec:Prohibit_grad w2 () in
+  let ctx2 = Train.forward_once ~output_cd_file:false ctx2 ref2 in
+  Stdio.printf "decomposed ref (pointwise+reduce) = %s\n" (fmt_arr (get_vals ctx2 ref2));
+  Stdio.printf "select-before-reduce match: %b\n"
+    (Array.equal Float.equal (get_vals ctx wein) (get_vals ctx2 ref2))
+
+(* ---- Test 9: where reduction gradient agrees with decomposed reference ---- *)
+(* With "ij;ij;ij=>i" and grad=[1,1]:
+   grad_a[i,j] = where(pred[i,j], grad[i], 0) = pred[i,j]*grad[i]
+   pred=[[1,0],[0,1]] => grad_a=[[1,0],[0,1]]
+   grad_b[i,j] = where(pred[i,j], 0, grad[i]) = (1-pred[i,j])*grad[i]
+   pred=[[1,0],[0,1]] => grad_b=[[0,1],[1,0]] *)
+let () =
+  Stdio.printf "\nTest 9: where reduction gradient\n";
+  Tensor.unsafe_reinitialize ();
+  let ctx = Context.auto () in
+  let pred = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let a    = PDSL.ndarray [| 10.; 20.; 30.; 40. |] ~output_dims:[ 2; 2 ] () in
+  let b    = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  Train.set_materialized (Option.value_exn ~here:[%here] a.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] b.diff).grad;
+  let wein = Operation.where ~spec:"ij;ij;ij=>i" ~grad_spec:Require_grad pred a b () in
+  let ctx = Train.update_once ~output_cd_file:false ctx wein in
+  let ga = get_grad ctx a in
+  let gb = get_grad ctx b in
+  Stdio.printf "where einsum grad_a (expect [[1 0],[0 1]]) = %s\n" (fmt_arr ga);
+  Stdio.printf "where einsum grad_b (expect [[0 1],[1 0]]) = %s\n" (fmt_arr gb);
+  (* Decomposed reference gradient: via pointwise where + einsum1 *)
+  Tensor.unsafe_reinitialize ();
+  let ctx2 = Context.auto () in
+  let pred2 = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
+  let a2    = PDSL.ndarray [| 10.; 20.; 30.; 40. |] ~output_dims:[ 2; 2 ] () in
+  let b2    = PDSL.ndarray [| 1.; 2.; 3.; 4. |] ~output_dims:[ 2; 2 ] () in
+  Train.set_materialized (Option.value_exn ~here:[%here] a2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] b2.diff).grad;
+  let w2   = Operation.where ~grad_spec:If_needed pred2 a2 b2 () in
+  let ref2 = Operation.einsum1 "ij=>i" ~grad_spec:Require_grad w2 () in
+  let ctx2 = Train.update_once ~output_cd_file:false ctx2 ref2 in
+  let ga2 = get_grad ctx2 a2 in
+  let gb2 = get_grad ctx2 b2 in
+  Stdio.printf "decomposed grad_a = %s\n" (fmt_arr ga2);
+  Stdio.printf "decomposed grad_b = %s\n" (fmt_arr gb2);
+  Stdio.printf "reduction gradient a match: %b\n" (Array.equal Float.equal ga ga2);
+  Stdio.printf "reduction gradient b match: %b\n" (Array.equal Float.equal gb gb2)

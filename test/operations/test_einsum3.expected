@@ -36,3 +36,16 @@ Test 6: %cd dispatch fix
 
 Test 7: wrong-arity spec raises Shape_error
 Negative test (wrong arity): got expected Shape_error: Invalid einsum spec (expected three arguments): ij;jk=>im
+
+Test 8: where with reduction-bearing spec (select-before-reduce)
+where einsum 'ij;ij;ij=>i' = [12 43]
+decomposed ref (pointwise+reduce) = [12 43]
+select-before-reduce match: true
+
+Test 9: where reduction gradient
+where einsum grad_a (expect [[1 0],[0 1]]) = [1 0 0 1]
+where einsum grad_b (expect [[0 1],[1 0]]) = [0 1 1 0]
+decomposed grad_a = [1 0 0 1]
+decomposed grad_b = [0 1 1 0]
+reduction gradient a match: true
+reduction gradient b match: true
