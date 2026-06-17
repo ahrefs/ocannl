@@ -53,7 +53,7 @@ let known_config_keys =
       (* Utils.settings *)
       "log_level"; "debug_log_from_routines"; "output_debug_files_in_build_directory";
       "fixed_state_for_init"; "print_decimals_precision"; "check_half_prec_constants_cutoff";
-      "default_prng_variant"; "large_models";
+      "default_prng_variant"; "large_models"; "big_models" (* deprecated alias for large_models *);
       (* Cleanup / startup *)
       "build_files_prefix"; "clean_up_build_files_on_startup"; "clean_up_log_files_on_startup";
       "never_capture_stdout";
@@ -528,7 +528,12 @@ let restore_settings () =
     Float.of_string_opt
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant";
-  settings.large_models <- get_global_flag ~default:false ~arg_name:"large_models"
+  (* [big_models] is the pre-gh-ocannl-344 name; read it as a fallback so existing configs / CLI /
+     OCANNL_BIG_MODELS still enable 64-bit index and pool-offset widths when [large_models] is unset. *)
+  settings.large_models <-
+    get_global_flag
+      ~default:(get_global_flag ~default:false ~arg_name:"big_models")
+      ~arg_name:"large_models"
 
 let () = restore_settings ()
 

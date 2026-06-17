@@ -103,5 +103,5 @@
  (name test_pool_segments)
  (package arrayjit)
  (modules test_pool_segments)
- (deps test_pool_segments.expected)
+ (deps ocannl_config test_pool_segments.expected)
  (libraries base stdio arrayjit.context))
