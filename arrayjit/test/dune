@@ -58,24 +58,43 @@
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
 
-; Built and run only on macOS, where the Metal backend (the `metal` package)
-; is available; skipped on other systems via `enabled_if`.
+; Metal backend tests. The Metal backend (the `metal` opam package + the
+; `(optional)` `arrayjit.metal_backend` library) is Apple-only — `arrayjit.opam`
+; depends on `metal {= :os macos}`, so off macOS those libraries are absent.
+;
+; We cannot just gate the stanza: an `enabled_if` on a `(test)` does NOT stop
+; dune from resolving its `(libraries)`, so a disabled test still requires the
+; hidden optional lib and the build fails with "arrayjit.metal_backend ... is
+; hidden". Instead we keep the test ALWAYS building and pick the implementation
+; with dune `select` (the same mechanism `arrayjit/lib/dune` uses for
+; `metal_backend_impl`): where `metal` + `arrayjit.metal_backend` are available
+; the real test runs; elsewhere a stub (`*.missing.ml`, linking neither) is
+; selected and reproduces the recorded golden so the test passes trivially.
 (test
  (name test_metal_storage_mode)
  (package arrayjit)
- (enabled_if
-  (= %{system} macosx))
  (modules test_metal_storage_mode)
- (deps ocannl_config)
- (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
+ (deps ocannl_config test_metal_storage_mode.expected)
+ (libraries
+  base
+  stdio
+  (select
+   test_metal_storage_mode.ml
+   from
+   (metal arrayjit.metal_backend arrayjit.ir ->
+    test_metal_storage_mode.real.ml)
+   (-> test_metal_storage_mode.missing.ml))))
 
-; Exercises the real Metal allocator paths and private-buffer host transfers;
-; macOS-only, and requires a working Metal device at run time.
 (test
  (name test_metal_alloc)
  (package arrayjit)
- (enabled_if
-  (= %{system} macosx))
  (modules test_metal_alloc)
- (deps ocannl_config)
- (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
+ (deps ocannl_config test_metal_alloc.expected)
+ (libraries
+  base
+  stdio
+  (select
+   test_metal_alloc.ml
+   from
+   (metal arrayjit.metal_backend arrayjit.ir -> test_metal_alloc.real.ml)
+   (-> test_metal_alloc.missing.ml))))

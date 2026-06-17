@@ -36,6 +36,8 @@ jobs:
         allow-prerelease-opam: true
     # FIXME: We need to pin printbox-text until > 0.12.0 is released.
     - run: opam pin -n printbox-text https://github.com/c-cube/printbox.git
+    # dataprep is an unreleased spin-off, not in opam-repository; pin to its repo so --deps-only can resolve it.
+    - run: opam pin -n dataprep https://github.com/lukstafi/ocaml-dataprep.git
     - run: opam pin -n .
     - run: opam install . -y --deps-only --with-test --with-doc
     - run: opam exec -- dune build
