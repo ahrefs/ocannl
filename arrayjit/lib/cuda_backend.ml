@@ -143,9 +143,15 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let%track4_sexp finalize_device (device : device) =
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
-    (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-    Hashtbl.iter device.constant_buffer_cache ~f:(fun (loc : Backend_intf.buffer_loc) ->
-        Cu.Deviceptr.mem_free (Slab.resolve_pool device loc))
+    (* Note: this is not necessary as releasing the primary context by GC will reset the context.
+       gh-ocannl-344: constants are bump-packed, so several cache entries share one constant pool
+       slab; free each distinct [pool_id] exactly once (freeing per-entry would double-free / free a
+       sub-region pointer). [Slab.free_pool] frees the slab and drops its table entry. *)
+    Hashtbl.data device.constant_buffer_cache
+    |> List.map ~f:(fun (loc : Backend_intf.buffer_loc) -> loc.pool_id)
+    |> List.dedup_and_sort ~compare:Int.compare
+    |> List.iter ~f:(fun pool_id ->
+           Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
     let name_cu = name ^ ".cu" in

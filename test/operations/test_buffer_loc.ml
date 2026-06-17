@@ -73,14 +73,20 @@ let run_packed () =
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
            if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
   in
-  match (loc "p", loc "q") with
-  | Some lp, Some lq ->
+  match (loc "p", loc "q", loc "a", loc "b") with
+  | Some lp, Some lq, Some la, Some lb ->
       (* Both outputs are non-constant working nodes: same pool, distinct increasing offsets. *)
       Stdio.printf "two outputs share a pool = %b\n" (lp.pool_id = lq.pool_id);
       Stdio.printf "two outputs have distinct offsets = %b\n" (lp.offset <> lq.offset);
       Stdio.printf "offsets are 8-byte aligned (2x float32) = %b\n"
-        (lp.offset % 4 = 0 && lq.offset % 4 = 0)
-  | _ -> Stdio.printf "two outputs share a pool = MISSING\n"
+        (lp.offset % 4 = 0 && lq.offset % 4 = 0);
+      (* The two read-only constants pack into one (per-device) constant pool at distinct offsets,
+         separate from the working pool. *)
+      Stdio.printf "two constants share a pool = %b\n" (la.pool_id = lb.pool_id);
+      Stdio.printf "two constants have distinct offsets = %b\n" (la.offset <> lb.offset);
+      Stdio.printf "constant pool is separate from working pool = %b\n"
+        (la.pool_id <> lp.pool_id)
+  | _ -> Stdio.printf "outputs/constants = MISSING\n"
 
 let () =
   run_once "run1";

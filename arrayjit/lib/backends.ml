@@ -12,6 +12,41 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 (* export OCANNL_LOG_LEVEL_BACKENDS=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_BACKENDS"]
 
+(* gh-ocannl-344: pure planner for the pool allocator. Lays out a sequence of [(size, alignment)]
+   allocations (in order) into one or more pools so that no pool's bumped extent exceeds [cap] bytes
+   -- the per-pool 4 GB ceiling for uint32 offsets when [large_models = false]. Returns, per input
+   item, its [(segment_index, byte_offset)], plus the byte size of each segment (pool). Raises
+   [Utils.User_error] (naming [what] and [debug_name i]) if a single item exceeds [cap], since no
+   pool can hold it without uint64 offsets. Factored out so the segmenting/cap behavior is unit
+   testable with synthetic sizes (it does not need real device memory). *)
+let plan_pool_segments ~(cap : int) ~(what : string) ~(debug_name : int -> string)
+    (items : (int * int) list) : (int * int) list * int list =
+  let align_up off a = if a <= 1 then off else (off + a - 1) / a * a in
+  let seg = ref 0 and bump = ref 0 in
+  let closed = ref [] (* completed segment sizes, reversed *) in
+  let assignments =
+    List.mapi items ~f:(fun i (size, align) ->
+        if size > cap then
+          raise
+          @@ Utils.User_error
+               (Printf.sprintf
+                  "%s: tensor node %s needs %d bytes, over the %d-byte per-pool cap; set \
+                   large_models=true for uint64 offsets"
+                  what (debug_name i) size cap);
+        let offset = align_up !bump align in
+        if offset + size > cap then (
+          (* Close the current pool and open a new one starting this item at offset 0. *)
+          closed := !bump :: !closed;
+          Int.incr seg;
+          bump := size;
+          (!seg, 0))
+        else (
+          bump := offset + size;
+          (!seg, offset)))
+  in
+  let segment_sizes = if List.is_empty items then [] else List.rev (!bump :: !closed) in
+  (assignments, segment_sizes)
+
 (* Dynamic backstop for merge-buffer verification: runs as the first work of a consumer's schedule
    and checks the node most recently scheduled into the stream's merge buffer. The primary check is
    now the static [check_merge_buffer_static] performed at link time (gh-ocannl-288); this remains
@@ -477,22 +512,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
     }
 
-  let align_up off a = if a <= 1 then off else (off + a - 1) / a * a
-
   let size_in_bytes_of (key : Tn.t) =
     let prec = Lazy.force key.Tn.prec in
     Array.fold (Lazy.force key.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
 
   (* gh-ocannl-344 Phase B/C: allocate a context's delta -- the in-context tnodes not already present
-     in [context.ctx_buffers]. Working (non-constant) nodes are packed into a single pool sized to the
-     delta and bump-assigned increasing byte offsets, replacing the one-pool-per-tnode policy. Peak
-     working allocation equals the old per-tnode total. Constant / read-only nodes are deduped
-     per-device via [constant_buffer_cache] (one slab each; physically packing them into a shared
-     constant slab is a deferred optimization that does not change the pool class, its lifetime, or
-     the binding count). Enumeration follows [traced_store] order so pool ids and offsets stay
-     deterministic across runs. With [large_models = false] a working pool is capped at 4 GB (uint32
-     offsets): a delta larger than that opens additional pools; a single tnode larger than the cap
-     raises a clear error. *)
+     in [context.ctx_buffers]. Working (non-constant) and constant/read-only nodes are EACH packed
+     into pools sized to their group and bump-assigned increasing byte offsets, replacing the
+     one-pool-per-tnode policy. Working pools belong to the context (freed at its [finalize]);
+     constant pools are deduped per-device via [constant_buffer_cache] and outlive the context (freed
+     at device teardown). Enumeration follows [traced_store] order so pool ids and offsets stay
+     deterministic across runs. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced
+     by {!Backend_utils.plan_pool_segments}. *)
   let%track3_sexp allocate_delta (context : context) (traced_store : Low_level.traced_store) :
       ctx_buffers =
     let device = context.device in
@@ -506,62 +537,73 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           else working := (key, node) :: !working);
     let working = List.rev !working and constants = List.rev !constants in
     let ctx_buffers = ref context.ctx_buffers in
-    (* Pass 2a: pack the working delta into one pool (or several, past the 4 GB cap). [flush] mints a
-       pool sized to its segment, then zero-inits / host-inits each node at its assigned offset. *)
-    let flush (seg : (Tn.t * Low_level.traced_array * int * int) list) (total : int) : unit =
-      if not (List.is_empty seg) then (
-        let pool_id = device.next_pool_id in
-        device.next_pool_id <- pool_id + 1;
-        let alignment =
-          List.fold seg ~init:1 ~f:(fun a (key, _, _, _) ->
-              Int.max a (Ops.prec_in_bytes (Lazy.force key.Tn.prec)))
+    (* Pack a group of (key, node) into one or more pools, segmenting at the cap. [register] decides
+       how the resulting [buffer_loc] is recorded (directly into [ctx_buffers] for working nodes, or
+       deduped through [constant_buffer_cache] for constants). [base_pool_id] of each segment is a
+       freshly minted [next_pool_id]; offsets and pool sizes come from the pure planner. *)
+    let pack (group : (Tn.t * Low_level.traced_array) list)
+        ~(register : Tn.t -> alloc:(unit -> buffer_loc) -> unit) : unit =
+      if not (List.is_empty group) then begin
+        let items =
+          List.map group ~f:(fun (key, _) ->
+              (size_in_bytes_of key, Ops.prec_in_bytes (Lazy.force key.Tn.prec)))
         in
-        alloc_pool device ~pool_id ~size_in_bytes:total ~alignment;
-        List.iter (List.rev seg) ~f:(fun (key, node, offset, size_in_bytes) ->
-            let host_init = Host_inits.find key in
-            (* Zero-initialize unless the node will be copied from host immediately, or the lowered
-               code already zero-initializes it. *)
-            let zero_init =
-              not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
+        let assignments, segment_sizes =
+          plan_pool_segments ~cap ~what:"Backends.allocate_delta"
+            ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
+            items
+        in
+        (* Mint a pool id per segment up front, sized from the planner. *)
+        let seg_pool_ids =
+          List.map segment_sizes ~f:(fun size_in_bytes ->
+              let pool_id = device.next_pool_id in
+              device.next_pool_id <- pool_id + 1;
+              (pool_id, size_in_bytes))
+          |> Array.of_list
+        in
+        (* Allocate each segment's slab, padding alignment to the max element precision it holds. *)
+        let seg_align = Array.map seg_pool_ids ~f:(fun _ -> ref 1) in
+        List.iter2_exn group assignments ~f:(fun (key, _) (seg, _) ->
+            let a = Ops.prec_in_bytes (Lazy.force key.Tn.prec) in
+            if a > !(seg_align.(seg)) then seg_align.(seg) := a);
+        Array.iteri seg_pool_ids ~f:(fun seg (pool_id, size_in_bytes) ->
+            alloc_pool device ~pool_id ~size_in_bytes ~alignment:!(seg_align.(seg)));
+        (* Place each node at its planned (segment, offset). *)
+        List.iter2_exn group assignments ~f:(fun (key, node) (seg, offset) ->
+            let pool_id, _ = seg_pool_ids.(seg) in
+            let size_in_bytes = size_in_bytes_of key in
+            let alloc () : buffer_loc =
+              let host_init = Host_inits.find key in
+              (* Zero-initialize unless the node will be copied from host immediately, or the lowered
+                 code already zero-initializes it. *)
+              let zero_init =
+                not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
+              in
+              if zero_init then memset_zero device ~pool_id ~offset ~size_in_bytes;
+              let loc = { pool_id; offset } in
+              Option.iter host_init ~f:(fun nd ->
+                  Device.from_host ~dst:context ~dst_loc:loc (Lazy.force nd));
+              loc
             in
-            if zero_init then memset_zero device ~pool_id ~offset ~size_in_bytes;
-            let loc = { pool_id; offset } in
-            Option.iter host_init ~f:(fun nd ->
-                Device.from_host ~dst:context ~dst_loc:loc (Lazy.force nd));
-            ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:loc))
+            register key ~alloc)
+      end
     in
-    let seg = ref [] and bump = ref 0 in
-    List.iter working ~f:(fun (key, node) ->
-        let size = size_in_bytes_of key and align = Ops.prec_in_bytes (Lazy.force key.Tn.prec) in
-        if size > cap then
-          raise
-          @@ Utils.User_error
-               [%string
-                 "Backends.allocate_delta: tensor node %{Tn.debug_name key} needs %{size#Int} bytes, \
-                  over the %{cap#Int}-byte per-pool cap; set large_models=true for uint64 offsets"];
-        let offset = align_up !bump align in
-        if offset + size > cap then (
-          flush !seg !bump;
-          seg := [ (key, node, 0, size) ];
-          bump := size)
-        else (
-          seg := (key, node, offset, size) :: !seg;
-          bump := offset + size));
-    flush !seg !bump;
-    (* Pass 2b: constants / read-only nodes, deduped per device. It is the user's responsibility to
-       initialize constants on devices (redundantly across contexts, or once + init_from_device). *)
+    (* Pass 2a: working delta -> context-owned pool(s), recorded directly. *)
+    pack working ~register:(fun key ~alloc ->
+        ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:(alloc ()));
+    (* Pass 2b: constants / read-only -> per-device constant pool(s). Constants already allocated on
+       this device (a hit in [constant_buffer_cache], possibly from another context tree) resolve
+       directly and are excluded from the new slab, so the freshly-minted constant pool holds exactly
+       this device's genuinely-new constants -- no wasted holes. The remaining new constants pack
+       into one constant pool (or more, past the cap), deduped into the cache. Constant pools outlive
+       the context and are skipped by context [finalize] (freed at device teardown). *)
+    let new_constants = ref [] in
     List.iter constants ~f:(fun (key, node) ->
-        let host_init = Host_inits.find key in
-        let default () : buffer_loc =
-          let zero_init =
-            not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
-          in
-          let loc = allocate device key ~zero_init in
-          Option.iter host_init ~f:(fun nd ->
-              Device.from_host ~dst:context ~dst_loc:loc (Lazy.force nd));
-          loc
-        in
-        let data = Hashtbl.find_or_add device.constant_buffer_cache key ~default in
+        match Hashtbl.find device.constant_buffer_cache key with
+        | Some data -> ctx_buffers := Map.add_exn !ctx_buffers ~key ~data
+        | None -> new_constants := (key, node) :: !new_constants);
+    pack (List.rev !new_constants) ~register:(fun key ~alloc ->
+        let data = Hashtbl.find_or_add device.constant_buffer_cache key ~default:alloc in
         ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
     !ctx_buffers
 
