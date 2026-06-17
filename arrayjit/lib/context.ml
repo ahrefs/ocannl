@@ -323,6 +323,18 @@ let copy_nd (src : Nd.t) : Nd.t =
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
+  (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice owns
+     no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run. Reject
+     direct host reads uniformly -- read the parent tensor instead. [slice_of] is set eagerly at
+     construction, so this also covers the window before lowering decides eligibility. *)
+  (match Tn.slice_of tn with
+  | Some (parent, _) ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.to_host: node %s is an @| slice view; read its parent %s instead"
+              (Tn.debug_name tn) (Tn.debug_name parent))
+  | None -> ());
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
@@ -355,6 +367,19 @@ let to_host ctx (tn : Tn.t) : Nd.t =
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+  (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of] is
+     set eagerly at construction, so this fires even when the slice has not been lowered yet and
+     [alias_of] is still [None] -- without it the [init_from_host] fallback below would allocate a
+     fresh detached buffer for the slice that later alias lowering orphans (the host write would
+     update neither the parent nor any buffer the kernels read). Write the parent instead. *)
+  (match Tn.slice_of tn with
+  | Some (parent, _) ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.from_host: node %s is an @| slice view; write its parent %s instead"
+              (Tn.debug_name tn) (Tn.debug_name parent))
+  | None -> ());
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   let ctx =

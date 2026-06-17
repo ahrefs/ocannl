@@ -593,6 +593,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_slice_alias)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_slice_alias)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_tensor_persistence)
  (package neural_nets_lib)
  (modules test_tensor_persistence)

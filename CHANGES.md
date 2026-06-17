@@ -25,6 +25,14 @@
 - Sasha Rush Tensor Puzzles expressed in the extended einsum notation (gh-ocannl-308).
 - Data-parallel training: `shard_along` / `gather` sharding primitives and a driver
   with merge-buffer gradient all-reduce (part of gh-ocannl-293).
+- Zero-copy slice views (`@|` / `Fetch.Slice`, gh-ocannl-293 subtask 293a): an
+  alias-eligible leading-axis slice no longer materializes a copy — it is lowered as a
+  view that redirects reads/writes to the parent buffer at the (runtime) batch index.
+  **Semantics change**: writing through such a slice now mutates the parent (and vice
+  versa). Slices fall back to the materializing copy loop when ineligible (padded,
+  precision-converting, virtual/constant parent, or non-leading-axis). Host-side value
+  access (`Context.get_values` / `set_values`) of an alias view is rejected with a clear
+  error — read or write the parent tensor instead.
 - Benchmark tables partitioned by `result_label` into per-group sub-records (gh-ocannl-140).
 
 - `Nn_blocks.batch_norm1d` — MLP batch normalization that normalizes over the

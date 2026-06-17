@@ -528,7 +528,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       ctx_buffers =
     let device = context.device in
     let cap = if Utils.settings.large_models then Int.max_value else 0x1_0000_0000 in
-    (* Pass 1: partition the delta, preserving [traced_store] iteration order. *)
+    (* Pass 1: partition the delta, preserving [traced_store] iteration order. Slice-alias views own
+       no buffer and are excluded automatically: [is_in_context_force] returns false for them
+       (gh-ocannl-293 293a). Their parent is materialized and is allocated here (or already present
+       from a prior context) like any other node, since the alias's redirected reads/writes reference
+       the parent in the lowered code. *)
     let working = ref [] and constants = ref [] in
     Hashtbl.iteri traced_store ~f:(fun ~key ~data:node ->
         if Tnode.is_in_context_force key 43 && not (Map.mem context.ctx_buffers key) then
