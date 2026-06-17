@@ -46,6 +46,12 @@ type t = {
   mutable delayed_prec_unsafe : delayed_prec;
       (** Participates in the computation of {!field-prec}. *)
   mutable memory_mode : (memory_mode * int) option;
+  mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
+      (** When [Some (parent, batch_idx)], this node is a zero-copy slice-alias *view* of [parent]:
+          it owns no buffer of its own, and every read/write of it is redirected (during lowering) to
+          [parent] with [batch_idx] prepended as the leading index. Set by {!Assignments.lower} for
+          alias-eligible [Fetch.Slice]s; orthogonal to {!field-memory_mode}. The strong reference to
+          [parent] also keeps it reachable for as long as the alias is. *)
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
 }
@@ -177,9 +183,23 @@ let rec is_materialized_force tn provenance =
       default_to_most_local tn provenance;
       is_materialized_force tn provenance
 
+(** A slice-alias view (see {!field-alias_of}). Such a node owns no buffer of its own; its accesses
+    are redirected to its parent during lowering. *)
+let is_alias tn = Option.is_some tn.alias_of
+
+let alias_of tn = tn.alias_of
+
+(** Marks [tn] as a zero-copy slice-alias view of [parent] with leading index [batch_idx]. Idempotent
+    when re-marked with the same parent. *)
+let set_alias_of tn ~parent ~batch_idx = tn.alias_of <- Some (parent, batch_idx)
+
 let%debug3_sexp rec is_in_context_force (tn : t) (provenance : int) : bool =
   (* Since gh-ocannl-333 there is no host-only storage, so being in context depends only on the
      memory mode. (Buffers never alias host memory: every backend copies on to_host/from_host.) *)
+  (* A slice-alias view owns no buffer: it is never independently in context -- its accesses are
+     redirected to its parent (gh-ocannl-293 subtask 293a). *)
+  if is_alias tn then false
+  else
   match tn.memory_mode with
   | Some ((Virtual | Local), _) -> false
   | Some (On_device, _) -> true
@@ -473,6 +493,7 @@ let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
       id;
       label;
       memory_mode = None;
+      alias_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -502,6 +523,7 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
       id;
       label;
       memory_mode = Some (Materialized, 49);
+      alias_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -576,6 +598,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       id;
       label;
       memory_mode = Some (Materialized, 49);
+      alias_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -597,6 +620,7 @@ let find =
       id = -1;
       label = [];
       memory_mode = None;
+      alias_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }

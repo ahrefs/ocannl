@@ -1,0 +1,11 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+slice is an alias view: true
+slice absent from ctx_buffers (no fresh alloc): true
+parent present in ctx_buffers: true
+read-through batch 0: out=[2 4 6] (expect [2 4 6]): true
+read-through batch 1: out=[8 10 12] (expect [8 10 12]): true
+host get_values on alias raises: true
+host set_values on alias raises: true
+alias still absent from ctx_buffers after rejected host access: true
+write-through: parent=[99 99 99 4 5 6] (expect [99 99 99 4 5 6]): true

@@ -126,12 +126,17 @@ let%debug3_sexp context_nodes (asgns : t) : Tn.t_set =
         in
         Set.union_list (module Tn) (one lhs :: rhses)
     | Set_vec_unop { lhs; rhs; _ } -> Set.union (one lhs) (of_node rhs)
+    (* A slice-alias view's parent must be in context too (it backs the view); the alias itself is
+       dropped by [one] via [is_in_context_force] (gh-ocannl-293 293a). *)
+    | Fetch { array; fetch_op = Slice { sliced; _ }; _ } -> one array + one sliced
     | Fetch { array; _ } -> one array
   in
   loop asgns
 
 (** In the second set, returns the nodes that are not read from after being written to. In the first
-    set, returns the nodes that are ever read from. *)
+    set, returns the nodes that are ever read from. The second set is also used as the set of nodes to
+    materialize; for a [Fetch.Slice] the parent is included there so it is materialized to back a
+    potential zero-copy alias view (gh-ocannl-293 293a). *)
 let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
@@ -157,6 +162,9 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
         in
         (inputs, outputs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
+    (* Materialize the slice parent too, so it can back a zero-copy alias view of [array]; harmless in
+       the copy-fallback case where the parent is read by the copy loop (gh-ocannl-293 293a). *)
+    | Fetch { array; fetch_op = Slice { sliced; _ }; _ } -> (empty, Set.of_list (module Tn) [ array; sliced ])
     | Fetch { array; _ } -> (empty, one array)
   in
   loop asgns
@@ -211,7 +219,27 @@ let%track4_sexp to_low_level code =
                 | Concat _ -> assert false)
   in
   let is_padded tn = Option.is_some (Tn.get_padding tn) in
+  (* Redirect a slice-alias view to its parent: a read/write of the alias at [idcs] becomes a
+     read/write of the parent at [batch_idx :: idcs] -- exactly the index the materializing copy loop
+     used to build for its RHS. Recursive to cover (currently impossible) alias chains. The parent is
+     unpadded by alias eligibility, so the downstream padding logic runs correctly against it
+     (gh-ocannl-293 293a). *)
+  let rec resolve_alias (tn : Tn.t) (idcs : Indexing.axis_index array) : Tn.t * Indexing.axis_index array
+      =
+    match Tn.alias_of tn with
+    | Some (parent, { static_symbol; _ }) ->
+        resolve_alias parent (Array.append [| Iterator static_symbol |] idcs)
+    | None -> (tn, idcs)
+  in
   let get (buffer : buffer) (idcs : Indexing.axis_index array) : Low_level.scalar_t =
+    (* Only [Node] buffers can be slice-alias views; [Merge_buffer] is never redirected. *)
+    let buffer, idcs =
+      match buffer with
+      | Node tn ->
+          let parent, idcs = resolve_alias tn idcs in
+          (Node parent, idcs)
+      | Merge_buffer _ -> (buffer, idcs)
+    in
     let tn = match buffer with Node tn -> tn | Merge_buffer tn -> tn in
     let idcs =
       match (idcs, Lazy.force tn.Tn.dims) with
@@ -233,6 +261,8 @@ let%track4_sexp to_low_level code =
     | Merge_buffer tn -> Low_level.Get_merge_buffer (tn, idcs)
   in
   let set (tn : Tn.t) (idcs : Indexing.axis_index array) (llsc : Low_level.scalar_t) : Low_level.t =
+    (* Write-through a slice-alias view goes to the parent buffer (gh-ocannl-293 293a). *)
+    let tn, idcs = resolve_alias tn idcs in
     let idcs =
       match (idcs, Lazy.force tn.Tn.dims) with
       | [||], [| 1 |] -> [| Fixed_idx 0 |]
@@ -727,9 +757,14 @@ let%track4_sexp to_low_level code =
         @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
             set array idcs @@ Constant_bits i)
     | Fetch { array; fetch_op = Slice { batch_idx = { static_symbol = idx; _ }; sliced }; dims } ->
-        default_padding_before array
-        @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
-            set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
+        if Tn.is_alias array then
+          (* Zero-copy alias view: no materialization. Reads/writes of [array] are redirected to
+             [sliced] (with [idx] prepended) by [get]/[set] (gh-ocannl-293 293a). *)
+          Low_level.Noop
+        else
+          default_padding_before array
+          @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
+              set array idcs @@ get (Node sliced) @@ Array.append [| Iterator idx |] idcs)
     | Fetch { array; fetch_op = Embed_symbol s; dims } ->
         default_padding_before array
         @@ Low_level.loop_over_dims (Lazy.force dims) ~body:(fun idcs ->
@@ -765,6 +800,39 @@ let%track4_sexp to_low_level code =
         @@ Low_level.unroll_dims dims ~body:(fun idcs ~offset ->
             set array idcs @@ Constant values.(offset % size))
   in
+  (* Pre-pass: mark alias-eligible [Fetch.Slice]s before lowering, so [get]/[set] redirect them and
+     the [Slice] lowering emits no copy loop. Eligibility needs forced shapes, which are available
+     here (shape inference is forced before [lower]/[to_low_level]). Idempotent across re-lowerings.
+     A slice falls back to the materializing copy loop unless ALL hold:
+     - leading-axis, rank-drop-by-one (the only shape [Slice] produces): parent rank = child rank + 1
+       and the trailing dims match elementwise;
+     - parent and child share the same precision: the copy loop silently converts precision (e.g. a
+       float buffer sliced then reinterpreted as uint4x32), which a shared-storage alias cannot do;
+     - the parent has backing storage (not [Virtual] / [Effectively_constant]);
+     - parent and child are both unpadded (aliasing would otherwise break the padding contract).
+     (gh-ocannl-293 subtask 293a.) *)
+  let slice_alias_eligible ~(array : Tn.t) ~(sliced : Tn.t) : bool =
+    let pdims = Lazy.force sliced.Tn.dims and cdims = Lazy.force array.Tn.dims in
+    Array.length pdims = Array.length cdims + 1
+    && Array.equal Int.equal (Array.subo pdims ~pos:1) cdims
+    && Ops.equal_prec (Lazy.force array.Tn.prec) (Lazy.force sliced.Tn.prec)
+    && (not (Tn.known_virtual sliced))
+    && (match sliced.Tn.memory_mode with Some (Tn.Effectively_constant, _) -> false | _ -> true)
+    && Option.is_none (Tn.get_padding sliced)
+    && Option.is_none (Tn.get_padding array)
+  in
+  let rec mark_aliases (c : t) : unit =
+    match c with
+    | Noop -> ()
+    | Seq (c1, c2) ->
+        mark_aliases c1;
+        mark_aliases c2
+    | Block_comment (_, c) -> mark_aliases c
+    | Fetch { array; fetch_op = Slice { batch_idx; sliced }; dims = _ } ->
+        if slice_alias_eligible ~array ~sliced then Tn.set_alias_of array ~parent:sliced ~batch_idx
+    | Fetch _ | Accum_op _ | Set_vec_unop _ -> ()
+  in
+  mark_aliases code;
   loop code
 
 let flatten c =

@@ -323,6 +323,17 @@ let copy_nd (src : Nd.t) : Nd.t =
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
+  (* A slice-alias view owns no buffer (gh-ocannl-293 293a); it is absent from [ctx_buffers]. Reject
+     direct host reads with a clear message instead of the generic "not present" error -- read the
+     parent tensor instead. *)
+  (match Tn.alias_of tn with
+  | Some (parent, _) ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.to_host: node %s is a slice-alias view (zero-copy); read its parent %s instead"
+              (Tn.debug_name tn) (Tn.debug_name parent))
+  | None -> ());
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   (* Ensure pending device writes feeding [tn] have completed before reading it back. *)
@@ -355,6 +366,18 @@ let to_host ctx (tn : Tn.t) : Nd.t =
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+  (* A slice-alias view owns no buffer (gh-ocannl-293 293a). Reject direct host writes: otherwise the
+     [init_from_host] fallback below would allocate a fresh detached buffer for the alias, silently
+     breaking write-through. Write the parent tensor instead. *)
+  (match Tn.alias_of tn with
+  | Some (parent, _) ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.from_host: node %s is a slice-alias view (zero-copy); write its parent %s \
+               instead"
+              (Tn.debug_name tn) (Tn.debug_name parent))
+  | None -> ());
   let (Wrapper wrapper) = ctx.backend_wrapper in
   let module Backend = (val wrapper.backend) in
   let ctx =
