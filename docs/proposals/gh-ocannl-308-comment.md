@@ -1,9 +1,9 @@
 # Sasha Rush's Tensor Puzzles in OCANNL
 
 Worked through all 21 [Tensor Puzzles](https://github.com/srush/Tensor-Puzzles) in OCANNL, preferring
-extended einsum notation. The solutions are committed as an executable, self-checking test:
-[`test/einsum/tensor_puzzles.ml`](../../test/einsum/tensor_puzzles.ml) (golden output in
-`tensor_puzzles.expected`), so they stay correct as OCANNL evolves.
+extended einsum notation. The solutions are committed as an executable, self-checking test at
+`test/einsum/tensor_puzzles.ml` (golden output in `test/einsum/tensor_puzzles.expected`), so they
+stay correct as OCANNL evolves.
 
 **Result: 8 solvable in einsum / `%op`, 6 with op-level workarounds (14 solvable total), 7 not expressible today.**
 
@@ -23,7 +23,7 @@ extended einsum notation. The solutions are committed as an executable, self-che
 5. `eye` `(j)->[j,j]` — row grid `[n,1]` vs column grid `[1,n]`, equality: `(r ++ "i=>i0") = (r ++ "j=>0j")`
 6. `triu` `(j)->[j,j]` — same grids, `i <= j` as `not ((r ++ "j=>0j") < (r ++ "i=>i0"))`
 8. `diff` `([i])->[i-1]` — finite-difference operator matrix `D[i,o] = (i = o+1) - (i = o)` built from index grids, then contracted: `a +* "i; i o => o" D`. (The natural valid-convolution spelling `a +* "o<+k; k => o" kernel` currently **hangs shape inference** even on a length-5 input — see gaps below.)
-13. `pad_to` `([i],j)->[j]` — fixed-size padding via concatenation: `(a, zeros) ++^ "i; j => i^j"`. Truncation to a smaller fixed size, and padding to a *runtime* size `j`, remain gaps (no range-slice op; concat needs a statically-known pad width).
+13. `pad_to` `([i],j)->[j]` — both directions for statically-known target sizes: pad via concatenation `(a, zeros) ++^ "i; j => i^j"`, truncate via a rectangular selection matmul `a +* "i; i o => o" sel` with `sel[i,o]=(i=o)`. Only a *runtime* (data-dependent) target `j` remains a gap — that needs a dynamic/range-slice op.
 14. `sequence_mask` `([i,j],[i])->[i,j]` — column index grid vs per-row length: `where ((r ++ "j=>0j") < (len ++ "i=>i0")) values 0`
 18. `linspace` `(lo,hi,n)->[n]` — affine arithmetic on a range: `(range n *. step) + lo`, `step = (hi-lo)/(n-1)` (the `n=1` case divides by zero and is handled separately)
 

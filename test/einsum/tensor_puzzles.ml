@@ -29,7 +29,7 @@
       5  eye          -- index grids + equality: (r ++ "i=>i0") = (r ++ "j=>0j")
       6  triu         -- index grids + comparison: not ((r ++ "j=>0j") < (r ++ "i=>i0"))
       8  diff         -- finite-difference operator matrix D[i,o]=(i=o+1)-(i=o), contracted: a +* D
-      13 pad_to       -- concatenation for padding (fixed sizes); truncation is a gap (see below)
+      13 pad_to       -- pad via concatenation; truncate via rectangular selection matmul (static j)
       14 sequence_mask-- column index grid vs per-row length + where
       18 linspace     -- affine arithmetic on a range tensor
 
@@ -164,14 +164,22 @@ let () =
   let ctx = Train.forward_once ctx p8 in
   show ctx "8 diff" "workaround" p8;
 
-  (* 13 pad_to ([i],j)->[j]: fixed-size padding via concatenation with a zero block.
-     a=[1;2;3] padded to length 5 = [1;2;3;0;0]. Truncation to a SMALLER fixed size, and padding
-     to a RUNTIME size j, are gaps -- see the comment after this block. *)
+  (* 13 pad_to ([i],j)->[j]: both directions, for STATICALLY known target sizes.
+     Pad: a=[1;2;3] -> length 5 = [1;2;3;0;0] via concatenation with a zero block. *)
   let%op a13 = [ 1.; 2.; 3. ] in
   let%op z13 = [ 0.; 0. ] in
   let%op p13 = (a13, z13) ++^ "i; j => i^j" [ "i"; "j" ] in
   let ctx = Train.forward_once ctx p13 in
-  show ctx "13 pad_to" "workaround" p13;
+  show ctx "13 pad_to/pad" "workaround" p13;
+  (* Truncate: a=[1;2;3;4;5] -> first 3 = [1;2;3] via a rectangular selection matmul, sel[i,o]=(i=o)
+     with i in 5, o in 3, contracting i. (A runtime target size j would need a dynamic/range-slice
+     op; here the target size is a static shape, so this is the puzzle in the static-shape regime.) *)
+  let%op a13t = [ 1.; 2.; 3.; 4.; 5. ] in
+  let ri5t = TDSL.range 5 and ro3t = TDSL.range 3 in
+  let%op sel13 = (ri5t ++ "i=>i0") = (ro3t ++ "j=>0j") in
+  let%op p13t = a13t +* "i; i o => o" sel13 in
+  let ctx = Train.forward_once ctx p13t in
+  show ctx "13 pad_to/trunc" "workaround" p13t;
 
   (* 14 sequence_mask ([i,j],[i])->[i,j]: keep values[i,j] while j < length[i]. *)
   let v14 = TDSL.range_of_shape ~output_dims:[ 2; 3 ] () in
@@ -203,9 +211,8 @@ let () =
      %!";
   ()
 
-(* 13 pad_to, continued: TRUNCATION to a smaller fixed size is not directly available -- OCANNL's
-   slicing operator [@|] selects a single index of the leftmost batch axis, not a contiguous
-   prefix range, and there is no range-slice op. It can be emulated by a matmul against a
-   rectangular selection matrix (an eye-like [n,k] grid), but that is no longer the puzzle's spirit.
-   Padding to a *runtime* size j (the puzzle's signature) is also a gap: concatenation requires the
-   pad width to be a statically known shape, whereas j is a runtime integer. *)
+(* 13 pad_to, note on the runtime-size limitation: both directions above use a STATICALLY known
+   target length. The only part not covered is a *runtime* integer target j -- concatenation needs a
+   statically known pad width and the selection matmul needs a statically known output axis, so a
+   data-dependent j would require a dynamic/range-slice op OCANNL does not yet have. OCANNL's slicing
+   operator [@|] selects a single index of the leftmost batch axis, not a contiguous prefix range. *)

@@ -12,7 +12,8 @@ Found 0, in the config file
 #5 eye         [workaround   ] 1 0 0 0 1 0 0 0 1
 #6 triu        [workaround   ] 1 1 1 0 1 1 0 0 1
 #8 diff        [workaround   ] 1 2 3 4
-#13 pad_to     [workaround   ] 1 2 3 0 0
+#13 pad_to/pad [workaround   ] 1 2 3 0 0
+#13 pad_to/trunc [workaround   ] 1 2 3
 #14 seq_mask   [workaround   ] 0 1 0 3 0 0
 #18 linspace   [workaround   ] 2 4 6 8 10
 
