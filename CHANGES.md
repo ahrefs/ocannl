@@ -1,6 +1,31 @@
-## [Unreleased]
+## [Unreleased] — targeting 0.7
+
+> Release note: **0.6.4 is skipped** as a tagged release (last release is 0.6.3). The
+> work originally planned for 0.6.4/0.6.5/0.7.0 (frontend finalization, concatenation,
+> position embeddings, transformer toy) and for 0.7.2 (compiler optimizations, pool
+> allocator) is **consolidated into 0.7**. See [ROADMAP.md](ROADMAP.md).
 
 ### Added
+
+- **Removed the hosted tensor mode** (gh-ocannl-333): dropped the `array` field of
+  `Tnode.t` and the "hosted" memory mode. Tensor value access and printing are now
+  context-mediated; host-init nodes self-initialize at link time. Removed the dead
+  `automatic_host_transfers` setting and the `use_host_memory` hook.
+- Tensor saving, loading, and restoring (gh-ocannl-373).
+- Namespaces for tensor node IDs (gh-ocannl-372).
+- Ternary einsum notation: `Einsum_tern` in shape inference, PPX dispatch, a `Mul3`
+  ternary scalar op across all backends, and `einsum3` / where-with-spec (gh-ocannl-305).
+- Loop-invariant code motion (loop hoisting) prior to visit counting (gh-ocannl-350).
+- Common subexpression elimination after inlining (gh-ocannl-351).
+- Virtual-node inlining extended to non-scalar constants and ranges (gh-ocannl-142).
+- `Uint32`/`Uint64` precisions, with index-embedding operations selecting precision per
+  the `big_models` setting to avoid unnecessary conversions (gh-ocannl-349, gh-ocannl-177).
+- `-march=native` C-compiler flag (gh-ocannl-311); restored CUDA pre-loaded builtins
+  referenced by pointer via a cudajit helper (gh-ocannl-353).
+- Sasha Rush Tensor Puzzles expressed in the extended einsum notation (gh-ocannl-308).
+- Data-parallel training: `shard_along` / `gather` sharding primitives and a driver
+  with merge-buffer gradient all-reduce (part of gh-ocannl-293).
+- Benchmark tables partitioned by `result_label` into per-group sub-records (gh-ocannl-140).
 
 - `Nn_blocks.batch_norm1d` — MLP batch normalization that normalizes over the
   batch axis only. Mirrors `batch_norm2d`; inherits its running-statistics
@@ -41,6 +66,17 @@
 - Concat symbols are now grouped into connected components for iteration using union-find
 - Product space and product iterators now use list arrays to handle concatenated dimensions
 - Moved `datasets/` to separate `dataprep` package
+- Relaxed the required `ocannl_` prefix on commandline arguments; config keys are now
+  validated, and `ocannl_config.example` was renamed to `ocannl_config.reference`
+  (gh-ocannl-409).
+- Renamed routine/kernel parameters from `param`/`params` to `kparam`/`kparams`
+  (gh-ocannl-356).
+- Extended the identifier blacklist with C keywords, primitive-operator names, and
+  backend-specific reserved words (gh-ocannl-383); `debug_name` now collapses
+  consecutive identical label components, e.g. `ident` ×3 → `ident3` (gh-ocannl-281).
+- Removed remaining unnecessary buffer zeroing-out in backend code (gh-ocannl-382).
+- Upgraded slipshow presentation rendering to v0.11.0, with Mermaid diagrams
+  (gh-ocannl-425).
 - **Breaking:** `Backend.device_to_device` now returns `context routine option` instead of `bool`.
   Instead of scheduling the copy as a side effect, it builds a transfer *routine*: callers run
   `r.schedule` (or link a consumer against `r.context`). `None` replaces the old `false` ("nothing
@@ -54,6 +90,12 @@
 
 ### Fixed
 
+- Detect rank cycles among row variables during shape inference (gh-ocannl-247).
+- Prohibit `~logic:"@"` (`Compose`) with `/` and `**` in the `%cd` extension, and fixed
+  ternary `~logic` being mapped to `compose_type` instead of `ternary_type`
+  (gh-ocannl-192).
+- C-syntax tracing `printf` statements no longer produce bad line breaks / indentation
+  (gh-ocannl-179).
 - Removed a duplicate `fsm_transformer` test stanza in `test/training/dune`
   that tripped `dune build @check` with `Executable "fsm_transformer" appears
   for the second time in this directory`.
