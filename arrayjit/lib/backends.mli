@@ -3,6 +3,18 @@
 open Base
 module Schedulers = Schedulers
 
+val plan_pool_segments :
+  cap:int ->
+  what:string ->
+  debug_name:(int -> string) ->
+  (int * int) list ->
+  (int * int) list * int list
+(** gh-ocannl-344 pool-allocator planner. Lays out [(size, alignment)] allocations (in order) into
+    pools so no pool's bumped extent exceeds [cap] bytes (the uint32 4 GB per-pool ceiling when
+    [large_models = false]). Returns each item's [(segment_index, byte_offset)] and the byte size of
+    each segment. Raises {!Ir.Utils.User_error} (naming [what] and [debug_name i]) when a single item
+    exceeds [cap]. Exposed for unit testing the segmenting/cap behavior with synthetic sizes. *)
+
 val finalize :
   'dev 'runner 'event 'optimize_ctx.
   (module Ir.Backend_intf.Backend

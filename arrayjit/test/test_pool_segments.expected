@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+fits-one-pool: assignments=[(0,0); (0,100); (0,200)] sizes=[250]
+splits-at-cap: assignments=[(0,0); (1,0)] sizes=[600; 600]
+exact-then-split: assignments=[(0,0); (1,0)] sizes=[1000; 1]
+alignment-padding: assignments=[(0,0); (0,8)] sizes=[16]
+empty: assignments=[] sizes=[]
+over-cap single item raises = true

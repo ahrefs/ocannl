@@ -1,9 +1,15 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-run1: a              -> { pool_id = 1; offset = 0 }
-run1: b              -> { pool_id = 3; offset = 0 }
-run1: out            -> { pool_id = 2; offset = 0 }
-run2: a              -> { pool_id = 1; offset = 0 }
-run2: b              -> { pool_id = 3; offset = 0 }
-run2: out            -> { pool_id = 2; offset = 0 }
+run1: a              -> { pool_id = 2; offset = 0 }
+run1: b              -> { pool_id = 2; offset = 8 }
+run1: out            -> { pool_id = 1; offset = 0 }
+run2: a              -> { pool_id = 2; offset = 0 }
+run2: b              -> { pool_id = 2; offset = 8 }
+run2: out            -> { pool_id = 1; offset = 0 }
+two outputs share a pool = true
+two outputs have distinct offsets = true
+offsets are 8-byte aligned (2x float32) = true
+two constants share a pool = true
+two constants have distinct offsets = true
+constant pool is separate from working pool = true
 done

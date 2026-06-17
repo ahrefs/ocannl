@@ -98,3 +98,10 @@
    from
    (metal arrayjit.metal_backend arrayjit.ir -> test_metal_alloc.real.ml)
    (-> test_metal_alloc.missing.ml))))
+
+(test
+ (name test_pool_segments)
+ (package arrayjit)
+ (modules test_pool_segments)
+ (deps ocannl_config test_pool_segments.expected)
+ (libraries base stdio arrayjit.context))

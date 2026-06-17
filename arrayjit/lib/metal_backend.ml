@@ -17,6 +17,13 @@ type ullong = Unsigned.ULLong.t
 
 let sexp_of_ullong x = Sexp.Atom (Unsigned.ULLong.to_string x)
 
+(* gh-ocannl-344: number of pool base-pointer parameters every pooled kernel declares. A routine may
+   reach at most this many distinct pools (working delta + ancestor deltas + constant pools + merge);
+   together with the slot table, static-index and merge params this stays well under Metal's ~31
+   argument-buffer binding limit, independently of the tensor-node count. A routine needing more
+   distinct pools raises a clear error at link time. *)
+let metal_max_pools = 16
+
 module Backend_buffer = struct
   type buffer_ptr = Me.Buffer.t (* Use the payload type from metal.ml *)
 
@@ -64,38 +71,18 @@ let track_allocation (buffer : Me.Buffer.t) =
   Stdlib.Gc.finalise (fun _ -> ignore (Atomic.fetch_and_add allocated_memory (-size))) buffer;
   ignore (Atomic.fetch_and_add allocated_memory size)
 
-(* Use Shared storage for unified memory, WriteCombined for CPU writes, Tracked hazards. Shared
-   buffers are accessible by both the CPU and the GPU. *)
+(* gh-ocannl-344: every pool uses Shared storage (unified memory, WriteCombined for CPU writes), so
+   host transfers are a direct memcpy with no staging blit, and a context delta never splits across
+   storage modes. Hazards are Untracked: at pool granularity Metal's automatic tracking would
+   serialize kernels touching *disjoint* tnodes in the same slab (false dependencies); OCANNL's own
+   writer-event machinery ([updating_for]) already expresses the true cross-kernel ordering. The
+   per-tnode private/shared selection (gh-ocannl-320) is retired -- there is no replacement config. *)
 let shared_resource_options =
   Me.ResourceOptions.(
-    storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_tracked)
-
-(* Private storage is GPU-only: the CPU cannot map it, so there is no CPU cache mode to set.
-   Choosing private for GPU-only buffers avoids CPU cache-coherency traffic and lets Metal pick a
-   GPU-friendly layout. *)
-let private_resource_options =
-  Me.ResourceOptions.(storage_mode_private + hazard_tracking_mode_tracked)
-
-(* GPU-only tnodes ([Local], [Device_only], [On_device]) do not require persistent CPU-visible
-   storage. After gh-ocannl-333 there is no [Hosted] mode; on-demand host read-back / upload for
-   [On_device] nodes goes through the backend's blit-based [to_host]/[from_host], so private storage
-   remains valid for them. The materialization-request modes -- [Materialized], [Effectively_constant],
-   the partially-resolved [Never_virtual], and the [None] default -- may still be host-initialized
-   and stay shared. [Virtual] tnodes are inlined and never reach the allocator; they map to shared
-   defensively. *)
-let storage_mode_for_memory_mode : Tn.memory_mode option -> Me.Resource.StorageMode.t = function
-  | Some (Local | Device_only | On_device) -> Me.Resource.StorageMode.Private
-  | Some (Effectively_constant | Virtual | Never_virtual | Materialized) | None ->
-      Me.Resource.StorageMode.Shared
-
-let resource_options_for_mode (mode : Tn.memory_mode option) =
-  match storage_mode_for_memory_mode mode with
-  | Me.Resource.StorageMode.Private -> private_resource_options
-  | Shared | Managed | Memoryless -> shared_resource_options
+    storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_untracked)
 
 (* The Metal slab allocator: a private [(device_id, pool_id) -> Metal.Buffer.t] table backing the
-   shared {!Backend_intf.Slab_alloc}. Storage mode (private vs. shared) is a per-pool property carried
-   by [?mode]. *)
+   shared {!Backend_intf.Slab_alloc}. All pools are Shared/Untracked; [?mode] is ignored. *)
 module Slab = struct
   open Backend_intf
 
@@ -104,9 +91,9 @@ module Slab = struct
 
   let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
-  let alloc_pool ?mode (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
+  let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     let buffer =
-      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) (resource_options_for_mode mode)
+      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) shared_resource_options
     in
     track_allocation buffer;
     Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
@@ -128,9 +115,10 @@ module Slab = struct
     Me.CommandBuffer.commit command_buffer;
     Me.CommandBuffer.wait_until_completed command_buffer
 
-  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
-    (* Phase-1 policy: one pool per tnode at offset 0. *)
-    assert (offset = 0);
+  let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
+    (* Resolve the slab [Me.Buffer.t] for [pool_id]. Metal buffers are objects, not raw pointers, so
+       the byte [offset] is NOT folded into the handle here; callers apply it via blit
+       source/destination offsets, or fold it into a GPU address for the kernel pointer table. *)
     Hashtbl.find_exn pools (device.device_id, pool_id)
 
   let storage_mode_of_pool (device : device) ~pool_id =
@@ -363,7 +351,8 @@ module Fresh () = struct
       in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
       Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:temp_buffer
-        ~source_offset:0 ~destination_buffer:dst_ptr ~destination_offset:0 ~size:size_in_bytes;
+        ~source_offset:0 ~destination_buffer:dst_ptr ~destination_offset:dst_loc.offset
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
@@ -384,8 +373,9 @@ module Fresh () = struct
           Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
       in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr ~source_offset:0
-        ~destination_buffer:temp_buffer ~destination_offset:0 ~size:size_in_bytes;
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
+        ~source_offset:src_loc.offset ~destination_buffer:temp_buffer ~destination_offset:0
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
@@ -402,25 +392,27 @@ module Fresh () = struct
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
     let src_ptr = Slab.resolve_pool src.device src_loc in
 
-    let memcpy ~dst_ptr =
+    let memcpy ~dst_ptr ~dst_offset =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
       let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr ~source_offset:0
-        ~destination_buffer:dst_ptr ~destination_offset:0 ~size:size_in_bytes;
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
+        ~source_offset:src_loc.offset ~destination_buffer:dst_ptr ~destination_offset:dst_offset
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer
     in
 
     match (into_merge_buffer, dst_loc) with
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_loc"
-    | No, Some dst_loc -> memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
+    | No, Some dst_loc ->
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc) ~dst_offset:dst_loc.offset
     | Copy, _ ->
         opt_alloc_merge_buffer
           ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
           ~size_in_bytes dst.device;
         let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
-        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
   (* --- Compilation and Linking --- *)
   type code = {
@@ -461,7 +453,12 @@ module Fresh () = struct
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
 
     let arg_int_prefix =
-      if Utils.settings.big_models then "const uint64_t& " else "const uint32_t& "
+      if Utils.settings.large_models then "const uint64_t& " else "const uint32_t& "
+
+    (* gh-ocannl-344: pass materialized tensor nodes through [metal_max_pools] bound pool buffers + a
+       slot table instead of one buffer per tnode, so a kernel reaching hundreds of nodes stays under
+       Metal's ~31 argument-buffer binding limit. [link_proc] binds the pools and fills the slots. *)
+    let ptr_param_style = `Pooled metal_max_pools
 
     let extra_args =
       [
@@ -773,15 +770,71 @@ using namespace metal;|} in
       traced_stores;
     }
 
+  (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
+     use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node, matching
+     the kernel prologue order), and return [index_to_pool] for binding [__pool<i>]. Raises if the
+     routine touches more than [metal_max_pools] distinct pools. The returned [CArray] is kept alive
+     by the caller so its backing store outlives the buffer copy. *)
+  let build_pool_binding (dev : device) (ctx_buffers : ctx_buffers) (tns : Tn.t list) =
+    let tbl = Hashtbl.create (module Int) and index_to_pool = ref [] and next = ref 0 in
+    let idx_of pool_id =
+      match Hashtbl.find tbl pool_id with
+      | Some i -> i
+      | None ->
+          let i = !next in
+          Int.incr next;
+          Hashtbl.set tbl ~key:pool_id ~data:i;
+          index_to_pool := pool_id :: !index_to_pool;
+          i
+    in
+    (* (pool_index, byte_offset) per node, in the slot order the shader prologue indexes. *)
+    let pairs =
+      List.map tns ~f:(fun tn ->
+          let loc = Map.find_exn ctx_buffers tn in
+          (idx_of loc.pool_id, loc.offset))
+    in
+    if !next > metal_max_pools then
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Metal_backend: routine needs %d distinct pools, over the metal_max_pools=%d binding \
+               budget"
+              !next metal_max_pools);
+    (* The slot-table element width must match the MSL type [C_syntax.pool_slot_msl_typ] declared in
+       the shader: 64-bit under [large_models] (offsets may exceed UINT32_MAX once the 4 GB per-pool
+       cap is lifted), else 32-bit. [keep] holds the backing [CArray] so it outlives the buffer copy. *)
+    let slots_buf, keep =
+      let make (type a) (elem : a Ctypes.typ) (of_int : int -> a) =
+        let vals = List.concat_map pairs ~f:(fun (p, o) -> [ of_int p; of_int o ]) in
+        let arr = Ctypes.CArray.of_list elem vals in
+        let buf =
+          Me.Buffer.on_device_with_bytes dev.dev
+            ~bytes:Ctypes.(to_voidp (CArray.start arr))
+            ~length:(List.length vals * Ctypes.sizeof elem)
+            shared_resource_options
+        in
+        (buf, fun () -> ignore (Sys.opaque_identity arr))
+      in
+      if C_syntax.pool_slot_is_64 () then make Ctypes.ullong Unsigned.ULLong.of_int
+      else make Ctypes.uint Unsigned.UInt.of_int
+    in
+    (Array.of_list (List.rev !index_to_pool), slots_buf, keep)
+
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
       ~(kparams : (string * kparam_source) list) ~lowered_bindings
-      ~(ctx_arrays : buffer_ptr Tn.t_map) : Task.t =
+      ~(ctx_buffers : ctx_buffers) : Task.t =
     let dev = prior_context.device in
     let metal_device = dev.dev in
     let queue = dev.runner.queue in
     let runner_label = get_name dev in
     let func = Me.Library.new_function_with_name library func_name in
     let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
+    (* Precompute the pool-index assignment + slot table once (addresses/offsets are stable after
+       allocation). [Some (index_to_pool, slots_buf, arr)] iff this routine uses the pooled params. *)
+    let pool_binding =
+      List.find_map kparams ~f:(function _, Kparam_pool_slots tns -> Some tns | _ -> None)
+      |> Option.map ~f:(build_pool_binding dev ctx_buffers)
+    in
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label];
@@ -796,16 +849,34 @@ using namespace metal;|} in
         (* Set arguments *)
         List.iteri kparams ~f:(fun index (_p_name, p_source) ->
             match p_source with
-            | Kparam_ptr tn when Map.mem ctx_arrays tn ->
-                let buffer = Map.find_exn ctx_arrays tn in
-                Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
+            | Kparam_ptr tn when Map.mem ctx_buffers tn ->
+                (* gh-ocannl-344: the tnode is a region of a (possibly multi-tenant) pool slab; bind
+                   the slab buffer at the tnode's byte offset so the kernel pointer parameter points
+                   at this tnode, not the pool base. *)
+                let loc = Map.find_exn ctx_buffers tn in
+                Me.ComputeCommandEncoder.set_buffer encoder ~offset:loc.offset ~index
+                  (Slab.resolve_pool dev loc)
             | Kparam_ptr tn ->
                 (* After gh-ocannl-333 there is no host array to wrap as a constant buffer: every
-                   in-context node (including constants) is allocated in [ctx_arrays] by
-                   [alloc_if_needed], which uploads any host initialization data there. *)
+                   in-context node (including constants) is allocated in [ctx_buffers] by the
+                   allocator, which uploads any host initialization data there. *)
                 failwith
                   [%string
-                    "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
+                    "Kparam_ptr %{Tn.debug_name tn} not found in ctx_buffers for %{func_name}"]
+            | Kparam_pool_slab i ->
+                (* Bind pool param [i] to the slab assigned index [i]; the unused tail (i >= number of
+                   distinct pools) duplicates pool 0 so the shader's local pool array is fully bound
+                   without extra bindings. Pools are bound at offset 0 -- the per-node byte offset is
+                   applied in-shader via the slot table. *)
+                let index_to_pool, _, _ = Option.value_exn ~here:[%here] pool_binding in
+                let pool_id =
+                  if i < Array.length index_to_pool then index_to_pool.(i) else index_to_pool.(0)
+                in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index
+                  (Slab.resolve_pool dev { pool_id; offset = 0 })
+            | Kparam_pool_slots _ ->
+                let _, slots_buf, _ = Option.value_exn ~here:[%here] pool_binding in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index slots_buf
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in
@@ -814,7 +885,8 @@ using namespace metal;|} in
             | Merge_buffer -> (
                 match !(dev.merge_buffer) with
                 | Some loc ->
-                    Me.ComputeCommandEncoder.set_buffer encoder ~index (Slab.resolve_pool dev loc)
+                    Me.ComputeCommandEncoder.set_buffer encoder ~offset:loc.offset ~index
+                      (Slab.resolve_pool dev loc)
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
                 (* TODO:We could tag logs with a run id. *)
@@ -840,8 +912,8 @@ using namespace metal;|} in
     in
     Task.Task
       {
-        context_lifetime = (library, pso, ctx_arrays);
-        (* Keep library and PSO alive *)
+        context_lifetime = (library, pso, ctx_buffers, pool_binding);
+        (* Keep library, PSO and the slot-table buffer alive *)
         description = "launches " ^ func_name ^ " on " ^ runner_label;
         work;
       }
@@ -852,10 +924,9 @@ using namespace metal;|} in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
-    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
-        ~lowered_bindings ~ctx_arrays
+        ~lowered_bindings ~ctx_buffers
     in
     (lowered_bindings, task)
 
@@ -870,11 +941,8 @@ using namespace metal;|} in
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, kparams) ->
               Option.map ctx_buffers_opts.(i) ~f:(fun ctx_buffers ->
-                  let ctx_arrays =
-                    Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device)
-                  in
                   link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings
-                    ~ctx_arrays)))
+                    ~ctx_buffers)))
     in
     (lowered_bindings, tasks)
 end

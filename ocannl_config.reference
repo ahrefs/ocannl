@@ -61,8 +61,12 @@ check_half_prec_constants_cutoff=16384.0
 default_prng_variant=light
 
 # If true, use uint64 for indexing arithmetic. If false (default), use uint32 for indexing arithmetic.
-# This affects all backends' kernel index parameters and local index variables.
-# Set to true for models with tensors larger than 2^32 elements.
+# This affects all backends' kernel index parameters and local index variables, and the Metal pool
+# offset width. Set to true for models with tensors/pools larger than 2^32 elements/bytes.
+large_models=false
+
+# Deprecated alias for large_models (its pre-gh-ocannl-344 name): read as a fallback only when
+# large_models is unset, so existing configs / CLI / OCANNL_BIG_MODELS keep working.
 big_models=false
 
 # If non-empty, generated code files are placed in build_files/<prefix>/ instead of

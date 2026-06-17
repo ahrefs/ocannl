@@ -1,11 +1,11 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-alloc_pool Local         -> Private
-alloc_pool Device_only   -> Private
-alloc_pool On_device     -> Private
+alloc_pool Local         -> Shared
+alloc_pool Device_only   -> Shared
+alloc_pool On_device     -> Shared
 alloc_pool Effectively_constant -> Shared
 alloc_pool Materialized  -> Shared
 alloc_pool (no mode)     -> Shared
-memset_zero Device_only  -> Private
-from_host/to_host private round-trip preserves values -> true
-memset_zero private pool reads back zeros -> true
+from_host/to_host at offset>0 preserves values -> true
+memset_zero at offset>0 reads back zeros -> true
+offset>0 ops leave region A (offset 0) intact -> true

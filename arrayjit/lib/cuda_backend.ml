@@ -82,16 +82,22 @@ module Slab = struct
         Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
         Hashtbl.remove pools key)
 
-  let memset_zero (device : device) ~pool_id ~offset:_ ~size_in_bytes =
-    (* Phase-1 offset is 0, so zero the slab from its base. *)
-    let ptr = Hashtbl.find_exn pools (device.device_id, pool_id) in
-    if size_in_bytes > 0 then
-      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
+  (* Advance a [CUdeviceptr] by [offset] bytes. cudajit (>= 0.7.0) represents a device pointer as
+     [Deviceptr of Unsigned.uint64], so pooled sub-region addressing is base-address arithmetic.
+     NOTE: CUDA is not buildable in this dev environment; this mirrors the CPU/Metal offset contract
+     and must be confirmed against the installed cudajit at CUDA build time. *)
+  let ptr_at (Cu.Deviceptr.Deviceptr base) ~offset : buffer_ptr =
+    if offset = 0 then Cu.Deviceptr.Deviceptr base
+    else Cu.Deviceptr.Deviceptr Unsigned.UInt64.(add base (of_int offset))
 
   let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
-    (* Phase-1 policy: one pool per tnode at offset 0. *)
-    assert (offset = 0);
-    Hashtbl.find_exn pools (device.device_id, pool_id)
+    (* Pooled policy: many tnodes share a pool slab at distinct byte offsets. *)
+    ptr_at (Hashtbl.find_exn pools (device.device_id, pool_id)) ~offset
+
+  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
+    let ptr = resolve_pool device { pool_id; offset } in
+    if size_in_bytes > 0 then
+      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
 end
 
 (* [initialized_devices] never forgets its entries. *)
@@ -137,9 +143,15 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let%track4_sexp finalize_device (device : device) =
     Cu.Context.set_current device.dev.primary_context;
     Cu.Context.synchronize ();
-    (* Note: this is not necessary as releasing the primary context by GC will reset the context. *)
-    Hashtbl.iter device.constant_buffer_cache ~f:(fun (loc : Backend_intf.buffer_loc) ->
-        Cu.Deviceptr.mem_free (Slab.resolve_pool device loc))
+    (* Note: this is not necessary as releasing the primary context by GC will reset the context.
+       gh-ocannl-344: constants are bump-packed, so several cache entries share one constant pool
+       slab; free each distinct [pool_id] exactly once (freeing per-entry would double-free / free a
+       sub-region pointer). [Slab.free_pool] frees the slab and drops its table entry. *)
+    Hashtbl.data device.constant_buffer_cache
+    |> List.map ~f:(fun (loc : Backend_intf.buffer_loc) -> loc.pool_id)
+    |> List.dedup_and_sort ~compare:Int.compare
+    |> List.iter ~f:(fun pool_id ->
+           Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
     let name_cu = name ^ ".cu" in
@@ -337,10 +349,10 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
 
     (* Use native CUDA types for loop indices and arguments instead of stdint.h types *)
     let loop_index_type =
-      if Utils.settings.big_models then "unsigned long long " else "unsigned int "
+      if Utils.settings.large_models then "unsigned long long " else "unsigned int "
 
     let arg_int_prefix =
-      if Utils.settings.big_models then "const unsigned long long " else "const unsigned int "
+      if Utils.settings.large_models then "const unsigned long long " else "const unsigned int "
 
     let typ_of_prec = function
       | Ops.Byte_prec _ -> "unsigned char"
@@ -978,7 +990,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
                          [%string
                            "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too \
                             big: %{upto#Int}"]);
-              S.Int !i)
+              S.Int !i
+          | _name, (Kparam_pool_slab _ | Kparam_pool_slots _) ->
+              (* The CUDA backend uses per-tnode pointer params ([`Per_param] codegen); only the
+                 Metal backend emits the pooled slab / slot parameters. *)
+              invalid_arg "Cuda_backend.link: unexpected pooled kparam (CUDA uses per-tnode pointers)")
       in
       set_ctx @@ ctx_of prior_context;
       [%log "launching the kernel"];

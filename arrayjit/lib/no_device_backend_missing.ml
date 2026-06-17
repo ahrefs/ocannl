@@ -35,6 +35,7 @@ struct
   let memset_zero_raw _ptr ~offset:_ ~size_in_bytes:_ =
     failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
+  let offset_buffer _ptr ~bytes:_ = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
   let get_used_memory () = failwith @@ "Backend " ^ Config.name ^ " missing (no device)"
 
   let buffer_to_buffer ~dst:_ ~src:_ ~size_in_bytes:_ =

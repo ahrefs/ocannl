@@ -38,6 +38,9 @@ module Mock_raw = struct
 
   let free_pool_raw = Some (fun ptr -> freed := ptr :: !freed)
   let memset_zero_raw _ptr ~offset:_ ~size_in_bytes:_ = ()
+
+  (* A "pointer" is an integer id; advancing it by [bytes] models sub-region addressing. *)
+  let offset_buffer base ~bytes = base + bytes
   let buffer_to_buffer ~dst:_ ~src:_ ~size_in_bytes:_ = ()
   let host_to_buffer _nd ~dst:_ = ()
   let buffer_to_host _nd ~src:_ = ()
@@ -79,6 +82,7 @@ module Mock_raw_gc = struct
 
   let free_pool_raw = None (* relies on GC + the dropped table entry *)
   let memset_zero_raw _ptr ~offset:_ ~size_in_bytes:_ = ()
+  let offset_buffer base ~bytes = base + bytes
   let buffer_to_buffer ~dst:_ ~src:_ ~size_in_bytes:_ = ()
   let host_to_buffer _nd ~dst:_ = ()
   let buffer_to_host _nd ~src:_ = ()
@@ -102,6 +106,16 @@ let () =
   (* A unique tnode pool id never pre-exists, so allocating it frees nothing. *)
   Mock_slab.alloc_pool device ~pool_id:1 ~size_in_bytes:16 ~alignment:1;
   Stdio.printf "freed count after unique-id alloc = %d\n" (List.length !Mock_raw.freed);
+
+  (* Pooled addressing: resolving { pool_id; offset } must advance the slab base by [offset] bytes
+     (the multi-tenant-pool invariant). resolve_pool at offset 0 returns the base; at offset N
+     returns base + N. If [resolve_pool] reverted to asserting offset = 0, the second call below
+     would raise instead of returning base + 8. *)
+  let base1 = Mock_slab.resolve_pool device (loc 1) in
+  let base1_at8 = Mock_slab.resolve_pool device { Backend_intf.pool_id = 1; offset = 8 } in
+  Stdio.printf "resolve_pool offset 0 = base = %b\n"
+    (base1_at8 - base1 = 8 && Mock_slab.resolve_pool device (loc 1) = base1);
+  Stdio.printf "resolve_pool offset 8 = base + 8 = %b\n" (base1_at8 = base1 + 8);
 
   (* free_pool must drop the private table entry even for a GC-reliant backend (free_pool_raw =
      None), so the strong reference is released and the buffer can be reclaimed. If free_pool were

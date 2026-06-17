@@ -60,8 +60,8 @@ let fp8 = Fp8_prec Fp8
 let single = Single_prec Single
 let double = Double_prec Double
 
-(** Returns the precision to use for indexing arithmetic based on the big_models setting. *)
-let index_prec () = if Utils.settings.big_models then uint64 else uint32
+(** Returns the precision to use for indexing arithmetic based on the large_models setting. *)
+let index_prec () = if Utils.settings.large_models then uint64 else uint32
 
 let is_up_to_fp16 = function
   | Half_prec _ | Byte_prec _ | Fp8_prec _ -> true

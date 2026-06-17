@@ -1,13 +1,16 @@
-(* Regression test for the buffer-addressing refactor (backend-buffer-addressing proposal): buffer
-   handles are deterministic integer [buffer_loc = { pool_id; offset }] resolved against a
-   backend-private pool table, not opaque per-run pointers.
+(* Regression test for the buffer-addressing refactor + gh-ocannl-344 pooling: buffer handles are
+   deterministic integer [buffer_loc = { pool_id; offset }] resolved against a backend-private pool
+   table, and a context's working (non-constant) delta is packed into a SINGLE pool at increasing
+   byte offsets rather than one pool per tnode.
 
-   It compiles+links the same tiny graph into two independently-created fresh [sync_cc] backends and
-   prints the resulting [ctx_buffers] locations. The invariant pinned here: locations are
-   deterministic and reproducible across fresh backends (the debuggability win), one pool per tnode
-   at offset 0 (phase-1 policy), and the two runs print identical [{ pool_id; offset }] values. If
-   the allocator stopped minting pool ids in deterministic tnode-iteration order, or reintroduced
-   opaque pointers, the two blocks below would differ or print noise. *)
+   Two invariants are pinned:
+   1. Determinism / reproducibility: linking the same graph into two independently-created fresh
+      [sync_cc] backends yields identical [{ pool_id; offset }] values (the debuggability win).
+   2. Pooling: when a single routine materializes several non-constant tnodes, they share one
+      [pool_id] with distinct, increasing offsets; read-only inputs (constants) live in separate
+      per-device pools. If the allocator regressed to one-pool-per-tnode, the two outputs below would
+      print different pool ids (and all offsets 0); if it stopped honoring offsets, the computed
+      values would be wrong. *)
 
 open Base
 open Ocannl
@@ -46,7 +49,47 @@ let run_once tag =
   |> List.iter ~f:(fun (name, pool_id, offset) ->
          Stdio.printf "%s: %-14s -> { pool_id = %d; offset = %d }\n" tag name pool_id offset)
 
+(* A routine that materializes two non-constant outputs in one link, to demonstrate that the working
+   delta packs into a single pool. *)
+let run_packed () =
+  Tensor.unsafe_reinitialize ();
+  let backend = Backends.fresh_backend ~backend_name:"sync_cc" () in
+  let module Backend = (val backend : Ir.Backend_intf.Backend) in
+  let device = Backend.get_device ~ordinal:0 in
+  let root = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) device in
+  let a = make_tensor "a" [| 1.0; 2.0 |] in
+  let b = make_tensor "b" [| 3.0; 4.0 |] in
+  let p = make_tensor "p" [| 0.0; 0.0 |] in
+  let q = make_tensor "q" [| 0.0; 0.0 |] in
+  (* Two assignments sequenced into one computation => one routine with two materialized outputs. *)
+  let%cd combo =
+    p =: a + b;
+    q =: a *. b
+  in
+  let code = Backend.compile root.BI.optimize_ctx Idx.Empty combo in
+  let routine = Backend.link root code in
+  let loc name =
+    Map.to_alist routine.BI.context.BI.ctx_buffers
+    |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
+           if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+  in
+  match (loc "p", loc "q", loc "a", loc "b") with
+  | Some lp, Some lq, Some la, Some lb ->
+      (* Both outputs are non-constant working nodes: same pool, distinct increasing offsets. *)
+      Stdio.printf "two outputs share a pool = %b\n" (lp.pool_id = lq.pool_id);
+      Stdio.printf "two outputs have distinct offsets = %b\n" (lp.offset <> lq.offset);
+      Stdio.printf "offsets are 8-byte aligned (2x float32) = %b\n"
+        (lp.offset % 4 = 0 && lq.offset % 4 = 0);
+      (* The two read-only constants pack into one (per-device) constant pool at distinct offsets,
+         separate from the working pool. *)
+      Stdio.printf "two constants share a pool = %b\n" (la.pool_id = lb.pool_id);
+      Stdio.printf "two constants have distinct offsets = %b\n" (la.offset <> lb.offset);
+      Stdio.printf "constant pool is separate from working pool = %b\n"
+        (la.pool_id <> lp.pool_id)
+  | _ -> Stdio.printf "outputs/constants = MISSING\n"
+
 let () =
   run_once "run1";
   run_once "run2";
+  run_packed ();
   Stdio.printf "done\n"

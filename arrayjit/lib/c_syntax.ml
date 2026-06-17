@@ -13,6 +13,17 @@ module Tn = Tnode
 
 type t = PPrint.document
 
+(* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
+   With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a byte
+   offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader declares
+   -- must be 64-bit to avoid silent truncation; otherwise 32-bit suffices (offsets are capped under
+   4 GB). This is the single source of truth shared by the codegen (the [const ... * __pool_slots]
+   MSL type) and the backend (the [Ctypes] element type), so the two cannot drift. [large_models] is a
+   startup-fixed global, read identically when the source is generated and when the table is filled. *)
+let pool_slot_is_64 () = Utils.settings.large_models
+
+let pool_slot_msl_typ () = if pool_slot_is_64 () then "ulong" else "uint"
+
 module type C_syntax_config = sig
   val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
@@ -30,6 +41,15 @@ module type C_syntax_config = sig
   val typ_of_prec : Ops.prec -> string
   val vec_typ_of_prec : length:int -> Ops.prec -> string
   val ident_blacklist : string list
+
+  val ptr_param_style : [ `Per_param | `Pooled of int ]
+  (** How materialized in-context tensor nodes are passed to the kernel. [`Per_param] (the default,
+      used by C and CUDA) emits one typed pointer parameter per node, whose host side binds
+      [pool_base + offset] -- byte-identical to the pre-pooling codegen. [`Pooled n] (Metal) emits a
+      fixed [n] byte-pointer pool parameters plus one (pool_index, byte_offset) slot table, and a
+      kernel prologue that forms each node's typed pointer by casting (pools at slot.pool) + offset.
+      This collapses O(num_nodes) buffer bindings to [n] + 1, which Metal needs to stay under its
+      ~31 argument-buffer binding limit. *)
 
   val float_log_style : string
   (** Format specifier for printing floating point numbers in debug logs. *)
@@ -88,11 +108,12 @@ struct
   let kernel_prep_line = ""
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
-  let arg_int_prefix = if Utils.settings.big_models then "const uint64_t " else "const uint32_t "
-  let loop_index_type = if Utils.settings.big_models then "uint64_t " else "uint32_t "
+  let arg_int_prefix = if Utils.settings.large_models then "const uint64_t " else "const uint32_t "
+  let loop_index_type = if Utils.settings.large_models then "uint64_t " else "uint32_t "
   let extra_args = []
   let typ_of_prec = Ops.c_typ_of_prec
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
+  let ptr_param_style = `Per_param
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =
@@ -879,9 +900,11 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     current_traced_store := Some traced_store;
     Hash_set.clear zero_out_seen;
-    let kparams : (string * kparam_source) list =
+    (* The materialized in-context nodes, in deterministic [traced_store] order, with their per-param
+       pointer declaration (used by the [`Per_param] style). *)
+    let ptr_params : (string * Tn.t) list =
       List.rev
-      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ kparams ->
+      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ acc ->
           let backend_info, is_param =
             if Tn.is_virtual_force tn 334 then ("Virt", false)
             else if in_ctx tn then ("Ctx", true)
@@ -892,9 +915,27 @@ module C_syntax (B : C_syntax_config) = struct
           let backend_info = Sexp.Atom backend_info in
           if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
             tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-          if is_param then
-            (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, Kparam_ptr tn) :: kparams
-          else kparams)
+          if is_param then (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, tn) :: acc
+          else acc)
+    in
+    (* [`Per_param]: one typed pointer param per node (C/CUDA, byte-identical to before).
+       [`Pooled n]: [n] byte-pointer pool params + one slot table (Metal binding fix). *)
+    let kparams : (string * kparam_source) list =
+      match B.ptr_param_style with
+      | `Per_param -> List.map ptr_params ~f:(fun (decl, tn) -> (decl, Kparam_ptr tn))
+      | `Pooled n_pools -> (
+          match ptr_params with
+          | [] -> []
+          | _ ->
+              let slabs =
+                List.init n_pools ~f:(fun i ->
+                    (Printf.sprintf "char* __pool%d" i, Kparam_pool_slab i))
+              in
+              let slots =
+                ( Printf.sprintf "const %s* __pool_slots" (pool_slot_msl_typ ()),
+                  Kparam_pool_slots (List.map ptr_params ~f:snd) )
+              in
+              slabs @ [ slots ])
     in
     let idx_params =
       List.map idx_params ~f:(fun s ->
@@ -976,10 +1017,38 @@ module C_syntax (B : C_syntax_config) = struct
                     let base_msg = Printf.sprintf "%s = %%d\n" p_name_and_type in
                     let ident_doc = pp_symbol s.static_symbol in
                     B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
-                      ~base_message_literal:base_msg ~args_docs:[ ident_doc ])
+                      ~base_message_literal:base_msg ~args_docs:[ ident_doc ]
+                | Kparam_pool_slab _ | Kparam_pool_slots _ ->
+                    (* Pooled (Metal): the per-node pointers are materialized as locals in the pool
+                       prologue and logged at their first [Set]; the pool bases / slot table
+                       themselves are not separately logged here. *)
+                    empty)
               sorted_params
        in
        body := !body ^^ debug_init_doc ^^ hardline);
+
+    (* Pooled (Metal) prologue: build the local pool-base array from the bound pool params, then form
+       each materialized node's typed pointer from its slot. Indices match the [Kparam_pool_slots]
+       order (= [ptr_params]). The rest of the body indexes [get_ident tn] exactly as in the per-param
+       style. *)
+    (match B.ptr_param_style with
+    | `Per_param -> ()
+    | `Pooled n_pools when not (List.is_empty ptr_params) ->
+        let pools_decl =
+          Printf.sprintf "%schar* __pools[%d] = { %s };" B.buffer_prefix n_pools
+            (String.concat ~sep:", " (List.init n_pools ~f:(Printf.sprintf "__pool%d")))
+        in
+        let defs =
+          List.mapi ptr_params ~f:(fun k (_decl, tn) ->
+              let typ = B.typ_of_prec (Lazy.force tn.Tn.prec) in
+              Printf.sprintf "%s%s* %s = (%s%s*)(__pools[__pool_slots[%d]] + __pool_slots[%d]);"
+                B.buffer_prefix typ (get_ident tn) B.buffer_prefix typ (2 * k) ((2 * k) + 1))
+        in
+        body :=
+          !body ^^ string "/* Pool base pointers. */" ^^ hardline
+          ^^ separate_map hardline string (pools_decl :: defs)
+          ^^ hardline
+    | `Pooled _ -> ());
 
     let local_decls =
       string "/* Local declarations and initialization. */"

@@ -415,6 +415,10 @@ let%track3_sexp link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers (
                           %{Tn.debug_memory_mode tn.Tn.memory_mode}"]
             in
             Param_2 (ref (Some c_ptr), link bs ps Ctypes.(ptr void @-> cs))
+        | _, (Kparam_pool_slab _ | Kparam_pool_slots _) :: _ ->
+            (* The C backend uses per-tnode pointer params ([`Per_param] codegen); only the Metal
+               backend emits the pooled slab / slot parameters. *)
+            invalid_arg "Cc_backend.link: unexpected pooled kparam (C uses per-tnode pointers)"
       in
       (* Reverse the input order because [Indexing.apply] will reverse it again. Important:
          [code.bindings] are traversed in the wrong order but that's OK because [link] only uses
