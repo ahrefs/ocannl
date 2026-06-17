@@ -191,13 +191,16 @@ type transpose_type =
       (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
 [@@deriving equal, sexp_of]
 
-(** If you miss expressivity here, leave a note on
-    {{:https://github.com/ahrefs/ocannl/issues/305}issue 305}. *)
 type ternary_type =
   | Pointwise_tern  (** As in the operation [Where]. *)
   | Compose_accumulate  (** As in the operation [FMA]. *)
   | Defined_by_cd_logic
       (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
+  | Einsum_tern of string * delayed_var_ref list
+      (** Ternary einsum contraction. The spec string has three RHS slots separated by [;] and one LHS
+          slot after [=>]. Axis labels absent from the LHS become reduction axes. E.g. ["ij;jk;km=>im"]
+          for a chain contraction (note: O(N⁴) — prefer binary chains for chain contractions;
+          ["p;a;b=>out"] for select-before-reduce with [where]. *)
 [@@deriving equal, sexp_of]
 
 (** Extracts any available shape information from the initialization or fetch. *)
