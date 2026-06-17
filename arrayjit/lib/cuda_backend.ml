@@ -82,16 +82,22 @@ module Slab = struct
         Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
         Hashtbl.remove pools key)
 
-  let memset_zero (device : device) ~pool_id ~offset:_ ~size_in_bytes =
-    (* Phase-1 offset is 0, so zero the slab from its base. *)
-    let ptr = Hashtbl.find_exn pools (device.device_id, pool_id) in
-    if size_in_bytes > 0 then
-      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
+  (* Advance a [CUdeviceptr] by [offset] bytes. cudajit (>= 0.7.0) represents a device pointer as
+     [Deviceptr of Unsigned.uint64], so pooled sub-region addressing is base-address arithmetic.
+     NOTE: CUDA is not buildable in this dev environment; this mirrors the CPU/Metal offset contract
+     and must be confirmed against the installed cudajit at CUDA build time. *)
+  let ptr_at (Cu.Deviceptr.Deviceptr base) ~offset : buffer_ptr =
+    if offset = 0 then Cu.Deviceptr.Deviceptr base
+    else Cu.Deviceptr.Deviceptr Unsigned.UInt64.(add base (of_int offset))
 
   let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
-    (* Phase-1 policy: one pool per tnode at offset 0. *)
-    assert (offset = 0);
-    Hashtbl.find_exn pools (device.device_id, pool_id)
+    (* Pooled policy: many tnodes share a pool slab at distinct byte offsets. *)
+    ptr_at (Hashtbl.find_exn pools (device.device_id, pool_id)) ~offset
+
+  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
+    let ptr = resolve_pool device { pool_id; offset } in
+    if size_in_bytes > 0 then
+      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
 end
 
 (* [initialized_devices] never forgets its entries. *)

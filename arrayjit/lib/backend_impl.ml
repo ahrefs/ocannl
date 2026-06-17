@@ -47,6 +47,12 @@ module type No_device_buffer_and_copying = sig
   val alloc_pool_raw : size_in_bytes:int -> buffer_ptr
   val free_pool_raw : (buffer_ptr -> unit) option
   val memset_zero_raw : buffer_ptr -> offset:int -> size_in_bytes:int -> unit
+
+  val offset_buffer : buffer_ptr -> bytes:int -> buffer_ptr
+  (** Returns a handle for the slab pointer advanced by [bytes]. Used by {!Make_slab.resolve_pool} to
+      turn a [{ pool_id; offset }] into the concrete pointer for a sub-region of a multi-tenant pool.
+      For [bytes = 0] this must return the base unchanged. *)
+
   val buffer_to_buffer : dst:buffer_ptr -> src:buffer_ptr -> size_in_bytes:int -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
   val buffer_to_host : Ndarray.t -> src:buffer_ptr -> unit
@@ -82,6 +88,10 @@ module No_device_buffer_and_copying () :
       done)
 
   let free_pool_raw = None
+
+  let offset_buffer (base : buffer_ptr) ~(bytes : int) : buffer_ptr =
+    if bytes = 0 then base
+    else Ctypes.(to_voidp (from_voidp uint8_t base +@ bytes))
 
   type void_buffer_ptr = (Stdlib.Obj.t option, unit Ctypes_static.typ) Ctypes_ptr.Fat.t
 
@@ -175,10 +185,9 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
     Raw.memset_zero_raw ptr ~offset ~size_in_bytes
 
   let resolve_pool device { pool_id; offset } =
-    (* Phase-1 policy: one pool per tnode at offset 0. Aliasing (offset > 0) is future work and would
-       add backend-specific pointer arithmetic here. *)
-    assert (offset = 0);
-    Hashtbl.find_exn pools (device.device_id, pool_id)
+    (* Pooled policy: many tnodes share a pool at distinct byte offsets. Resolve to the slab base and
+       advance by [offset] via the backend's raw pointer arithmetic. *)
+    Raw.offset_buffer (Hashtbl.find_exn pools (device.device_id, pool_id)) ~bytes:offset
 end
 
 let next_global_device_id : Utils.atomic_int = Atomic.make 0

@@ -4,5 +4,7 @@ grow freed the old pool = true
 grow installed a new pool = true
 freed count after grow = 1
 freed count after unique-id alloc = 1
+resolve_pool offset 0 = base = true
+resolve_pool offset 8 = base + 8 = true
 gc backend exposes free_pool (not None) = true
 gc backend entry present before free = true, after free = false

@@ -128,9 +128,10 @@ module Slab = struct
     Me.CommandBuffer.commit command_buffer;
     Me.CommandBuffer.wait_until_completed command_buffer
 
-  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
-    (* Phase-1 policy: one pool per tnode at offset 0. *)
-    assert (offset = 0);
+  let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
+    (* Resolve the slab [Me.Buffer.t] for [pool_id]. Metal buffers are objects, not raw pointers, so
+       the byte [offset] is NOT folded into the handle here; callers apply it via blit
+       source/destination offsets, or fold it into a GPU address for the kernel pointer table. *)
     Hashtbl.find_exn pools (device.device_id, pool_id)
 
   let storage_mode_of_pool (device : device) ~pool_id =
@@ -363,7 +364,8 @@ module Fresh () = struct
       in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
       Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:temp_buffer
-        ~source_offset:0 ~destination_buffer:dst_ptr ~destination_offset:0 ~size:size_in_bytes;
+        ~source_offset:0 ~destination_buffer:dst_ptr ~destination_offset:dst_loc.offset
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
@@ -384,8 +386,9 @@ module Fresh () = struct
           Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
       in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr ~source_offset:0
-        ~destination_buffer:temp_buffer ~destination_offset:0 ~size:size_in_bytes;
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
+        ~source_offset:src_loc.offset ~destination_buffer:temp_buffer ~destination_offset:0
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer)
 
@@ -402,25 +405,27 @@ module Fresh () = struct
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
     let src_ptr = Slab.resolve_pool src.device src_loc in
 
-    let memcpy ~dst_ptr =
+    let memcpy ~dst_ptr ~dst_offset =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
       let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr ~source_offset:0
-        ~destination_buffer:dst_ptr ~destination_offset:0 ~size:size_in_bytes;
+      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
+        ~source_offset:src_loc.offset ~destination_buffer:dst_ptr ~destination_offset:dst_offset
+        ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
       Me.CommandBuffer.commit command_buffer
     in
 
     match (into_merge_buffer, dst_loc) with
     | No, None -> invalid_arg "Metal_backend.device_to_device: missing dst_loc"
-    | No, Some dst_loc -> memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
+    | No, Some dst_loc ->
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc) ~dst_offset:dst_loc.offset
     | Copy, _ ->
         opt_alloc_merge_buffer
           ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
           ~size_in_bytes dst.device;
         let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
-        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
+        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
   (* --- Compilation and Linking --- *)
   type code = {
