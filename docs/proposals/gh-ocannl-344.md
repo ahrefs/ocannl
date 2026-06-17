@@ -1,149 +1,292 @@
-# Proposal: Implement a Universal Pool Allocator across backends
+# Proposal: Universal Pool Allocator — one-pool-per-context-delta + Metal binding fix
 
 GitHub issue: [ahrefs/ocannl#344](https://github.com/ahrefs/ocannl/issues/344)
 
-## Status update (2026-06-12)
+**Status**: Open, scheduled under v0.7.2 "Memory management" in ROADMAP.md (the GitHub milestone
+still reads v0.7). The behavior-preserving **foundation** this work was built on has already
+landed (see "What is already in place"), so what remains is the allocation *policy* and the Metal
+codegen change — both confined behind an existing seam.
 
-- Issue is OPEN. The GitHub milestone reads v0.7, but ROADMAP.md (the authority) lists #344 under v0.7.2 "Memory management" (was due mid-April 2026, now past due).
-- Not started: `ctx_arrays` and `buffer_ptr` still exist unchanged (`backend_intf.ml:7-8`), no pool allocator module exists, and the setting is still `big_models` (`utils.ml:30`).
-- Rename landed (#356, commit 9262ab44): kernel params are now `kparams` and `Kparam_ptr` (formerly `params`/`Param_ptr`); references below have been updated.
-- `device_to_device` now *returns* a transfer routine, with static merge-buffer verification (commit 1162646d; `backend_intf.ml:307`), and `merge_buffer_use` is now `No | Copy` (`Streaming_for` is gone). AC 9 must account for merge-buffer transfers being compiled routines.
-- Deprecated multi-stream infrastructure was removed from the backend layer (commit 272c0880) and cross-stream automatic coherence was dropped in the #341 cleanup; multiple streams per device remain, so per-stream vs per-device pool ownership is still a live design question.
-- Metal private storage mode for GPU-only buffers landed (commit 1cf9a95b) and merge buffers are now memory-mode aware (399177b0): `alloc_buffer`/`alloc_array` now take a `?mode` argument and Metal selects storage mode per tnode via `storage_mode_for_memory_mode` (`metal_backend.ml:75-90`). Pools must therefore be segregated by storage mode (private vs shared), not assigned one mode arbitrarily — this refines the gh-ocannl-320 note below.
-- Tensor persistence (`lib/persistence.ml`, #373) landed; it restores into *hosted* buffers, orthogonal to device pooling.
-- Cited line numbers drifted; refreshed in place below as of 2026-06-12. The core design remains valid and is still the prerequisite for the alias-view work (task-e4003e5f) noted under "Relationship to other work".
+## Summary
 
-## Status update (2026-06-16): scope split — foundation extracted
+The addressing contract, interface simplification, and allocator seam that the original #344
+called for are **done**, landed as the behavior-preserving refactor in
+[backend-buffer-addressing.md](backend-buffer-addressing.md) (commits `7d189e75`, `d1c139f1`,
+`afa4d26f`). Buffers are already `buffer_loc = { pool_id; offset }`, `ctx_arrays` is already
+`ctx_buffers`, and a shared `allocate` seam (`backends.ml:61`) already mints deterministic
+per-device pool ids through the backend slab API (`alloc_pool` / `free_pool` / `memset_zero`).
+The current policy behind that seam is **one pool per tnode at offset 0** — byte-for-byte
+equivalent to the old per-tnode allocation.
 
-A design deep-dive re-sequenced this work. The behavior-preserving **foundation** — folding
-`stream` into `device`, replacing `buffer_ptr` with `buffer_loc = { pool_id; offset }`, moving
-the backend pointer into a device-private `pool_id → 'base` table (dropping the `'buffer_ptr`
-type parameter from the shared types), and introducing a shared **allocator seam** with a
-trivial one-pool-per-tnode policy — is extracted into a new proposal:
-[backend-buffer-addressing.md](backend-buffer-addressing.md). **#344 now depends on it.**
+This proposal is therefore trimmed to the **pooling capability**: swap the one-pool-per-tnode
+policy for a **one-pool-per-context-delta policy** (a context's new tnodes packed into a single
+slab), and add the **Metal-only codegen change** that makes this collapse Metal's per-tnode buffer
+bindings to O(num_pools). Neither touches the `buffer_loc` contract, the slab API, nor CUDA/C
+generated code.
 
-This proposal is **trimmed to the pooling capability**: the bump-arena allocation policy and the
-Metal 31-binding fix, landing as a *policy swap behind the seam* that
-backend-buffer-addressing.md establishes. Key reframings from the deep-dive:
+The design choices below are deliberate and narrow:
 
-- **The contract type and rename moved out.** AC 2 (`buffer_offset` type — now `buffer_loc`) and
-  AC 3 (`ctx_arrays → ctx_buffers`) are realized in backend-buffer-addressing.md. AC 1 splits:
-  the seam + trivial policy land there; only the **bump-arena policy body** stays here.
-- **Bump-only scope, no reuse (parity with today).** The allocator is a non-reuse bump
-  allocator: peak pool size = Σ(all materialized tnodes in a context), the same as today's
-  per-tnode allocation. This is *not* a memory-saving change. Liveness-based offset reuse and
-  eviction (the "thick allocator") are deferred — the forcing function is "Σ-tnodes exceeds
-  device memory while the working set would fit."
-- **Lifecycle collapses under bump + context-tied lifetimes.** No free-list, no slab
-  refcounting, no runtime exhaustion *policy* beyond "current slab full → append another." The
-  pool classes are: per-**context** working arena (freed at `finalize`, the only release point
-  under bump; nested via the parent-context chain) + per-**device** constant pool (dedup across
-  contexts) + merge/staging kept out of pools. Note this is per-*context*, not per-*stream*:
-  with one compute stream per device, a per-stream working pool would never free until device
-  teardown.
-- **Codegen change is Metal-only (AC 5 over-scoped).** Only Metal has a binding limit. CUDA/C
-  keep per-tnode pointer kernel params computed host-side as `pool_base + offset` at dispatch;
-  their generated `.c`/`.cu` stays byte-identical. Only Metal emits in-shader `pool_base +
-  offset`, binds pools once, and passes offsets as runtime args (`set_bytes` / offsets-table
-  buffer — never source constants, since `code` objects are reused across contexts).
-- **Deferred and decoupled.** AC 7 (`large_models` / uint64): cap each pool at ≤4 GB, keep
-  uint32 offsets, open another pool past that; only a single >4 GB tnode needs uint64 — defer
-  it, error clearly meanwhile. AC 9: keep merge buffers **out** of pools (pointer stability),
-  not "integrated."
-- **Retained Metal design wisdom (still in scope here):** untracked hazard mode for pool
-  buffers, storage-mode pool segregation (private vs shared), offsets-as-runtime-args.
-
-The acceptance criteria and design review below are kept for that retained capability; read AC
-1/2/3 and recommendation framing through the lens of this split.
+- **Bump-only, no reuse (parity with today).** Peak pool size = Σ(all materialized tnodes in a
+  context) — the same total as today's per-tnode allocation. This is *not* a memory-saving
+  change; it consolidates many allocations into few, fixing Metal's binding limit and reducing
+  allocation overhead. Liveness-based offset reuse and eviction (the "thick allocator") are
+  deferred; their forcing function is "Σ-tnodes exceeds device memory while the working set would
+  fit," which has not yet bitten.
+- **One pool per context delta.** A `pool_id` *is* a slab — one contiguous backend allocation with
+  one base pointer (see "Pools and slabs" below). When a child context adds tensors beyond its
+  parent, *all* of that delta's non-constant tensors go into a **single pool** sized exactly to the
+  delta, owned by that context. The delta is known atomically at link time, so the slab is sized in
+  one shot — no free-list, no refcounting, no "slab full → append" logic. The only release point is
+  `finalize`, which frees exactly the pool(s) that context minted. The pool classes are:
+  - per-**context-delta** working pool (one slab, freed at the context's `finalize`),
+  - per-**device** constant pool (dedup across contexts, mirroring today's
+    `constant_buffer_cache`; freed at device teardown, not context `finalize`),
+  - the reserved merge pool, kept **out** of any working pool.
+  This is per-*context*, not per-*stream*: with one compute stream per device, a per-stream
+  working pool would never free until device teardown.
+- **Uniform always-copy semantics, single storage mode (no segregation).** All backends copy on
+  `to_host`/`from_host` — no device buffer ever aliases a host array. The dead `use_host_memory`
+  host-aliasing hook (already a no-op after #333) is deleted, making always-copy a cross-backend
+  invariant and giving identical, reproducible buffer behavior on CPU, CUDA, and Metal. Metal uses
+  one storage mode for every pool — **shared**, chosen so host transfers need no staging — with no
+  per-tnode segregation and no mode config. This is what collapses what would otherwise force
+  multiple working pools per delta back to one.
+- **Codegen change is Metal-only.** Only Metal has a binding limit. CUDA and C keep their
+  per-tnode pointer kernel params, computed host-side as `pool_base + offset` at dispatch — their
+  generated `.c`/`.cu` stays byte-identical, confining `.expected`-file churn to Metal. Only
+  Metal emits in-shader `pool_base + offset`, binds pools once, and passes offsets as runtime
+  args.
+- **Offsets are runtime args, never source constants.** `compile`/`compile_batch` run before
+  linking and allocation, and `code`/`code_batch` objects are reused across contexts, so offsets
+  are only known at link time. They must be passed as `set_bytes` per offset or via a single
+  small offsets-table buffer. Specializing shader source per link would forfeit code reuse.
 
 ## Goal
 
-Replace per-tensor-node individual buffer allocations with a pool allocator that consolidates tensors into a small number of large pool buffers shared across all backends (Metal, CUDA, C). Each tensor is addressed as a `(pool_id, byte_offset)` pair within a pool buffer, rather than holding its own device pointer. This solves Metal's ~31 argument buffer binding limit, reduces allocation overhead, improves memory locality, and provides a natural place to introduce configurable 32-bit vs 64-bit index arithmetic via the `large_models` setting.
+Replace per-tensor-node individual buffer allocations with a pool allocator that packs tensors
+into a small number of large pool buffers across all backends (Metal, CUDA, C). Each tensor is
+already addressed as `{ pool_id; offset }`; this work makes a pool actually hold many tensors
+rather than one. The immediate driver is Metal's ~31 argument-buffer binding limit; the change
+also reduces allocation overhead, improves memory locality, and gives a natural home for
+configurable 32-bit vs 64-bit index arithmetic via the `large_models` setting.
+
+## What is already in place (foundation, landed)
+
+The following were #344 acceptance criteria in the original draft and are now realized — do not
+re-do them:
+
+- **`buffer_loc` addressing.** `type buffer_loc = { pool_id : int; offset : int }`
+  (`backend_intf.ml:14`); `ctx_buffers : buffer_loc Map.M(Tnode).t` (`backend_intf.ml:16`). The
+  `'buffer_ptr` type parameter is gone from the shared interface; the backend keeps a private
+  `pool_id → 'base` table.
+- **`ctx_arrays → ctx_buffers` rename**, across the interface and all backends.
+- **Slab API** replacing the per-tnode `Alloc_buffer` module type: `alloc_pool` / `free_pool`
+  (optional, `None` for GC backends) / `memset_zero`, int-in / int-out (`backend_intf.ml:23-40`).
+- **Shared allocator seam** `allocate` (`backends.ml:61`), advancing `device.next_pool_id` in
+  deterministic tnode order. Current policy: one pool per tnode, offset 0.
+- **Merge buffer as a reserved pool** (`merge_buffer_pool_id = 0`, `backend_intf.ml:125`);
+  `constant_buffer_cache` stores `buffer_loc` (`backend_intf.ml:114`).
+- **`stream` folded into `device`**; `?mode` (memory mode) carried on `alloc_pool`. *(This work
+  retires `?mode`'s role in selecting Metal storage mode — Metal commits to shared, see below — so
+  the argument becomes vestigial for storage selection.)*
+- **Adjacent landings that simplified the ground:** hosted memory removed (#333, `8f949e3f`) — so
+  every in-context node, including constants, is allocated in `ctx_buffers` with no host-pointer
+  wrapping (and `use_host_memory` is left a no-op — see "Uniform always-copy semantics" below);
+  Metal private storage mode (#320, `1cf9a95b`) via `storage_mode_for_memory_mode` /
+  `resource_options_for_mode` (`metal_backend.ml:86-92`); `device_to_device` returning a compiled
+  transfer routine with static merge-buffer verification (`1162646d`), and `merge_buffer_use = No
+  | Copy` (`backend_intf.ml:43`).
+
+## Design
+
+### Pools and slabs
+
+Under the addressing contract `buffer_loc = { pool_id; offset }`, the backend resolves an access as
+`base_of(pool_id) + offset` against a **single** base pointer (its private `pool_id → 'base`
+table). So a `pool_id` maps to exactly one **slab** — one contiguous backend allocation
+(`MTLBuffer` / `CUdeviceptr` / C `malloc`) with one base and one size; many tnodes share a pool
+only by taking different offsets into that one slab. A pool cannot span two slabs (offset is
+meaningless across non-contiguous bases), so "grow the arena" means "mint another `pool_id`," never
+"add a slab to a pool." Throughout this document **pool ≡ slab**.
+
+### One-pool-per-context-delta allocation policy (the seam swap)
+
+The change lives entirely in the shared `link`/`allocate` path (`backends.ml:61`,
+`alloc_if_needed` fold at `backends.ml:532`) plus a small per-device pool-state table
+(`pool_id → { total_size; bump_offset }`). Today `allocate` mints a fresh `pool_id` and a full
+slab for every tnode. Under the new policy, `link` allocates a context's delta in **two passes**:
+
+1. **Enumerate and size.** Fold over `code.lowered.traced_store` to collect the delta — the
+   in-context tnodes not already present in the parent's `ctx_buffers` and not constants — and sum
+   `align(size, alignment)` over them. This is the whole delta, known atomically before any
+   allocation.
+2. **Allocate one pool, bump-assign.** `alloc_pool` a single slab of that total, then assign each
+   delta tnode `{ pool_id = slab; offset = running_bump }`. No "slab full → append" path: the slab
+   is sized correctly the first time.
+
+- **Constant / read-only** nodes (`node.read_only || Tn.known_constant key`, `backends.ml:517`)
+  bypass the delta pool: they dedup into the per-**device** constant pool via
+  `constant_buffer_cache` exactly as today (bump-packed), because they are shared across contexts
+  and outlive any single context.
+- **Merge/staging** nodes stay on the reserved merge pool — never a working pool (see below).
+- **4 GB cap** (`large_models = false`, uint32 offsets): if a delta's total exceeds 4 GB, split it
+  across as many pools as needed. This is the *only* multi-pool-per-delta case, and it is
+  deterministic — not exhaustion-driven.
+
+`finalize` (`backends.ml:599`) frees exactly the working pool(s) the context minted. Since a
+delta-pool holds only nodes new to that context, the existing skip-by-membership logic (skip
+entries owned by a parent context or the constant cache) generalizes cleanly to pool granularity:
+free each distinct working `pool_id` whose nodes are all this context's. There is no other release
+point.
+
+**Determinism is preserved.** The delta is enumerated in `traced_store`'s existing deterministic
+order, so pool ids and offsets remain reproducible across runs — the debuggability property the
+foundation established stays intact.
+
+### Metal binding fix (the only codegen change)
+
+Today Metal dispatch iterates `kparams` and calls `set_buffer` once per `Kparam_ptr tn`
+(`metal_backend.ml:805-809`) — O(num_tnodes) bindings, which blows the ~31-slot limit for models
+with more than ~30 materialized tensors in one kernel. After this work, Metal:
+
+- binds each **pool** once via `set_buffer` — the handful of pools a kernel actually reads from:
+  the context's delta-pool chain (its own delta plus any ancestor-context deltas it touches), the
+  constant pool, and the merge pool. A few bindings regardless of tnode count,
+- emits in-shader `pool_base + offset` casts to the typed pointer for each tensor access,
+- passes all per-tensor offsets through **one small offsets-table buffer** (one extra binding,
+  stable layout per routine), indexed in-shader. Source-level constants are ruled out because
+  `code` objects outlive any single context's allocation, and per-tensor `set_bytes` is ruled out
+  because each `set_bytes` consumes a buffer argument index — re-introducing the O(num_tnodes)
+  binding blowup pooling exists to remove.
+
+CUDA and C are untouched: they keep `Kparam_ptr tn` kernel params and compute the pointer
+host-side as `pool_base + offset` at dispatch (CUDA `cuda_backend.ml:961`, C `cc_backend.ml:403`).
+Their generated code stays byte-identical, so `.expected` churn is confined to the Metal backend
+and the allocator. In-shader `pool_base + offset` for *all* backends is deferred until
+migration/eviction actually requires it.
+
+**Untracked hazards for pool buffers.** Pools currently allocate with
+`hazard_tracking_mode_tracked` (`metal_backend.ml:71,77`). At pool granularity that makes Metal
+serialize kernels touching *disjoint* tensors in the same pool — false dependencies. Pool buffers
+should use `hazard_tracking_mode_untracked` and rely on OCANNL's own event machinery
+(`updating_for`, writer events), which already expresses the true dependencies.
+
+### Uniform always-copy semantics; Metal storage mode is always shared
+
+Two coupled simplifications, chosen for reproducibility and to avoid storage-mode bookkeeping:
+
+- **Always-copy everywhere, no host aliasing.** `to_host`/`from_host` always copy on every
+  backend; a device buffer never aliases a host array. This is already the de-facto behavior after
+  #333 — `use_host_memory` (`backend_impl.ml:40,61`, `metal_backend.ml:161-165`,
+  `c_syntax.ml:23,80`) is ignored by `is_in_context_force` (`tnode.ml:182-185`) and its function
+  form is never applied. Make it an explicit invariant by **deleting `use_host_memory`** (the
+  parameter, the three backend signature fields, the CPU `Some (fun … ptr -> ptr)`, and Metal's
+  unused `get_buffer_for_ptr`). The payoff is cross-backend symmetry: CPU, CUDA, and Metal all
+  expose buffers through the same copy path, so behavior and `.expected` output are identical and
+  reproducible across backends.
+- **Metal pools are always shared storage.** Every Metal pool uses `storage_mode_shared`; the
+  per-tnode `storage_mode_for_memory_mode` / `resource_options_for_mode` selection
+  (`metal_backend.ml:86-92`) is retired, with no replacement config. Shared is chosen as the
+  less-hassle mode: on unified memory it matches private's compute and bandwidth, and it lets host
+  copies be a direct CPU `memcpy` with **no staging blit or sync** — the round-trip that private
+  storage would force on every `to_host`/`from_host`. (`cpu_cache_mode` still tunes upload vs
+  readback within shared; that is a separate, later knob.)
+
+Together these are what make one-pool-per-context-delta hold: with a single device-wide storage
+mode there is nothing to segregate, so a delta never splits across storage modes. Allocation,
+addressing, and the working/constant/merge pool structure are storage-mode-independent.
+
+### `large_models` setting controls index width
+
+Rename (or alias) the existing `big_models` setting (`utils.ml:23,38,529`) to `large_models` for
+consistency with the issue's terminology. It already drives `arg_int_prefix` / `loop_index_type`
+in `c_syntax.ml:94-95` (uint32 vs uint64); extend it to pool-offset arithmetic.
+
+Offset width caps **per-pool size**, not total memory. With `large_models = false` (uint32),
+cap each pool at 4 GB and open additional pools past that — total device memory stays unbounded.
+Only a single tnode larger than 4 GB genuinely needs uint64; that case can be deferred with a
+clear error meanwhile. Keep this decoupled from `loop_index_type`, which is about element indexing
+*within* one tensor, not pool offsets.
+
+### Merge buffers stay out of working pools
+
+The reserved merge pool (`merge_buffer_pool_id = 0`) is left out of any working pool. The
+transfer-routine design (`device_to_device` returning a compiled routine) requires the merge
+buffer's pointer to stay stable across routine invocations, which a working pool that may relocate
+or reuse offsets cannot guarantee. A single-tenant reserved pool is the simplest thing that
+preserves that invariant, and the foundation already addresses it uniformly as
+`{ pool_id = 0; offset = 0 }`.
 
 ## Acceptance Criteria
 
-1. **Pool allocator module**: A new `Pool_allocator` module (or extension of `backend_intf.ml`) provides a backend-agnostic pool allocation interface. Each pool has a backend-specific base pointer, a total size, and a bump/free-list allocator that returns `{ pool_id; offset; size_in_bytes }` records with configurable alignment.
-
-2. **`buffer_ptr` replaced by `buffer_offset`**: The `'buffer_ptr buffer` type in `backend_intf.ml` (line 7) is replaced by a `buffer_offset` record containing `pool_id : int`, `offset : int`, and `size_in_bytes : int`. The per-tnode map `ctx_arrays` (line 8) maps tnodes to `buffer_offset` values instead of raw backend pointers.
-
-3. **`ctx_arrays` renamed to `ctx_buffers`**: All occurrences of `ctx_arrays` across `backend_intf.ml`, `backend_impl.ml`, `metal_backend.ml`, `cuda_backend.ml`, `cc_backend.ml`, and all callers are renamed to `ctx_buffers`.
-
-4. **Pool-based allocation in all backends**: Each backend's `Alloc_buffer` implementation allocates from pools rather than making individual `mem_alloc` / `Buffer.on_device` / `allocate_n` calls:
-   - **Metal** (`metal_backend.ml` lines 97-130): `Me.Buffer.on_device` creates pool buffers, not per-tnode buffers. *(Update 2026-06-12: allocation is now memory-mode aware via `resource_options_for_mode`; pools must be segregated by storage mode.)*
-   - **CUDA** (`cuda_backend.ml` lines 58-75): `Cu.Deviceptr.mem_alloc` creates pool buffers.
-   - **C** (`backend_impl.ml` lines 44-72): `Ctypes.allocate_n` creates pool buffers.
-
-5. **Code generation emits pool base + offset access**: `c_syntax.ml` parameter generation (lines 847-881) emits pool base pointers as kernel arguments and offset constants (or additional arguments) instead of per-tnode pointer arguments. Generated C/Metal/CUDA code casts `(pool_base + offset)` to the appropriate typed pointer for each tensor access.
-
-6. **Metal binding count reduced**: Metal kernel dispatch (`metal_backend.ml` lines 785-815) binds O(num_pools) buffers via `set_buffer` instead of O(num_tnodes). Offsets are passed as kernel constants or a small argument buffer. This keeps total bindings well within Metal's 31-slot limit for models with hundreds of tensor nodes. *(Update 2026-06-12: offsets cannot be source-level "kernel constants" — compilation (`compile`/`compile_batch`) happens before linking and allocation, and `code`/`code_batch` objects are reusable across contexts, so offsets are only known at link time. They must be runtime arguments: `set_bytes` per offset, or a single small offsets-table buffer. Link-time source specialization would forfeit code reuse.)*
-
-7. **`large_models` setting controls index width**: The existing `big_models` setting in `Utils.settings` is renamed (or aliased) to `large_models`. When `large_models = true`, pool offsets and index arithmetic use `uint64_t` (supporting pools > 4 GB). When `false` (default), `uint32_t` is used. This affects `arg_int_prefix` and `loop_index_type` in `c_syntax.ml` (lines 94-95) and offset-related types in generated code.
-
-8. **Pool lifecycle management**: Pools are created at device/stream initialization with a configurable initial size. When a pool is exhausted, a new pool is allocated (pools are never resized, since that would invalidate offsets). Pools are freed when the owning device/stream is finalized. The `allocated_buffer` reuse pattern in `stream_ref` (line 108 of `backend_intf.ml`) is replaced by pool-level management.
-
-9. **Merge buffer integration**: The `merge_buffer` field on `stream_ref` (`backend_intf.ml` line 106) works with the pool allocator. Merge buffers can be allocated from a dedicated temporary pool or from the main pool with fast reclaim. *(Update 2026-06-12: `device_to_device` now returns a compiled transfer routine with static merge-buffer verification, and `merge_buffer_use` is `No | Copy` — pool integration must keep merge-buffer pointers stable across routine invocations.)*
-
-10. **No regression in existing tests**: All existing tests pass after the refactoring.
+1. **One-pool-per-context-delta policy behind the seam.** `link` allocates a context's delta as a
+   single slab sized to the delta (two passes: enumerate+size, then `alloc_pool` once and
+   bump-assign offsets), instead of one slab per tnode. Peak total allocation equals today's
+   (non-reuse bump). Pool ids and offsets remain deterministic in `traced_store` order.
+2. **Pool classes.** Per-context-delta working pool (freed at that context's `finalize`),
+   per-device constant pool (dedup via `constant_buffer_cache`, freed at device teardown), and the
+   reserved merge pool kept out of working pools.
+3. **Uniform always-copy semantics; Metal always shared.** `use_host_memory` is deleted (the
+   parameter and all backend bindings), making always-copy `to_host`/`from_host` a cross-backend
+   invariant — no device buffer aliases a host array. Every Metal pool uses `storage_mode_shared`;
+   the per-tnode `storage_mode_for_memory_mode` selection is retired with no replacement config.
+4. **Metal binding count reduced.** Metal dispatch binds O(num_pools) buffers via `set_buffer`
+   instead of O(num_tnodes), with all offsets passed through a single offsets-table buffer. Total
+   bindings stay within the ~31-slot limit for models with hundreds of tensor nodes. Pool buffers
+   use `hazard_tracking_mode_untracked`.
+5. **CUDA/C generated code unchanged.** CUDA and C keep per-tnode `Kparam_ptr` params with the
+   pointer computed host-side as `pool_base + offset`; their `.c`/`.cu` output is byte-identical.
+6. **`large_models` setting.** `big_models` is renamed (or aliased) to `large_models`; pool
+   offsets use uint32 with each pool capped at ≤ 4 GB (open another pool past the cap), uint64
+   reserved for the single-tnode-over-4 GB case (may be deferred with a clear error). Decoupled
+   from `loop_index_type`.
+7. **No regression in existing tests.** All existing tests pass; `.expected` changes are confined
+   to the Metal backend and allocator-level output.
 
 ## Context
 
-### Why pool allocation is necessary
+### Why pooling is necessary
 
-Metal compute shaders have a hard limit of ~31 argument buffer bindings per compute command encoder. The current architecture binds one Metal buffer per tensor node (`metal_backend.ml` line 790: `Me.ComputeCommandEncoder.set_buffer encoder ~index buffer`), which fails for models with more than ~30 materialized tensors in a single kernel. A pool allocator consolidates all tensors into 1-3 large pool buffers, each bound once, with individual tensors addressed by offset arithmetic within the shader.
-
-### Current allocation architecture
-
-Each backend allocates buffers independently per tensor node. The `Alloc_buffer` module type (`backend_intf.ml`) defines `alloc_buffer`, `alloc_array`, `alloc_zeros`, and `free_buffer`; `alloc_buffer`/`alloc_array` now also take a `?mode` (memory mode) argument. The `ctx_arrays` field (`backend_intf.ml` line 157) in the context type maps each tnode to a backend-specific `buffer_ptr`. At link time, each `Kparam_ptr tn` (renamed from `Param_ptr` in #356) in the kernel parameter list causes a separate buffer binding.
-
-Key code paths affected:
-- **Parameter list construction**: `c_syntax.ml` lines 847-862 -- each in-context tnode becomes a `Kparam_ptr tn` entry in `kparams`
-- **Metal dispatch**: `metal_backend.ml` lines 785-815 -- iterates `Kparam_ptr` params, calls `set_buffer` per tnode
-- **CUDA dispatch**: `cuda_backend.ml` line 940 -- iterates `Kparam_ptr` params, pushes device pointers as kernel args
-- **C dispatch**: `cc_backend.ml` line 402 -- iterates `Kparam_ptr` params, passes pointers to compiled function
-- **Buffer type**: `backend_intf.ml` line 7 -- `type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int }`
+Metal compute shaders have a hard limit of ~31 argument-buffer bindings per compute command
+encoder. Today the Metal backend binds one buffer per tensor node
+(`metal_backend.ml:805-809`), which fails for models with more than ~30 materialized tensors in a
+single kernel. Packing tensors into 1–3 large pools, each bound once and addressed by offset
+arithmetic in-shader, removes the limit. Pooling retains independent value — reduced allocation
+overhead, better locality, and the substrate for future eviction and alias views — regardless of
+the Metal driver.
 
 ### Alignment requirements
 
 Pool sub-allocations must respect backend-specific alignment:
-- **Metal**: 256 bytes (page alignment preferred for private storage mode)
-- **CUDA**: 256 bytes (memory coalescing alignment)
-- **C/host**: 64 bytes (cache line alignment)
+
+- **Metal**: 256 bytes (page alignment preferred)
+- **CUDA**: 256 bytes (memory-coalescing alignment)
+- **C/host**: 64 bytes (cache-line alignment)
 
 ### Relationship to other work
 
-- **gh-ocannl-333 (remove hosted memory)**: Pool allocation changes buffer management; synergistic with removing the host-side `array` field since device buffers become the sole storage.
-- **gh-ocannl-320 (Metal private mode)**: Entire pools get one storage mode, simplifying private mode adoption. *(Update 2026-06-12: private storage mode for GPU-only buffers has since landed — commit `1cf9a95b` — so pools should default to private mode for non-hosted tnodes.)*
-- **gh-ocannl-340 (Local_scope init)**: Local tnodes with short lifetimes benefit from arena-style allocation within pools.
-- **task-e4003e5f (slice as alias view, subtask 293a of #293)**: blocked on this work. It
-  will enter *alias* entries into `ctx_buffers` — a tnode resolving to another tnode's
-  `(pool_id, offset + delta)` without owning storage. **Design constraint added
-  2026-06-12**: the pool reclaim/free pass must be alias-aware — never reclaim a slab
-  while alias entries reference it, and skip alias entries themselves when freeing. See
-  [task-e4003e5f.md](task-e4003e5f.md).
+- **[backend-buffer-addressing.md](backend-buffer-addressing.md)** — *prerequisite, landed.*
+  Established the `buffer_loc` contract, the slab API, the allocator seam, and the stream→device
+  fold. This proposal is the policy swap behind that seam.
+- **gh-ocannl-333 (remove hosted memory)** — *landed (`8f949e3f`).* Removed the host-side `array`
+  field and host-pointer wrapping, so every in-context node is a plain device buffer and
+  `use_host_memory` became a no-op. This work finishes the job by deleting `use_host_memory`
+  outright — a small #333 follow-through that belongs to this change because it removes the last
+  storage-mode ambiguity the pool policy would otherwise have to reason about.
+- **gh-ocannl-320 (Metal private mode)** — *landed (`1cf9a95b`).* Provided per-tnode private
+  storage. This work supersedes that selection: Metal commits to `storage_mode_shared` for all
+  pools, so the `storage_mode_for_memory_mode` mechanism is retired.
+- **[task-e4003e5f.md](task-e4003e5f.md) (slice as alias view, subtask 293a of #293)** — unblocked
+  by the foundation's `buffer_loc` contract (an alias is `{ pool_id; offset + delta }`), not by
+  this pooling work. **Constraint on this work:** the pool free/reclaim path must be
+  alias-aware — never free a slab while alias entries reference it, and skip alias entries
+  themselves when freeing. `finalize`'s existing parent-shared / constant-cache skip logic is the
+  natural place to extend.
 
-### Naming conventions
+## Open decisions
 
-The issue requests renaming for consistency:
-- `ctx_arrays` -> `ctx_buffers` (these are device buffers, not arrays)
-- `buffer_ptr` -> `buffer_offset` (after pooling, individual tensors are offsets into pools)
-- `big_models` -> `large_models` (consistent with the issue's terminology)
-
-## Design review (2026-06-12)
-
-**Verdict: sound-with-changes.** Pooling is the right long-term direction (it is also what the buffer migration/eviction endgame and the alias-view work need), but the proposal as written over-scopes the codegen change, misses two Metal-specific runtime hazards, and should explicitly land **after** #333.
-
-**Recommendations:**
-
-1. **Land after #333.** With `Hosted` removed, Metal storage-mode segregation collapses to "private pools + a small shared staging pool", and the `use_host_memory` host-pointer-wrapping entries (`alloc_if_needed`, `metal_backend.ml:791-799`) disappear. Doing #344 first would force a `Wrapped of buffer_ptr` escape variant into `buffer_offset` plus memory-`type`-driven pool segregation, both deleted again by #333. (ROADMAP already agrees: #333 in v0.7.0, #344 in v0.7.2.)
-2. **Phase the codegen change; AC 5 is over-scoped for phase 1.** Only Metal has a binding limit. CUDA and C can keep per-tnode pointer kernel parameters with the pointer computed host-side at link/dispatch as `pool_base + offset` — generated `.c`/`.cu` stays byte-identical, confining risk and `.expected`-file churn to the allocator plus the Metal backend. Emit in-shader `pool_base + offset` for all backends only when migration/eviction actually requires it.
-3. **Use untracked hazards for pool buffers on Metal.** Pool buffers allocated with `hazard_tracking_mode_tracked` (current default in `metal_backend.ml:69-77`) would make Metal serialize kernels that touch disjoint tensors in the same pool — false dependencies at pool granularity. Pools should use `hazard_tracking_mode_untracked` and rely on OCANNL's own event machinery (`updating_for`, writer events), which already expresses the true dependencies.
-4. **Decide pool ownership and integrate `constant_buffer_cache` and `finalize`.** Contexts/ctx_buffers are per-stream, but `constant_buffer_cache` is per-device (shared across streams), so a per-device constant pool (with locking, since multiple streams per device remain) is needed even if working pools are per-stream. `constant_buffer_cache`'s value type changes to `buffer_offset` too. `Backends.finalize` currently frees per-tnode buffers; under pooling it must decrement slab refcounts / return sub-blocks to the free list — and skip alias entries (consistent with the task-e4003e5f constraint already noted above).
-5. **Refine AC 7: offset width caps per-pool size, not total memory.** With `large_models=false` (uint32), cap each pool at 4 GB and open additional pools; total memory stays unbounded and only single tensors > 4 GB genuinely require uint64. Decouple this from `loop_index_type`, which is about element indexing within one tensor.
-6. **Keep merge buffers out of pools in phase 1.** They are per-stream, reused via the existing `alloc_buffer ?old_buffer` grow-only pattern, and the new transfer-routine design requires pointer stability across invocations. A dedicated (non-pooled or single-tenant-pool) merge buffer is the simplest thing that preserves that invariant.
-
-**Open decision points for Łukasz:**
-
-- Pool ownership: per-stream working pools + per-device constant pool, or everything per-device with locking?
-- Is pooling actually the chosen fix for the 31-binding limit, or is a Metal argument buffer / GPU-address pointer table (one binding containing per-tnode addresses) worth doing first as a small unblocker? Pooling retains independent value (eviction, alias views, allocation overhead, locality) either way, but the pointer-table is an order of magnitude smaller if Metal models > 30 tnodes is the urgent pain.
-- Pool exhaustion policy: initial pool size default, growth factor for subsequent pools, and whether `Local`-mode tnodes get an arena-style sub-pool (the gh-ocannl-340 synergy) in phase 1 or later.
-- Offsets at dispatch: one offsets-table buffer (1 extra binding, stable layout per routine) vs. `set_bytes` per tensor (no extra buffer, more encoder calls)?
+- **Pointer-table alternative.** If "Metal models > 30 tnodes" is the only urgent pain, a Metal
+  argument buffer / GPU-address pointer table (one binding holding per-tnode addresses) is an
+  order of magnitude smaller to build and would unblock it sooner. Pooling still has independent
+  value (eviction, alias views, allocation overhead, locality), so this is a sequencing question,
+  not an either/or.
