@@ -16,12 +16,13 @@ Found 0, in the config file
 #13 pad_to/trunc [workaround   ] 1 2 3
 #14 seq_mask   [workaround   ] 0 1 0 3 0 0
 #18 linspace   [workaround   ] 2 4 6 8 10
+#7 cumsum      [workaround   ] 1 3 6 10
+#11 flip       [workaround   ] 4 3 2 1
+#10 roll       [workaround   ] 2 3 4 1
+#17 flatten    [workaround   ] 10 20 30 40 50 60
 
-Not expressible today (need new primitives):
-  7  cumsum     -- needs SCAN (loop-carried prefix dependency)
-  10 roll       -- needs GATHER / circular shift (modular dynamic index)
-  11 flip       -- needs negative-stride affine indexing or a REVERSE op
-  12 compress   -- needs SCAN + SCATTER
-  15 bincount   -- needs SCATTER (values-as-indices) + integer index tensors
-  16 scatter_add-- needs SCATTER
-  17 flatten    -- needs RESHAPE / view across rank
+Not expressible today -- DATA-DEPENDENT indexing (the index is a runtime tensor value), which
+needs gather/scatter that OCANNL lacks:
+  12 compress   -- left-align kept entries: position = prefix-count of mask, then SCATTER
+  15 bincount   -- out[a[i]] += 1: SCATTER with values-as-indices + integer index tensors
+  16 scatter_add-- out[link[j]] += values[j]: the canonical SCATTER

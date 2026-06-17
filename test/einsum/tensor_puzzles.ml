@@ -12,7 +12,11 @@
 
    ============================================================================================
    CLASSIFICATION (this doubles as the GitHub issue #308 comment source)
-   Summary: 8 einsum + 6 op-level workaround = 14 solvable; 7 not expressible today (21 total).
+   Summary: 8 einsum + 10 op-level workaround = 18 solvable; 3 not expressible today (21 total).
+   Key principle: any STATIC, data-independent index map (permutation, reshape, prefix, convolution)
+   is a dense selector/operator matrix S[i,o] built from index-grid comparisons and contracted via
+   einsum -- O(size^2) but expressible. Only DATA-DEPENDENT index maps (the index is a runtime
+   tensor value) genuinely need gather/scatter, which OCANNL lacks.
    ============================================================================================
 
    A. Solvable with OCANNL einsum / %op (pure contraction / pointwise / fixed-index reshaping):
@@ -25,30 +29,32 @@
       20 repeat      -- block-literal stacking of d copies (broadcast)
       21 bucketize   -- broadcast compare + reduce: (not (v < bnd)) ++ "ij => i"
 
-   B. Solvable with OCANNL ops / workarounds (per-axis index grids, convolution, concatenation):
+   B. Solvable with OCANNL ops / workarounds (index-grid selector matrices, concatenation) -- all
+      for STATICALLY known sizes:
       5  eye          -- index grids + equality: (r ++ "i=>i0") = (r ++ "j=>0j")
       6  triu         -- index grids + comparison: not ((r ++ "j=>0j") < (r ++ "i=>i0"))
+      7  cumsum       -- lower-triangular selector (i <= o), contracted: a +* "i; i o => o" L
       8  diff         -- finite-difference operator matrix D[i,o]=(i=o+1)-(i=o), contracted: a +* D
+      10 roll         -- circular permutation selector (i = o+1, plus wrap), contracted
+      11 flip         -- anti-diagonal selector (i + o = n-1), contracted
       13 pad_to       -- pad via concatenation; truncate via rectangular selection matmul (static j)
       14 sequence_mask-- column index grid vs per-row length + where
+      17 flatten      -- reshape selector S[i,j,k]=(i*cols+j = k) via range_of_shape, contract i,j
       18 linspace     -- affine arithmetic on a range tensor
 
-   C. Not expressible today (each names the missing primitive):
-      7  cumsum     -- loop-carried prefix dependency; needs a SCAN primitive
-      10 roll       -- a[(i+1) mod n]; needs GATHER / circular-shift (modular dynamic index)
-      11 flip       -- a[n-1-i]; needs negative-stride affine indexing or a REVERSE op
-      12 compress   -- prefix-count then place; needs SCAN + SCATTER
-      15 bincount   -- out[a[i]] += 1; needs SCATTER (values-as-indices)
-      16 scatter_add-- out[link[j]] += values[j]; the canonical SCATTER
-      17 flatten    -- reshape across rank; needs a RESHAPE / view op
+   C. Not expressible today -- DATA-DEPENDENT indexing (index = a runtime tensor value):
+      12 compress   -- left-align kept entries: output position = prefix-count of mask, then SCATTER
+      15 bincount   -- out[a[i]] += 1: SCATTER with values-as-indices (+ integer index tensors)
+      16 scatter_add-- out[link[j]] += values[j]: the canonical SCATTER
 
    Most impactful missing capabilities (gap analysis):
-      1. Gather / scatter (dynamic indexing) -- unlocks compress(12), bincount(15), scatter_add(16)
-         and a gather route for roll(10); needed for embedding lookup, variable-length masking,
-         and many real ML ops. Related: gh-ocannl-293 (sharding & slicing).
-      2. Scan / prefix-sum -- unlocks cumsum(7) and compress(12); needed for sequence processing.
-      3. Reshape / view -- unlocks flatten(17).
-      4. Reverse / modular affine indexing -- unlocks flip(11) and roll(10).
+      1. Gather / scatter (dynamic indexing) -- the ONLY fundamental gap; unlocks compress(12),
+         bincount(15), scatter_add(16); needed for embedding lookup, variable-length masking, and
+         many real ML ops. Related: gh-ocannl-293 (sharding & slicing).
+      2. Scan / prefix-sum -- not needed for EXPRESSIBILITY (cumsum is the triangular-selector matmul
+         above), but the O(n) streaming way; the selector matmul is O(n^2).
+      3. Native reshape/view, reverse, and modular/affine indexing -- ergonomic/efficient
+         replacements for the O(size^2) selector-matrix workarounds for flatten/flip/roll.
 
    DISCOVERED LIMITATION (diff): the valid-convolution einsum [a +* "o<+k; k => o" kernel] hangs
    OCANNL's shape inference even on a length-5 vector with a length-2 kernel (no error, just spins).
@@ -198,16 +204,59 @@ let () =
   let ctx = Train.forward_once ctx p18 in
   show ctx "18 linspace" "workaround" p18;
 
+  (* The next four are STATIC, data-independent index maps -- so they are the same dense
+     selector-matrix pattern as diff/pad_to-truncate: build a 0/1 selector S[i,o] from index-grid
+     comparisons and contract the input over i. They are O(size^2) (or O(size^3) for flatten), not
+     how you'd implement them for real, but they ARE expressible. Only DATA-DEPENDENT index maps
+     (compress/bincount/scatter_add) are out of reach. *)
+
+  (* 7 cumsum ([i])->[i]: out[o] = sum_{i<=o} a[i] = lower-triangular ones matrix times a. *)
+  let%op a7 = [ 1.; 2.; 3.; 4. ] in
+  let ri7 = TDSL.range 4 and co7 = TDSL.range 4 in
+  let%op tri7 = not ((co7 ++ "j=>0j") < (ri7 ++ "i=>i0")) in
+  (* L[i,o] = (i <= o) *)
+  let%op p7 = a7 +* "i; i o => o" tri7 in
+  let ctx = Train.forward_once ctx p7 in
+  show ctx "7 cumsum" "workaround" p7;
+
+  (* 11 flip ([i])->[i]: out[o] = a[n-1-o] via the anti-diagonal selector (i + o = n-1). *)
+  let%op a11 = [ 1.; 2.; 3.; 4. ] in
+  let ri11 = TDSL.range 4 and co11 = TDSL.range 4 in
+  let%op anti11 = (ri11 ++ "i=>i0") + (co11 ++ "j=>0j") = 3 in
+  let%op p11 = a11 +* "i; i o => o" anti11 in
+  let ctx = Train.forward_once ctx p11 in
+  show ctx "11 flip" "workaround" p11;
+
+  (* 10 roll ([i])->[i]: circular shift, out[o] = a[(o+1) mod n]. Static circular selector:
+     S[i,o] = (i = o+1) plus the wrap case (i = 0 and o = n-1). *)
+  let%op a10 = [ 1.; 2.; 3.; 4. ] in
+  let ri10 = TDSL.range 4 and co10 = TDSL.range 4 in
+  let%op circ10 =
+    ((ri10 ++ "i=>i0") = ((co10 ++ "j=>0j") + 1))
+    + (((ri10 ++ "i=>i0") = 0) *. ((co10 ++ "j=>0j") = 3))
+  in
+  let%op p10 = a10 +* "i; i o => o" circ10 in
+  let ctx = Train.forward_once ctx p10 in
+  show ctx "10 roll" "workaround" p10;
+
+  (* 17 flatten ([i,j])->[i*j]: static affine reshape out[k] = a[i,j] where k = i*cols + j.
+     range_of_shape already fills row-major offsets, so pos[i,j] = i*cols + j directly; the selector
+     is S[i,j,k] = (pos[i,j] = k), contracted over i and j. *)
+  let%op a17 = [ [ 10.; 20.; 30. ]; [ 40.; 50.; 60. ] ] in
+  let pos17 = TDSL.range_of_shape ~output_dims:[ 2; 3 ] () in
+  let ck17 = TDSL.range 6 in
+  let%op sel17 = (pos17 ++ "i j => i j 0") = (ck17 ++ "k => 0 0 k") in
+  let%op p17 = a17 +* "i j; i j k => k" sel17 in
+  let ctx = Train.forward_once ctx p17 in
+  show ctx "17 flatten" "workaround" p17;
+
   Stdio.printf
     "\n\
-     Not expressible today (need new primitives):\n\
-    \  7  cumsum     -- needs SCAN (loop-carried prefix dependency)\n\
-    \  10 roll       -- needs GATHER / circular shift (modular dynamic index)\n\
-    \  11 flip       -- needs negative-stride affine indexing or a REVERSE op\n\
-    \  12 compress   -- needs SCAN + SCATTER\n\
-    \  15 bincount   -- needs SCATTER (values-as-indices) + integer index tensors\n\
-    \  16 scatter_add-- needs SCATTER\n\
-    \  17 flatten    -- needs RESHAPE / view across rank\n\
+     Not expressible today -- DATA-DEPENDENT indexing (the index is a runtime tensor value), which\n\
+     needs gather/scatter that OCANNL lacks:\n\
+    \  12 compress   -- left-align kept entries: position = prefix-count of mask, then SCATTER\n\
+    \  15 bincount   -- out[a[i]] += 1: SCATTER with values-as-indices + integer index tensors\n\
+    \  16 scatter_add-- out[link[j]] += values[j]: the canonical SCATTER\n\
      %!";
   ()
 

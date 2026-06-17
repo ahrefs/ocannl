@@ -5,7 +5,15 @@ extended einsum notation. The solutions are committed as an executable, self-che
 `test/einsum/tensor_puzzles.ml` (golden output in `test/einsum/tensor_puzzles.expected`), so they
 stay correct as OCANNL evolves.
 
-**Result: 8 solvable in einsum / `%op`, 6 with op-level workarounds (14 solvable total), 7 not expressible today.**
+**Result: 8 solvable in einsum / `%op`, 10 with op-level workarounds (18 solvable total), 3 not expressible today.**
+
+**Key principle** (thanks to review feedback): any *static, data-independent* index map — a
+permutation, reshape, prefix sum, or convolution — is a dense selector/operator matrix `S[i,o]`
+built from index-grid comparisons and contracted via einsum (`a +* "i; i o => o" S`). It is
+`O(size²)`, not how you'd implement it for real, but it *is* expressible. Only *data-dependent*
+index maps (where the index is itself a runtime tensor value) genuinely need gather/scatter, which
+OCANNL lacks. So cumsum, flip, roll, and flatten move to the solvable tier; only compress, bincount,
+and scatter_add remain out of reach.
 
 ## A. Solvable with OCANNL einsum / `%op`
 
@@ -18,33 +26,33 @@ stay correct as OCANNL evolves.
 20. `repeat` `([i])->[d,i]` — block-literal stacking of `d` copies: `[ a; a; a ]`
 21. `bucketize` `([i],[j])->[i]` — broadcast compare + reduce: `not (v < bnd) ++ "ij => i"` (counting boundaries ≤ v; `>=` is expressed as `not (<)`)
 
-## B. Solvable with op-level workarounds (index grids / convolution / concatenation)
+## B. Solvable with op-level workarounds (index-grid selector matrices, concatenation) — static sizes
 
 5. `eye` `(j)->[j,j]` — row grid `[n,1]` vs column grid `[1,n]`, equality: `(r ++ "i=>i0") = (r ++ "j=>0j")`
 6. `triu` `(j)->[j,j]` — same grids, `i <= j` as `not ((r ++ "j=>0j") < (r ++ "i=>i0"))`
-8. `diff` `([i])->[i-1]` — finite-difference operator matrix `D[i,o] = (i = o+1) - (i = o)` built from index grids, then contracted: `a +* "i; i o => o" D`. (The natural valid-convolution spelling `a +* "o<+k; k => o" kernel` currently **hangs shape inference** even on a length-5 input — see gaps below.)
-13. `pad_to` `([i],j)->[j]` — both directions for statically-known target sizes: pad via concatenation `(a, zeros) ++^ "i; j => i^j"`, truncate via a rectangular selection matmul `a +* "i; i o => o" sel` with `sel[i,o]=(i=o)`. Only a *runtime* (data-dependent) target `j` remains a gap — that needs a dynamic/range-slice op.
+7. `cumsum` `([i])->[i]` — lower-triangular ones selector `L[i,o]=(i<=o)`, contracted: `a +* "i; i o => o" L`
+8. `diff` `([i])->[i-1]` — finite-difference operator matrix `D[i,o] = (i = o+1) - (i = o)` built from index grids, then contracted: `a +* "i; i o => o" D`. (The natural valid-convolution spelling `a +* "o<+k; k => o" kernel` currently **hangs shape inference** even on a length-5 input — see below.)
+10. `roll` `([i])->[i]` — circular permutation selector `S[i,o]=(i=o+1)` plus the wrap term `(i=0)·(o=n-1)`, contracted
+11. `flip` `([i])->[i]` — anti-diagonal selector `S[i,o]=(i+o=n-1)`, contracted
+13. `pad_to` `([i],j)->[j]` — both directions for static target sizes: pad via concatenation `(a, zeros) ++^ "i; j => i^j"`, truncate via a rectangular selection matmul `a +* "i; i o => o" sel`, `sel[i,o]=(i=o)`. Only a *runtime* (data-dependent) target `j` remains a gap.
 14. `sequence_mask` `([i,j],[i])->[i,j]` — column index grid vs per-row length: `where ((r ++ "j=>0j") < (len ++ "i=>i0")) values 0`
+17. `flatten` `([i,j])->[i*j]` — static reshape via selector `S[i,j,k]=(i*cols+j = k)` (using `range_of_shape` for the row-major offset `i*cols+j`), contract `i,j`: `a +* "i j; i j k => k" sel`
 18. `linspace` `(lo,hi,n)->[n]` — affine arithmetic on a range: `(range n *. step) + lo`, `step = (hi-lo)/(n-1)` (the `n=1` case divides by zero and is handled separately)
 
-## C. Not expressible today
+## C. Not expressible today — data-dependent indexing
 
-Each names the missing primitive:
+The output index is itself a runtime tensor value, so a static selector cannot encode it — this needs
+gather/scatter, which OCANNL lacks:
 
-7. `cumsum` — loop-carried prefix dependency; needs a **scan** primitive
-10. `roll` — `a[(i+1) mod n]`; needs **gather** / circular shift (modular dynamic index)
-11. `flip` — `a[n-1-i]`; needs negative-stride affine indexing or a **reverse** op
-12. `compress` — prefix-count then place; needs **scan + scatter**
-15. `bincount` — `out[a[i]] += 1`; needs **scatter** (values-as-indices) and integer index tensors
+12. `compress` — left-align kept entries: the output position of each kept element is the prefix-count of the mask (a runtime value), then **scatter**. (Note: cumsum *is* now expressible, but the subsequent scatter to data-dependent positions is not.)
+15. `bincount` — `out[a[i]] += 1`; **scatter** with values-as-indices (and integer index tensors)
 16. `scatter_add` — `out[link[j]] += values[j]`; the canonical **scatter**
-17. `flatten` — reshape across rank; needs a **reshape / view** op
 
 ## Most impactful missing capabilities
 
-1. **Gather / scatter (dynamic indexing)** — unlocks compress (12), bincount (15), scatter_add (16) and a gather route for roll (10); needed for embedding lookup, variable-length masking, and many real ML ops. Related: #293 (sharding & slicing).
-2. **Scan / prefix-sum** — unlocks cumsum (7) and compress (12); needed for sequence processing.
-3. **Reshape / view** — unlocks flatten (17).
-4. **Reverse / modular affine indexing** — unlocks flip (11) and roll (10).
+1. **Gather / scatter (dynamic indexing)** — the *only* fundamental gap; unlocks compress (12), bincount (15), scatter_add (16); needed for embedding lookup, variable-length masking, and many real ML ops. Related: #293 (sharding & slicing).
+2. **Scan / prefix-sum** — not needed for *expressibility* (cumsum is the triangular-selector matmul above), but it is the `O(n)` streaming way; the selector matmul is `O(n²)`.
+3. **Native reshape/view, reverse, and modular/affine indexing** — ergonomic, efficient replacements for the `O(size²)` selector-matrix workarounds used for flatten/flip/roll.
 
 ## Bonus finding (shape-inference bug)
 
