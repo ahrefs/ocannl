@@ -760,7 +760,7 @@ using namespace metal;|} in
 
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
       ~(kparams : (string * kparam_source) list) ~lowered_bindings
-      ~(ctx_arrays : buffer_ptr Tn.t_map) : Task.t =
+      ~(ctx_buffers : ctx_buffers) : Task.t =
     let dev = prior_context.device in
     let metal_device = dev.dev in
     let queue = dev.runner.queue in
@@ -781,16 +781,20 @@ using namespace metal;|} in
         (* Set arguments *)
         List.iteri kparams ~f:(fun index (_p_name, p_source) ->
             match p_source with
-            | Kparam_ptr tn when Map.mem ctx_arrays tn ->
-                let buffer = Map.find_exn ctx_arrays tn in
-                Me.ComputeCommandEncoder.set_buffer encoder ~index buffer
+            | Kparam_ptr tn when Map.mem ctx_buffers tn ->
+                (* gh-ocannl-344: the tnode is a region of a (possibly multi-tenant) pool slab; bind
+                   the slab buffer at the tnode's byte offset so the kernel pointer parameter points
+                   at this tnode, not the pool base. *)
+                let loc = Map.find_exn ctx_buffers tn in
+                Me.ComputeCommandEncoder.set_buffer encoder ~offset:loc.offset ~index
+                  (Slab.resolve_pool dev loc)
             | Kparam_ptr tn ->
                 (* After gh-ocannl-333 there is no host array to wrap as a constant buffer: every
-                   in-context node (including constants) is allocated in [ctx_arrays] by
-                   [alloc_if_needed], which uploads any host initialization data there. *)
+                   in-context node (including constants) is allocated in [ctx_buffers] by the
+                   allocator, which uploads any host initialization data there. *)
                 failwith
                   [%string
-                    "Kparam_ptr %{Tn.debug_name tn} not found in ctx_arrays for %{func_name}"]
+                    "Kparam_ptr %{Tn.debug_name tn} not found in ctx_buffers for %{func_name}"]
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in
@@ -799,7 +803,8 @@ using namespace metal;|} in
             | Merge_buffer -> (
                 match !(dev.merge_buffer) with
                 | Some loc ->
-                    Me.ComputeCommandEncoder.set_buffer encoder ~index (Slab.resolve_pool dev loc)
+                    Me.ComputeCommandEncoder.set_buffer encoder ~offset:loc.offset ~index
+                      (Slab.resolve_pool dev loc)
                 | None -> failwith [%string "Merge_buffer requested but not set for %{func_name}"])
             | Log_file_name ->
                 (* TODO:We could tag logs with a run id. *)
@@ -825,7 +830,7 @@ using namespace metal;|} in
     in
     Task.Task
       {
-        context_lifetime = (library, pso, ctx_arrays);
+        context_lifetime = (library, pso, ctx_buffers);
         (* Keep library and PSO alive *)
         description = "launches " ^ func_name ^ " on " ^ runner_label;
         work;
@@ -837,10 +842,9 @@ using namespace metal;|} in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
-    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
-        ~lowered_bindings ~ctx_arrays
+        ~lowered_bindings ~ctx_buffers
     in
     (lowered_bindings, task)
 
@@ -855,11 +859,8 @@ using namespace metal;|} in
       Array.mapi code_batch.funcs ~f:(fun i func_opt ->
           Option.bind func_opt ~f:(fun (func_name, kparams) ->
               Option.map ctx_buffers_opts.(i) ~f:(fun ctx_buffers ->
-                  let ctx_arrays =
-                    Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device)
-                  in
                   link_proc ~prior_context ~library ~func_name ~kparams ~lowered_bindings
-                    ~ctx_arrays)))
+                    ~ctx_buffers)))
     in
     (lowered_bindings, tasks)
 end
