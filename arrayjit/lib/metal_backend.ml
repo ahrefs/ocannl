@@ -64,38 +64,18 @@ let track_allocation (buffer : Me.Buffer.t) =
   Stdlib.Gc.finalise (fun _ -> ignore (Atomic.fetch_and_add allocated_memory (-size))) buffer;
   ignore (Atomic.fetch_and_add allocated_memory size)
 
-(* Use Shared storage for unified memory, WriteCombined for CPU writes, Tracked hazards. Shared
-   buffers are accessible by both the CPU and the GPU. *)
+(* gh-ocannl-344: every pool uses Shared storage (unified memory, WriteCombined for CPU writes), so
+   host transfers are a direct memcpy with no staging blit, and a context delta never splits across
+   storage modes. Hazards are Untracked: at pool granularity Metal's automatic tracking would
+   serialize kernels touching *disjoint* tnodes in the same slab (false dependencies); OCANNL's own
+   writer-event machinery ([updating_for]) already expresses the true cross-kernel ordering. The
+   per-tnode private/shared selection (gh-ocannl-320) is retired -- there is no replacement config. *)
 let shared_resource_options =
   Me.ResourceOptions.(
-    storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_tracked)
-
-(* Private storage is GPU-only: the CPU cannot map it, so there is no CPU cache mode to set.
-   Choosing private for GPU-only buffers avoids CPU cache-coherency traffic and lets Metal pick a
-   GPU-friendly layout. *)
-let private_resource_options =
-  Me.ResourceOptions.(storage_mode_private + hazard_tracking_mode_tracked)
-
-(* GPU-only tnodes ([Local], [Device_only], [On_device]) do not require persistent CPU-visible
-   storage. After gh-ocannl-333 there is no [Hosted] mode; on-demand host read-back / upload for
-   [On_device] nodes goes through the backend's blit-based [to_host]/[from_host], so private storage
-   remains valid for them. The materialization-request modes -- [Materialized], [Effectively_constant],
-   the partially-resolved [Never_virtual], and the [None] default -- may still be host-initialized
-   and stay shared. [Virtual] tnodes are inlined and never reach the allocator; they map to shared
-   defensively. *)
-let storage_mode_for_memory_mode : Tn.memory_mode option -> Me.Resource.StorageMode.t = function
-  | Some (Local | Device_only | On_device) -> Me.Resource.StorageMode.Private
-  | Some (Effectively_constant | Virtual | Never_virtual | Materialized) | None ->
-      Me.Resource.StorageMode.Shared
-
-let resource_options_for_mode (mode : Tn.memory_mode option) =
-  match storage_mode_for_memory_mode mode with
-  | Me.Resource.StorageMode.Private -> private_resource_options
-  | Shared | Managed | Memoryless -> shared_resource_options
+    storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_untracked)
 
 (* The Metal slab allocator: a private [(device_id, pool_id) -> Metal.Buffer.t] table backing the
-   shared {!Backend_intf.Slab_alloc}. Storage mode (private vs. shared) is a per-pool property carried
-   by [?mode]. *)
+   shared {!Backend_intf.Slab_alloc}. All pools are Shared/Untracked; [?mode] is ignored. *)
 module Slab = struct
   open Backend_intf
 
@@ -104,9 +84,9 @@ module Slab = struct
 
   let pools : (int * int, buffer_ptr) Hashtbl.Poly.t = Hashtbl.Poly.create ()
 
-  let alloc_pool ?mode (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
+  let alloc_pool ?mode:_ (device : device) ~pool_id ~size_in_bytes ~alignment:_ =
     let buffer =
-      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) (resource_options_for_mode mode)
+      Me.Buffer.on_device device.dev ~length:(max 1 size_in_bytes) shared_resource_options
     in
     track_allocation buffer;
     Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
