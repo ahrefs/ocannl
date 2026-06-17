@@ -659,6 +659,10 @@ let stop_gradient ?spec ?(capture_dims = []) =
 let slice (batch_idx : Idx.static_symbol) =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~t ~t1 ~projections =
+    (* Mark the slice eagerly (before lowering decides alias eligibility) so direct host access of the
+       slice is rejected from birth -- otherwise a host write before any lowering would allocate a
+       detached buffer that the later alias redirect orphans (gh-ocannl-293 293a). *)
+    Tn.set_slice_of t.Tensor.value ~parent:t1.Tensor.value ~batch_idx;
     Asgns.to_comp
     @@ Fetch
          {

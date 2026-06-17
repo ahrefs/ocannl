@@ -715,6 +715,12 @@ let%track4_sexp to_low_level code =
                 | Ops.Uint4x32_prec _ -> 1 (* 128-bit value *)
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
           in
+          (* Redirect a vector store through a slice-alias view to the parent, mirroring [set] for
+             scalar stores (gh-ocannl-293 293a). Without this the alias [lhs] -- which owns no buffer
+             and is excluded from [ctx_buffers] -- would be a write target the backend cannot link.
+             The parent is unpadded by alias eligibility, and its precision matches the slice's, so
+             [length] (computed from [lhs.prec] above) stays correct. *)
+          let lhs, lhs_idcs = resolve_alias lhs lhs_idcs in
           Set_from_vec
             {
               tn = lhs;

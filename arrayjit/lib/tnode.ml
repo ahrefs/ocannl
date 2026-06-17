@@ -52,6 +52,13 @@ type t = {
           [parent] with [batch_idx] prepended as the leading index. Set by {!Assignments.lower} for
           alias-eligible [Fetch.Slice]s; orthogonal to {!field-memory_mode}. The strong reference to
           [parent] also keeps it reachable for as long as the alias is. *)
+  mutable slice_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
+      (** When [Some (parent, batch_idx)], this node is an [\@|] sub-tensor slice of [parent]. Set
+          *eagerly at construction* (independent of alias eligibility), so it is a superset of
+          {!field-alias_of}: every confirmed alias is a slice, but an ineligible slice (precision-
+          converting, padded, virtual parent) is still a slice that falls back to a materializing
+          copy. Used to reject direct host access (read/write the parent instead) -- including the
+          window before lowering decides eligibility, where {!field-alias_of} is still [None]. *)
   mutable backend_info : Sexp.t;
   mutable code_name : string option;
 }
@@ -192,6 +199,16 @@ let alias_of tn = tn.alias_of
 (** Marks [tn] as a zero-copy slice-alias view of [parent] with leading index [batch_idx]. Idempotent
     when re-marked with the same parent. *)
 let set_alias_of tn ~parent ~batch_idx = tn.alias_of <- Some (parent, batch_idx)
+
+(** Whether [tn] is an [\@|] sub-tensor slice (see {!field-slice_of}) -- set eagerly at construction,
+    independent of alias eligibility. A superset of {!is_alias}. *)
+let is_slice tn = Option.is_some tn.slice_of
+
+let slice_of tn = tn.slice_of
+
+(** Marks [tn] as an [\@|] slice of [parent] eagerly at construction (before alias eligibility is
+    known). Idempotent. *)
+let set_slice_of tn ~parent ~batch_idx = tn.slice_of <- Some (parent, batch_idx)
 
 let%debug3_sexp rec is_in_context_force (tn : t) (provenance : int) : bool =
   (* Since gh-ocannl-333 there is no host-only storage, so being in context depends only on the
@@ -494,6 +511,7 @@ let create delayed_prec ~id ~label ~unpadded_dims ~padding () =
       label;
       memory_mode = None;
       alias_of = None;
+      slice_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -524,6 +542,7 @@ let create_from_padded ~id ~label ~ndarray ~padding () =
       label;
       memory_mode = Some (Materialized, 49);
       alias_of = None;
+      slice_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -599,6 +618,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       label;
       memory_mode = Some (Materialized, 49);
       alias_of = None;
+      slice_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }
@@ -621,6 +641,7 @@ let find =
       label = [];
       memory_mode = None;
       alias_of = None;
+      slice_of = None;
       backend_info = Sexp.List [];
       code_name = None;
     }

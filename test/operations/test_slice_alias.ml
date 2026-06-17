@@ -163,4 +163,54 @@ let () =
   Stdio.printf "virtual-parent slice NOT aliased: %b\n" (not (Ir.Tnode.is_alias vslice.value));
   Stdio.printf "virtual-parent slice falls back to copy loop (writes to slice > 0): %b\n"
     (count_writes_to virt_llc vslice.value.Ir.Tnode.id > 0);
+
+  (* --- Finding 1 (Codex): a VECTOR store (e.g. `slice =: uniform ()`, a `uint4x32_to_prec_uniform`
+     vec-unop) through an eligible slice must redirect to the parent, just like a scalar `set`.
+     Otherwise the `Set_from_vec` targets the alias node directly, which owns no buffer and is absent
+     from `ctx_buffers`, so the backend cannot link it. Lower and assert the store hits the parent,
+     not the slice. --- *)
+  (* out dim is a multiple of 4: `uniform` packs 4 single-precision values per uint4x32. *)
+  let vec_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let vecp = make_parent "vecp" (Array.init 8 ~f:Float.of_int) ~batch:2 ~out:4 in
+  let%op vs = vecp @| vec_n in
+  (* Consume the slice's forward (the [Fetch.Slice], which marks the alias) BEFORE building the
+     self-referential vector write, so [vs] is still a forward root here. *)
+  let vec_fwd = Train.forward vs in
+  let%cd vecwrite = vs =: uniform () in
+  let vec_llc =
+    Ir.Assignments.to_low_level
+      (Ir.Assignments.sequence [ vec_fwd; vecwrite ]).Ir.Assignments.asgns
+  in
+  Stdio.printf "vec-store slice is aliased: %b\n" (Ir.Tnode.is_alias vs.value);
+  Stdio.printf "vec-store redirected: 0 vector writes to slice: %b\n"
+    (count_writes_to vec_llc vs.value.Ir.Tnode.id = 0);
+  Stdio.printf "vec-store redirected: parent receives the vector write (>0): %b\n"
+    (count_writes_to vec_llc vecp.value.Ir.Tnode.id > 0);
+
+  (* --- Finding 2 (Codex): host write/read of a FRESHLY built slice, before any lowering has marked
+     `alias_of`, must still be rejected via the eager `slice_of` marker -- so no detached buffer is
+     allocated for the slice (which later alias lowering would orphan). --- *)
+  let fresh_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let freshp = make_parent "freshp" [| 1.; 2.; 3.; 4.; 5.; 6. |] ~batch:2 ~out:3 in
+  let%op fresh_s = freshp @| fresh_n in
+  let fresh_ctx = Context.auto () in
+  Stdio.printf "fresh slice marked is_slice before lowering: %b\n" (Ir.Tnode.is_slice fresh_s.value);
+  Stdio.printf "fresh slice has no alias_of yet (pre-lowering): %b\n"
+    (not (Ir.Tnode.is_alias fresh_s.value));
+  let fresh_set_raises =
+    try
+      ignore (Context.set_values fresh_ctx fresh_s.value [| 0.; 0.; 0. |] : Context.t);
+      false
+    with Utils.User_error _ -> true
+  in
+  let fresh_get_raises =
+    try
+      ignore (Context.get_values fresh_ctx fresh_s.value : float array);
+      false
+    with Utils.User_error _ -> true
+  in
+  Stdio.printf "fresh-slice host set_values rejected (no detached buffer): %b\n" fresh_set_raises;
+  Stdio.printf "fresh-slice host get_values rejected: %b\n" fresh_get_raises;
+  Stdio.printf "fresh slice never allocated (absent from ctx_buffers): %b\n"
+    (not (Context.mem fresh_ctx fresh_s.value));
   ()

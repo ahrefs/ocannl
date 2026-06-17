@@ -14,3 +14,11 @@ eligible slice lowered with NO copy loop (0 writes to slice): true
 virtual-parent known_virtual: true
 virtual-parent slice NOT aliased: true
 virtual-parent slice falls back to copy loop (writes to slice > 0): true
+vec-store slice is aliased: true
+vec-store redirected: 0 vector writes to slice: true
+vec-store redirected: parent receives the vector write (>0): true
+fresh slice marked is_slice before lowering: true
+fresh slice has no alias_of yet (pre-lowering): true
+fresh-slice host set_values rejected (no detached buffer): true
+fresh-slice host get_values rejected: true
+fresh slice never allocated (absent from ctx_buffers): true
