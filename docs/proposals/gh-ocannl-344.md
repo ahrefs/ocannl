@@ -283,10 +283,11 @@ Pool sub-allocations must respect backend-specific alignment:
   themselves when freeing. `finalize`'s existing parent-shared / constant-cache skip logic is the
   natural place to extend.
 
-## Open decisions
+## Decided scope
 
-- **Pointer-table alternative.** If "Metal models > 30 tnodes" is the only urgent pain, a Metal
-  argument buffer / GPU-address pointer table (one binding holding per-tnode addresses) is an
-  order of magnitude smaller to build and would unblock it sooner. Pooling still has independent
-  value (eviction, alias views, allocation overhead, locality), so this is a sequencing question,
-  not an either/or.
+A narrower alternative was weighed: a Metal argument buffer / GPU-address pointer table (one
+binding holding per-tnode addresses) would lift the ~31-binding limit with far less work, *if* that
+limit were the only pain. We commit instead to the **full pooling scope**. Pooling carries
+independent, durable value the pointer table does not — reduced allocation overhead, memory
+locality, and the substrate that buffer eviction (the "thick allocator") and alias views
+([task-e4003e5f.md](task-e4003e5f.md)) both require. The pointer-table shortcut is not pursued.
