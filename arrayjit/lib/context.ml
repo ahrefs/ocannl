@@ -187,7 +187,7 @@ let compile ctx comp bindings =
   (* Required inputs for the initialization check below. Nodes with registered host initialization
      data (ndarray-backed literals, loaded tensors) self-initialize at link time from [Host_inits]
      (gh-ocannl-333), so they are excluded. *)
-  let context_nodes = Asgns.context_nodes ~use_host_memory:None comp.Asgns.asgns in
+  let context_nodes = Asgns.context_nodes comp.Asgns.asgns in
   let inputs =
     Set.filter (Set.diff context_nodes comp.Asgns.embedded_nodes) ~f:(fun tn ->
         not (Ir.Host_inits.mem tn))

@@ -159,7 +159,6 @@ struct
   include C_syntax.Pure_C_config (struct
     type nonrec buffer_ptr = buffer_ptr
 
-    let use_host_memory = use_host_memory
     let procs = Procs.procs
 
     let full_printf_support =

@@ -20,7 +20,6 @@ module type C_syntax_config = sig
 
   type buffer_ptr
 
-  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   val main_kernel_prefix : string
   val kernel_prep_line : string
   val buffer_prefix : string
@@ -77,7 +76,6 @@ end
 module Pure_C_config (Input : sig
   type buffer_ptr
 
-  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
   val procs : Low_level.optimized array
   val full_printf_support : bool
 end) =
@@ -86,7 +84,6 @@ struct
 
   type nonrec buffer_ptr = Input.buffer_ptr
 
-  let use_host_memory = Input.use_host_memory
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
   let buffer_prefix = ""
@@ -271,7 +268,7 @@ module C_syntax (B : C_syntax_config) = struct
     Low_level.get_ident_within_code ~no_dots:true ~blacklist:B.ident_blacklist
     @@ Array.map B.procs ~f:(fun l -> l.llc)
 
-  let in_ctx tn = B.(Tn.is_in_context_force ~use_host_memory tn 46)
+  let in_ctx tn = Tn.is_in_context_force tn 46
 
   let filter_and_prepend_builtins ~includes ~builtins ~proc_doc =
     let doc_buffer = Buffer.create 4096 in

@@ -177,18 +177,15 @@ let rec is_materialized_force tn provenance =
       default_to_most_local tn provenance;
       is_materialized_force tn provenance
 
-let%debug3_sexp rec is_in_context_force ~(use_host_memory : 'a option) (tn : t) (provenance : int) :
-    bool =
-  (* [use_host_memory] no longer changes whether a node is in context: there is no host-only
-     storage. It is retained as a parameter for backend-capability symmetry with the rest of the
-     pipeline. *)
-  ignore use_host_memory;
+let%debug3_sexp rec is_in_context_force (tn : t) (provenance : int) : bool =
+  (* Since gh-ocannl-333 there is no host-only storage, so being in context depends only on the
+     memory mode. (Buffers never alias host memory: every backend copies on to_host/from_host.) *)
   match tn.memory_mode with
   | Some ((Virtual | Local), _) -> false
   | Some (On_device, _) -> true
   | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
       default_to_most_local tn provenance;
-      is_in_context_force ~use_host_memory tn provenance
+      is_in_context_force tn provenance
 
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false

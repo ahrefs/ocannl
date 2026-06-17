@@ -37,8 +37,6 @@ end
 module type No_device_buffer_and_copying = sig
   include Buffer
 
-  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
-
   val get_used_memory : unit -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
@@ -58,7 +56,6 @@ module No_device_buffer_and_copying () :
   No_device_buffer_and_copying with type buffer_ptr = unit Ctypes.ptr = struct
   type buffer_ptr = unit Ctypes.ptr
 
-  let use_host_memory = Some (fun ~size_in_bytes:_ ptr -> ptr)
   let sexp_of_buffer_ptr = Ops.sexp_of_voidptr
 
   include Buffer_types (struct
@@ -240,12 +237,6 @@ end
 (** Parts shared by backend implementations. *)
 module type Backend_impl_common = sig
   include Buffer
-
-  val use_host_memory : (size_in_bytes:int -> unit Ctypes.ptr -> buffer_ptr) option
-  (** If not [None], the backend will read from and write to the host memory directly whenever
-      reasonable. [size_in_bytes] is the size of the memory allocated on the host.
-
-      [use_host_memory] can only be [Some] on unified memory devices, like CPU and Apple Metal. *)
 end
 
 (** An interface to adding schedulers for stream-agnostic (typically CPU) backend implementations.
