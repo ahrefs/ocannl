@@ -477,46 +477,93 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             Option.(join @@ map lowered ~f:(fun optim -> optim.Low_level.merge_node)));
     }
 
-  let%track3_sexp alloc_if_needed parent_context ~key ~data:node ctx_buffers =
-    if Tnode.is_in_context_force key 43 && not (Map.mem ctx_buffers key) then (
-      let device = parent_context.device in
-      [%log Tn.debug_name key];
-      [%log (key : Tnode.t)];
-      (* Host initialization data for ndarray-backed literals / loaded nodes is registered in the
-         weakly-owned [Host_inits] table (gh-ocannl-333). It is read (not consumed) here, so the
-         same node can be initialized into multiple independent contexts. *)
-      let host_init = Host_inits.find key in
-      let default () : buffer_loc =
-        (* Zero-initialize unless the node will be copied from host immediately after allocation, or
-           has explicit Zero_out operations in the lowered code. *)
-        let will_copy_from_host = Option.is_some host_init in
-        let zero_init = not (will_copy_from_host || node.Low_level.zero_initialized_by_code) in
-        let loc = allocate device key ~zero_init in
-        Option.iter host_init ~f:(fun nd ->
-            Device.from_host ~dst:parent_context ~dst_loc:loc (Lazy.force nd));
-        loc
-      in
-      let add_new_exn () =
-        try Map.add_exn ctx_buffers ~key ~data:(default ())
-        with exn ->
-          [%log "Backends.alloc_if_needed: failed to add new node to context", (key : Tnode.t)];
-          raise exn
-      in
-      let add_old_exn data =
-        try Map.add_exn ctx_buffers ~key ~data
-        with exn ->
-          [%log "Backends.alloc_if_needed: failed to add old node to context", (key : Tnode.t)];
-          raise exn
-      in
-      (* It's the user's responsibility to ensure that constants are initialized on devices, the
-         user can choose to run initialization code on multiple contexts redundantly, or on the owner
-         context only and then to use init_from_device. Constant / read-only buffers are shared
-         across contexts on a device via [constant_buffer_cache]; their host initialization data, if
-         any, is copied (not pointer-wrapped) into a device buffer at first use. *)
-      if node.Low_level.read_only || Tn.known_constant key then add_old_exn
-      @@ Hashtbl.find_or_add device.constant_buffer_cache key ~default
-      else add_new_exn ())
-    else ctx_buffers
+  let align_up off a = if a <= 1 then off else (off + a - 1) / a * a
+
+  let size_in_bytes_of (key : Tn.t) =
+    let prec = Lazy.force key.Tn.prec in
+    Array.fold (Lazy.force key.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
+
+  (* gh-ocannl-344 Phase B/C: allocate a context's delta -- the in-context tnodes not already present
+     in [context.ctx_buffers]. Working (non-constant) nodes are packed into a single pool sized to the
+     delta and bump-assigned increasing byte offsets, replacing the one-pool-per-tnode policy. Peak
+     working allocation equals the old per-tnode total. Constant / read-only nodes are deduped
+     per-device via [constant_buffer_cache] (one slab each; physically packing them into a shared
+     constant slab is a deferred optimization that does not change the pool class, its lifetime, or
+     the binding count). Enumeration follows [traced_store] order so pool ids and offsets stay
+     deterministic across runs. With [large_models = false] a working pool is capped at 4 GB (uint32
+     offsets): a delta larger than that opens additional pools; a single tnode larger than the cap
+     raises a clear error. *)
+  let%track3_sexp allocate_delta (context : context) (traced_store : Low_level.traced_store) :
+      ctx_buffers =
+    let device = context.device in
+    let cap = if Utils.settings.large_models then Int.max_value else 0x1_0000_0000 in
+    (* Pass 1: partition the delta, preserving [traced_store] iteration order. *)
+    let working = ref [] and constants = ref [] in
+    Hashtbl.iteri traced_store ~f:(fun ~key ~data:node ->
+        if Tnode.is_in_context_force key 43 && not (Map.mem context.ctx_buffers key) then
+          if node.Low_level.read_only || Tn.known_constant key then
+            constants := (key, node) :: !constants
+          else working := (key, node) :: !working);
+    let working = List.rev !working and constants = List.rev !constants in
+    let ctx_buffers = ref context.ctx_buffers in
+    (* Pass 2a: pack the working delta into one pool (or several, past the 4 GB cap). [flush] mints a
+       pool sized to its segment, then zero-inits / host-inits each node at its assigned offset. *)
+    let flush (seg : (Tn.t * Low_level.traced_array * int * int) list) (total : int) : unit =
+      if not (List.is_empty seg) then (
+        let pool_id = device.next_pool_id in
+        device.next_pool_id <- pool_id + 1;
+        let alignment =
+          List.fold seg ~init:1 ~f:(fun a (key, _, _, _) ->
+              Int.max a (Ops.prec_in_bytes (Lazy.force key.Tn.prec)))
+        in
+        alloc_pool device ~pool_id ~size_in_bytes:total ~alignment;
+        List.iter (List.rev seg) ~f:(fun (key, node, offset, size_in_bytes) ->
+            let host_init = Host_inits.find key in
+            (* Zero-initialize unless the node will be copied from host immediately, or the lowered
+               code already zero-initializes it. *)
+            let zero_init =
+              not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
+            in
+            if zero_init then memset_zero device ~pool_id ~offset ~size_in_bytes;
+            let loc = { pool_id; offset } in
+            Option.iter host_init ~f:(fun nd ->
+                Device.from_host ~dst:context ~dst_loc:loc (Lazy.force nd));
+            ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:loc))
+    in
+    let seg = ref [] and bump = ref 0 in
+    List.iter working ~f:(fun (key, node) ->
+        let size = size_in_bytes_of key and align = Ops.prec_in_bytes (Lazy.force key.Tn.prec) in
+        if size > cap then
+          raise
+          @@ Utils.User_error
+               [%string
+                 "Backends.allocate_delta: tensor node %{Tn.debug_name key} needs %{size#Int} bytes, \
+                  over the %{cap#Int}-byte per-pool cap; set large_models=true for uint64 offsets"];
+        let offset = align_up !bump align in
+        if offset + size > cap then (
+          flush !seg !bump;
+          seg := [ (key, node, 0, size) ];
+          bump := size)
+        else (
+          seg := (key, node, offset, size) :: !seg;
+          bump := offset + size));
+    flush !seg !bump;
+    (* Pass 2b: constants / read-only nodes, deduped per device. It is the user's responsibility to
+       initialize constants on devices (redundantly across contexts, or once + init_from_device). *)
+    List.iter constants ~f:(fun (key, node) ->
+        let host_init = Host_inits.find key in
+        let default () : buffer_loc =
+          let zero_init =
+            not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
+          in
+          let loc = allocate device key ~zero_init in
+          Option.iter host_init ~f:(fun nd ->
+              Device.from_host ~dst:context ~dst_loc:loc (Lazy.force nd));
+          loc
+        in
+        let data = Hashtbl.find_or_add device.constant_buffer_cache key ~default in
+        ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
+    !ctx_buffers
 
   let%debug3_sexp link context (code : code) =
     verify_prior_context ~ctx_arrays:context.ctx_buffers
@@ -527,9 +574,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
       ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
-    let ctx_buffers =
-      Hashtbl.fold code.lowered.traced_store ~init:context.ctx_buffers ~f:(alloc_if_needed context)
-    in
+    let ctx_buffers = allocate_delta context code.lowered.traced_store in
     let optimize_ctx = code.lowered.optimize_ctx in
     let bindings, schedule = link context code.code ctx_buffers in
     let context = make_child ~ctx_buffers ~optimize_ctx context in
@@ -545,10 +590,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       ~from_prior_context:code_batch.from_prior_context;
     let ctx_buffers =
       Array.map code_batch.lowereds
-        ~f:
-          (Option.map ~f:(fun l ->
-               Hashtbl.fold l.Low_level.traced_store ~init:context.ctx_buffers
-                 ~f:(alloc_if_needed context)))
+        ~f:(Option.map ~f:(fun l -> allocate_delta context l.Low_level.traced_store))
     in
     let bindings, schedules = link_batch context code_batch.code_batch ctx_buffers in
     Array.fold_mapi schedules ~init:context ~f:(fun i context -> function
