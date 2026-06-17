@@ -1,0 +1,26 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Tensor Puzzles in OCANNL (gh-ocannl-308) ===
+#1 ones        [einsum       ] 1 1 1 1
+#2 sum         [einsum       ] 6
+#3 outer       [einsum       ] 0 0 0 0 1 2 0 2 4 0 3 6
+#4 diag        [einsum       ] 0 4 8
+#9 vstack      [einsum       ] 0 1 2 10 20 30
+#19 heaviside  [einsum       ] 0 5 1
+#20 repeat     [einsum       ] 0 1 2 0 1 2 0 1 2
+#21 bucketize  [einsum       ] 0 1 3
+#5 eye         [workaround   ] 1 0 0 0 1 0 0 0 1
+#6 triu        [workaround   ] 1 1 1 0 1 1 0 0 1
+#8 diff        [workaround   ] 1 2 3 4
+#13 pad_to     [workaround   ] 1 2 3 0 0
+#14 seq_mask   [workaround   ] 0 1 0 3 0 0
+#18 linspace   [workaround   ] 2 4 6 8 10
+
+Not expressible today (need new primitives):
+  7  cumsum     -- needs SCAN (loop-carried prefix dependency)
+  10 roll       -- needs GATHER / circular shift (modular dynamic index)
+  11 flip       -- needs negative-stride affine indexing or a REVERSE op
+  12 compress   -- needs SCAN + SCATTER
+  15 bincount   -- needs SCATTER (values-as-indices) + integer index tensors
+  16 scatter_add-- needs SCATTER
+  17 flatten    -- needs RESHAPE / view across rank

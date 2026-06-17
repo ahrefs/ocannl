@@ -286,3 +286,14 @@
   (env_var OCANNL_BACKEND))
  (modules test_basis_total_order)
  (libraries base ocannl stdio))
+
+(test
+ (name tensor_puzzles)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tensor_puzzles)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
