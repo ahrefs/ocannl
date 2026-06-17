@@ -58,24 +58,29 @@
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
 
-; Built and run only on macOS, where the Metal backend (the `metal` package)
-; is available; skipped on other systems via `enabled_if`.
+; Gated on actual availability of the optional Metal backend, not on the OS:
+; `arrayjit.metal_backend` is an `(optional)` library and is hidden whenever
+; its `metal` dependency is unavailable in the switch. An `(= %{system} macosx)`
+; gate is true on every macOS switch, including ones without the `metal` opam
+; package installed, where it would force a build of a hidden library and fail
+; the whole `@all` alias. `%{lib-available:...}` is true only when the backend
+; is genuinely linkable, so the test is built where it can run and skipped
+; everywhere else.
 (test
  (name test_metal_storage_mode)
  (package arrayjit)
- (enabled_if
-  (= %{system} macosx))
+ (enabled_if %{lib-available:arrayjit.metal_backend})
  (modules test_metal_storage_mode)
  (deps ocannl_config)
  (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
 
 ; Exercises the real Metal allocator paths and private-buffer host transfers;
-; macOS-only, and requires a working Metal device at run time.
+; requires the optional Metal backend to be available (and a working Metal
+; device at run time). Gated on library availability — see the note above.
 (test
  (name test_metal_alloc)
  (package arrayjit)
- (enabled_if
-  (= %{system} macosx))
+ (enabled_if %{lib-available:arrayjit.metal_backend})
  (modules test_metal_alloc)
  (deps ocannl_config)
  (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
