@@ -58,29 +58,32 @@
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
 
-; Gated on actual availability of the optional Metal backend, not on the OS:
-; `arrayjit.metal_backend` is an `(optional)` library and is hidden whenever
-; its `metal` dependency is unavailable in the switch. An `(= %{system} macosx)`
-; gate is true on every macOS switch, including ones without the `metal` opam
-; package installed, where it would force a build of a hidden library and fail
-; the whole `@all` alias. `%{lib-available:...}` is true only when the backend
-; is genuinely linkable, so the test is built where it can run and skipped
-; everywhere else.
+; Gated on availability of the external `metal` opam package, not on the OS.
+; `metal` is the platform constraint (Apple-only) and the actual dependency
+; that goes missing off macOS; `arrayjit.metal_backend` is the `(optional)`
+; local wrapper that links it. We must gate on the *external* lib, not the
+; local wrapper: a locally-defined optional library reads as available in
+; `enabled_if` (it is part of the workspace) even when its transitive `metal`
+; dep is absent, so the unavailable lib is only discovered at link — too late,
+; the stanza is already in `@all` and the build fails. An `(= %{system} macosx)`
+; gate has the same failure mode on a macOS switch without `metal` installed.
+; `%{lib-available:metal}` is true only when `metal` is genuinely installed, so
+; the test is built where it can run and cleanly skipped everywhere else.
 (test
  (name test_metal_storage_mode)
  (package arrayjit)
- (enabled_if %{lib-available:arrayjit.metal_backend})
+ (enabled_if %{lib-available:metal})
  (modules test_metal_storage_mode)
  (deps ocannl_config)
  (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
 
 ; Exercises the real Metal allocator paths and private-buffer host transfers;
-; requires the optional Metal backend to be available (and a working Metal
-; device at run time). Gated on library availability — see the note above.
+; requires the `metal` package to be available (and a working Metal device at
+; run time). Gated on library availability — see the note above.
 (test
  (name test_metal_alloc)
  (package arrayjit)
- (enabled_if %{lib-available:arrayjit.metal_backend})
+ (enabled_if %{lib-available:metal})
  (modules test_metal_alloc)
  (deps ocannl_config)
  (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
