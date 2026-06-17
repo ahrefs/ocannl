@@ -1,0 +1,28 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Tensor Puzzles in OCANNL (gh-ocannl-308) ===
+#1 ones        [einsum       ] 1 1 1 1
+#2 sum         [einsum       ] 6
+#3 outer       [einsum       ] 0 0 0 0 1 2 0 2 4 0 3 6
+#4 diag        [einsum       ] 0 4 8
+#9 vstack      [einsum       ] 0 1 2 10 20 30
+#19 heaviside  [einsum       ] 0 5 1
+#20 repeat     [einsum       ] 0 1 2 0 1 2 0 1 2
+#21 bucketize  [einsum       ] 0 1 3
+#5 eye         [workaround   ] 1 0 0 0 1 0 0 0 1
+#6 triu        [workaround   ] 1 1 1 0 1 1 0 0 1
+#8 diff        [workaround   ] 1 2 3 4
+#13 pad_to/pad [workaround   ] 1 2 3 0 0
+#13 pad_to/trunc [workaround   ] 1 2 3
+#14 seq_mask   [workaround   ] 0 1 0 3 0 0
+#18 linspace   [workaround   ] 2 4 6 8 10
+#7 cumsum      [workaround   ] 1 3 6 10
+#11 flip       [workaround   ] 4 3 2 1
+#10 roll       [workaround   ] 2 3 4 1
+#17 flatten    [workaround   ] 10 20 30 40 50 60
+
+Not expressible today -- DATA-DEPENDENT indexing (the index is a runtime tensor value), which
+needs gather/scatter that OCANNL lacks:
+  12 compress   -- left-align kept entries: position = prefix-count of mask, then SCATTER
+  15 bincount   -- out[a[i]] += 1: SCATTER with values-as-indices + integer index tensors
+  16 scatter_add-- out[link[j]] += values[j]: the canonical SCATTER
