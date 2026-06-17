@@ -105,7 +105,6 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
      the shared [Device_config_common]). *)
   include Backend_buffer
 
-  let use_host_memory = None
   let ctx_of (context : context) = context.device.dev.primary_context
   let is_done event = Cu.Delimited_event.query event
   let will_wait_for context event = Cu.Delimited_event.wait context.device.runner event
@@ -318,7 +317,6 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     include C_syntax.Pure_C_config (struct
       type nonrec buffer_ptr = buffer_ptr
 
-      let use_host_memory = None
       let procs = Input.procs
 
       let full_printf_support =

@@ -26,8 +26,8 @@ let () =
   check "Local" (Some Tn.Local);
   check "Device_only" (Some Tn.Device_only);
   check "On_device" (Some Tn.On_device);
-  (* Materialization-request / host-initialized modes: the CPU may initialize or wrap these (e.g.
-     [use_host_memory]), so they stay shared. After gh-ocannl-333 the [Hosted] mode is gone. *)
+  (* Materialization-request / host-initialized modes: the CPU may initialize these, so they stay
+     shared. After gh-ocannl-333 the [Hosted] mode is gone. *)
   check "Materialized" (Some Tn.Materialized);
   check "Effectively_constant" (Some Tn.Effectively_constant);
   (* Partially-resolved and absent modes: conservative shared default. *)

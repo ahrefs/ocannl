@@ -6,7 +6,6 @@ end) =
 struct
   type buffer_ptr
 
-  let use_host_memory = None
   let name = Config.name
 
   type procedure

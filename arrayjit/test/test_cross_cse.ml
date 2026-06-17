@@ -208,7 +208,6 @@ let () =
   let module Syntax = Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
     type buffer_ptr = unit Ctypes.ptr
 
-    let use_host_memory = None
     let procs = [| optimized |]
     let full_printf_support = true
   end))

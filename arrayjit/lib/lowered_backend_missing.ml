@@ -12,7 +12,6 @@ struct
   type optimize_ctx = Low_level.optimize_ctx [@@deriving sexp_of]
 
   let empty_optimize_ctx () = { Low_level.computations = Hashtbl.create (module Tnode) }
-  let use_host_memory = None
 
   let sexp_of_dev _dev =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"

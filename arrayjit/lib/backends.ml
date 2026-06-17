@@ -275,10 +275,10 @@ let lower_batch_assignments optim_ctx ?names ?occupancy bindings asgns_l =
         )
       else (None, None))
 
-let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_context : unit =
+let%debug3_sexp verify_prior_context ~ctx_arrays ~from_prior_context : unit =
   Set.iter from_prior_context ~f:(fun tn ->
       if
-        Tn.is_in_context_force ~use_host_memory tn 42
+        Tn.is_in_context_force tn 42
         && (not (Option.is_some @@ Map.find ctx_arrays tn))
         (* Nodes with registered host initialization data (ndarray-backed literals, loaded tensors)
            self-initialize in this context at link time from [Host_inits] (gh-ocannl-333), so they
@@ -286,12 +286,11 @@ let%debug3_sexp verify_prior_context ~use_host_memory ~ctx_arrays ~from_prior_co
         && not (Host_inits.mem tn)
       then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
 
-let%debug3_sexp from_prior_context_batch ~use_host_memory (comps : Assignments.comp option array) :
-    Tn.t_set =
+let%debug3_sexp from_prior_context_batch (comps : Assignments.comp option array) : Tn.t_set =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
           Set.diff
-            (Assignments.context_nodes ~use_host_memory comp.Assignments.asgns)
+            (Assignments.context_nodes comp.Assignments.asgns)
             comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
@@ -453,7 +452,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let code : Device.code = compile ~name bindings lowered in
     let from_prior_context : Tn.t_set =
-      Set.diff (Assignments.context_nodes ~use_host_memory comp.asgns) comp.embedded_nodes
+      Set.diff (Assignments.context_nodes comp.asgns) comp.embedded_nodes
     in
     { from_prior_context; name; lowered; code; expected_merge_node = lowered.Low_level.merge_node }
 
@@ -465,7 +464,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let code_batch = compile_batch ~names bindings lowereds in
     let from_prior_context =
-      from_prior_context_batch ~use_host_memory
+      from_prior_context_batch
       @@ Array.mapi lowereds ~f:(fun i -> Option.map ~f:(fun _ -> comps.(i)))
     in
     {
@@ -479,7 +478,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     }
 
   let%track3_sexp alloc_if_needed parent_context ~key ~data:node ctx_buffers =
-    if Tnode.is_in_context_force ~use_host_memory key 43 && not (Map.mem ctx_buffers key) then (
+    if Tnode.is_in_context_force key 43 && not (Map.mem ctx_buffers key) then (
       let device = parent_context.device in
       [%log Tn.debug_name key];
       [%log (key : Tnode.t)];
@@ -520,7 +519,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     else ctx_buffers
 
   let%debug3_sexp link context (code : code) =
-    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_buffers
+    verify_prior_context ~ctx_arrays:context.ctx_buffers
       ~from_prior_context:code.from_prior_context;
     (* Static merge-buffer verification "in the right direction" (gh-ocannl-288): the linked
        context carries the merge-buffer node of the producing [device_to_device] transfer routine;
@@ -542,7 +541,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs }
 
   let%debug3_sexp link_batch context code_batch =
-    verify_prior_context ~use_host_memory ~ctx_arrays:context.ctx_buffers
+    verify_prior_context ~ctx_arrays:context.ctx_buffers
       ~from_prior_context:code_batch.from_prior_context;
     let ctx_buffers =
       Array.map code_batch.lowereds

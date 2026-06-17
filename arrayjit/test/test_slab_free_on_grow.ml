@@ -28,7 +28,6 @@ module Mock_raw = struct
     let sexp_of_buffer_ptr = sexp_of_buffer_ptr
   end)
 
-  let use_host_memory = None
   let get_used_memory () = 0
   let next = ref 0
   let freed : int list ref = ref []
@@ -71,7 +70,6 @@ module Mock_raw_gc = struct
     let sexp_of_buffer_ptr = sexp_of_buffer_ptr
   end)
 
-  let use_host_memory = None
   let get_used_memory () = 0
   let next = ref 100
 

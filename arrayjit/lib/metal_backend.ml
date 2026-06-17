@@ -80,9 +80,9 @@ let private_resource_options =
    storage. After gh-ocannl-333 there is no [Hosted] mode; on-demand host read-back / upload for
    [On_device] nodes goes through the backend's blit-based [to_host]/[from_host], so private storage
    remains valid for them. The materialization-request modes -- [Materialized], [Effectively_constant],
-   the partially-resolved [Never_virtual], and the [None] default -- may still be initialized or
-   wrapped via shared memory (e.g. [use_host_memory]) and stay shared. [Virtual] tnodes are inlined
-   and never reach the allocator; they map to shared defensively. *)
+   the partially-resolved [Never_virtual], and the [None] default -- may still be host-initialized
+   and stay shared. [Virtual] tnodes are inlined and never reach the allocator; they map to shared
+   defensively. *)
 let storage_mode_for_memory_mode : Tn.memory_mode option -> Me.Resource.StorageMode.t = function
   | Some (Local | Device_only | On_device) -> Me.Resource.StorageMode.Private
   | Some (Effectively_constant | Virtual | Never_virtual | Materialized) | None ->
@@ -156,13 +156,6 @@ module Fresh () = struct
 
   (* Store for captured logs per device_id (the device is its own single compute stream). *)
   let stream_logs : (int, string list ref) Hashtbl.t = Hashtbl.create (module Int)
-
-  (* Metal has unified memory on Apple Silicon, so we can use host memory *)
-  let get_buffer_for_ptr device ~size_in_bytes bytes =
-    Me.Buffer.on_device_with_bytes_no_copy device ~bytes ~length:size_in_bytes
-      Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
-
-  let use_host_memory = Some (get_buffer_for_ptr metal_devices.(0))
 
   (* Device Management *)
   let num_devs = Array.length metal_devices
@@ -456,7 +449,6 @@ module Fresh () = struct
     include C_syntax.Pure_C_config (struct
       type nonrec buffer_ptr = buffer_ptr
 
-      let use_host_memory = use_host_memory
       let procs = Input.procs
       let full_printf_support = false
     end)
