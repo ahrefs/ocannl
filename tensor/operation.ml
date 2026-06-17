@@ -439,14 +439,19 @@ let fma ~grad_spec t1 t2 t3 =
   in
   Tensor.ternop ~op_label:"fma" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1 t2 t3
 
-let where ~grad_spec t1 t2 t3 =
+let where ?spec ?(capture_dims = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
+  let ternary_op =
+    match spec with
+    | None -> Shape.Pointwise_tern
+    | Some s -> Shape.Einsum_tern (s, capture_dims)
+  in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =: where v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
     g2 =+ where v1 g 0;
     g3 =+ where v1 0 g
   in
-  Tensor.ternop ~op_label:"where" ~ternary_op:Pointwise_tern ~op_asn ~grad_asn ~grad_spec t1 t2 t3
+  Tensor.ternop ~op_label:"where" ~ternary_op ~op_asn ~grad_asn ~grad_spec t1 t2 t3
 
 (** Similar to the explicit mode of [numpy.einsum], the binary variant. Can compute various forms of
     matrix multiplication, inner and outer products, etc.
@@ -457,6 +462,26 @@ let einsum ?(capture_dims = []) spec = pointmul ~spec ~capture_dims
 
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
 let outer_sum ?(capture_dims = []) spec = add ~spec ~capture_dims
+
+(** Ternary einsum: contracts three tensors under a three-RHS spec
+    [rhs1 ; rhs2 ; rhs3 => lhs]. The forward pass computes
+    [v[lhs] =+ mul3(v1[rhs1], v2[rhs2], v3[rhs3])] over the product space of all axis labels.
+    Axis labels present in any RHS but absent from the LHS become reduction axes.
+
+    WARNING: for chain-structured contractions such as ["ij;jk;km=>im"] the fused kernel iterates
+    the full product space (O(N⁴) for N-dimensional operands), which is less efficient than a
+    binary chain (O(N³)). Use ternary einsum for patterns where all three operands share reduction
+    axes, e.g. bilinear forms. *)
+let einsum3 ?(capture_dims = []) spec =
+  let module NTDSL = Initial_NTDSL in
+  let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ mul3 v1 v2 v3 in
+  let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
+    g1 =+ mul3 g v2 v3;
+    g2 =+ mul3 v1 g v3;
+    g3 =+ mul3 v1 v2 g
+  in
+  Tensor.ternop ~op_label:"einsum3" ~ternary_op:(Shape.Einsum_tern (spec, capture_dims))
+    ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
     diagonals, compute traces etc.
