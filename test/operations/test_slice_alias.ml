@@ -34,6 +34,45 @@ let make_parent label vals ~batch ~out =
 let arr_to_string a =
   "[" ^ String.concat ~sep:" " (Array.to_list (Array.map a ~f:(Printf.sprintf "%g"))) ^ "]"
 
+(* Counts statement-level writes ([Set] / [Set_from_vec] / [Zero_out]) targeting tensor node [id] in
+   a lowered [Low_level.t]. A materializing slice copy loop emits a [Set] to the slice node inside a
+   [For_loop]; an aliased slice lowers its [Fetch.Slice] to [Noop] and redirects every access to the
+   parent, so the slice node is written exactly zero times. This is the non-vacuous "no copy loop"
+   probe: it flips from 0 to >0 the moment [Fetch.Slice] lowers to [loop_over_dims] instead of
+   [Noop]. *)
+let count_writes_to (llc : Ir.Low_level.t) (id : int) : int =
+  let open Ir.Low_level in
+  let n = ref 0 in
+  let hit (tn : Ir.Tnode.t) = if tn.Ir.Tnode.id = id then Int.incr n in
+  let rec go_t : Ir.Low_level.t -> unit = function
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ -> ()
+    | Seq (a, b) ->
+        go_t a;
+        go_t b
+    | For_loop { body; _ } -> go_t body
+    | Zero_out tn -> hit tn
+    | Set { tn; llsc; _ } ->
+        hit tn;
+        go_scalar llsc
+    | Set_from_vec { tn; arg = s, _; _ } ->
+        hit tn;
+        go_scalar s
+    | Set_local (_, s) -> go_scalar s
+  and go_scalar : scalar_t -> unit = function
+    | Local_scope { body; _ } -> go_t body
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        go_scalar a;
+        go_scalar b;
+        go_scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        go_scalar a;
+        go_scalar b
+    | Unop (_, (a, _)) -> go_scalar a
+  in
+  go_t llc;
+  !n
+
 let () =
   Tensor.unsafe_reinitialize ();
   let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
@@ -95,4 +134,33 @@ let () =
   let parent_after = Context.get_values ctx images.value in
   Stdio.printf "write-through: parent=%s (expect [99 99 99 4 5 6]): %b\n" (arr_to_string parent_after)
     (Array.equal Float.equal parent_after [| 99.; 99.; 99.; 4.; 5.; 6. |]);
+
+  (* --- AC1 (no copy loop): lower an eligible slice's forward and confirm its [Fetch.Slice] became a
+     [Noop] -- the slice node is written ZERO times in the lowered code. Inspecting the lowered
+     [Low_level.t] directly (via [Ir.Assignments.to_low_level], pre-optimization) is the non-vacuous
+     part: the "absent from ctx_buffers" check above only proves no allocation, not the absence of a
+     copy loop. This uses a fresh slice so the forward code is not the consumed one above. --- *)
+  let elig_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let parent2 = make_parent "parent2" [| 1.; 2.; 3.; 4.; 5.; 6. |] ~batch:2 ~out:3 in
+  let%op elig = parent2 @| elig_n in
+  let elig_fwd = Train.forward elig in
+  let elig_llc = Ir.Assignments.to_low_level elig_fwd.Ir.Assignments.asgns in
+  Stdio.printf "eligible slice is aliased: %b\n" (Ir.Tnode.is_alias elig.value);
+  Stdio.printf "eligible slice lowered with NO copy loop (0 writes to slice): %b\n"
+    (count_writes_to elig_llc elig.value.Ir.Tnode.id = 0);
+
+  (* --- AC3 (virtual-parent fallback): a slice of a KNOWN-VIRTUAL parent is ineligible -- it is NOT
+     marked as an alias and falls back to the materializing copy loop (>0 writes to the slice). The
+     parent is a computed (mode-unspecified) tensor forced [Virtual] before lowering. --- *)
+  let virt_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let vbase = make_parent "vbase" [| 1.; 2.; 3.; 4.; 5.; 6. |] ~batch:2 ~out:3 in
+  let%op vparent = vbase + vbase in
+  Train.set_virtual vparent.value;
+  let%op vslice = vparent @| virt_n in
+  let virt_fwd = Train.forward vslice in
+  let virt_llc = Ir.Assignments.to_low_level virt_fwd.Ir.Assignments.asgns in
+  Stdio.printf "virtual-parent known_virtual: %b\n" (Ir.Tnode.known_virtual vparent.value);
+  Stdio.printf "virtual-parent slice NOT aliased: %b\n" (not (Ir.Tnode.is_alias vslice.value));
+  Stdio.printf "virtual-parent slice falls back to copy loop (writes to slice > 0): %b\n"
+    (count_writes_to virt_llc vslice.value.Ir.Tnode.id > 0);
   ()

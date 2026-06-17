@@ -9,3 +9,8 @@ host get_values on alias raises: true
 host set_values on alias raises: true
 alias still absent from ctx_buffers after rejected host access: true
 write-through: parent=[99 99 99 4 5 6] (expect [99 99 99 4 5 6]): true
+eligible slice is aliased: true
+eligible slice lowered with NO copy loop (0 writes to slice): true
+virtual-parent known_virtual: true
+virtual-parent slice NOT aliased: true
+virtual-parent slice falls back to copy loop (writes to slice > 0): true
