@@ -46,6 +46,17 @@ type kparam_source =
   | Log_file_name
   | Merge_buffer
   | Kparam_ptr of Tnode.t
+  | Kparam_pool_slab of int
+      (** gh-ocannl-344: the [i]-th pool base-pointer parameter of a pooled kernel (Metal). A fixed
+          number of these is emitted; at link the backend binds slab [i] to the pool assigned index
+          [i] (or a duplicate of an in-use pool for the unused tail). Lets a kernel reach hundreds of
+          tensor nodes through a handful of bound pools, staying under Metal's ~31 binding limit. *)
+  | Kparam_pool_slots of Tnode.t list
+      (** gh-ocannl-344: the per-routine slot table accompanying {!Kparam_pool_slab}. For the [k]-th
+          tnode in this list the backend writes (pool_index, byte_offset); the shader reads it to
+          form the typed pointer by casting (pools at pool_index) + byte_offset. Emitted only by
+          pooled (Metal) codegen;
+          per-tnode pointer backends (C, CUDA) never produce it. *)
   | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 

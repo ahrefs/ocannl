@@ -726,3 +726,20 @@
  (alias runtest)
  (package neural_nets_lib)
  (action (diff test_config_consistency.expected test_config_consistency.actual)))
+
+(test
+ (name test_metal_pool_bindings)
+ (package neural_nets_lib)
+ (modules test_metal_pool_bindings)
+ (deps ocannl_config test_metal_pool_bindings.expected)
+ (libraries
+  base
+  stdio
+  ocannl
+  (select
+   test_metal_pool_bindings.ml
+   from
+   (metal -> test_metal_pool_bindings.real.ml)
+   (-> test_metal_pool_bindings.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

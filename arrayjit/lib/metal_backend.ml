@@ -17,6 +17,13 @@ type ullong = Unsigned.ULLong.t
 
 let sexp_of_ullong x = Sexp.Atom (Unsigned.ULLong.to_string x)
 
+(* gh-ocannl-344: number of pool base-pointer parameters every pooled kernel declares. A routine may
+   reach at most this many distinct pools (working delta + ancestor deltas + constant pools + merge);
+   together with the slot table, static-index and merge params this stays well under Metal's ~31
+   argument-buffer binding limit, independently of the tensor-node count. A routine needing more
+   distinct pools raises a clear error at link time. *)
+let metal_max_pools = 16
+
 module Backend_buffer = struct
   type buffer_ptr = Me.Buffer.t (* Use the payload type from metal.ml *)
 
@@ -448,6 +455,11 @@ module Fresh () = struct
     let arg_int_prefix =
       if Utils.settings.large_models then "const uint64_t& " else "const uint32_t& "
 
+    (* gh-ocannl-344: pass materialized tensor nodes through [metal_max_pools] bound pool buffers + a
+       slot table instead of one buffer per tnode, so a kernel reaching hundreds of nodes stays under
+       Metal's ~31 argument-buffer binding limit. [link_proc] binds the pools and fills the slots. *)
+    let ptr_param_style = `Pooled metal_max_pools
+
     let extra_args =
       [
         "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
@@ -758,6 +770,44 @@ using namespace metal;|} in
       traced_stores;
     }
 
+  (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
+     use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node, matching
+     the kernel prologue order), and return [index_to_pool] for binding [__pool<i>]. Raises if the
+     routine touches more than [metal_max_pools] distinct pools. The returned [CArray] is kept alive
+     by the caller so its backing store outlives the buffer copy. *)
+  let build_pool_binding (dev : device) (ctx_buffers : ctx_buffers) (tns : Tn.t list) =
+    let tbl = Hashtbl.create (module Int) and index_to_pool = ref [] and next = ref 0 in
+    let idx_of pool_id =
+      match Hashtbl.find tbl pool_id with
+      | Some i -> i
+      | None ->
+          let i = !next in
+          Int.incr next;
+          Hashtbl.set tbl ~key:pool_id ~data:i;
+          index_to_pool := pool_id :: !index_to_pool;
+          i
+    in
+    let slot_vals =
+      List.concat_map tns ~f:(fun tn ->
+          let loc = Map.find_exn ctx_buffers tn in
+          [ Unsigned.UInt.of_int (idx_of loc.pool_id); Unsigned.UInt.of_int loc.offset ])
+    in
+    if !next > metal_max_pools then
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Metal_backend: routine needs %d distinct pools, over the metal_max_pools=%d binding \
+               budget"
+              !next metal_max_pools);
+    let arr = Ctypes.CArray.of_list Ctypes.uint slot_vals in
+    let slots_buf =
+      Me.Buffer.on_device_with_bytes dev.dev
+        ~bytes:Ctypes.(to_voidp (CArray.start arr))
+        ~length:(List.length slot_vals * Ctypes.sizeof Ctypes.uint)
+        shared_resource_options
+    in
+    (Array.of_list (List.rev !index_to_pool), slots_buf, arr)
+
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
       ~(kparams : (string * kparam_source) list) ~lowered_bindings
       ~(ctx_buffers : ctx_buffers) : Task.t =
@@ -767,6 +817,12 @@ using namespace metal;|} in
     let runner_label = get_name dev in
     let func = Me.Library.new_function_with_name library func_name in
     let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
+    (* Precompute the pool-index assignment + slot table once (addresses/offsets are stable after
+       allocation). [Some (index_to_pool, slots_buf, arr)] iff this routine uses the pooled params. *)
+    let pool_binding =
+      List.find_map kparams ~f:(function _, Kparam_pool_slots tns -> Some tns | _ -> None)
+      |> Option.map ~f:(build_pool_binding dev ctx_buffers)
+    in
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label];
@@ -795,6 +851,20 @@ using namespace metal;|} in
                 failwith
                   [%string
                     "Kparam_ptr %{Tn.debug_name tn} not found in ctx_buffers for %{func_name}"]
+            | Kparam_pool_slab i ->
+                (* Bind pool param [i] to the slab assigned index [i]; the unused tail (i >= number of
+                   distinct pools) duplicates pool 0 so the shader's local pool array is fully bound
+                   without extra bindings. Pools are bound at offset 0 -- the per-node byte offset is
+                   applied in-shader via the slot table. *)
+                let index_to_pool, _, _ = Option.value_exn ~here:[%here] pool_binding in
+                let pool_id =
+                  if i < Array.length index_to_pool then index_to_pool.(i) else index_to_pool.(0)
+                in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index
+                  (Slab.resolve_pool dev { pool_id; offset = 0 })
+            | Kparam_pool_slots _ ->
+                let _, slots_buf, _ = Option.value_exn ~here:[%here] pool_binding in
+                Me.ComputeCommandEncoder.set_buffer encoder ~index slots_buf
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
                 let size = Ctypes.sizeof Ctypes.int in
@@ -830,8 +900,8 @@ using namespace metal;|} in
     in
     Task.Task
       {
-        context_lifetime = (library, pso, ctx_buffers);
-        (* Keep library and PSO alive *)
+        context_lifetime = (library, pso, ctx_buffers, pool_binding);
+        (* Keep library, PSO and the slot-table buffer alive *)
         description = "launches " ^ func_name ^ " on " ^ runner_label;
         work;
       }

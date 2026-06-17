@@ -990,7 +990,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
                          [%string
                            "cuda: static index %{Indexing.symbol_ident s.static_symbol} is too \
                             big: %{upto#Int}"]);
-              S.Int !i)
+              S.Int !i
+          | _name, (Kparam_pool_slab _ | Kparam_pool_slots _) ->
+              (* The CUDA backend uses per-tnode pointer params ([`Per_param] codegen); only the
+                 Metal backend emits the pooled slab / slot parameters. *)
+              invalid_arg "Cuda_backend.link: unexpected pooled kparam (CUDA uses per-tnode pointers)")
       in
       set_ctx @@ ctx_of prior_context;
       [%log "launching the kernel"];
