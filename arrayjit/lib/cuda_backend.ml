@@ -795,6 +795,7 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       | FMA, Ops.Half_prec _ -> func "__hfma"
       | FMA, Ops.Single_prec _ -> func "fmaf"
       | FMA, _ -> func "fma"
+      | Mul3, _ -> fun v1 v2 v3 -> group (parens (v1 ^^ string " * " ^^ v2 ^^ string " * " ^^ v3))
 
     let convert_precision ~from ~to_ =
       match (from, to_) with

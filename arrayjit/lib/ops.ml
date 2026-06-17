@@ -438,6 +438,7 @@ type vec_unop =
 type ternop =
   | Where  (** Where(a,b,c): if a then b else c *)
   | FMA  (** FMA(a,b,c): (a * b) + c, non-accumulating *)
+  | Mul3  (** Mul3(a,b,c): a * b * c, non-accumulating *)
 [@@deriving sexp, compare, equal]
 
 type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp, compare, equal]
@@ -513,7 +514,10 @@ let interpret_unop op v =
 
 let interpret_ternop op v1 v2 v3 =
   let open Float in
-  match op with Where -> if v1 <> 0. then v2 else v3 | FMA -> (v1 * v2) + v3
+  match op with
+  | Where -> if v1 <> 0. then v2 else v3
+  | FMA -> (v1 * v2) + v3
+  | Mul3 -> v1 * v2 * v3
 
 (** Note: currently the %cd syntax only supports infix binops as assignment ops. *)
 let is_binop_infix _ = true
@@ -770,7 +774,7 @@ let vec_unop_c_syntax prec op =
   | Uint4x32_to_prec_uniform, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform_vec(", ")")
 
 (** In the %cd syntax, we use uncurried notation for ternary ops. *)
-let ternop_cd_syntax = function Where -> "where" | FMA -> "fma"
+let ternop_cd_syntax = function Where -> "where" | FMA -> "fma" | Mul3 -> "mul3"
 
 let ternop_c_syntax prec op =
   match (op, prec) with
@@ -784,6 +788,7 @@ let ternop_c_syntax prec op =
       | Uint64_prec _ | Fp8_prec _ ) ) ->
       ("fma(", ",", ",", ")")
   | FMA, _ -> ("fmaf(", ",", ",", ")")
+  | Mul3, _ -> ("((", ") * (", ") * (", "))")
 
 let c_convert_precision ~from ~to_ =
   match (from, to_) with
@@ -961,7 +966,8 @@ let is_homogeneous_prec_binop = function
     be converted to the result precision. *)
 let is_homogeneous_prec_ternop = function
   | Where -> false (* Heterogeneous: condition can have different precision *)
-  | FMA -> true (* FMA is homogeneous *)
+  | FMA -> true
+  | Mul3 -> true
 
 let () =
   (* Ensure that the functions are linked in *)

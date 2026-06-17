@@ -132,7 +132,7 @@ struct
     let precs = Ops.[ byte; int32; uint32; half; bfloat16; fp8; single; double ] in
     List.iter precs ~f:(fun prec ->
         List.iter
-          Ops.[ Where; FMA ]
+          Ops.[ Where; FMA; Mul3 ]
           ~f:(fun op ->
             let p, _, _, _ =
               try Ops.ternop_c_syntax prec op with Invalid_argument _ -> ("", "", "", "")
