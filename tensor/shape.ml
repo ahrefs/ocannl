@@ -511,7 +511,7 @@ let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_label
   ( proj_env,
     bio_lhs,
     bio_rhs_list,
-    extras_dim_refs @ extras_lhs @ rhs_constraints @ lhs_constraints )
+    extras_dim_refs @ extras_lhs @ lhs_constraints @ rhs_constraints )
 
 (* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
    discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
