@@ -1,5 +1,7 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 With large_models=false, index precision: uint32
+With large_models=false, pool slot type: uint
 With large_models=true, index precision: uint64
+With large_models=true, pool slot type: ulong
 Index precision tests passed!

@@ -743,3 +743,21 @@
    (-> test_metal_pool_bindings.missing.ml)))
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name test_metal_pool_slot_width)
+ (package neural_nets_lib)
+ (modules test_metal_pool_slot_width)
+ (deps ocannl_config test_metal_pool_slot_width.expected)
+ (libraries
+  base
+  stdio
+  ocannl
+  arrayjit.utils
+  (select
+   test_metal_pool_slot_width.ml
+   from
+   (metal -> test_metal_pool_slot_width.real.ml)
+   (-> test_metal_pool_slot_width.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

@@ -787,10 +787,11 @@ using namespace metal;|} in
           index_to_pool := pool_id :: !index_to_pool;
           i
     in
-    let slot_vals =
-      List.concat_map tns ~f:(fun tn ->
+    (* (pool_index, byte_offset) per node, in the slot order the shader prologue indexes. *)
+    let pairs =
+      List.map tns ~f:(fun tn ->
           let loc = Map.find_exn ctx_buffers tn in
-          [ Unsigned.UInt.of_int (idx_of loc.pool_id); Unsigned.UInt.of_int loc.offset ])
+          (idx_of loc.pool_id, loc.offset))
     in
     if !next > metal_max_pools then
       raise
@@ -799,14 +800,25 @@ using namespace metal;|} in
               "Metal_backend: routine needs %d distinct pools, over the metal_max_pools=%d binding \
                budget"
               !next metal_max_pools);
-    let arr = Ctypes.CArray.of_list Ctypes.uint slot_vals in
-    let slots_buf =
-      Me.Buffer.on_device_with_bytes dev.dev
-        ~bytes:Ctypes.(to_voidp (CArray.start arr))
-        ~length:(List.length slot_vals * Ctypes.sizeof Ctypes.uint)
-        shared_resource_options
+    (* The slot-table element width must match the MSL type [C_syntax.pool_slot_msl_typ] declared in
+       the shader: 64-bit under [large_models] (offsets may exceed UINT32_MAX once the 4 GB per-pool
+       cap is lifted), else 32-bit. [keep] holds the backing [CArray] so it outlives the buffer copy. *)
+    let slots_buf, keep =
+      let make (type a) (elem : a Ctypes.typ) (of_int : int -> a) =
+        let vals = List.concat_map pairs ~f:(fun (p, o) -> [ of_int p; of_int o ]) in
+        let arr = Ctypes.CArray.of_list elem vals in
+        let buf =
+          Me.Buffer.on_device_with_bytes dev.dev
+            ~bytes:Ctypes.(to_voidp (CArray.start arr))
+            ~length:(List.length vals * Ctypes.sizeof elem)
+            shared_resource_options
+        in
+        (buf, fun () -> ignore (Sys.opaque_identity arr))
+      in
+      if C_syntax.pool_slot_is_64 () then make Ctypes.ullong Unsigned.ULLong.of_int
+      else make Ctypes.uint Unsigned.UInt.of_int
     in
-    (Array.of_list (List.rev !index_to_pool), slots_buf, arr)
+    (Array.of_list (List.rev !index_to_pool), slots_buf, keep)
 
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
       ~(kparams : (string * kparam_source) list) ~lowered_bindings

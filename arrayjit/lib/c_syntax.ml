@@ -13,6 +13,17 @@ module Tn = Tnode
 
 type t = PPrint.document
 
+(* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
+   With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a byte
+   offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader declares
+   -- must be 64-bit to avoid silent truncation; otherwise 32-bit suffices (offsets are capped under
+   4 GB). This is the single source of truth shared by the codegen (the [const ... * __pool_slots]
+   MSL type) and the backend (the [Ctypes] element type), so the two cannot drift. [large_models] is a
+   startup-fixed global, read identically when the source is generated and when the table is filled. *)
+let pool_slot_is_64 () = Utils.settings.large_models
+
+let pool_slot_msl_typ () = if pool_slot_is_64 () then "ulong" else "uint"
+
 module type C_syntax_config = sig
   val procs : Low_level.optimized array
   (** The low-level prcedure to compile, and the arrays of the context it will be linked to if not
@@ -921,7 +932,8 @@ module C_syntax (B : C_syntax_config) = struct
                     (Printf.sprintf "char* __pool%d" i, Kparam_pool_slab i))
               in
               let slots =
-                ("const uint* __pool_slots", Kparam_pool_slots (List.map ptr_params ~f:snd))
+                ( Printf.sprintf "const %s* __pool_slots" (pool_slot_msl_typ ()),
+                  Kparam_pool_slots (List.map ptr_params ~f:snd) )
               in
               slabs @ [ slots ])
     in
