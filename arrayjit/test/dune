@@ -58,32 +58,43 @@
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir))
 
-; Gated on availability of the external `metal` opam package, not on the OS.
-; `metal` is the platform constraint (Apple-only) and the actual dependency
-; that goes missing off macOS; `arrayjit.metal_backend` is the `(optional)`
-; local wrapper that links it. We must gate on the *external* lib, not the
-; local wrapper: a locally-defined optional library reads as available in
-; `enabled_if` (it is part of the workspace) even when its transitive `metal`
-; dep is absent, so the unavailable lib is only discovered at link — too late,
-; the stanza is already in `@all` and the build fails. An `(= %{system} macosx)`
-; gate has the same failure mode on a macOS switch without `metal` installed.
-; `%{lib-available:metal}` is true only when `metal` is genuinely installed, so
-; the test is built where it can run and cleanly skipped everywhere else.
+; Metal backend tests. The Metal backend (the `metal` opam package + the
+; `(optional)` `arrayjit.metal_backend` library) is Apple-only — `arrayjit.opam`
+; depends on `metal {= :os macos}`, so off macOS those libraries are absent.
+;
+; We cannot just gate the stanza: an `enabled_if` on a `(test)` does NOT stop
+; dune from resolving its `(libraries)`, so a disabled test still requires the
+; hidden optional lib and the build fails with "arrayjit.metal_backend ... is
+; hidden". Instead we keep the test ALWAYS building and pick the implementation
+; with dune `select` (the same mechanism `arrayjit/lib/dune` uses for
+; `metal_backend_impl`): where `metal` + `arrayjit.metal_backend` are available
+; the real test runs; elsewhere a stub (`*.missing.ml`, linking neither) is
+; selected and reproduces the recorded golden so the test passes trivially.
 (test
  (name test_metal_storage_mode)
  (package arrayjit)
- (enabled_if %{lib-available:metal})
  (modules test_metal_storage_mode)
- (deps ocannl_config)
- (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
+ (deps ocannl_config test_metal_storage_mode.expected)
+ (libraries
+  base
+  stdio
+  (select
+   test_metal_storage_mode.ml
+   from
+   (metal arrayjit.metal_backend arrayjit.ir ->
+    test_metal_storage_mode.real.ml)
+   (-> test_metal_storage_mode.missing.ml))))
 
-; Exercises the real Metal allocator paths and private-buffer host transfers;
-; requires the `metal` package to be available (and a working Metal device at
-; run time). Gated on library availability — see the note above.
 (test
  (name test_metal_alloc)
  (package arrayjit)
- (enabled_if %{lib-available:metal})
  (modules test_metal_alloc)
- (deps ocannl_config)
- (libraries base stdio metal arrayjit.ir arrayjit.metal_backend))
+ (deps ocannl_config test_metal_alloc.expected)
+ (libraries
+  base
+  stdio
+  (select
+   test_metal_alloc.ml
+   from
+   (metal arrayjit.metal_backend arrayjit.ir -> test_metal_alloc.real.ml)
+   (-> test_metal_alloc.missing.ml))))
