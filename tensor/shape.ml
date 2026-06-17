@@ -69,8 +69,12 @@ type transpose_type =
 type terminal_type = Data of Ir.Assignments.init_data | Fetch of Ir.Assignments.fetch_op
 [@@deriving equal, sexp_of]
 
-type ternary_type = Pointwise_tern | Compose_accumulate | Defined_by_cd_logic
-[@@deriving sexp, equal]
+type ternary_type =
+  | Pointwise_tern
+  | Compose_accumulate
+  | Defined_by_cd_logic
+  | Einsum_tern of string * delayed_var_ref list
+[@@deriving sexp_of, equal]
 
 let einsum_of_spec spec =
   try Einsum_parser.einsum_of_spec spec
@@ -91,7 +95,10 @@ let logic_to_spec = function
   | Broadcast_tern (Pointwise_tern, _, _, _) ->
       "."
   | Broadcast (Compose, _, _) | Broadcast_tern (Compose_accumulate, _, _, _) -> "@"
-  | Broadcast (Einsum (spec, _), _, _) | Transpose (Permute (spec, _), _) | Block { spec; _ } ->
+  | Broadcast (Einsum (spec, _), _, _)
+  | Transpose (Permute (spec, _), _)
+  | Block { spec; _ }
+  | Broadcast_tern (Einsum_tern (spec, _), _, _, _) ->
       spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
@@ -298,6 +305,218 @@ let add_var_used_in_spec_or_compose row =
 
 let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
+
+(** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
+    [dim_var_env]/[row_var_env]. Returns the additional constraints implied by any pre-solved dims.
+    Extracted to eliminate duplication across the unary-permute, binary-einsum, block, and ternary-einsum
+    branches of [get_inequalities]. *)
+let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
+    dim_refs =
+  List.filter_map dim_refs ~f:(fun delayed_ref ->
+      let label = delayed_ref.var_ref.ref_label in
+      match Hashtbl.find dim_var_env label with
+      | Some var ->
+          delayed_ref.var <- `Dim var;
+          Option.map
+            ~f:(fun solved_dim ->
+              Row.Dim_eq
+                {
+                  d1 = Row.Var var;
+                  d2 = Row.get_default_dim ~d:solved_dim ();
+                  origin =
+                    [
+                      {
+                        Row.lhs_name = label;
+                        lhs_kind = `Output;
+                        rhs_name = delayed_ref.var_ref.ref_label;
+                        rhs_kind = `Output;
+                        operation = Some "set_dim";
+                      };
+                    ];
+                })
+            (if for_projections then None else delayed_ref.var_ref.solved_dim)
+      | None -> (
+          match Hashtbl.find row_var_env label with
+          | Some var ->
+              delayed_ref.var <- `Row var;
+              Option.map
+                ~f:(fun solved_dim ->
+                  Row.Rows_constr
+                    {
+                      r = [ Row.get_row_for_var Row.empty_provenance var ];
+                      constr =
+                        Row.Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                      origin =
+                        [
+                          {
+                            Row.lhs_name = label;
+                            lhs_kind = `Output;
+                            rhs_name = delayed_ref.var_ref.ref_label;
+                            rhs_kind = `Output;
+                            operation = Some "set_dim";
+                          };
+                        ];
+                    })
+                (if for_projections then None else delayed_ref.var_ref.solved_dim)
+          | None ->
+              raise
+              @@ Row.Shape_error
+                   ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                     [ Shape_mismatch error_shapes ] )))
+
+(** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
+    [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
+    [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding,
+    proj-env merge, and [Row_eq] emission.
+
+    [rhs_slots] is a list of [(parsed_axis_labels, shape)] pairs, one per RHS.
+    [result_label] is the operation string for LHS [Row_eq] origins (e.g.
+    ["Broadcast RESULT"] or ["Block RESULT"]). [arg_label_prefix] is the prefix
+    for RHS [Row_eq] origins; the index (1-based) is appended, yielding e.g.
+    ["Broadcast ARGUMENT 1"]. [error_shapes] is the shape list for error context.
+
+    Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and
+    [bio_rhs_list] are the batch/input/output row triples for the LHS and each
+    RHS — needed by [Block] to compute discardable vars. *)
+let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
+    ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
+    ?(lhs_constraints_first = false) () =
+  let row_var_env = Hashtbl.create (module String) in
+  let dim_var_env = Hashtbl.create (module String) in
+  let rhs_results =
+    List.mapi rhs_slots ~f:(fun idx (ls_rhs, (sh : t)) ->
+        let extras, proj_env, bio =
+          einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
+            ls_rhs
+        in
+        (idx, sh, extras, proj_env, bio))
+  in
+  let extras_lhs, proj_env_lhs, ((b_lhs, i_lhs, o_lhs) as bio_lhs) =
+    einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:(cur_sh : t).id ~row_var_env
+      ~dim_var_env ls_lhs
+  in
+  check_dim_row_var_name_clash ~spec
+    ~error_trace:[ Shape_mismatch error_shapes ]
+    dim_var_env row_var_env;
+  let extras_dim_refs =
+    bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
+      dim_refs
+  in
+  let proj_env =
+    let combine ~key:_ _ _ = assert false in
+    List.fold rhs_results ~init:proj_env_lhs ~f:(fun acc (_, _, _, proj_env_rhs, _) ->
+        Map.merge_skewed ~combine acc proj_env_rhs)
+  in
+  let rhs_constraints =
+    List.concat_map rhs_results ~f:(fun (idx, sh, extras, _, (b_rhs, i_rhs, o_rhs)) ->
+        let arg_label = Printf.sprintf "%s %d" arg_label_prefix (idx + 1) in
+        extras
+        @ [
+            Row.Row_eq
+              {
+                r1 = b_rhs;
+                r2 = sh.batch;
+                origin =
+                  [
+                    {
+                      Row.lhs_name = spec;
+                      lhs_kind = `Batch;
+                      rhs_name = sh.debug_name;
+                      rhs_kind = `Batch;
+                      operation = Some arg_label;
+                    };
+                  ];
+              };
+            Row.Row_eq
+              {
+                r1 = i_rhs;
+                r2 = sh.input;
+                origin =
+                  [
+                    {
+                      Row.lhs_name = spec;
+                      lhs_kind = `Input;
+                      rhs_name = sh.debug_name;
+                      rhs_kind = `Input;
+                      operation = Some arg_label;
+                    };
+                  ];
+              };
+            Row.Row_eq
+              {
+                r1 = o_rhs;
+                r2 = sh.output;
+                origin =
+                  [
+                    {
+                      Row.lhs_name = spec;
+                      lhs_kind = `Output;
+                      rhs_name = sh.debug_name;
+                      rhs_kind = `Output;
+                      operation = Some arg_label;
+                    };
+                  ];
+              };
+          ])
+  in
+  let lhs_constraints =
+    [
+      Row.Row_eq
+        {
+          r1 = cur_sh.batch;
+          r2 = b_lhs;
+          origin =
+            [
+              {
+                Row.lhs_name = cur_sh.debug_name;
+                lhs_kind = `Batch;
+                rhs_name = spec;
+                rhs_kind = `Batch;
+                operation = Some result_label;
+              };
+            ];
+        };
+      Row.Row_eq
+        {
+          r1 = cur_sh.input;
+          r2 = i_lhs;
+          origin =
+            [
+              {
+                Row.lhs_name = cur_sh.debug_name;
+                lhs_kind = `Input;
+                rhs_name = spec;
+                rhs_kind = `Input;
+                operation = Some result_label;
+              };
+            ];
+        };
+      Row.Row_eq
+        {
+          r1 = cur_sh.output;
+          r2 = o_lhs;
+          origin =
+            [
+              {
+                Row.lhs_name = cur_sh.debug_name;
+                lhs_kind = `Output;
+                rhs_name = spec;
+                rhs_kind = `Output;
+                operation = Some result_label;
+              };
+            ];
+        };
+    ]
+  in
+  let bio_rhs_list = List.map rhs_results ~f:(fun (_, _, _, _, bio) -> bio) in
+  let ordered_constraints =
+    if lhs_constraints_first then lhs_constraints @ rhs_constraints
+    else rhs_constraints @ lhs_constraints
+  in
+  ( proj_env,
+    bio_lhs,
+    bio_rhs_list,
+    extras_dim_refs @ extras_lhs @ ordered_constraints )
 
 (* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
    discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
@@ -856,60 +1075,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       check_dim_row_var_name_clash ~spec
         ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ]
         dim_var_env row_var_env;
-      (* Bind delayed_var_refs to the variables after they are created *)
       let extras_dim_refs =
-        List.filter_map dim_refs ~f:(fun delayed_ref ->
-            let label = delayed_ref.var_ref.ref_label in
-            (* Check if it's in one of the environments *)
-            match Hashtbl.find dim_var_env label with
-            | Some var ->
-                delayed_ref.var <- `Dim var;
-                Option.map
-                  ~f:(fun solved_dim ->
-                    Dim_eq
-                      {
-                        d1 = Row.Var var;
-                        d2 = Row.get_default_dim ~d:solved_dim ();
-                        origin =
-                          [
-                            {
-                              lhs_name = label;
-                              lhs_kind = `Output;
-                              rhs_name = delayed_ref.var_ref.ref_label;
-                              rhs_kind = `Output;
-                              operation = Some "set_dim";
-                            };
-                          ];
-                      })
-                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
-            | None -> (
-                match Hashtbl.find row_var_env label with
-                | Some var ->
-                    delayed_ref.var <- `Row var;
-                    Option.map
-                      ~f:(fun solved_dim ->
-                        Rows_constr
-                          {
-                            r = [ Row.get_row_for_var Row.empty_provenance var ];
-                            constr =
-                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
-                            origin =
-                              [
-                                {
-                                  lhs_name = label;
-                                  lhs_kind = `Output;
-                                  rhs_name = delayed_ref.var_ref.ref_label;
-                                  rhs_kind = `Output;
-                                  operation = Some "set_dim";
-                                };
-                              ];
-                          })
-                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
-                | None ->
-                    raise
-                    @@ Row.Shape_error
-                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                           [ Shape_mismatch [ cur_sh; sh ] ] )))
+        bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env
+          ~error_shapes:[ cur_sh; sh ] dim_refs
       in
       let proj_env =
         let combine ~key:_ _ _ = assert false in
@@ -1066,225 +1234,16 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  ( "Invalid einsum spec (expected two arguments): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
-      let row_var_env = Hashtbl.create (module String) in
-      let dim_var_env = Hashtbl.create (module String) in
-      let extras_rhs1, proj_env_rhs1, (b_rhs1, i_rhs1, o_rhs1) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh1.id ~row_var_env ~dim_var_env
-          ls_rhs1
+      let proj_env, _, _, inequalities =
+        einsum_n_constraints ~for_projections ~spec
+          ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
+          ~cur_sh ~ls_lhs ~dim_refs
+          ~result_label:"Broadcast RESULT"
+          ~arg_label_prefix:"Broadcast ARGUMENT"
+          ~error_shapes:[ cur_sh; sh1; sh2 ]
+          ~lhs_constraints_first:true ()
       in
-      let extras_rhs2, proj_env_rhs2, (b_rhs2, i_rhs2, o_rhs2) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh2.id ~row_var_env ~dim_var_env
-          ls_rhs2
-      in
-      let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
-          ls_lhs
-      in
-      check_dim_row_var_name_clash ~spec
-        ~error_trace:[ Shape_mismatch [ cur_sh; sh1; sh2 ] ]
-        dim_var_env row_var_env;
-      (* Bind delayed_var_refs to the variables after they are created *)
-      (* TODO: refactor to avoid duplication with the one for unary einsum *)
-      let extras_dim_refs =
-        List.filter_map dim_refs ~f:(fun delayed_ref ->
-            let label = delayed_ref.var_ref.ref_label in
-            (* Check if it's in one of the environments *)
-            match Hashtbl.find dim_var_env label with
-            | Some var ->
-                delayed_ref.var <- `Dim var;
-                Option.map
-                  ~f:(fun solved_dim ->
-                    Dim_eq
-                      {
-                        d1 = Row.Var var;
-                        d2 = Row.get_default_dim ~d:solved_dim ();
-                        origin =
-                          [
-                            {
-                              lhs_name = label;
-                              lhs_kind = `Output;
-                              rhs_name = delayed_ref.var_ref.ref_label;
-                              rhs_kind = `Output;
-                              operation = Some "set_dim";
-                            };
-                          ];
-                      })
-                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
-            | None -> (
-                match Hashtbl.find row_var_env label with
-                | Some var ->
-                    delayed_ref.var <- `Row var;
-                    Option.map
-                      ~f:(fun solved_dim ->
-                        Rows_constr
-                          {
-                            r = [ Row.get_row_for_var Row.empty_provenance var ];
-                            constr =
-                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
-                            origin =
-                              [
-                                {
-                                  lhs_name = label;
-                                  lhs_kind = `Output;
-                                  rhs_name = delayed_ref.var_ref.ref_label;
-                                  rhs_kind = `Output;
-                                  operation = Some "set_dim";
-                                };
-                              ];
-                          })
-                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
-                | None ->
-                    raise
-                    @@ Row.Shape_error
-                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                           [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )))
-      in
-      let proj_env =
-        let combine ~key:_ _ _ = assert false in
-        Map.merge_skewed ~combine proj_env_rhs1
-        @@ Map.merge_skewed ~combine proj_env_rhs2 proj_env_lhs
-      in
-      (* Forget the old proj_env as it is not relevant after a propagate_shapes call completes. *)
-      ( proj_env,
-        dim_var_set_empty,
-        extras_dim_refs @ extras_rhs1 @ extras_rhs2 @ extras_lhs
-        @ [
-            Row_eq
-              {
-                r1 = cur_sh.batch;
-                r2 = b_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Batch;
-                      rhs_name = spec;
-                      rhs_kind = `Batch;
-                      operation = Some "Broadcast RESULT";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = b_rhs1;
-                r2 = sh1.batch;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Batch;
-                      rhs_name = sh1.debug_name;
-                      rhs_kind = `Batch;
-                      operation = Some "Broadcast ARGUMENT 1";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = b_rhs2;
-                r2 = sh2.batch;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Batch;
-                      rhs_name = sh2.debug_name;
-                      rhs_kind = `Batch;
-                      operation = Some "Broadcast ARGUMENT 2";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = cur_sh.input;
-                r2 = i_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Input;
-                      rhs_name = spec;
-                      rhs_kind = `Input;
-                      operation = Some "Broadcast RESULT";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = i_rhs1;
-                r2 = sh1.input;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Input;
-                      rhs_name = sh1.debug_name;
-                      rhs_kind = `Input;
-                      operation = Some "Broadcast ARGUMENT 1";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = i_rhs2;
-                r2 = sh2.input;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Input;
-                      rhs_name = sh2.debug_name;
-                      rhs_kind = `Input;
-                      operation = Some "Broadcast ARGUMENT 2";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = cur_sh.output;
-                r2 = o_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Output;
-                      rhs_name = spec;
-                      rhs_kind = `Output;
-                      operation = Some "Broadcast RESULT";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = o_rhs1;
-                r2 = sh1.output;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Output;
-                      rhs_name = sh1.debug_name;
-                      rhs_kind = `Output;
-                      operation = Some "Broadcast ARGUMENT 1";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = o_rhs2;
-                r2 = sh2.output;
-                origin =
-                  [
-                    {
-                      lhs_name = spec;
-                      lhs_kind = `Output;
-                      rhs_name = sh2.debug_name;
-                      rhs_kind = `Output;
-                      operation = Some "Broadcast ARGUMENT 2";
-                    };
-                  ];
-              };
-          ] )
+      (proj_env, dim_var_set_empty, inequalities)
   | Block { spec; delayed_vars; rhses } ->
       List.iter rhses ~f:(fun sh -> Hash_set.remove unused_shapes sh.id);
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
@@ -1299,145 +1258,20 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                      (List.length rhses) spec,
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
-      let row_var_env = Hashtbl.create (module String) in
-      let dim_var_env = Hashtbl.create (module String) in
-      (* Process all RHS shapes *)
-      let rhs_results =
-        List.mapi (List.zip_exn ls_rhses rhses) ~f:(fun i (ls_rhs, sh) ->
-            let extras, proj_env, (b, inp, o) =
-              einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env
-                ~dim_var_env ls_rhs
-            in
-            (i, sh, extras, proj_env, b, inp, o))
+      let proj_env, (b_lhs, i_lhs, o_lhs), bio_rhs_list, inequalities =
+        einsum_n_constraints ~for_projections ~spec
+          ~rhs_slots:(List.zip_exn ls_rhses rhses)
+          ~cur_sh ~ls_lhs ~dim_refs:delayed_vars
+          ~result_label:"Block RESULT"
+          ~arg_label_prefix:"Block ARGUMENT"
+          ~error_shapes:(cur_sh :: rhses)
+          ()
       in
-      let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
-          ls_lhs
-      in
-      check_dim_row_var_name_clash ~spec
-        ~error_trace:[ Shape_mismatch (cur_sh :: rhses) ]
-        dim_var_env row_var_env;
-      (* Bind delayed_var_refs to the variables after they are created *)
-      let extras_dim_refs =
-        List.filter_map delayed_vars ~f:(fun delayed_ref ->
-            let label = delayed_ref.var_ref.ref_label in
-            match Hashtbl.find dim_var_env label with
-            | Some var ->
-                delayed_ref.var <- `Dim var;
-                Option.map
-                  ~f:(fun solved_dim ->
-                    Dim_eq
-                      {
-                        d1 = Row.Var var;
-                        d2 = Row.get_default_dim ~d:solved_dim ();
-                        origin =
-                          [
-                            {
-                              lhs_name = label;
-                              lhs_kind = `Output;
-                              rhs_name = delayed_ref.var_ref.ref_label;
-                              rhs_kind = `Output;
-                              operation = Some "set_dim";
-                            };
-                          ];
-                      })
-                  (if for_projections then None else delayed_ref.var_ref.solved_dim)
-            | None -> (
-                match Hashtbl.find row_var_env label with
-                | Some var ->
-                    delayed_ref.var <- `Row var;
-                    Option.map
-                      ~f:(fun solved_dim ->
-                        Rows_constr
-                          {
-                            r = [ Row.get_row_for_var Row.empty_provenance var ];
-                            constr =
-                              Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
-                            origin =
-                              [
-                                {
-                                  lhs_name = label;
-                                  lhs_kind = `Output;
-                                  rhs_name = delayed_ref.var_ref.ref_label;
-                                  rhs_kind = `Output;
-                                  operation = Some "set_dim";
-                                };
-                              ];
-                          })
-                      (if for_projections then None else delayed_ref.var_ref.solved_dim)
-                | None ->
-                    raise
-                    @@ Row.Shape_error
-                         ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
-                           [ Shape_mismatch (cur_sh :: rhses) ] )))
-      in
-      let proj_env =
-        let combine ~key:_ _ _ = assert false in
-        List.fold rhs_results ~init:proj_env_lhs ~f:(fun acc (_, _, _, proj_env_rhs, _, _, _) ->
-            Map.merge_skewed ~combine acc proj_env_rhs)
-      in
-      (* Generate constraints for each RHS shape *)
-      let rhs_constraints =
-        List.concat_map rhs_results ~f:(fun (i, sh, extras, _, b_rhs, i_rhs, o_rhs) ->
-            let arg_name = Printf.sprintf "Block ARGUMENT %d" (i + 1) in
-            extras
-            @ [
-                Row_eq
-                  {
-                    r1 = b_rhs;
-                    r2 = sh.batch;
-                    origin =
-                      [
-                        {
-                          lhs_name = spec;
-                          lhs_kind = `Batch;
-                          rhs_name = sh.debug_name;
-                          rhs_kind = `Batch;
-                          operation = Some arg_name;
-                        };
-                      ];
-                  };
-                Row_eq
-                  {
-                    r1 = i_rhs;
-                    r2 = sh.input;
-                    origin =
-                      [
-                        {
-                          lhs_name = spec;
-                          lhs_kind = `Input;
-                          rhs_name = sh.debug_name;
-                          rhs_kind = `Input;
-                          operation = Some arg_name;
-                        };
-                      ];
-                  };
-                Row_eq
-                  {
-                    r1 = o_rhs;
-                    r2 = sh.output;
-                    origin =
-                      [
-                        {
-                          lhs_name = spec;
-                          lhs_kind = `Output;
-                          rhs_name = sh.debug_name;
-                          rhs_kind = `Output;
-                          operation = Some arg_name;
-                        };
-                      ];
-                  };
-              ])
-      in
-      (* Compute discardable_vars: variables that are allowed to be 0 (dimension 0 is otherwise an invalid size). A
-         variable is discardable if it's in a Concat component whose complement covers an axis on the
-         other side. We check both directions: RHS->LHS and LHS->RHS. The four-quantifier condition:
-         ∀shapes ∃axis ∀components: complement ∩ component ≠ ∅ *)
+      (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
       let rhs_shapes : Row.t list list =
-        List.map rhs_results ~f:(fun (_, _, _, _, b_rhs, i_rhs, o_rhs) -> [ b_rhs; i_rhs; o_rhs ])
+        List.map bio_rhs_list ~f:(fun (b, inp, o) -> [ b; inp; o ])
       in
       let lhs_rows = [ b_lhs; i_lhs; o_lhs ] in
-      (* LHS is a single shape, so wrap it in a singleton list for the shapes parameter *)
       let discardable_from_rhs =
         compute_block_discardable_vars ~this_side_rows:(List.concat rhs_shapes)
           ~other_side_shapes:[ lhs_rows ]
@@ -1446,56 +1280,34 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         compute_block_discardable_vars ~this_side_rows:lhs_rows ~other_side_shapes:rhs_shapes
       in
       let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
-      ( proj_env,
-        discardable_vars,
-        extras_dim_refs @ extras_lhs @ rhs_constraints
-        @ [
-            Row_eq
-              {
-                r1 = cur_sh.batch;
-                r2 = b_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Batch;
-                      rhs_name = spec;
-                      rhs_kind = `Batch;
-                      operation = Some "Block RESULT";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = cur_sh.input;
-                r2 = i_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Input;
-                      rhs_name = spec;
-                      rhs_kind = `Input;
-                      operation = Some "Block RESULT";
-                    };
-                  ];
-              };
-            Row_eq
-              {
-                r1 = cur_sh.output;
-                r2 = o_lhs;
-                origin =
-                  [
-                    {
-                      lhs_name = cur_sh.debug_name;
-                      lhs_kind = `Output;
-                      rhs_name = spec;
-                      rhs_kind = `Output;
-                      operation = Some "Block RESULT";
-                    };
-                  ];
-              };
-          ] )
+      (proj_env, discardable_vars, inequalities)
+  | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) ->
+      Hash_set.remove unused_shapes sh1.id;
+      Hash_set.remove unused_shapes sh2.id;
+      Hash_set.remove unused_shapes sh3.id;
+      add_var_used_in_spec_or_compose cur_sh.input.bcast;
+      add_var_used_in_spec_or_compose sh1.input.bcast;
+      add_var_used_in_spec_or_compose sh2.input.bcast;
+      add_var_used_in_spec_or_compose sh3.input.bcast;
+      let ls_rhs1, ls_rhs2, ls_rhs3, ls_lhs =
+        match einsum_of_spec spec with
+        | [ ls_rhs1; ls_rhs2; ls_rhs3 ], ls_lhs -> (ls_rhs1, ls_rhs2, ls_rhs3, ls_lhs)
+        | _ ->
+            raise
+            @@ Shape_error
+                 ( "Invalid einsum spec (expected three arguments): " ^ spec,
+                   [ Shape_mismatch [ cur_sh; sh1; sh2; sh3 ] ] )
+      in
+      let proj_env, _, _, inequalities =
+        einsum_n_constraints ~for_projections ~spec
+          ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
+          ~cur_sh ~ls_lhs ~dim_refs
+          ~result_label:"Broadcast RESULT"
+          ~arg_label_prefix:"Broadcast ARGUMENT"
+          ~error_shapes:[ cur_sh; sh1; sh2; sh3 ]
+          ()
+      in
+      (proj_env, dim_var_set_empty, inequalities)
 
 let state = ref Row.empty_env
 let active_update_steps = ref []
@@ -2225,6 +2037,8 @@ let update_delayed_var_refs env update_step =
   match update_step.logic with
   | Transpose (Permute (_, var_refs), _) -> update_var_ref_list var_refs
   | Broadcast (Einsum (_, var_refs), _, _) -> update_var_ref_list var_refs
+  | Broadcast_tern (Einsum_tern (_, var_refs), _, _, _) -> update_var_ref_list var_refs
+  | Block { delayed_vars; _ } -> update_var_ref_list delayed_vars
   | _ -> ()
 
 let apply_env_step env update_step =

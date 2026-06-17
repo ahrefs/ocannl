@@ -1597,12 +1597,16 @@ let translate ?ident_label (expr : expression) : result =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_tern]
           else if String.equal spec "@" then [%expr Shape.Compose_accumulate]
-          else
+          else if String.equal tern_op "fma" then
             Ast_builder.Default.pexp_extension ~loc
             @@ Location.error_extensionf ~loc
-                 "ppx_ocannl %%cd: expected <.> or <@>, found <%s> -- einsum notation for ternary \
-                  operators not supported yet, see issue #305"
+                 "ppx_ocannl %%cd: fma with einsum spec <%s> is not supported -- FMA accumulation \
+                  semantics (the +c term is re-added on every reduction iteration) are ambiguous \
+                  under contraction; use '.' or '@' for fma"
                  spec
+          else
+            let spec_expr = Ast_builder.Default.estring ~loc spec in
+            [%expr Shape.Einsum_tern ([%e spec_expr], [])]
         in
         let _, tern_op = ternary_op tern_op in
         process_raw_ternop ~accu_op ~lhs ~tern_op ~rhs1 ~rhs2 ~rhs3 ~logic

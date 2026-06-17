@@ -513,6 +513,7 @@ let ternary_ops =
     [
       ("where", fun loc -> ([%expr Shape.Pointwise_tern], [%expr Ir.Ops.Where]));
       ("fma", fun loc -> ([%expr Shape.Compose_accumulate], [%expr Ir.Ops.FMA]));
+      ("mul3", fun loc -> ([%expr Shape.Pointwise_tern], [%expr Ir.Ops.Mul3]));
     ]
 
 (** Assignment binary ops, and whether assignment reduction is zero-initialized. *)

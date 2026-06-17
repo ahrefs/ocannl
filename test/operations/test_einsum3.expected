@@ -1,0 +1,51 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Test 1: chain contraction
+einsum3 = [2 1 4 3]
+binary chain = [2 1 4 3]
+chain contraction match: true
+
+Test 2: batched chain contraction
+batched einsum3 = [2 1 4 3 6 5 8 7]
+batched binary chain = [2 1 4 3 6 5 8 7]
+batched chain contraction match: true
+
+Test 3: gradient agreement
+einsum3 grad_a = [1 1 1 1]
+einsum3 grad_b = [1 1 1 1]
+einsum3 grad_c = [1 1 1 1]
+binary  grad_a = [1 1 1 1]
+binary  grad_b = [1 1 1 1]
+binary  grad_c = [1 1 1 1]
+gradient a match: true
+gradient b match: true
+gradient c match: true
+
+Test 4: where with einsum spec
+where einsum 'i;i;i=>i' = [10 2 30 4]
+where pointwise      = [10 2 30 4]
+where einsum matches pointwise: true
+
+Test 5: where einsum gradient
+where einsum grad_a (expect [1 0 1 0]) = [1 0 1 0]
+where einsum grad_b (expect [0 1 0 1]) = [0 1 0 1]
+
+Test 6: %cd dispatch fix
+%cd mul3 einsum (identity*swap*identity) = [0 1 1 0]
+%cd dispatch fix: OK
+
+Test 7: wrong-arity spec raises Shape_error
+Negative test (wrong arity): got expected Shape_error: Invalid einsum spec (expected three arguments): ij;jk=>im
+
+Test 8: where with reduction-bearing spec (select-before-reduce)
+where einsum 'ij;ij;ij=>i' = [12 43]
+decomposed ref (pointwise+reduce) = [12 43]
+select-before-reduce match: true
+
+Test 9: where reduction gradient
+where einsum grad_a (expect [[1 0],[0 1]]) = [1 0 0 1]
+where einsum grad_b (expect [[0 1],[1 0]]) = [0 1 1 0]
+decomposed grad_a = [1 0 0 1]
+decomposed grad_b = [0 1 1 0]
+reduction gradient a match: true
+reduction gradient b match: true
