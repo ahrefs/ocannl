@@ -250,6 +250,81 @@ let is_surjective proj =
         (* Need enough unique symbols to cover all dimensions *)
         Set.length lhs_symbol_set >= non_trivial_lhs_count
 
+(** Coalesce an affine [symbols] list into canonical [(coeff, symbol)] terms: repeated symbols are
+    summed and zero-coefficient terms dropped. Order is unspecified. *)
+let coalesce_affine_terms symbols =
+  List.fold symbols
+    ~init:(Map.empty (module Symbol))
+    ~f:(fun acc (coeff, s) ->
+      Map.update acc s ~f:(function None -> coeff | Some c0 -> c0 + coeff))
+  |> Map.to_alist
+  |> List.filter_map ~f:(fun (s, c) -> if c = 0 then None else Some (c, s))
+
+(* gh-133 Stage B: injectivity of an affine LHS map over its non-static symbols.
+
+   [symbol_range s] is the loop width of [s] (>= 1); a width of 1 marks a static / range-1 symbol,
+   which is pinned from the start and ignored for injectivity (it contributes a single value).
+
+   A single position [Σ cᵢ·sᵢ + offset] is injective on its remaining (non-pinned, non-static)
+   symbols when, sorting them by ascending [abs coeff], every term k >= 2 satisfies the mixed-radix
+   criterion [abs c_k >= 1 + Σ_{i<k} abs c_i · (range_i − 1)]. The offset never affects injectivity.
+   This is sufficient, not necessary (e.g. [3·a + 4·b] over ranges [(3, 2)] is rejected though
+   distinct), matching the proposal's known-incomplete case.
+
+   The whole-LHS criterion is a pinning fixpoint: pin static/range-1 symbols, then repeatedly pin the
+   residual symbols of any position that passes the per-position criterion once already-pinned terms
+   are removed. The map is injective iff every non-static symbol is eventually pinned. This accepts
+   triangular maps such as [(s1, s1 + s2)] (position 1 pins s1, then position 2 pins s2).
+
+   [Concat] axes partition their range across disjoint sub-ranges, so each concat symbol is pinned
+   directly (preserving the pre-Stage-B treatment); [Fixed_idx]/[Sub_axis] carry no symbol. *)
+let affine_injective ~symbol_range (project_lhs : axis_index array) : bool =
+  let dyn s = symbol_range s > 1 in
+  (* Every non-static symbol that must be pinned for the map to be injective. *)
+  let add_dyn acc ss = List.fold ss ~init:acc ~f:(fun acc s -> if dyn s then Set.add acc s else acc) in
+  let all_syms =
+    Array.fold project_lhs
+      ~init:(Set.empty (module Symbol))
+      ~f:(fun acc idx ->
+        match idx with
+        | Iterator s -> add_dyn acc [ s ]
+        | Affine { symbols; _ } -> add_dyn acc (List.map (coalesce_affine_terms symbols) ~f:snd)
+        | Concat syms -> add_dyn acc syms
+        | Fixed_idx _ | Sub_axis -> acc)
+  in
+  (* Symbols newly pinnable by [idx] given the currently [pinned] set; [None] if the position is not
+     (yet) injective on its residual symbols. *)
+  let position_pins pinned idx =
+    match idx with
+    | Fixed_idx _ | Sub_axis -> Some []
+    | Iterator s -> Some (if dyn s then [ s ] else [])
+    | Concat syms -> Some (List.filter syms ~f:dyn)
+    | Affine { symbols; _ } ->
+        let residual =
+          coalesce_affine_terms symbols
+          |> List.filter ~f:(fun (_, s) -> dyn s && not (Set.mem pinned s))
+        in
+        let sorted =
+          List.sort residual ~compare:(fun (c1, _) (c2, _) -> Int.compare (abs c1) (abs c2))
+        in
+        let rec check acc = function
+          | [] -> true
+          | (c, s) :: rest ->
+              if abs c >= 1 + acc then check (acc + (abs c * (symbol_range s - 1))) rest else false
+        in
+        if check 0 sorted then Some (List.map sorted ~f:snd) else None
+  in
+  let rec fixpoint pinned =
+    let pinned' =
+      Array.fold project_lhs ~init:pinned ~f:(fun pinned idx ->
+          match position_pins pinned idx with
+          | Some syms -> List.fold syms ~init:pinned ~f:Set.add
+          | None -> pinned)
+    in
+    if Set.length pinned' > Set.length pinned then fixpoint pinned' else pinned'
+  in
+  Set.equal (fixpoint (Set.empty (module Symbol))) all_syms
+
 let is_injective proj =
   let all_product_iterators =
     Set.of_list (module Symbol) (Array.to_list proj.product_iterators |> List.concat)
@@ -259,26 +334,32 @@ let is_injective proj =
         List.concat_map acc ~f:(fun combination -> List.map syms ~f:(fun s -> s :: combination)))
     |> List.map ~f:(Set.of_list (module Symbol))
   in
-  (* Check each LHS index for injectivity *)
-  let lhs_symbols, is_injective_mapping =
-    Array.fold proj.project_lhs ~init:([], true) ~f:(fun (syms, still_injective) idx ->
-        if not still_injective then (syms, false)
-        else
-          match idx with
-          | Iterator s -> (s :: syms, true)
-          | Fixed_idx _ -> (syms, true)
-          | Affine { symbols; _ } ->
-              (* Filter for symbols that are product iterators *)
-              let product_symbols =
-                List.filter symbols ~f:(fun (_coeff, s) -> Set.mem all_product_iterators s)
-              in
-              (* If more than one product iterator in this Affine index, not injective *)
-              if List.length product_symbols > 1 then (syms, false)
-              else
-                (* (coefficients don't matter for injectivity) *)
-                (List.map product_symbols ~f:snd @ syms, true)
-          | Sub_axis -> (syms, true)
-          | Concat syms_list -> (syms_list @ syms, true))
+  (* Per-symbol loop width (range), derived from the product space. Symbols absent from the product
+     space (e.g. static indices) default to range 1 and are treated as pinned/static. *)
+  let symbol_range_map =
+    Array.fold2_exn proj.product_iterators proj.product_space
+      ~init:(Map.empty (module Symbol))
+      ~f:(fun acc syms dims ->
+        match List.zip syms dims with
+        | Ok pairs -> List.fold pairs ~init:acc ~f:(fun acc (s, d) -> Map.set acc ~key:s ~data:d)
+        | Unequal_lengths -> acc)
+  in
+  let symbol_range s = Map.find symbol_range_map s |> Option.value ~default:1 in
+  (* gh-133 Stage B: the affine LHS map must be injective over its non-static symbols (mixed-radix
+     per-position criterion + whole-LHS pinning fixpoint). Previously any [Affine] position with more
+     than one product iterator was rejected outright. *)
+  let is_injective_mapping = affine_injective ~symbol_range proj.project_lhs in
+  (* Symbols (product iterators only) appearing on the LHS, for the block-coverage check below. *)
+  let lhs_symbols =
+    Array.fold proj.project_lhs ~init:[] ~f:(fun syms idx ->
+        match idx with
+        | Iterator s -> s :: syms
+        | Fixed_idx _ | Sub_axis -> syms
+        | Affine { symbols; _ } ->
+            List.filter_map symbols ~f:(fun (_coeff, s) ->
+                Option.some_if (Set.mem all_product_iterators s) s)
+            @ syms
+        | Concat syms_list -> syms_list @ syms)
   in
 
   if not is_injective_mapping then false
