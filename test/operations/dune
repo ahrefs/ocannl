@@ -615,6 +615,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name virtual_diagonal)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules virtual_diagonal)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_tensor_persistence)
  (package neural_nets_lib)
  (modules test_tensor_persistence)

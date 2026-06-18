@@ -457,7 +457,9 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     | None -> at_idcs := Some indices
     | Some at ->
         if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
-    (* TODO(#133): For non-recursive accesses, non-linearity is not supported yet. *)
+    (* gh-133 Stage A: repeated non-static symbols (diagonal [i;i] / partially-diagonal [i;j;i]) and
+       covered single-symbol affine positions are supported. Only multi-symbol affine positions
+       ([Non_virtual 51], deferred to Stage B) and [Concat] ([Non_virtual 52]) remain rejected. *)
     let syms =
       Set.of_array (module Indexing.Symbol)
       @@ Array.filter_map indices
@@ -475,17 +477,27 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                    | [] -> None
                    | [ s ] -> Some s
                    | _ ->
-                       (* TODO(#133): multiple non-static symbols in affine index not yet
+                       (* TODO(#133, Stage B): multiple non-static symbols in affine index not yet
                           supported *)
                        raise @@ Non_virtual 51)
                | Concat _syms ->
                    (* Concat indices should be eliminated before virtualization *)
                    raise @@ Non_virtual 52)
     in
-    let num_syms =
-      Array.count indices ~f:(function Iterator s -> not @@ Set.mem static_indices s | _ -> false)
+    (* Non-static symbols appearing in a bare [Iterator] position. [inline_computation]'s pass 1 binds
+       only such positions from the call args; pass 2 grounds any affine occurrence via [subst]. *)
+    let iter_syms =
+      Set.of_array (module Indexing.Symbol)
+      @@ Array.filter_map indices ~f:(function
+           | Indexing.Iterator s when not @@ Set.mem static_indices s -> Some s
+           | _ -> None)
     in
-    if Set.length syms <> num_syms then raise @@ Non_virtual 5
+    (* Coverage check (replaces the old uniqueness check): every non-static symbol used (including
+       inside a single-symbol affine position) must also appear in a bare [Iterator] position, so it
+       can be bound from the call args. Repeated [Iterator] positions are allowed and produce equality
+       guards in [inline_computation]. A symbol that appears only in an affine position is deferred to
+       Stage B. *)
+    if not @@ Set.is_subset syms ~of_:iter_syms then raise @@ Non_virtual 5
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~env_dom llc =
@@ -621,29 +633,30 @@ let%track7_sexp inline_computation ~id
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  let make_subst (i : int) (lhs_ind : Indexing.axis_index) =
-    if i >= Array.length call_args then
-      failwith
-        [%string
-          "make_subst: call_args too short, maybe stale optimization context? Tnode: \
-           %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} i: %{i#Int}"]
-    else
-      let rhs_ind = call_args.(i) in
-      match lhs_ind with
-      | Indexing.Iterator lhs_s when not (Set.mem static_indices lhs_s) -> Some (lhs_s, rhs_ind)
-      | _ when Indexing.equal_axis_index lhs_ind rhs_ind -> None
-      | _ -> raise @@ Non_virtual 13
+  let computations =
+    Hashtbl.find computations_table traced.tn
+    |> Option.value_or_thunk ~default:(fun () ->
+        raise
+        @@ Utils.User_error
+             [%string
+               "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
+                %{Tn.debug_name traced.tn}"])
+  in
+  (* gh-133 Stage A: a guard's else-branch reads [Get_local id] -- the zero/init local produced by a
+     [Zero_out] computation. If the producer has no [Zero_out] (e.g. a surjective producer that was
+     previously materialized), that local is never initialized, so we must NOT emit a guard; such
+     reads fall back to materialization via [Non_virtual 13] below, preserving prior behavior. *)
+  let has_zero_init =
+    let rec contains = function
+      | Zero_out tn -> Tn.equal tn traced.tn
+      | Seq (a, b) -> contains a || contains b
+      | For_loop { body; _ } -> contains body
+      | _ -> false
+    in
+    List.exists computations ~f:(fun (_, def) -> contains def)
   in
   (* In the order of computation. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
-    let env =
-      match def_args with
-      | None -> Map.empty (module Indexing.Symbol)
-      | Some def_args ->
-          Map.of_alist_exn (module Indexing.Symbol)
-          @@ Array.to_list
-          @@ Array.filter_mapi def_args ~f:make_subst
-    in
     let subst env (idx : Indexing.axis_index) : Indexing.axis_index =
       match idx with
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
@@ -677,6 +690,60 @@ let%track7_sexp inline_computation ~id
           Indexing.Affine { symbols = all_terms; offset = new_offset }
       | idx -> idx
     in
+    (* gh-133 Stage A: build the substitution environment and equality guards in two passes, so a
+       producer index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal
+       [i;j;i]) does not crash [Map.of_alist_exn] on duplicate keys. *)
+    let def_args_arr = Option.value def_args ~default:[||] in
+    let n = Array.length def_args_arr in
+    if n > Array.length call_args then
+      failwith
+        [%string
+          "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
+           %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} n: %{n#Int}"];
+    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. [bound_pos.(i)]
+       marks positions that DEFINE the substitution (no guard for them). *)
+    let bound_pos = Array.create ~len:n false in
+    let env =
+      Array.foldi def_args_arr ~init:(Map.empty (module Indexing.Symbol)) ~f:(fun i env lhs_ind ->
+          match lhs_ind with
+          | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem env s) ->
+              bound_pos.(i) <- true;
+              Map.add_exn env ~key:s ~data:call_args.(i)
+          | _ -> env)
+    in
+    (* Pass 2: validate every non-binding position against the COMPLETE env. If the substituted
+       producer index [lhs'] equals the call-site index, no guard is needed. Otherwise a guard is
+       emitted iff the producer position depends on a (now-bound) non-static symbol:
+       - a non-binding bare [Iterator] is necessarily a repeated occurrence of a symbol bound in pass 1
+         (diagonal [i;i] / partially-diagonal [i;j;i]);
+       - a covered single-symbol [Affine] position (its symbol is bound in pass 1, guaranteed by the
+         [check_idcs] coverage check) -- e.g. a producer [i; i+1] read at [j; j+2] guards on j+1 = j+2,
+         which folds to the init value.
+       In both cases the consistency becomes [Cmpeq (lhs', rhs)] comparing the substituted producer
+       index with the call-site index. [Fixed_idx]/[Sub_axis] producer positions carry no symbol, so
+       (per the proposal's Implementation Notes) they keep structural equality: an unequal one is a
+       genuine static mismatch and stays materialized via [Non_virtual 13], exactly as before (sparse
+       producers such as [i; Fixed_idx 0] are unaffected). [guards] are applied around the inlined
+       value in the [Set] case below. *)
+    let depends_on_symbol (idx : Indexing.axis_index) =
+      match idx with
+      | Indexing.Iterator s -> not (Set.mem static_indices s)
+      | Indexing.Affine { symbols; _ } ->
+          List.exists symbols ~f:(fun (_, s) -> not (Set.mem static_indices s))
+      | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+      | Indexing.Concat _ -> false (* unreachable: rejected by check_idcs *)
+    in
+    let guards =
+      Array.foldi def_args_arr ~init:[] ~f:(fun i guards lhs_ind ->
+          if bound_pos.(i) then guards
+          else
+            let rhs_ind = call_args.(i) in
+            let lhs' = subst env lhs_ind in
+            if Indexing.equal_axis_index lhs' rhs_ind then guards
+            else if depends_on_symbol lhs_ind then (lhs', rhs_ind) :: guards
+            else raise @@ Non_virtual 13)
+    in
+    let guards = List.rev guards in
     let rec loop env llc : t option =
       match llc with
       | Noop -> None
@@ -694,7 +761,27 @@ let%track7_sexp inline_computation ~id
       | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
-          Some (Set_local (id, loop_scalar env llsc))
+          let inlined = loop_scalar env llsc in
+          (* gh-133 Stage A: for a producer that repeats a non-static symbol, wrap the inlined value in
+             one [Where (Cmpeq ...)] equality guard per non-binding position. Off-condition reads fall
+             back to [Get_local id] -- the zero/init local emitted by the preceding [Zero_out] ->
+             [Set_local (id, Constant 0.0)] in this same scope -- keeping off-diagonal cells at init.
+             Without that init local ([has_zero_init] false) the guard would read an uninitialized
+             local, so we reject (preserving the prior materialized behavior). Index comparison uses
+             index precision (Cmpeq is homogeneous, so its result precision is forced onto the
+             operands); the [Where] is heterogeneous, so its then/else arms keep the value precision. *)
+          if (not (List.is_empty guards)) && not has_zero_init then raise @@ Non_virtual 13;
+          let value_prec = Lazy.force traced.tn.Tn.prec in
+          let index_prec = Ops.index_prec () in
+          let guarded =
+            List.fold guards ~init:inlined ~f:(fun acc (lhs_ind, rhs_ind) ->
+                let cond =
+                  Binop
+                    (Ops.Cmpeq, (Embed_index lhs_ind, index_prec), (Embed_index rhs_ind, index_prec))
+                in
+                Ternop (Ops.Where, (cond, index_prec), (acc, value_prec), (Get_local id, value_prec)))
+          in
+          Some (Set_local (id, guarded))
       | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = _; debug = _ }
         when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
@@ -737,15 +824,6 @@ let%track7_sexp inline_computation ~id
     loop env def
   in
   try
-    let computations =
-      Hashtbl.find computations_table traced.tn
-      |> Option.value_or_thunk ~default:(fun () ->
-          raise
-          @@ Utils.User_error
-               [%string
-                 "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
-                  %{Tn.debug_name traced.tn}"])
-    in
     let body = List.rev_filter_map ~f:loop_proc computations in
     if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
   with Non_virtual i ->
@@ -1211,6 +1289,12 @@ let simplify_llc llc =
         let v2 = loop_scalar llv2 in
         let result = (Binop (op, v1, v2), prec) in
         if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then result else loop_scalar result
+    | Ternop
+        (Where, (Binop (Cmpeq, (Embed_index a, _), (Embed_index b, _)), _), then_, _)
+      when Indexing.equal_axis_index a b ->
+        (* gh-133 Stage A: a repeated-symbol equality guard whose two embedded indices are
+           syntactically identical is always taken; fold it to its then-branch. *)
+        loop_scalar then_
     | Ternop (op, llv1, llv2, llv3) ->
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
