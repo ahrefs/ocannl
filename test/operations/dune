@@ -604,6 +604,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name virtual_shared_loop)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules virtual_shared_loop)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_tensor_persistence)
  (package neural_nets_lib)
  (modules test_tensor_persistence)
