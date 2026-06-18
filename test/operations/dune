@@ -626,6 +626,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name virtual_affine)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules virtual_affine)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name virtual_diagonal)
  (package neural_nets_lib)
  (deps

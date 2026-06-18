@@ -10,3 +10,7 @@ stride*o+k (k range > stride) injective: false
 is_injective 2*oh+wh: true
 is_injective i+j: false
 is_injective with uncovered contraction symbol: false
+=== lowering payoff: injective + surjective scatter skips neutral init ===
+pool-backward scatter injective: true
+pool-backward scatter surjective: true
+pool-backward scatter skips neutral-init (surjective && injective): true

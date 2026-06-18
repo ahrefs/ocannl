@@ -452,38 +452,41 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
   let at_idcs = ref None in
   let has_setter = ref false in
   let top_tn = traced.tn in
-  let check_idcs indices =
+  let check_idcs loop_ranges indices =
     (match !at_idcs with
     | None -> at_idcs := Some indices
     | Some at ->
         if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
     (* gh-133 Stage A: repeated non-static symbols (diagonal [i;i] / partially-diagonal [i;j;i]) and
-       covered single-symbol affine positions are supported. Only multi-symbol affine positions
-       ([Non_virtual 51], deferred to Stage B) and [Concat] ([Non_virtual 52]) remain rejected. *)
+       covered single-symbol affine positions are supported. gh-133 Stage B: multi-symbol affine
+       positions ([stride*oh+kh], [K*i+k], triangular [(s1, s1+s2)]) are also supported, but only when
+       the whole LHS index map is proven injective over the producer loop widths -- otherwise dropping
+       the producer loops in [inline_computation] would lose fold contributions. [Concat]
+       ([Non_virtual 52]) remains rejected. *)
+    let symbol_range s = Map.find loop_ranges s |> Option.value ~default:1 in
+    (* Non-static symbols per position; a position with more than one non-static affine symbol is only
+       admissible when the whole vector is injective. *)
+    let has_multi_affine = ref false in
     let syms =
-      Set.of_array (module Indexing.Symbol)
-      @@ Array.filter_map indices
-           ~f:
-             Indexing.(
-               function
-               | Fixed_idx _ -> None
-               | Sub_axis -> None
-               | Iterator s -> Option.some_if (not @@ Set.mem static_indices s) s
-               | Affine { symbols; offset = _ } -> (
-                   (* For affine indices, collect all symbols that are not static *)
-                   List.filter_map symbols ~f:(fun (_, s) ->
-                       Option.some_if (not @@ Set.mem static_indices s) s)
-                   |> function
-                   | [] -> None
-                   | [ s ] -> Some s
-                   | _ ->
-                       (* TODO(#133, Stage B): multiple non-static symbols in affine index not yet
-                          supported *)
-                       raise @@ Non_virtual 51)
-               | Concat _syms ->
-                   (* Concat indices should be eliminated before virtualization *)
-                   raise @@ Non_virtual 52)
+      Array.fold indices
+        ~init:(Set.empty (module Indexing.Symbol))
+        ~f:(fun acc -> function
+          | Indexing.Fixed_idx _ | Indexing.Sub_axis -> acc
+          | Indexing.Iterator s -> if Set.mem static_indices s then acc else Set.add acc s
+          | Indexing.Affine { symbols; offset = _ } ->
+              let nonstatic =
+                List.filter_map symbols ~f:(fun (_, s) ->
+                    Option.some_if (not @@ Set.mem static_indices s) s)
+              in
+              (match nonstatic with [] | [ _ ] -> () | _ -> has_multi_affine := true);
+              List.fold nonstatic ~init:acc ~f:Set.add
+          | Indexing.Concat _syms ->
+              (* Concat indices should be eliminated before virtualization *)
+              raise @@ Non_virtual 52)
     in
+    let injective = lazy (Indexing.affine_injective ~symbol_range indices) in
+    (* A multi-symbol affine position is sound to drop only if the LHS map is injective. *)
+    if !has_multi_affine && not (Lazy.force injective) then raise @@ Non_virtual 51;
     (* Non-static symbols appearing in a bare [Iterator] position. [inline_computation]'s pass 1 binds
        only such positions from the call args; pass 2 grounds any affine occurrence via [subst]. *)
     let iter_syms =
@@ -492,94 +495,78 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
            | Indexing.Iterator s when not @@ Set.mem static_indices s -> Some s
            | _ -> None)
     in
-    (* Coverage check (replaces the old uniqueness check): every non-static symbol used (including
-       inside a single-symbol affine position) must also appear in a bare [Iterator] position, so it
-       can be bound from the call args. Repeated [Iterator] positions are allowed and produce equality
-       guards in [inline_computation]. A symbol that appears only in an affine position is deferred to
-       Stage B. *)
-    if not @@ Set.is_subset syms ~of_:iter_syms then raise @@ Non_virtual 5
+    (* Coverage check (replaces the old uniqueness check): every non-static symbol used must be
+       groundable by [inline_computation]. A symbol that appears in a bare [Iterator] position is bound
+       from the call args; otherwise (a symbol that occurs only inside affine positions, Stage B) the
+       whole map must be affine-injective so its symbols are pinned/solvable. Repeated [Iterator]
+       positions are allowed and produce equality guards. [inline_computation] re-validates per call
+       site, so over-accepting here only risks a later [Non_virtual 13] fall back to materialization. *)
+    if (not (Lazy.force injective)) && not (Set.is_subset syms ~of_:iter_syms) then
+      raise @@ Non_virtual 5
+  in
+  (* A sibling tensor's access is fine as long as its indices are bound within the candidate's
+     computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage B:
+     inspect symbols hidden inside [Affine]/[Concat] too, not just bare [Iterator], so the relaxed
+     affine path cannot admit an escaping symbol concealed in an affine index. *)
+  let check_sibling_escaping ~env_dom ~code idcs =
+    Array.iter idcs ~f:(fun idx ->
+        let syms =
+          match idx with
+          | Indexing.Iterator s -> [ s ]
+          | Indexing.Affine { symbols; _ } -> List.map symbols ~f:snd
+          | Indexing.Concat syms -> syms
+          | Indexing.Fixed_idx _ | Indexing.Sub_axis -> []
+        in
+        List.iter syms ~f:(fun s ->
+            if (not (Set.mem static_indices s)) && not (Set.mem env_dom s) then (
+              [%log2
+                "INFO: Inlining candidate has an escaping variable",
+                (idx : Indexing.axis_index),
+                (top_llc : t)];
+              raise @@ Non_virtual code)))
   in
   (* Traverse the float code too, for completeness / future use-cases. *)
-  let rec loop_proc ~env_dom llc =
-    let loop = loop_proc ~env_dom in
+  let rec loop_proc ~env_dom ~loop_ranges llc =
+    let loop = loop_proc ~env_dom ~loop_ranges in
     match llc with
     | Noop -> ()
     | (Seq (c1, c2) : t) ->
         loop c1;
         loop c2
     | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
-    | For_loop { index; body; from_ = _; to_ = _; trace_it = true } ->
-        loop_proc ~env_dom:(Set.add env_dom index) body
+    | For_loop { index; body; from_; to_; trace_it = true } ->
+        loop_proc
+          ~env_dom:(Set.add env_dom index)
+          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
+          body
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
-          check_idcs idcs;
+          check_idcs loop_ranges idcs;
           has_setter := true)
-        else
-          (* A sibling setter is fine as long as its indices are bound within the candidate's
-             computation: [inline_computation] later filters it out of [top_tn]'s stored body. Only
-             an escaping (unbound) iterator disqualifies. See #134. *)
-          Array.iter idcs ~f:(function
-            | Iterator s as _idx
-              when (not (Set.mem static_indices s)) && not (Set.mem env_dom s) ->
-                [%log2
-                  "INFO: Inlining candidate has an escaping variable",
-                  (_idx : Indexing.axis_index),
-                  (top_llc : t)];
-                raise @@ Non_virtual 7
-            | _ -> ());
-        loop_scalar ~env_dom llsc
+        else check_sibling_escaping ~env_dom ~code:7 idcs;
+        loop_scalar ~env_dom ~loop_ranges llsc
     | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
         if Tn.equal tn top_tn then (
-          check_idcs idcs;
+          check_idcs loop_ranges idcs;
           has_setter := true)
-        else
-          (* See the [Set] case above: a sibling vector setter with bound indices is allowed. *)
-          Array.iter idcs ~f:(function
-            | Iterator s as _idx
-              when (not (Set.mem static_indices s)) && not (Set.mem env_dom s) ->
-                [%log2
-                  "INFO: Inlining candidate has an escaping variable",
-                  (_idx : Indexing.axis_index),
-                  (top_llc : t)];
-                raise @@ Non_virtual 7
-            | _ -> ());
-        loop_scalar ~env_dom arg
-    | Set_local (_, llsc) -> loop_scalar ~env_dom llsc
+        else check_sibling_escaping ~env_dom ~code:7 idcs;
+        loop_scalar ~env_dom ~loop_ranges arg
+    | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
     | Declare_local _ -> raise @@ Non_virtual 19
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual 8
-  and loop_scalar ~env_dom llsc =
+  and loop_scalar ~env_dom ~loop_ranges llsc =
     match llsc with
     | Constant _ | Constant_bits _ -> ()
     | Get (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs idcs
-        else
-          (* Check for escaping variables. *)
-          Array.iter idcs ~f:(function
-            | Iterator s when not (Set.mem static_indices s) ->
-                if not @@ Set.mem env_dom s then (
-                  [%log2
-                    "Inlining candidate has an escaping variable",
-                    (s : Indexing.symbol),
-                    (top_llc : t)];
-                  raise @@ Non_virtual 9)
-            | _ -> ())
-    | Local_scope { body; _ } -> loop_proc ~env_dom body
+        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
+        else check_sibling_escaping ~env_dom ~code:9 idcs
+    | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
     | Get_local _ -> ()
     | Get_merge_buffer (tn, idcs) ->
-        if Tn.equal tn top_tn then check_idcs idcs
-        else
-          (* Check for escaping variables. *)
-          Array.iter idcs ~f:(function
-            | Iterator s when not (Set.mem static_indices s) ->
-                if not @@ Set.mem env_dom s then (
-                  [%log2
-                    "Inlining candidate has an escaping variable",
-                    (s : Indexing.symbol),
-                    (top_llc : t)];
-                  raise @@ Non_virtual 9)
-            | _ -> ())
+        if Tn.equal tn top_tn then check_idcs loop_ranges idcs
+        else check_sibling_escaping ~env_dom ~code:9 idcs
     | Embed_index (Fixed_idx _ | Sub_axis) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
@@ -606,17 +593,17 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
                   (top_llc : t)];
               raise @@ Non_virtual 10))
     | Ternop (_, (llv1, _), (llv2, _), (llv3, _)) ->
-        loop_scalar ~env_dom llv1;
-        loop_scalar ~env_dom llv2;
-        loop_scalar ~env_dom llv3
+        loop_scalar ~env_dom ~loop_ranges llv1;
+        loop_scalar ~env_dom ~loop_ranges llv2;
+        loop_scalar ~env_dom ~loop_ranges llv3
     | Binop (_, (llv1, _), (llv2, _)) ->
-        loop_scalar ~env_dom llv1;
-        loop_scalar ~env_dom llv2
-    | Unop (_, (llsc, _)) -> loop_scalar ~env_dom llsc
+        loop_scalar ~env_dom ~loop_ranges llv1;
+        loop_scalar ~env_dom ~loop_ranges llv2
+    | Unop (_, (llsc, _)) -> loop_scalar ~env_dom ~loop_ranges llsc
   in
   try
     if Tn.known_non_virtual traced.tn then raise @@ Non_virtual 11;
-    loop_proc ~env_dom:static_indices top_llc;
+    loop_proc ~env_dom:static_indices ~loop_ranges:(Map.empty (module Indexing.Symbol)) top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     let current_computations =
       Hashtbl.find computations_table traced.tn |> Option.value ~default:[]
@@ -657,7 +644,8 @@ let%track7_sexp inline_computation ~id
   in
   (* In the order of computation. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
-    let subst env (idx : Indexing.axis_index) : Indexing.axis_index =
+    (* One substitution step: replace env-bound symbols, folding nested affine/fixed contributions. *)
+    let subst_step env (idx : Indexing.axis_index) : Indexing.axis_index =
       match idx with
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
       | Indexing.Affine { symbols; offset } ->
@@ -690,9 +678,36 @@ let%track7_sexp inline_computation ~id
           Indexing.Affine { symbols = all_terms; offset = new_offset }
       | idx -> idx
     in
-    (* gh-133 Stage A: build the substitution environment and equality guards in two passes, so a
-       producer index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal
-       [i;j;i]) does not crash [Map.of_alist_exn] on duplicate keys. *)
+    (* gh-133 Stage B: a solved producer symbol can be bound to an affine expression that still
+       mentions other producer symbols (e.g. [wh := t - 2*oh] when [oh]'s loop is kept). Those inner
+       symbols are themselves env-bound (to a freshened loop variable), so substitution must be
+       applied transitively to a fixpoint. Bindings are acyclic and finite, so this terminates. *)
+    let rec subst env idx =
+      let stepped = subst_step env idx in
+      if Indexing.equal_axis_index stepped idx then stepped else subst env stepped
+    in
+    (* Canonical [(coeff, symbol) list, offset] view of an affine-like position. *)
+    let canon idx =
+      match idx with
+      | Indexing.Iterator s -> Some ([ (1, s) ], 0)
+      | Indexing.Affine { symbols; offset } -> Some (Indexing.coalesce_affine_terms symbols, offset)
+      | Indexing.Fixed_idx i -> Some ([], i)
+      | Indexing.Sub_axis | Indexing.Concat _ -> None
+    in
+    (* Per-symbol loop width of this producer computation, for range guards on solved symbols. *)
+    let def_loop_ranges =
+      let rec scan acc = function
+        | For_loop { index; from_; to_; body; _ } ->
+            scan (Map.set acc ~key:index ~data:(to_ - from_ + 1)) body
+        | Seq (a, b) -> scan (scan acc a) b
+        | _ -> acc
+      in
+      scan (Map.empty (module Indexing.Symbol)) def
+    in
+    let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:1 in
+    (* gh-133 Stage A/B: build the substitution environment and guards in several passes, so a producer
+       index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal [i;j;i]) does
+       not crash on duplicate keys, and so multi-symbol affine positions (Stage B) can be solved. *)
     let def_args_arr = Option.value def_args ~default:[||] in
     let n = Array.length def_args_arr in
     if n > Array.length call_args then
@@ -700,31 +715,99 @@ let%track7_sexp inline_computation ~id
         [%string
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} n: %{n#Int}"];
-    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. [bound_pos.(i)]
-       marks positions that DEFINE the substitution (no guard for them). *)
+    (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
+       [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0, range). *)
     let bound_pos = Array.create ~len:n false in
-    let env =
-      Array.foldi def_args_arr ~init:(Map.empty (module Indexing.Symbol)) ~f:(fun i env lhs_ind ->
-          match lhs_ind with
-          | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem env s) ->
+    let env = ref (Map.empty (module Indexing.Symbol)) in
+    let range_guards = ref [] in
+    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. *)
+    Array.iteri def_args_arr ~f:(fun i lhs_ind ->
+        match lhs_ind with
+        | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem !env s) ->
+            bound_pos.(i) <- true;
+            env := Map.add_exn !env ~key:s ~data:call_args.(i)
+        | _ -> ());
+    (* gh-133 Stage B: structural affine match -- producer [Σ cₖ·sₖ + off] read at a call-site affine
+       with the same canonical (distinct) coefficient list and equal offset binds producer symbols
+       pairwise to the call-site symbols, no inversion and no guard. *)
+    let try_structural_match i lhs_ind =
+      if bound_pos.(i) then false
+      else
+        match (lhs_ind, canon call_args.(i)) with
+        | Indexing.Affine { symbols = psyms; offset = poff }, Some (cterms, coff) when poff = coff ->
+            let pterms = Indexing.coalesce_affine_terms psyms in
+            let pcoeffs = List.map pterms ~f:fst in
+            let ccoeffs = List.map cterms ~f:fst in
+            let distinct l =
+              List.length (List.dedup_and_sort ~compare:Int.compare l) = List.length l
+            in
+            let unbound (_, s) = (not (Set.mem static_indices s)) && not (Map.mem !env s) in
+            if
+              (not (List.is_empty pterms))
+              && List.for_all pterms ~f:unbound && distinct pcoeffs
+              && List.equal Int.equal
+                   (List.sort ~compare:Int.compare pcoeffs)
+                   (List.sort ~compare:Int.compare ccoeffs)
+            then (
+              List.iter pterms ~f:(fun (c, ps) ->
+                  let _, cs = List.find_exn cterms ~f:(fun (cc, _) -> cc = c) in
+                  env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs));
               bound_pos.(i) <- true;
-              Map.add_exn env ~key:s ~data:call_args.(i)
-          | _ -> env)
+              true)
+            else false
+        | _ -> false
     in
-    (* Pass 2: validate every non-binding position against the COMPLETE env. If the substituted
-       producer index [lhs'] equals the call-site index, no guard is needed. Otherwise a guard is
-       emitted iff the producer position depends on a (now-bound) non-static symbol:
-       - a non-binding bare [Iterator] is necessarily a repeated occurrence of a symbol bound in pass 1
-         (diagonal [i;i] / partially-diagonal [i;j;i]);
-       - a covered single-symbol [Affine] position (its symbol is bound in pass 1, guaranteed by the
-         [check_idcs] coverage check) -- e.g. a producer [i; i+1] read at [j; j+2] guards on j+1 = j+2,
-         which folds to the init value.
-       In both cases the consistency becomes [Cmpeq (lhs', rhs)] comparing the substituted producer
-       index with the call-site index. [Fixed_idx]/[Sub_axis] producer positions carry no symbol, so
-       (per the proposal's Implementation Notes) they keep structural equality: an unequal one is a
-       genuine static mismatch and stays materialized via [Non_virtual 13], exactly as before (sparse
-       producers such as [i; Fixed_idx 0] are unaffected). [guards] are applied around the inlined
-       value in the [Set] case below. *)
+    (* gh-133 Stage B: unit-coefficient solving -- after substituting already-bound symbols, if exactly
+       one unbound producer symbol has coefficient ±1, bind it to the residual affine expression and
+       emit a range guard. Other unbound symbols stay free; their producer loops are kept (and
+       range-guarded indirectly via injectivity), guaranteeing exactly one matching iteration. *)
+    let try_unit_solve i lhs_ind =
+      if bound_pos.(i) then false
+      else
+        match lhs_ind with
+        | Indexing.Affine { symbols; offset } -> (
+            let terms = Indexing.coalesce_affine_terms symbols in
+            let unbound =
+              List.filter terms ~f:(fun (_, s) ->
+                  (not (Set.mem static_indices s)) && not (Map.mem !env s))
+            in
+            match List.filter unbound ~f:(fun (c, _) -> abs c = 1) with
+            | [ (uc, us) ] -> (
+                match canon call_args.(i) with
+                | None -> false
+                | Some (rterms, roff) ->
+                    (* us = uc * (rhs − offset − Σ_{other terms} c·s). uc = ±1 so uc⁻¹ = uc. Other
+                       producer terms are left symbolic and resolved by [subst] (transitively). *)
+                    let value_terms =
+                      List.map rterms ~f:(fun (rc, rs) -> (uc * rc, rs))
+                      @ List.filter_map terms ~f:(fun (c, s) ->
+                            if Indexing.equal_symbol s us then None else Some (-uc * c, s))
+                    in
+                    let value =
+                      Indexing.Affine
+                        { symbols = value_terms; offset = uc * (roff - offset) }
+                    in
+                    env := Map.set !env ~key:us ~data:value;
+                    range_guards := (us, symbol_range us) :: !range_guards;
+                    bound_pos.(i) <- true;
+                    true)
+            | _ -> false)
+        | _ -> false
+    in
+    (* Run the Stage B binding rounds to a fixpoint, in pinning order (structural match before
+       unit-coefficient solving). *)
+    let progress = ref true in
+    while !progress do
+      progress := false;
+      Array.iteri def_args_arr ~f:(fun i lhs_ind ->
+          if (not bound_pos.(i)) && (try_structural_match i lhs_ind || try_unit_solve i lhs_ind) then
+            progress := true)
+    done;
+    let env = !env in
+    (* Remaining non-binding positions become consistency guards: [subst(producer_pos) = call_site].
+       [Fixed_idx]/[Sub_axis] carry no symbol, so a static mismatch there is a genuine sparse-producer
+       mismatch and stays materialized via [Non_virtual 13]. Guards are materialized at the [Set] node
+       with the live (freshened) env. *)
     let depends_on_symbol (idx : Indexing.axis_index) =
       match idx with
       | Indexing.Iterator s -> not (Set.mem static_indices s)
@@ -740,10 +823,14 @@ let%track7_sexp inline_computation ~id
             let rhs_ind = call_args.(i) in
             let lhs' = subst env lhs_ind in
             if Indexing.equal_axis_index lhs' rhs_ind then guards
-            else if depends_on_symbol lhs_ind then (lhs', rhs_ind) :: guards
+            else if depends_on_symbol lhs_ind then (lhs_ind, rhs_ind) :: guards
             else raise @@ Non_virtual 13)
     in
     let guards = List.rev guards in
+    let range_guards = List.rev !range_guards in
+    (* Set when a guard is introduced but the producer emitted no [Zero_out]: an explicit init local is
+       then prepended before the (possibly loop-nested) guarded updates. *)
+    let needs_init = ref false in
     let rec loop env llc : t option =
       match llc with
       | Noop -> None
@@ -762,23 +849,48 @@ let%track7_sexp inline_computation ~id
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           let inlined = loop_scalar env llsc in
-          (* gh-133 Stage A: for a producer that repeats a non-static symbol, wrap the inlined value in
-             one [Where (Cmpeq ...)] equality guard per non-binding position. Off-condition reads fall
-             back to [Get_local id] -- the zero/init local emitted by the preceding [Zero_out] ->
-             [Set_local (id, Constant 0.0)] in this same scope -- keeping off-diagonal cells at init.
-             Without that init local ([has_zero_init] false) the guard would read an uninitialized
-             local, so we reject (preserving the prior materialized behavior). Index comparison uses
-             index precision (Cmpeq is homogeneous, so its result precision is forced onto the
-             operands); the [Where] is heterogeneous, so its then/else arms keep the value precision. *)
-          if (not (List.is_empty guards)) && not has_zero_init then raise @@ Non_virtual 13;
           let value_prec = Lazy.force traced.tn.Tn.prec in
           let index_prec = Ops.index_prec () in
-          let guarded =
-            List.fold guards ~init:inlined ~f:(fun acc (lhs_ind, rhs_ind) ->
-                let cond =
+          (* gh-133 Stage A: consistency (equality) guards for repeated / covered single-symbol affine
+             positions -- the substituted producer index must equal the call-site index. Indices are
+             resolved with the live (freshened) env so kept-loop symbols match the loop body. Index
+             comparison uses index precision (Cmpeq is homogeneous); the [Where] keeps value precision
+             on its then/else arms. *)
+          let eq_conds =
+            List.map guards ~f:(fun (lhs_ind, rhs_ind) ->
+                Binop
+                  ( Ops.Cmpeq,
+                    (Embed_index (subst env lhs_ind), index_prec),
+                    (Embed_index rhs_ind, index_prec) ))
+          in
+          (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its producer
+             loop range [0, range). [-1 < v] encodes [v >= 0] over integers. *)
+          let range_conds =
+            List.map range_guards ~f:(fun (us, range) ->
+                let v = subst env (Indexing.Iterator us) in
+                let lower =
                   Binop
-                    (Ops.Cmpeq, (Embed_index lhs_ind, index_prec), (Embed_index rhs_ind, index_prec))
+                    ( Ops.Cmplt,
+                      (Embed_index (Fixed_idx (-1)), index_prec),
+                      (Embed_index v, index_prec) )
                 in
+                let upper =
+                  Binop
+                    ( Ops.Cmplt,
+                      (Embed_index v, index_prec),
+                      (Embed_index (Fixed_idx range), index_prec) )
+                in
+                Binop (Ops.And, (lower, index_prec), (upper, index_prec)))
+          in
+          let conds = eq_conds @ range_conds in
+          (* Off-condition reads fall back to [Get_local id] -- the init local emitted by the producer's
+             [Zero_out] ([has_zero_init]) or, when absent (an injective+surjective scatter that skipped
+             neutral init -- Stage B), the explicit init prepended below. The no-[Zero_out] case implies
+             the map is surjective, so every read cell IS written by exactly one iteration (injectivity)
+             and the init value is always overwritten -- 0. is a safe neutral. *)
+          if (not (List.is_empty conds)) && not has_zero_init then needs_init := true;
+          let guarded =
+            List.fold conds ~init:inlined ~f:(fun acc cond ->
                 Ternop (Ops.Where, (cond, index_prec), (acc, value_prec), (Get_local id, value_prec)))
           in
           Some (Set_local (id, guarded))
@@ -821,7 +933,11 @@ let%track7_sexp inline_computation ~id
           Binop (op, (loop_scalar env llv1, prec1), (loop_scalar env llv2, prec2))
       | Unop (op, (llsc, prec)) -> Unop (op, (loop_scalar env llsc, prec))
     in
-    loop env def
+    match loop env def with
+    | Some body when !needs_init ->
+        (* Prepend the init local before any (possibly loop-nested) guarded updates. *)
+        Some (Seq (Set_local (id, Constant 0.0), body))
+    | other -> other
   in
   try
     let body = List.rev_filter_map ~f:loop_proc computations in

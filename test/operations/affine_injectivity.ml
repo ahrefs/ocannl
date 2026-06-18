@@ -18,11 +18,12 @@ let ranges pairs s =
 let p name b = Stdio.printf "%s: %b\n" name b
 
 (* Minimal projections: one single-symbol product axis per [product_axes] entry, [project_lhs] over
-   those symbols. [is_injective] reads only product_iterators / product_space / project_lhs. *)
-let mk_proj product_axes project_lhs : Idx.projections =
+   those symbols. [is_injective] reads only product_iterators / product_space / project_lhs;
+   [is_surjective] additionally reads [lhs_dims] (length must match [project_lhs]). *)
+let mk_proj ?(lhs_dims = [||]) product_axes project_lhs : Idx.projections =
   {
     product_space = Array.of_list_map product_axes ~f:(fun (_, d) -> [ d ]);
-    lhs_dims = [||];
+    lhs_dims;
     rhs_dims = [| [||] |];
     product_iterators = Array.of_list_map product_axes ~f:(fun (s, _) -> [ s ]);
     project_lhs;
@@ -100,5 +101,17 @@ let () =
   let i4 = sym () and c4 = sym () in
   p "is_injective with uncovered contraction symbol"
     (Idx.is_injective (mk_proj [ (i4, 4); (c4, 3) ] [| Idx.Iterator i4 |]));
+
+  Stdio.printf "=== lowering payoff: injective + surjective scatter skips neutral init ===\n";
+
+  (* Pool-backward with stride = window: the input-gradient index [2*oh+wh] (oh range 3, wh range 2)
+     covers [0, 6) exactly. Both injective and surjective, so the lowering in [assignments.ml] skips
+     the neutral-init pass and uses a plain setter. *)
+  let oh5 = sym () and wh5 = sym () in
+  let pool_back = mk_proj ~lhs_dims:[| 6 |] [ (oh5, 3); (wh5, 2) ] [| aff [ (2, oh5); (1, wh5) ] 0 |] in
+  p "pool-backward scatter injective" (Idx.is_injective pool_back);
+  p "pool-backward scatter surjective" (Idx.is_surjective pool_back);
+  p "pool-backward scatter skips neutral-init (surjective && injective)"
+    (Idx.is_surjective pool_back && Idx.is_injective pool_back);
 
   Stdio.printf "%!"
