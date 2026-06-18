@@ -66,6 +66,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_virtual_diagonal)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_virtual_diagonal)
+ (libraries ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_accumulation_semantics)
  (package neural_nets_lib)
  (deps

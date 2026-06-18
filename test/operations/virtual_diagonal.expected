@@ -1,0 +1,21 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+diagonal-generic: producer virtual: true
+diagonal-generic: read inlined (no array read of d): true
+diagonal-generic: one equality guard survives: true
+diagonal-generic: consumer read inlined under guard: true
+diagonal-equal: producer virtual: true
+diagonal-equal: read inlined (no array read of d): true
+diagonal-equal: guard folded away (no Where): true
+partial-diagonal: producer virtual: true
+partial-diagonal: read inlined (no array read of d): true
+partial-diagonal: one equality guard survives: true
+static-dynamic: producer virtual: true
+static-dynamic: read inlined (no array read of d): true
+static-dynamic: one equality guard survives: true
+single-affine: producer virtual: true
+single-affine: read inlined (no array read of d): true
+single-affine: no guard for matching affine: true
+single-symbol: producer virtual: true
+single-symbol: read inlined (no array read of d): true
+single-symbol: no guard: true
