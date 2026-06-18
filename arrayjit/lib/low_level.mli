@@ -113,8 +113,9 @@ type traced_array = {
       (** False only if the tensor node is built from index embeddings and scalar constant
           expressions. *)
   mutable is_complex : bool;
-      (** True only if the tensor node is built acciessing computations that are not a single
-          getter. *)
+      (** True only if the tensor node is built from a genuinely complex scalar computation (one
+          that accesses other non-constexpr computations). Sharing a loop symbol with another
+          tensor does not, by itself, make a node complex (see #134). *)
 }
 [@@deriving sexp_of]
 

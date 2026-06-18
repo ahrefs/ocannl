@@ -1,0 +1,15 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+independent siblings both virtual: true
+independent siblings setters dropped: true
+independent siblings inlined at use sites (no array reads survive): true
+is_complex from sharing alone: false
+mixed cleanup keeps b setter: true
+mixed drops virtual a setter: true
+mixed a virtual, b non-virtual: true
+forward provider inlined into materialized reader: true
+forward virtual-to-virtual chain both virtual: true
+forward virtual-to-virtual chain fully inlined: true
+loop-carried provider kept materialized: true
+loop-carried provider read NOT rewritten (array read preserved): true
+is_complex from genuine complex scalar: true

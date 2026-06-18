@@ -254,6 +254,23 @@ let is_complex_comp traced_store llsc =
 
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
+(* Records [tn] as a candidate owner of each loop symbol appearing in its assignment indices.
+   Multiple tensors may share a symbol (e.g. Block/concat lowering): all are recorded, in
+   first-seen (trace) order and deduplicated, so that [virtual_llc] can store one computation per
+   candidate. See #134. *)
+let track_symbol reverse_node_map tn idcs =
+  let add s =
+    let existing = Hashtbl.find reverse_node_map s |> Option.value ~default:[] in
+    if not (List.mem existing tn ~equal:Tn.equal) then
+      Hashtbl.set reverse_node_map ~key:s ~data:(existing @ [ tn ])
+  in
+  Array.iter idcs ~f:(function
+    | Indexing.Fixed_idx _ -> ()
+    | Indexing.Sub_axis -> ()
+    | Indexing.Iterator s -> add s
+    | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> add s)
+    | Indexing.Concat syms -> List.iter syms ~f:add)
+
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   (* FIXME(#351): avoid excessive inlining while CSE is not implemented *)
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
@@ -309,25 +326,11 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
-        (* Track which tensor uses which symbol. When multiple tensors share a symbol (e.g., in
-           Block/concat lowering), mark both as complex to disable virtualization. See TODO(#134):
-           this prevents multiple virtual arrays from sharing for loops. *)
-        let track_symbol s =
-          match Hashtbl.find reverse_node_map s with
-          | None -> Hashtbl.set reverse_node_map ~key:s ~data:tn
-          | Some old_tn when Tn.equal old_tn tn -> ()
-          | Some old_tn ->
-              (* Multiple tensors share this symbol - mark both as complex to prevent inlining *)
-              let old_traced = get_node traced_store old_tn in
-              old_traced.is_complex <- true;
-              traced.is_complex <- true
-        in
-        Array.iter idcs ~f:(function
-          | Fixed_idx _ -> ()
-          | Sub_axis -> ()
-          | Iterator s -> track_symbol s
-          | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> track_symbol s)
-          | Indexing.Concat syms -> List.iter syms ~f:track_symbol)
+        (* Track which tensors use which loop symbol. Multiple tensors may legitimately share a
+           symbol (e.g. Block/concat lowering); all of them are recorded as candidate owners in
+           first-seen (trace) order. Sharing a symbol no longer marks tensors [is_complex] -- only
+           genuine computation complexity does (see #134). *)
+        track_symbol reverse_node_map tn idcs
     | Set_from_vec { tn; idcs; length; vec_unop = _; arg = arg, _; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) arg;
         let traced : traced_array = get_node traced_store tn in
@@ -362,22 +365,7 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
               done);
           Hash_set.add traced.assignments (lookup env pos_idcs)
         done;
-        let track_symbol s =
-          match Hashtbl.find reverse_node_map s with
-          | None -> Hashtbl.set reverse_node_map ~key:s ~data:tn
-          | Some old_tn when Tn.equal old_tn tn -> ()
-          | Some old_tn ->
-              (* Multiple tensors share this symbol - mark both as complex to prevent inlining *)
-              let old_traced = get_node traced_store old_tn in
-              old_traced.is_complex <- true;
-              traced.is_complex <- true
-        in
-        Array.iter idcs ~f:(function
-          | Fixed_idx _ -> ()
-          | Sub_axis -> ()
-          | Iterator s -> track_symbol s
-          | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> track_symbol s)
-          | Indexing.Concat syms -> List.iter syms ~f:track_symbol)
+        track_symbol reverse_node_map tn idcs
     | Set_local (_, llsc) -> loop_scalar env None llsc
     | Declare_local _ -> ()
     | Comment _ -> ()
@@ -516,14 +504,16 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
           check_idcs idcs;
           has_setter := true)
         else
-          (* Check for escaping variables. *)
+          (* A sibling setter is fine as long as its indices are bound within the candidate's
+             computation: [inline_computation] later filters it out of [top_tn]'s stored body. Only
+             an escaping (unbound) iterator disqualifies. See #134. *)
           Array.iter idcs ~f:(function
-            | Iterator s as _idx when not (Set.mem static_indices s) ->
-                if not @@ Set.mem env_dom s then
-                  [%log2
-                    "INFO: Inlining candidate has an escaping variable",
-                    (_idx : Indexing.axis_index),
-                    (top_llc : t)];
+            | Iterator s as _idx
+              when (not (Set.mem static_indices s)) && not (Set.mem env_dom s) ->
+                [%log2
+                  "INFO: Inlining candidate has an escaping variable",
+                  (_idx : Indexing.axis_index),
+                  (top_llc : t)];
                 raise @@ Non_virtual 7
             | _ -> ());
         loop_scalar ~env_dom llsc
@@ -532,14 +522,14 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
           check_idcs idcs;
           has_setter := true)
         else
-          (* Check for escaping variables. *)
+          (* See the [Set] case above: a sibling vector setter with bound indices is allowed. *)
           Array.iter idcs ~f:(function
-            | Iterator s as _idx when not (Set.mem static_indices s) ->
-                if not @@ Set.mem env_dom s then
-                  [%log2
-                    "INFO: Inlining candidate has an escaping variable",
-                    (_idx : Indexing.axis_index),
-                    (top_llc : t)];
+            | Iterator s as _idx
+              when (not (Set.mem static_indices s)) && not (Set.mem env_dom s) ->
+                [%log2
+                  "INFO: Inlining candidate has an escaping variable",
+                  (_idx : Indexing.axis_index),
+                  (top_llc : t)];
                 raise @@ Non_virtual 7
             | _ -> ());
         loop_scalar ~env_dom arg
@@ -776,35 +766,84 @@ let rec unroll_pow ~(base : scalar_t) ~(exp : int) : scalar_t =
       base
 
 let virtual_llc computations_table traced_store reverse_node_map static_indices (llc : t) : t =
-  (* The current position is within scope of the definitions of the process_for virtual arrays. *)
-  let rec loop_proc ~process_for (llc : t) : t =
-    let loop = loop_proc ~process_for in
+  (* [process_for] holds tensors whose [Get]s must be left untouched (self/recursive references,
+     replaced by [Get_local] during the tensor's own [inline_computation]). [owned] holds tensors
+     whose whole-loop computation is captured at an enclosing [For_loop]: their per-statement
+     auto-store is suppressed and they are excluded from nested candidate lists, but -- unlike
+     [process_for] -- reads of them are still inlined, so surviving sibling readers can inline a
+     virtualized provider. [in_storage_pass] is set within a per-candidate storage sub-pass so it
+     does not recursively re-store nested-loop candidates. See #134. *)
+  let rec loop_proc ~process_for ~owned ~in_storage_pass (llc : t) : t =
+    let loop = loop_proc ~process_for ~owned ~in_storage_pass in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
         let c1 = loop c1 in
         let c2 = loop c2 in
         Seq (c1, c2)
-    | For_loop ({ index; body; _ } as for_config) -> (
-        match Hashtbl.find reverse_node_map index with
-        | Some tn when not @@ Set.mem process_for tn ->
-            let node : traced_array = get_node traced_store tn in
-            let result = loop_proc ~process_for:(Set.add process_for tn) llc in
-            if not @@ Tn.known_non_virtual node.tn then
-              check_and_store_virtual computations_table node static_indices result;
-            result
-        | _ -> For_loop { for_config with body = loop body })
+    | For_loop ({ index; body; _ } as for_config) ->
+        if in_storage_pass then
+          For_loop { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:true body }
+        else
+          let tns = Hashtbl.find reverse_node_map index |> Option.value ~default:[] in
+          let candidates =
+            (* First-seen (trace) order is preserved by [track_symbol], so a forward provider is
+               stored before its consumer below. *)
+            List.filter tns ~f:(fun tn ->
+                (not @@ Set.mem process_for tn)
+                && (not @@ Set.mem owned tn)
+                && (not @@ Tn.known_non_virtual tn))
+          in
+          (match candidates with
+          | [] ->
+              For_loop
+                { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:false body }
+          | _ ->
+              let owned' = List.fold candidates ~init:owned ~f:Set.add in
+              (* Phase 1 -- store, sequentially in source order. For each candidate, build its
+                 stored loop with [process_for] containing only that candidate (plus the incoming
+                 [process_for]); a [Get] of an earlier-stored sibling provider is inlined, while the
+                 candidate's own self-references stay for [Get_local]. [owned'] suppresses
+                 per-statement auto-store for every shared-loop candidate; [in_storage_pass] stops
+                 nested re-storage. *)
+              List.iter candidates ~f:(fun tn ->
+                  let node : traced_array = get_node traced_store tn in
+                  let stored =
+                    For_loop
+                      {
+                        for_config with
+                        body =
+                          loop_proc ~process_for:(Set.add process_for tn) ~owned:owned'
+                            ~in_storage_pass:true body;
+                      }
+                  in
+                  check_and_store_virtual computations_table node static_indices stored);
+              (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
+                 (materialized siblings, and later virtual siblings, all now stored) inline the
+                 provider; [owned'] still suppresses candidate auto-store; each candidate setter
+                 keeps its own self-references via the per-Set [next]. Candidate setters are emitted
+                 intact and removed later by [cleanup_virtual_llc]. *)
+              For_loop
+                { for_config with body = loop_proc ~process_for ~owned:owned' ~in_storage_pass:false body })
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
-        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual computations_table traced static_indices llc;
+        if
+          (not @@ Set.mem process_for tn)
+          && (not @@ Set.mem owned tn)
+          && (not @@ Tn.known_non_virtual traced.tn)
+        then check_and_store_virtual computations_table traced static_indices llc;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
         let next = if Tn.known_non_virtual traced.tn then process_for else Set.add process_for tn in
-        let result = Set { tn; idcs; llsc = loop_scalar ~process_for:next llsc; debug } in
-        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual computations_table traced static_indices result;
+        let result =
+          Set { tn; idcs; llsc = loop_scalar ~process_for:next ~owned ~in_storage_pass llsc; debug }
+        in
+        if
+          (not @@ Set.mem process_for tn)
+          && (not @@ Set.mem owned tn)
+          && (not @@ Tn.known_non_virtual traced.tn)
+        then check_and_store_virtual computations_table traced static_indices result;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -816,18 +855,22 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
               idcs;
               length;
               vec_unop;
-              arg = (loop_scalar ~process_for:next arg_scalar, arg_prec);
+              arg = (loop_scalar ~process_for:next ~owned ~in_storage_pass arg_scalar, arg_prec);
               debug;
             }
         in
-        if (not @@ Set.mem process_for tn) && (not @@ Tn.known_non_virtual traced.tn) then
-          check_and_store_virtual computations_table traced static_indices result;
+        if
+          (not @@ Set.mem process_for tn)
+          && (not @@ Set.mem owned tn)
+          && (not @@ Tn.known_non_virtual traced.tn)
+        then check_and_store_virtual computations_table traced static_indices result;
         result
-    | Set_local (id, llsc) -> Set_local (id, loop_scalar ~process_for llsc)
+    | Set_local (id, llsc) -> Set_local (id, loop_scalar ~process_for ~owned ~in_storage_pass llsc)
     | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
-  and loop_scalar ~process_for (llsc : scalar_t) : scalar_t =
+  and loop_scalar ~process_for ~owned ~in_storage_pass (llsc : scalar_t) : scalar_t =
+    let loop = loop_scalar ~process_for ~owned ~in_storage_pass in
     match llsc with
     | Constant _ -> llsc
     | Constant_bits _ -> llsc
@@ -845,23 +888,26 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
                ~f:(fun body -> Local_scope { id; body; orig_indices = indices })
     | Local_scope opts ->
         Local_scope
-          { opts with body = loop_proc ~process_for:(Set.add process_for opts.id.tn) opts.body }
+          {
+            opts with
+            body =
+              loop_proc ~process_for:(Set.add process_for opts.id.tn) ~owned ~in_storage_pass
+                opts.body;
+          }
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index _ -> llsc
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-        Ternop
-          ( op,
-            (loop_scalar ~process_for llv1, prec1),
-            (loop_scalar ~process_for llv2, prec2),
-            (loop_scalar ~process_for llv3, prec3) )
-    | Binop (op, (llv1, prec1), (llv2, prec2)) ->
-        Binop (op, (loop_scalar ~process_for llv1, prec1), (loop_scalar ~process_for llv2, prec2))
-    | Unop (op, (llsc, prec)) -> Unop (op, (loop_scalar ~process_for llsc, prec))
+        Ternop (op, (loop llv1, prec1), (loop llv2, prec2), (loop llv3, prec3))
+    | Binop (op, (llv1, prec1), (llv2, prec2)) -> Binop (op, (loop llv1, prec1), (loop llv2, prec2))
+    | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
   in
-  loop_proc ~process_for:(Set.empty (module Tnode)) llc
+  loop_proc
+    ~process_for:(Set.empty (module Tnode))
+    ~owned:(Set.empty (module Tnode))
+    ~in_storage_pass:false llc
 
-let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
+let cleanup_virtual_llc ~static_indices (llc : t) : t =
   (* The current position is within scope of the definitions of the process_for virtual arrays. *)
   let rec loop_proc ~balanced ~env_dom (llc : t) : t option =
     let loop = loop_proc ~balanced ~env_dom in
@@ -870,20 +916,14 @@ let cleanup_virtual_llc reverse_node_map ~static_indices (llc : t) : t =
     | Seq _ ->
         let body = List.filter_map ~f:loop @@ flat_lines [ llc ] in
         if List.is_empty body then None else Some (unflat_lines body)
-    | For_loop ({ index; body; _ } as for_config) -> (
+    | For_loop ({ index; body; _ } as for_config) ->
+        (* Recurse into the loop body. A shared loop may compute several tensors: the per-statement
+           cases below drop (and force [Virtual]) the setters of virtual tensors and keep those of
+           non-virtual tensors, so we must not drop the whole loop just because its index has a
+           virtual owner. The loop is elided only when its cleaned body is empty. See #134. *)
         let env_dom = Set.add env_dom index in
-        match Hashtbl.find reverse_node_map index with
-        | Some a ->
-            if not @@ Tn.known_non_virtual a then (
-              (* FIXME(#296): *)
-              Tn.update_memory_mode a Virtual 15;
-              None)
-            else
-              Option.map ~f:(fun body : t -> For_loop { for_config with body })
-              @@ loop_proc ~balanced ~env_dom body
-        | None ->
-            Option.map ~f:(fun body : t -> For_loop { for_config with body })
-            @@ loop_proc ~balanced ~env_dom body)
+        Option.map ~f:(fun body : t -> For_loop { for_config with body })
+        @@ loop_proc ~balanced ~env_dom body
     | Zero_out tn ->
         if not @@ Tn.known_non_virtual tn then (
           (* FIXME(#296): *)
@@ -1628,7 +1668,7 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   in
   let llc =
     hoist_cross_statement_cse @@ eliminate_common_subexpressions @@ simplify_llc
-    @@ cleanup_virtual_llc reverse_node_map ~static_indices
+    @@ cleanup_virtual_llc ~static_indices
     @@ virtual_llc_result
   in
   let merge_node =
