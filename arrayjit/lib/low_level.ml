@@ -800,21 +800,28 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
                 { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:false body }
           | _ ->
               let owned' = List.fold candidates ~init:owned ~f:Set.add in
-              (* Phase 1 -- store, sequentially in source order. For each candidate, build its
-                 stored loop with [process_for] containing only that candidate (plus the incoming
-                 [process_for]); a [Get] of an earlier-stored sibling provider is inlined, while the
-                 candidate's own self-references stay for [Get_local]. [owned'] suppresses
-                 per-statement auto-store for every shared-loop candidate; [in_storage_pass] stops
-                 nested re-storage. *)
-              List.iter candidates ~f:(fun tn ->
+              (* Phase 1 -- store, sequentially in source order. For candidate [k], its stored loop is
+                 processed with [process_for] containing [k] AND every later (not-yet-stored)
+                 candidate. Keeping the not-yet-stored candidates in [process_for] leaves their [Get]s
+                 intact, so a sibling setter (e.g. an in-loop materialized consumer) that reads a
+                 later candidate does NOT trigger [inline_computation] before that candidate is stored
+                 (which would raise the stale optimize_ctx error). Earlier candidates are already
+                 stored and are left OUT, so [k]'s own setter can inline them (forward provider
+                 chains). [owned'] suppresses per-statement auto-store for every shared-loop candidate;
+                 [in_storage_pass] stops nested re-storage. [check_and_store]/[inline_computation]
+                 filter the stored body to [k]'s own setters, so the irrelevant sibling setters left
+                 un-rewritten here are dropped. *)
+              List.iteri candidates ~f:(fun k tn ->
                   let node : traced_array = get_node traced_store tn in
+                  let store_pf =
+                    List.fold (List.drop candidates k) ~init:process_for ~f:Set.add
+                  in
                   let stored =
                     For_loop
                       {
                         for_config with
                         body =
-                          loop_proc ~process_for:(Set.add process_for tn) ~owned:owned'
-                            ~in_storage_pass:true body;
+                          loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true body;
                       }
                   in
                   check_and_store_virtual computations_table node static_indices stored);

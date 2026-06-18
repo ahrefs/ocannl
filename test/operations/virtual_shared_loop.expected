@@ -13,3 +13,6 @@ forward virtual-to-virtual chain fully inlined: true
 loop-carried provider kept materialized: true
 loop-carried provider read NOT rewritten (array read preserved): true
 is_complex from genuine complex scalar: true
+in-loop consumer: both providers virtual: true
+in-loop consumer: providers inlined (no array reads survive): true
+in-loop consumer: consumer setter kept: true

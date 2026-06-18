@@ -174,6 +174,24 @@ let case_complex () =
   let o = optimize l in
   p "is_complex from genuine complex scalar" (is_complex o z)
 
+(* === Case 7: two virtual providers + an in-loop materialized consumer (Codex P1) ===
+   c (materialized) reads BOTH a and b in the same loop. The storage pass for the first candidate
+   (a) walks c's setter, which reads the not-yet-stored b; it must not call inline_computation on b
+   before b is stored (that raised a stale optimize_ctx error). Both providers must virtualize and
+   inline into c, and c's setter must survive. *)
+let case_inloop_consumer () =
+  let a = mk "a" and b = mk "b" and cons = mk "cons" in
+  materialize cons;
+  let i = sym () in
+  let shared =
+    loop i (seq (set i a (c 2.)) (seq (set i b (c 3.)) (set i cons (add (get i a) (get i b)))))
+  in
+  let o = optimize shared in
+  p "in-loop consumer: both providers virtual" (Tn.known_virtual a && Tn.known_virtual b);
+  p "in-loop consumer: providers inlined (no array reads survive)"
+    (count_get o a = 0 && count_get o b = 0);
+  p "in-loop consumer: consumer setter kept" (count_set o cons = 1)
+
 let () =
   case_independent ();
   case_mixed ();
@@ -181,4 +199,5 @@ let () =
   case_chain ();
   case_reverse ();
   case_complex ();
+  case_inloop_consumer ();
   Stdio.printf "%!"
