@@ -1,0 +1,14 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+injective scatter: no neutral-init Zero_out: true
+injective scatter: plain setter (no read-modify-write): true
+non-injective scatter: emits neutral-init Zero_out: true
+non-injective scatter: read-modify-write accumulation: true
+AC6 unit-solve(plain): virtual=[10. 11. 12. 13. 14. 15.] expected=[10. 11. 12. 13. 14. 15.]
+AC6 unit-solve(plain) dst virtualized (Stage B path exercised): true
+AC6 unit-solve(plain) virtual matches expected: true
+AC6 unit-solve(plain) virtual matches materialized: true
+AC6 triangular: virtual=[0. 1. 0. 0. 0. 2. 3. 0. 0. 0. 4. 5.] expected=[0. 1. 0. 0. 0. 2. 3. 0. 0. 0. 4. 5.]
+AC6 triangular dst virtualized (Stage B path exercised): true
+AC6 triangular virtual matches expected: true
+AC6 triangular virtual matches materialized: true

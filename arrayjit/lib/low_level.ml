@@ -788,7 +788,20 @@ let%track7_sexp inline_computation ~id
                         { symbols = value_terms; offset = uc * (roff - offset) }
                     in
                     env := Map.set !env ~key:us ~data:value;
-                    range_guards := (us, symbol_range us) :: !range_guards;
+                    (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it is
+                       correct under unsigned index precision (a negative [rhs - rest] would underflow):
+                       [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
+                       [rest <= rhs < rest+range]; uc=-1 needs [rhs <= rest < rhs+range]. *)
+                    let rest_axis =
+                      Indexing.Affine
+                        {
+                          symbols =
+                            List.filter terms ~f:(fun (_, s) -> not (Indexing.equal_symbol s us));
+                          offset;
+                        }
+                    in
+                    range_guards :=
+                      (uc, rest_axis, call_args.(i), symbol_range us) :: !range_guards;
                     bound_pos.(i) <- true;
                     true)
             | _ -> false)
@@ -864,21 +877,28 @@ let%track7_sexp inline_computation ~id
                     (Embed_index rhs_ind, index_prec) ))
           in
           (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its producer
-             loop range [0, range). [-1 < v] encodes [v >= 0] over integers. *)
+             loop range [0, range). Index precision is UNSIGNED, so the guard must never form a negative
+             intermediate: we compare [rest] and [rhs] (both non-negative) rather than [rhs - rest].
+             uc=+1: [rest <= rhs] & [rhs < rest+range]; uc=-1: [rhs <= rest] & [rest < rhs+range].
+             [a <= b] is encoded as [a < b+1]. *)
+          let add_offset (idx : Indexing.axis_index) d : Indexing.axis_index =
+            if d = 0 then idx
+            else
+              match idx with
+              | Indexing.Iterator s -> Indexing.Affine { symbols = [ (1, s) ]; offset = d }
+              | Indexing.Affine { symbols; offset } -> Indexing.Affine { symbols; offset = offset + d }
+              | Indexing.Fixed_idx i -> Indexing.Fixed_idx (i + d)
+              | Indexing.Sub_axis | Indexing.Concat _ -> idx
+          in
+          let lt a b =
+            Binop (Ops.Cmplt, (Embed_index a, index_prec), (Embed_index b, index_prec))
+          in
           let range_conds =
-            List.map range_guards ~f:(fun (us, range) ->
-                let v = subst env (Indexing.Iterator us) in
-                let lower =
-                  Binop
-                    ( Ops.Cmplt,
-                      (Embed_index (Fixed_idx (-1)), index_prec),
-                      (Embed_index v, index_prec) )
-                in
-                let upper =
-                  Binop
-                    ( Ops.Cmplt,
-                      (Embed_index v, index_prec),
-                      (Embed_index (Fixed_idx range), index_prec) )
+            List.map range_guards ~f:(fun (uc, rest_axis, rhs_axis, range) ->
+                let rest = subst env rest_axis and rhs = subst env rhs_axis in
+                let lower, upper =
+                  if uc >= 0 then (lt rest (add_offset rhs 1), lt rhs (add_offset rest range))
+                  else (lt rhs (add_offset rest 1), lt rest (add_offset rhs range))
                 in
                 Binop (Ops.And, (lower, index_prec), (upper, index_prec)))
           in

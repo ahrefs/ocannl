@@ -637,6 +637,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name affine_lowering)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules affine_lowering)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name virtual_diagonal)
  (package neural_nets_lib)
  (deps
