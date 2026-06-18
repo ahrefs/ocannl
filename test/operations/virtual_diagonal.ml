@@ -169,6 +169,23 @@ let case_single_symbol_affine () =
   p "single-affine: read inlined (no array read of d)" (count_get opt d = 0);
   p "single-affine: no guard for matching affine" (count_where opt = 0)
 
+(* === Case 5b: covered single-symbol affine producer read at a MISMATCHED offset ===
+   Producer d[i, i+1] read at d[j, j+2]: the substituted producer index (j+1) does not equal the
+   call-site index (j+2), but the position is covered (symbol j is bound), so it must virtualize with a
+   SURVIVING equality guard (j+1 = j+2, which folds to the init value) -- NOT a Non_virtual 13
+   deferral to materialization. *)
+let case_single_symbol_affine_mismatch () =
+  let d = mk "d" and o = mk ~dims:[| 3 |] "o" in
+  materialize o;
+  let i = sym () and j = sym () in
+  let aff ofs s : Idx.axis_index = Idx.Affine { symbols = [ (1, s) ]; offset = ofs } in
+  let producer = seq (zero d) (loop i (set_at [| iter i; aff 1 i |] d (embed i))) in
+  let consumer = loop j (set_at [| iter j |] o (get_at [| iter j; aff 2 j |] d)) in
+  let opt = optimize (seq producer consumer) in
+  p "single-affine-mismatch: producer virtual" (Tn.known_virtual d);
+  p "single-affine-mismatch: read inlined (no array read of d)" (count_get opt d = 0);
+  p "single-affine-mismatch: equality guard survives" (count_where opt >= 1)
+
 (* === Case 6: single-symbol (non-repeated) producer still virtualizes -- regression guard === *)
 let case_single_symbol () =
   let d = mk ~dims:[| 3 |] "d" and o = mk ~dims:[| 3 |] "o" in
@@ -187,5 +204,6 @@ let () =
   case_partial_diagonal ();
   case_static_dynamic ();
   case_single_symbol_affine ();
+  case_single_symbol_affine_mismatch ();
   case_single_symbol ();
   Stdio.printf "%!"

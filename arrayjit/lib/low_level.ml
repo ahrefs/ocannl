@@ -712,13 +712,27 @@ let%track7_sexp inline_computation ~id
           | _ -> env)
     in
     (* Pass 2: validate every non-binding position against the COMPLETE env. If the substituted
-       producer index [lhs'] equals the call-site index, no guard is needed. Otherwise: a non-binding
-       BARE [Iterator] position is necessarily a repeated occurrence of a symbol already bound in pass 1
-       (diagonal [i;i] / partially-diagonal [i;j;i]); its consistency becomes an equality guard
-       [Cmpeq (lhs', rhs)]. Every other shape (a [Fixed_idx]/[Sub_axis]/[Affine] producer position that
-       does not match after substitution) keeps the pre-existing [Non_virtual 13] behavior -- this is
-       out of Stage A scope (sparse / single-symbol affine with a mismatched offset stay materialized,
-       exactly as before). [guards] are applied around the inlined value in the [Set] case below. *)
+       producer index [lhs'] equals the call-site index, no guard is needed. Otherwise a guard is
+       emitted iff the producer position depends on a (now-bound) non-static symbol:
+       - a non-binding bare [Iterator] is necessarily a repeated occurrence of a symbol bound in pass 1
+         (diagonal [i;i] / partially-diagonal [i;j;i]);
+       - a covered single-symbol [Affine] position (its symbol is bound in pass 1, guaranteed by the
+         [check_idcs] coverage check) -- e.g. a producer [i; i+1] read at [j; j+2] guards on j+1 = j+2,
+         which folds to the init value.
+       In both cases the consistency becomes [Cmpeq (lhs', rhs)] comparing the substituted producer
+       index with the call-site index. [Fixed_idx]/[Sub_axis] producer positions carry no symbol, so
+       (per the proposal's Implementation Notes) they keep structural equality: an unequal one is a
+       genuine static mismatch and stays materialized via [Non_virtual 13], exactly as before (sparse
+       producers such as [i; Fixed_idx 0] are unaffected). [guards] are applied around the inlined
+       value in the [Set] case below. *)
+    let depends_on_symbol (idx : Indexing.axis_index) =
+      match idx with
+      | Indexing.Iterator s -> not (Set.mem static_indices s)
+      | Indexing.Affine { symbols; _ } ->
+          List.exists symbols ~f:(fun (_, s) -> not (Set.mem static_indices s))
+      | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+      | Indexing.Concat _ -> false (* unreachable: rejected by check_idcs *)
+    in
     let guards =
       Array.foldi def_args_arr ~init:[] ~f:(fun i guards lhs_ind ->
           if bound_pos.(i) then guards
@@ -726,10 +740,8 @@ let%track7_sexp inline_computation ~id
             let rhs_ind = call_args.(i) in
             let lhs' = subst env lhs_ind in
             if Indexing.equal_axis_index lhs' rhs_ind then guards
-            else
-              match lhs_ind with
-              | Indexing.Iterator s when not (Set.mem static_indices s) -> (lhs', rhs_ind) :: guards
-              | _ -> raise @@ Non_virtual 13)
+            else if depends_on_symbol lhs_ind then (lhs', rhs_ind) :: guards
+            else raise @@ Non_virtual 13)
     in
     let guards = List.rev guards in
     let rec loop env llc : t option =

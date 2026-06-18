@@ -16,6 +16,9 @@ static-dynamic: one equality guard survives: true
 single-affine: producer virtual: true
 single-affine: read inlined (no array read of d): true
 single-affine: no guard for matching affine: true
+single-affine-mismatch: producer virtual: true
+single-affine-mismatch: read inlined (no array read of d): true
+single-affine-mismatch: equality guard survives: true
 single-symbol: producer virtual: true
 single-symbol: read inlined (no array read of d): true
 single-symbol: no guard: true
