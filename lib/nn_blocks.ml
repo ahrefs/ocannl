@@ -205,6 +205,20 @@ let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_r
   (* w_o output shape will automatically be set to the model dimension(s) by shape inference. *)
   { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 
+let%op multi_head_att_workshop ~num_heads ~d_k ~d_v () x =
+  let q = { w_q } * x in
+  let k = { w_k } * x in
+  let v = { w_v } * x in
+  let scores =
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
+  in
+  Shape.set_dim h num_heads;
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
+  let attn_weights = softmax ~spec:" ... | t -> ..." () scores in
+  { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
+
+  
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
   let centered = (x - mean) /. dim d in
