@@ -16,3 +16,6 @@ class_ids_of_int_list stores compact ids: true
 non-one-hot complex tensor does not produce Get_dynamic: true
 non-one-hot complex tensor keeps the vocab reduction loop: true
 non-range Cmpeq equality tensor stays Never_virtual: true
+large-index (IR): Get_dynamic.dyn_value iprec is double, not float32: true
+large-index (C): ids_wide parameter declared as double*: true
+large-index (C): dynamic index cast is widened (uint32_t or uint64_t): true
