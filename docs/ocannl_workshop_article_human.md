@@ -2,4 +2,55 @@
 
 ## Abstract
 
-## Introduction
+Modern neural network code is often cluttered with shape bookkeeping: explicit calls to reshape, unsqueeze, expand, transpose, reductions, and integer-axis arguments. OCANNL combines an embedded DSL that removes this boilerplate, with an end-to-end compiler with GPU backends. Users define tensor operations as OCaml functions using concise notation generalizing the Einstein summation convention. Concatenation is an expression over indices e.g. `i^j`, convolution is a contraction with affine operand addressing e.g. `stride*i + dilation*k`. A sequence of axes can be captured by a single variable, e.g. `..batch..` or `..activations..`, sandwiched between leading and trailing axes; with up to three such variables per shape. The paper showcases two examples: core multi-head attention, and rank-polymorphic 2D convolution. OCANNL performs broadcast-aware global bidirectional shape inference and derives loop-index maps for code generation. We formalize the inference problem for the core calculus (excluding affine and concatenation) and show properties of OCANNL's solver (proofs in the appendix). OCANNL's compiler inlines computations to avoid materializing intermediate tensors, and performs common subexpression elimination. This paper does not showcase benchmarks nor argue for performance, leaving that to follow-up work.
+
+## Examples
+
+```ocaml
+let%op multi_head_attn ~num_heads ~d_k ~d_v () x =
+  let q = { w_q } * x in
+  let k = { w_k } * x in
+  let v = { w_v } * x in
+
+  let scores =
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ])
+    /. sqrt (dim d)
+  in
+
+  Shape.set_dim h num_heads;
+  Shape.set_dim d d_k;
+  Shape.set_dim e d_v;
+
+  let attn_weights =
+    softmax ~spec:" ... | t -> ..." () scores
+  in
+
+  { w_o } *
+    (attn_weights +* v
+       " ... s | t -> h; ... t | h e => ... s | h e"
+       [ "e" ])
+```
+> **Figure 1. Core multi-head attention in OCANNL.** Axes: query position `s`, key/value position `t`, head `h`, key width `d`, and value width `e`. Batch rank, parameter shapes, score shape, contractions, and loop-index maps are inferred.
+
+## 2.2 Figure 2: rank-polymorphic `conv2d`
+
+Use this as the second code figure. It supports the technical claim that OCANNL infers index maps, not merely sizes.
+
+```ocaml
+let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1)
+    ?(use_padding = true) ?out_channels () x =
+  Shape.set_dim kh kernel_size;
+  Shape.set_dim kw kernel_size;
+  Option.iter out_channels ~f:(Shape.set_dim oc);
+  x
+  +* { kernel }
+       "... | stride*oh+kh, stride*ow+kw, ..ic..;
+             kh, kw, ..ic.. -> ..oc..
+        => ... | oh, ow, ..oc.."
+       [ "kh"; "kw"; "oc" ]
+  + { bias = 0. }
+```
+
+Possible caption:
+
+> **Figure 2. Rank-polymorphic 2D convolution.** The input is addressed at affine spatial positions `stride*oh+kh` and `stride*ow+kw`. The kernel axes `kh` and `kw`, together with the input-channel row `..ic..`, are contracted. The context row `...` and output-channel row `..oc..` are inferred and may have arbitrary rank.
