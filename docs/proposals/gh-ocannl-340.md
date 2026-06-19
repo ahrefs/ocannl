@@ -1,179 +1,200 @@
-# Proposal: Track whether Local_scope variables need initialization
+# Proposal: Elide Unneeded Local_scope Zero Initialization
 
-**Issue**: https://github.com/ahrefs/ocannl/issues/340
+**Issue:** https://github.com/ahrefs/ocannl/issues/340
 
-## Status update (2026-06-12)
+## Status
 
-- Issue is OPEN. The GitHub milestone reads v0.8, but ROADMAP.md (the authority) lists #340 under v0.7.2 "Compiler optimizations" (was due mid-April 2026, now past due).
-- Not implemented: `Local_scope` still has no `needs_init` field (`low_level.ml:54`, `low_level.mli:48`), and the `TODO(#340)` comment is still present in `c_syntax.ml` — now at line 602 (was 519).
-- New since the proposal was written: cross-statement CSE hoisting landed in `low_level.ml` (commits e48ec84f, 98410c21, f88fbdf8). It introduced a `Declare_local of scope_id` statement variant (`low_level.ml:50`) that splits a hoisted `Local_scope` into a declaration + body; `Declare_local` is a *second* unconditional zero-init site in `c_syntax.ml` (lines 585–591) that this design must also cover (or conservatively keep initializing hoisted declarations).
-- The pass pipeline gained `hoist_cross_statement_cse` after `eliminate_common_subexpressions` (`low_level.ml:1632`); it is an additional downstream pass that must propagate the new field.
-- Line numbers cited below have drifted (low_level.ml and c_syntax.ml both grew); they have been refreshed in place as of 2026-06-12.
-- The design itself remains valid and unblocked; no part of the approach is invalidated.
+Verified on 2026-06-19 against local HEAD `00f8ae3f` and the live GitHub issue.
 
-## Goal
+- Issue #340 is still open and assigned to milestone `v0.7`.
+- `ROADMAP.md` lists `Local_scope` initialization tracking under the still-open v0.7 compiler
+  optimization work.
+- `Local_scope` still carries only `id`, `body`, and `orig_indices` in
+  `arrayjit/lib/low_level.ml` and `arrayjit/lib/low_level.mli`.
+- `Declare_local of scope_id` exists and is used by cross-statement CSE hoisting.
+- `arrayjit/lib/c_syntax.ml` still emits unconditional `= 0` initializers for both
+  `Declare_local` and scalar `Local_scope` declarations, and the `TODO(#340)` is still present.
 
-Eliminate unnecessary zero-initialization of `Local_scope` scalar variables in generated C code. Currently, every `Local_scope` variable is unconditionally zero-initialized (e.g., `float v42 = 0.0;`), but initialization is only needed when the variable is **recurrent** -- i.e., read before its first write (accumulator pattern: `v42 = v42 + delta`). The tracing infrastructure already detects this via `read_before_write` on `traced_array`; the missing piece is threading that flag into the `Local_scope` IR node and using it in code generation. *(Update 2026-06-12: this premise is wrong in a load-bearing way — `read_before_write` is only set when `not (Tn.known_virtual tn)`, and setting it also forces `Materialized` provenance 36 (`low_level.ml:454-458`), which makes `Tn.known_non_virtual` true and thus prevents `Local_scope` creation in `virtual_llc`. Consequently `traced.read_before_write` is identically `false` at every `Local_scope` creation site; see the Design review below for the corrected data source.)*
+## Summary
+
+Generated C currently initializes every scalar local produced by `Local_scope`:
+
+```c
+float v42 = (float)0;
+```
+
+That initializer is only semantically required when the local can be read before its first write, as
+in an accumulator:
+
+```c
+v42 = v42 + delta;
+```
+
+Most `Local_scope` bodies assign the local before reading it, often because `Zero_out` was already
+rewritten to an explicit `Set_local (id, 0.)` inside the body. In those cases the declaration
+initializer is dead clutter:
+
+```c
+float v42;
+v42 = (float)0;
+...
+```
+
+Cross-statement CSE can also hoist a `Local_scope` body into a standalone `Declare_local` followed
+by the body. That declaration has the same initialization problem, so this proposal treats
+`Local_scope` and `Declare_local` as one codegen surface: both must use the same body-derived
+decision.
+
+The original issue suggested adding a `needs_init` field to `Local_scope` and populating it from
+`traced_array.read_before_write`. That data source is not sound for current code. The better fix is
+to derive the answer from the final body itself: emit `= 0` only if a syntactic scan of the body
+finds `Get_local id` before the first definitely executed `Set_local id`.
+
+## Decision
+
+Use a body scan, not `traced_array.read_before_write`, as the source of truth.
+
+The scan should answer:
+
+> Does this `scope_id` have a possible read before the first definitely executed write?
+
+For the current low-level statement IR, this can be precise enough to be used directly at codegen:
+
+- `Set_local (id, value)` first scans `value` for `Get_local id`; then, if the assignment target is
+  `id`, marks the local as written.
+- `Get_local id` before that mark means the declaration initializer is required.
+- `Seq` scans left to right.
+- `For_loop` scans the body. A write inside the loop is definitely executed only when the loop runs
+  at least once (`to_ >= from_` under the current integer-bound convention); reads inside the loop
+  still count.
+- `Set`, `Set_from_vec`, scalar expressions, nested `Local_scope`, and nested op arguments are
+  scanned for scalar reads. Nested `Local_scope` binders should not be confused with the target id.
+- `Declare_local`, `Zero_out`, `Comment`, `Staged_compilation`, and `Noop` do not write the target
+  local.
+
+This avoids threading a new boolean through many `Local_scope` pattern matches and remains correct
+after downstream rewrites such as simplification and common-subexpression elimination. The one place
+that must store the result is `Declare_local`, because hoisting splits the declaration from the body
+that justifies it.
+
+## Why read_before_write Is the Wrong Signal
+
+`visit_llc` sets `traced_array.read_before_write` only for recurrent accesses when the tensor node
+is not already known virtual. The same branch also updates the tensor memory mode to `Materialized`.
+Materialized nodes are known non-virtual, which prevents `Local_scope` creation for that tensor.
+
+That means `traced.read_before_write` is false at the normal `Local_scope` creation site for exactly
+the class of locals this optimization wants to inspect. Using it would silently turn into "never
+initialize local scopes", which is unsafe for supported or accidentally reachable recurrent virtual
+cases.
+
+## Implementation Plan
+
+1. Add a helper in `arrayjit/lib/low_level.ml`, exported from `low_level.mli`:
+
+   ```ocaml
+   val reads_scope_before_set : scope_id -> t -> bool
+   ```
+
+   The helper should be pure and operate on the final `Low_level.t` body. It should scan statements
+   and scalar expressions structurally, using `Scope_id.equal` for target-local identity.
+
+2. In `arrayjit/lib/c_syntax.ml`, update the `Local_scope` declaration emission:
+
+   ```ocaml
+   let init_zero =
+     if Low_level.reads_scope_before_set id body then
+       let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+       string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+     else empty
+   in
+   ```
+
+   Remove the `TODO(#340)` comment.
+
+3. Extend `Declare_local` so hoisted locals use the same initialization decision:
+
+   ```ocaml
+   | Declare_local of { id : scope_id; needs_init : bool }
+   ```
+
+   In `hoist_shared_locals`, compute `needs_init` from the hoisted body before recording the
+   insertion:
+
+   ```ocaml
+   let needs_init = reads_scope_before_set canonical_id body in
+   insertions := (first_user, [ Declare_local { id = canonical_id; needs_init }; body ])
+                 :: !insertions
+   ```
+
+   Then update `c_syntax.ml` so `Declare_local` uses the same conditional initializer as
+   `Local_scope`.
+
+4. Update every `Declare_local` pattern match and constructor site in `low_level.ml`,
+   `low_level.mli`, and `c_syntax.ml`.
+
+   Existing read-only traversals can usually switch from `Declare_local id` to
+   `Declare_local { id; _ }`. Any equality, hashing, debug-printing, and pretty-printing paths must
+   include or intentionally ignore `needs_init` according to their existing role. Code generation
+   must honor it.
+
+5. Do not add `needs_init` to `Local_scope`.
+
+   A field would need to be maintained across `inline_computation`, `virtual_llc`,
+   `cleanup_virtual_llc`, `simplify_llc`, `eliminate_common_subexpressions`, and
+   `hoist_cross_statement_cse`. Computing from the final body is simpler and less fragile. For the
+   hoisted case, the field belongs on `Declare_local` because the body has already been split out.
 
 ## Acceptance Criteria
 
-- A `needs_init : bool` field is added to the `Local_scope` variant in `scalar_t` (both `low_level.ml` and `low_level.mli`).
-- The field is populated from `traced_array.read_before_write` during `Local_scope` creation in `virtual_llc`. *(Update 2026-06-12: invalid — that flag is always `false` where `Local_scope` is created (see above), so this criterion amounts to unconditionally dropping the initializer. Replace with: `needs_init` is derived from a read-before-first-write scan of the scope body.)*
-- When `needs_init = false`, `c_syntax.ml` emits the declaration without zero-initialization (e.g., `float v42;` instead of `float v42 = (float)0;`).
-- When `needs_init = true`, zero-initialization is preserved (no regression for accumulator patterns).
-- The `TODO(#340)` comment in `c_syntax.ml` line 602 is removed.
-- All existing tests pass (no regression).
-- Conservative default: if the traced_array lookup fails, `needs_init` defaults to `true`.
+- Non-recurrent `Local_scope` declarations in generated C omit the `= 0` initializer.
+- Recurrent `Local_scope` declarations keep the `= 0` initializer.
+- Non-recurrent hoisted `Declare_local` declarations omit the `= 0` initializer.
+- Recurrent hoisted `Declare_local` declarations keep the `= 0` initializer.
+- The `TODO(#340)` in `arrayjit/lib/c_syntax.ml` is removed.
+- `Declare_local` carries and honors its own initialization decision.
+- The helper is covered by focused tests for:
+  - write-before-read: no initializer needed;
+  - read-before-write: initializer needed;
+  - `Set_local (id, Binop (... Get_local id ...))`: initializer needed;
+  - leading `Set_local (id, Constant 0.)` before later reads: no declaration initializer needed;
+  - loop body reads and writes, including an empty-loop case if the current `For_loop` bound
+    convention permits one.
+- Existing tests pass with `OCANNL_BACKEND=sync_cc dune runtest`.
 
-## Context
+## Suggested Regression Test
 
-### Current state: unconditional zero-init
+Add focused tests under `test/` or `arrayjit/test/` that build small low-level computations and
+print the generated C for both inline and hoisted cases:
 
-In `c_syntax.ml` lines 601-606, every `Local_scope` variable gets zero-initialized:
+1. A local whose body starts with `Set_local (id, Constant 0.)`, followed by later reads. The
+   emitted declaration should be `float v;`, not `float v = (float)0;`.
+2. A local whose first assignment reads itself, such as `Set_local (id, Binop (Add, Get_local id,
+   Constant 1.))`. The emitted declaration must keep `= (float)0`.
+3. A duplicated `Local_scope` expression that cross-statement CSE hoists into `Declare_local; body`,
+   with a write-before-read body. The hoisted declaration should omit `= 0`.
+4. The same hoisted shape with a read-before-write body. The hoisted declaration must keep `= 0`.
 
-```ocaml
-let init_zero =
-  (* TODO(#340): only do this in the rare cases where the computation is accumulating *)
-  let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
-  string " = " ^^ string prefix ^^ string "0" ^^ string postfix
-in
-```
+If there is already a generated-code expectation test around local scopes, extend that instead of
+adding a new harness.
 
-This produces C code like `float v42_some_var = (float)0;` even when the variable is immediately assigned before any read.
+## Non-Goals
 
-### Existing detection infrastructure
+- This proposal does not change array-level `Zero_out` elision; that work is tracked separately and
+  was largely handled under #420.
+- This proposal does not alter tensor memory-mode inference.
+- This proposal does not try to prove performance impact. The main payoff is cleaner generated code
+  and preserving defined C semantics only where the initializer is actually needed.
 
-The tracing pass (`visit_llc`, called first in `optimize_proc` at line 1625) already tracks whether each tensor node is read before written:
+## Validation Notes
 
-- **`traced_array.read_before_write`** (line 154): a `mutable bool` field, set to `true` at line 455 when any access position is `Recurrent`.
-- **`visits` type** (line 146): `Visits of int | Recurrent` -- a position is marked `Recurrent` via the `visit` function (line 192) when accessed before being assigned.
-- The `traced_store` hashtable, populated by `visit_llc`, is passed to `virtual_llc` where `Local_scope` is created.
+Current local code supports the body-scan design:
 
-### Local_scope creation site
-
-In `virtual_llc` (line 780), `Local_scope` is created at lines 843-847:
-
-```ocaml
-let id = get_scope tn in
-Option.value ~default:llsc
-@@ Option.map (inline_computation ~id computations_table traced static_indices indices)
-     ~f:(fun body -> Local_scope { id; body; orig_indices = indices })
-```
-
-The `traced` variable (of type `traced_array`) is already in scope here -- obtained at line 841 via `get_node traced_store tn`. Its `read_before_write` field is already populated by the earlier tracing pass.
-
-### Downstream passes
-
-After `virtual_llc`, the IR passes through:
-1. `cleanup_virtual_llc` -- propagates `Local_scope` unchanged (lines 940-949)
-2. `simplify_llc` -- may eliminate `Local_scope` nodes (lines 1053-1062) or propagate via `{ opts with body = ... }`
-3. `eliminate_common_subexpressions` -- may replace duplicate `Local_scope` with `Get_local` (lines 1324-1340)
-4. `hoist_cross_statement_cse` (line 1586) -- *(Update 2026-06-12: new pass)* may split a `Local_scope` into a `Declare_local` statement followed by the body, hoisted to a common ancestor scope. `Declare_local` has its own unconditional zero-init in `c_syntax.ml` (lines 585-591), so `needs_init` must either be threaded into `Declare_local` too, or hoisted declarations conservatively keep zero-init.
-
-All of these use record update (`{ opts with ... }`) or pattern match with wildcards, so adding a new field requires only that propagation code preserves it. The simplification pass that eliminates `Local_scope` entirely (lines 1053-1059) doesn't need the field since the local variable ceases to exist.
-
-### Backend scope
-
-Only `c_syntax.ml` handles `Local_scope` for code generation (lines 597-614 for code gen, line 732 for debug output; plus the `Declare_local` declaration at lines 585-591). The CUDA and Metal backends do not directly pattern-match on `Local_scope`.
-
-### Related issue
-
-gh-ocannl-420 addresses unnecessary `Zero_out` for arrays (a different level of initialization). This issue (#340) addresses unnecessary zero-init for scalar local variables. They are complementary optimizations.
-
-## Approach
-
-### 1. Add `needs_init` field to `Local_scope`
-
-In `low_level.ml` line 54 and `low_level.mli` line 48, extend the record:
-
-```ocaml
-| Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array; needs_init : bool }
-```
-
-### 2. Populate at creation site
-
-In `virtual_llc` at line 847, use `traced.read_before_write`:
-
-```ocaml
-~f:(fun body -> Local_scope { id; body; orig_indices = indices; needs_init = traced.read_before_write })
-```
-
-At lines 848-850 (the existing `Local_scope` propagation case), preserve the field via `{ opts with body = ... }` (already the pattern used).
-
-*(Update 2026-06-12: as noted above, `traced.read_before_write` is always `false` here. Either populate from `Hashtbl.exists traced.accesses ~f:is_recurrent` (un-gated), or — preferred — drop the field and compute `needs_init` syntactically from the body; see Design review.)*
-
-### 3. Update c_syntax.ml
-
-At line 597, add `needs_init` to the pattern match. At lines 601-606, conditionally emit zero-init:
-
-```ocaml
-| Local_scope { id = { tn = { prec = scope_prec; _ }; scope_id } as id; body; orig_indices = _; needs_init } ->
-    let scope_prec = Lazy.force scope_prec in
-    let num_typ = string (B.typ_of_prec scope_prec) in
-    let init_zero =
-      if needs_init then
-        let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
-        string " = " ^^ string prefix ^^ string "0" ^^ string postfix
-      else
-        empty
-    in
-```
-
-Remove the `TODO(#340)` comment.
-
-### 4. Update all pattern matches in low_level.ml
-
-~20 locations in `low_level.ml` pattern-match on `Local_scope`. Most fall into two categories:
-
-- **Wildcard the field** (read-only traversals): lines 73, 203, 223, 244, 399, 568, 1209, 1291-1292. These use `{ id; body; _ }` or similar -- already wildcard `orig_indices`, so no change needed if already using `_`.
-- **Propagate the field** (transformations that rebuild `Local_scope`): lines 729-736, 940-949, 985, 1037-1062, 1324-1331, plus the new `hoist_cross_statement_cse` pass (line 1586). Most use `{ opts with body = ... }` which automatically preserves `needs_init`. The explicit record constructions at lines 729-736 and 1331 need `needs_init` added.
-
-### 5. Handle inline_computation (lines 729-736)
-
-This creates a new `Local_scope` inside `inline_computation` when transforming nested scopes. The `needs_init` from the original should be preserved:
-
-```ocaml
-| Local_scope { id; body; orig_indices; needs_init } ->
-    Local_scope
-      {
-        id;
-        body = Option.value_exn ~here:[%here] @@ loop env body;
-        orig_indices = Array.map ~f:(subst env) orig_indices;
-        needs_init;
-      }
-```
-
-### 6. Handle CSE pass (lines 1324-1331) and cross-statement hoisting
-
-The CSE pass rebuilds `Local_scope` after processing the body. Propagate `needs_init`:
-
-```ocaml
-| Local_scope { id; body; orig_indices; needs_init } ->
-    ...
-    let result = Local_scope { id; body; orig_indices; needs_init } in
-```
-
-*(Update 2026-06-12)*: the new `hoist_cross_statement_cse` pass (`low_level.ml:1586`) splits hoisted `Local_scope` nodes into `Declare_local of scope_id` + body. To get the benefit for hoisted scopes, either extend `Declare_local` to carry `needs_init` (and skip the zero-init at `c_syntax.ml:585-591` when false), or accept conservative zero-init for hoisted declarations in the first iteration.
-
-### 7. Update expected test outputs
-
-If any `.expected` test files show the zero-initialization pattern for non-recurrent `Local_scope` variables, they will need updating to reflect the removed `= (float)0` initializers. Run the test suite and update `.expected` files as needed.
-
-## Design review (2026-06-12)
-
-**Verdict: sound-with-changes.** The emission mechanism (conditional `init_zero`) is right; the proposed data source is wrong, and there is a simpler architecture than field-threading.
-
-**Why the data source is wrong.** `visit_llc` sets `read_before_write` only under `not (Tn.known_virtual tn)` and simultaneously forces `Materialized` (provenance 36) — and `Materialized` makes `Tn.known_non_virtual` true (`tnode.ml:251-252`), which blocks `Local_scope` creation. So at the creation site the flag is *identically false*, and the proposal as written silently degenerates to "never zero-init". That is unsafe in exactly the corner where the initializer is load-bearing: a tensor already `Virtual` (e.g. shared across routines via `optimize_ctx`) with recurrent accesses skips the line-454 branch, gets inlined, and `inline_computation` can then produce a body like `Set_local (id, ... Get_local id ...)` with no prior write — today that reads a defined `0`; without the initializer it is C undefined behavior.
-
-**Recommendations:**
-
-1. **Derive `needs_init` from a syntactic read-before-first-write scan of the scope body** ("does `Get_local id` occur before the first definitely-executed `Set_local id`?"). The statement IR is branch-free and `For_loop` bounds are static ints, so the scan is *precise*: writes under a `For_loop` are guaranteed when `to_ >= from_`; reads count anywhere. Do not use `traced_array` at all.
-2. **Prefer computing the scan at emission time in `c_syntax.ml`** (export a helper `Low_level.reads_scope_before_set : scope_id -> t -> bool`), rather than adding a field. This eliminates steps 1, 2, 4, 5, 6 of the Approach (no threading through ~20 pattern matches), and is correct *by construction* after every downstream body rewrite — notably `simplify_llc:1056`'s substitution, which merges `Set_local (id, 0.); Set_local (id, f id)` and is the main case where the saved initializer is not just a dead store.
-3. **`Declare_local`:** compute the same scan at hoist time over the body being split off (`hoist_shared_locals` has it in hand, `low_level.ml:1558-1570`) and store the bool in `Declare_local`; or, acceptably, keep conservative zero-init for hoisted declarations — hoisted accumulator bodies start with `Set_local (id, 0.)`, so the decl-init is a dead store there anyway.
-4. **Add a regression test for the known-virtual + recurrent corner** (explicitly mark a tn `Virtual`, accumulate with `=+` and no init). If that configuration is considered illegal, make `visit_llc` reject it loudly instead of papering over it with the decl initializer.
-5. **Temper expectations in the goal/criteria:** since `inline_computation:706` rewrites `Zero_out` to `Set_local (id, 0.)`, most surviving `Local_scope` bodies self-initialize, and the dropped `= (float)0` is a dead store any C/CUDA/Metal compiler already eliminates. The real payoff is cleaner generated code; this is a cleanliness item, not a perf item, and the UB-safety analysis is the hard requirement.
-
-**Open decision points for Łukasz:**
-- Emission-time scan in `c_syntax.ml` (no IR change) vs. a `needs_init` field threaded through the passes. The review recommends the former; the field variant is acceptable if populated by the same body scan at creation *and* at `hoist_cross_statement_cse`.
-- Whether `Declare_local` participates in the first iteration or conservatively keeps `= 0`.
-- Whether "known-virtual tensor with recurrent accesses" is a supported configuration; if not, assert in `visit_llc` rather than relying on zero-init semantics.
+- `Local_scope` creation happens after tracing and constructs a body that can already contain
+  `Set_local` and `Get_local`.
+- Simplification can rewrite local-scope bodies, so a codegen-time body scan sees the post-rewrite
+  truth.
+- Cross-statement CSE hoisting extracts `Local_scope` bodies into `Declare_local; body`, which is
+  why `Declare_local` needs its own explicit `needs_init` payload.
+- CUDA and Metal backends do not directly emit `Local_scope`; this proposal is scoped to the shared
+  C syntax path used by the compiled backends.
