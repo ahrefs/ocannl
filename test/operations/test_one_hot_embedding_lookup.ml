@@ -136,4 +136,25 @@ let () =
   let ctx3 = Train.forward_once ctx3 plain in
   ignore (Context.get_values ctx3 plain.Tensor.value : float array);
   let dyn_plain, _, _ = inspect plain x.Tensor.value in
-  p "ordinary matmul is not rewritten to Get_dynamic" (dyn_plain = 0)
+  p "ordinary matmul is not rewritten to Get_dynamic" (dyn_plain = 0);
+
+  (* --- Helper migration: Nn_blocks.one_hot_of_int_list is now logical (no dense host data) but
+     still produces the correct one-hot values, and class_ids_of_int_list keeps compact IDs. --- *)
+  let id_list = [ 1; 3 ] in
+  let oh = Ocannl.Nn_blocks.one_hot_of_int_list ~num_classes:vocab id_list in
+  let ctx4 = Context.cpu () in
+  let ctx4 = Train.forward_once ctx4 oh in
+  let oh_vals = Context.get_values ctx4 oh.Tensor.value in
+  let oh_expected =
+    Array.concat_map (Array.of_list id_list) ~f:(fun idx ->
+        Array.init vocab ~f:(fun k -> if k = idx then 1. else 0.))
+  in
+  p "logical one_hot_of_int_list matches a dense one-hot"
+    (Array.for_all2_exn oh_vals oh_expected ~f:approx);
+  let cids = Ocannl.Nn_blocks.class_ids_of_int_list id_list in
+  let ctx5 = Context.cpu () in
+  let ctx5 = Train.forward_once ctx5 cids in
+  let cid_vals = Context.get_values ctx5 cids.Tensor.value in
+  p "class_ids_of_int_list stores compact ids"
+    (Array.length cid_vals = List.length id_list
+    && Array.for_all2_exn cid_vals (Array.of_list id_list) ~f:(fun v i -> approx v (Float.of_int i)))
