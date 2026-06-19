@@ -29,6 +29,7 @@ let summarize (llc : LL.t) : int * int * int =
     match s with
     | LL.Local_scope { body; _ } -> count_proc (dl, ls + 1, gl) body
     | LL.Get_local _ -> (dl, ls, gl + 1)
+    | LL.Get_dynamic { dyn_value = v, _; _ } -> count_scalar acc v
     | LL.Get _ | LL.Get_merge_buffer _ | LL.Constant _ | LL.Constant_bits _ | LL.Embed_index _ ->
         acc
     | LL.Ternop (_, (a, _), (b, _), (c, _)) -> count_scalar (count_scalar (count_scalar acc a) b) c

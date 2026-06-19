@@ -342,6 +342,24 @@ module C_syntax (B : C_syntax_config) = struct
       done;
       !doc
 
+  (* gh-343: like [pp_array_offset] but at [dyn_axis] splices [dyn_idx_doc] (an integer expression
+     derived from a runtime value) instead of the static [axis_index]. Used for [Get_dynamic]. *)
+  let pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc =
+    let open PPrint in
+    let axis_doc i = if i = dyn_axis then dyn_idx_doc else pp_axis_index idcs.(i) in
+    if Array.is_empty idcs then string "0"
+    else begin
+      let doc = ref (axis_doc 0) in
+      for i = 1 to Array.length idcs - 1 do
+        let idx_doc = axis_doc i in
+        if PPrint.is_empty !doc then doc := idx_doc
+        else if PPrint.is_empty idx_doc then
+          doc := parens !doc ^^ string (" * " ^ Int.to_string dims.(i))
+        else doc := parens !doc ^^ string (" * " ^ Int.to_string dims.(i) ^ " + ") ^^ idx_doc
+      done;
+      !doc
+    end
+
   let doc_to_string doc =
     let buf = Buffer.create 128 in
     PPrint.ToBuffer.compact buf doc;
@@ -696,6 +714,19 @@ module C_syntax (B : C_syntax_config) = struct
         let offset_doc = pp_array_offset (idcs, dims) in
         let expr = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
         ([], expr)
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = iv, iprec } ->
+        (* gh-343: a guarded dynamic gather. The dynamic index is spliced into the row-major offset
+           at [dyn_axis] as an integer; the enclosing [Where] guard guarantees it is in range before
+           this load is evaluated (C ternary short-circuits). *)
+        let ident_doc = string (get_ident tn) in
+        let dims = Lazy.force tn.dims in
+        let from_prec = Lazy.force tn.prec in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let dyn_defs, dyn_expr = pp_scalar iprec iv in
+        let dyn_idx_doc = string "((int)(" ^^ dyn_expr ^^ string "))" in
+        let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
+        let expr = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
+        (dyn_defs, expr)
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
@@ -829,6 +860,20 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ braces (string ("=" ^ B.float_log_style))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = iv, iprec } ->
+        (* gh-343: mirror the [Get] debug rendering, splicing the dynamic index into the offset. *)
+        let ident_doc = string (get_ident tn) in
+        let dims = Lazy.force tn.dims in
+        let from_prec = Lazy.force tn.prec in
+        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
+        let _dyn_defs, dyn_expr = pp_scalar iprec iv in
+        let dyn_idx_doc = string "((int)(" ^^ dyn_expr ^^ string "))" in
+        let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
+        let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
+        let expr_doc =
+          access_doc ^^ braces (string ("=" ^ B.float_log_style))
+        in
+        (expr_doc, [ `Value access_doc ])
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in

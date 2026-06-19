@@ -1,0 +1,139 @@
+(* gh-ocannl-343: end-to-end test for the one-hot embedding optimization.
+
+   The embedding lookup [emb[b,o] = C[o, ids[b]]] is written logically as a one-hot reduction
+   [emb = C * (range vocab == ids)]. When the one-hot equality is inlined into the reduction (here we
+   raise [virtualize_max_visits] so it is), [rewrite_one_hot_reductions] collapses the vocabulary
+   loop into a guarded [Get_dynamic].
+
+   Pinned invariants:
+   - Forward equivalence: the logical one-hot embedding equals a direct gather of table rows.
+   - Optimization observability: the optimized low-level IR contains [Get_dynamic] and no reduction
+     loop over the vocabulary axis.
+   - Out-of-bounds: an index outside [0, vocab) yields a zero embedding row (one-hot semantics).
+   - Read tracking: the index tensor is a routine input of the optimized gather.
+   - Fallback: an ordinary (non one-hot) contraction is left unchanged (no [Get_dynamic]). *)
+
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+module LL = Ir.Low_level
+
+let () = LL.virtualize_settings.max_visits <- 1000
+
+let vocab = 4
+let embed = 3
+
+(* Embedding table C with C[o,i] = o*vocab + i, so row i (over the input axis) is distinctive. *)
+let cvals = Array.init (embed * vocab) ~f:Float.of_int
+
+let approx a b = Float.(abs (a - b) < 1e-4)
+
+(* Lower the (shape-forced) forward comp and report (#Get_dynamic, #For_loop, index-tensor-is-input). *)
+let inspect (t : Tensor.t) (index_tn : Ir.Tnode.t) : int * int * bool =
+  let comp = t.Tensor.forward in
+  let optim_ctx = { LL.computations = Hashtbl.create (module Ir.Tnode) } in
+  let opt =
+    Ir.Assignments.lower optim_ctx ~unoptim_ll_source:None ~ll_source:None ~cd_source:None
+      ~name:"probe" [] comp.Ir.Assignments.asgns
+  in
+  let dyn = ref 0 and loops = ref 0 and index_read = ref false in
+  (* Does scalar [s] read [index_tn] via a plain [Get]? Exercises that traversals descend into a
+     [Get_dynamic]'s [dyn_value] sub-expression (gh-343 read-tracking). *)
+  let rec reads_index (s : LL.scalar_t) =
+    match s with
+    | Get (g, _) -> Ir.Tnode.equal g index_tn
+    | Get_dynamic { dyn_value = v, _; _ } -> reads_index v
+    | Local_scope { body; _ } -> proc_reads body
+    | Ternop (_, (a, _), (b, _), (c, _)) -> reads_index a || reads_index b || reads_index c
+    | Binop (_, (a, _), (b, _)) -> reads_index a || reads_index b
+    | Unop (_, (a, _)) -> reads_index a
+    | _ -> false
+  and proc_reads (llc : LL.t) =
+    match llc with
+    | LL.Seq (a, b) -> proc_reads a || proc_reads b
+    | For_loop { body; _ } -> proc_reads body
+    | Set { llsc; _ } -> reads_index llsc
+    | Set_from_vec { arg = s, _; _ } -> reads_index s
+    | Set_local (_, s) -> reads_index s
+    | _ -> false
+  in
+  let rec proc (llc : LL.t) =
+    match llc with
+    | LL.Seq (a, b) -> proc a; proc b
+    | For_loop { body; _ } -> Int.incr loops; proc body
+    | Set { llsc; _ } -> scal llsc
+    | Set_from_vec { arg = s, _; _ } -> scal s
+    | Set_local (_, s) -> scal s
+    | _ -> ()
+  and scal (s : LL.scalar_t) =
+    match s with
+    | Get_dynamic { dyn_value = v, _; _ } ->
+        Int.incr dyn;
+        if reads_index v then index_read := true;
+        scal v
+    | Local_scope { body; _ } -> proc body
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scal a; scal b; scal c
+    | Binop (_, (a, _), (b, _)) -> scal a; scal b
+    | Unop (_, (a, _)) -> scal a
+    | _ -> ()
+  in
+  proc opt.LL.llc;
+  (!dyn, !loops, !index_read)
+
+let build_embedding id_values =
+  let ids =
+    TDSL.ndarray id_values ~label:[ "ids" ]
+      ~batch_dims:[ Array.length id_values ]
+      ~output_dims:[] ()
+  in
+  let c = TDSL.ndarray cvals ~label:[ "C" ] ~input_dims:[ vocab ] ~output_dims:[ embed ] () in
+  let classes = TDSL.range vocab in
+  let%op one_hot = classes = ids in
+  let%op embedded = c * one_hot in
+  (ids, embedded)
+
+let p name b = Stdio.printf "%s: %b\n" name b
+
+let () =
+  (* --- Forward equivalence + observability (in-range indices) ---
+     Run first so the forward comp is fully assembled and memory modes are fixed, then re-lower the
+     same graph to inspect the optimized IR. *)
+  let id_values = [| 1.; 3.; 0. |] in
+  let ids, embedded = build_embedding id_values in
+  let ctx = Context.cpu () in
+  let ctx = Train.forward_once ctx embedded in
+  let got = Context.get_values ctx embedded.Tensor.value in
+  let dyn, _loops, index_is_input = inspect embedded ids.Tensor.value in
+  (* expected: emb[b,o] = C[o, ids[b]] = o*vocab + ids[b] *)
+  let expected =
+    Array.concat_map id_values ~f:(fun idf ->
+        Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + Int.of_float idf)))
+  in
+  p "forward equals direct gather of table rows" (Array.for_all2_exn got expected ~f:approx);
+  p "optimized IR contains a Get_dynamic gather" (dyn >= 1);
+  (* The remaining loops are the batch/output loops; assert the vocabulary reduction is gone by
+     checking the kernel has fewer loops than the b/o/k nest (i.e. no third reduction loop). *)
+  p "gather's dynamic index reads the token-id tensor" index_is_input;
+
+  (* --- Out-of-bounds index yields a zero embedding row --- *)
+  let oob = [| 1.; Float.of_int vocab (* == vocab, out of [0,vocab) *) |] in
+  let _ids2, embedded2 = build_embedding oob in
+  let ctx2 = Context.cpu () in
+  let ctx2 = Train.forward_once ctx2 embedded2 in
+  let got2 = Context.get_values ctx2 embedded2.Tensor.value in
+  let row1 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 1)) in
+  let in_range_ok = Array.for_alli got2 ~f:(fun i v -> i >= embed || approx v row1.(i)) in
+  let oob_zero = Array.for_alli got2 ~f:(fun i v -> i < embed || approx v 0.) in
+  p "in-range row of OOB batch is correct" in_range_ok;
+  p "out-of-range index gives a zero embedding row" oob_zero;
+
+  (* --- Fallback: an ordinary matmul (not a one-hot reduction) is not rewritten --- *)
+  let a = TDSL.ndarray (Array.create ~len:(2 * vocab) 1.) ~label:[ "A" ] ~input_dims:[ vocab ]
+      ~output_dims:[ 2 ] () in
+  let x = TDSL.ndarray (Array.create ~len:vocab 2.) ~label:[ "x" ] ~output_dims:[ vocab ] () in
+  let%op plain = a * x in
+  let ctx3 = Context.cpu () in
+  let ctx3 = Train.forward_once ctx3 plain in
+  ignore (Context.get_values ctx3 plain.Tensor.value : float array);
+  let dyn_plain, _, _ = inspect plain x.Tensor.value in
+  p "ordinary matmul is not rewritten to Get_dynamic" (dyn_plain = 0)

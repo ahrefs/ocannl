@@ -827,3 +827,14 @@
    (-> test_metal_pool_slot_width.missing.ml)))
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name test_one_hot_embedding_lookup)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_one_hot_embedding_lookup)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

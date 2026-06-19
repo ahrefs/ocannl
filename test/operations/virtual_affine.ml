@@ -74,6 +74,9 @@ and walk_s ~on_set ~on_get (s : LL.scalar_t) =
   | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _ ->
       ()
   | LL.Get (tn, _) -> on_get tn
+  | LL.Get_dynamic { tn; dyn_value = v, _; _ } ->
+      on_get tn;
+      walk_s ~on_set ~on_get v
   | LL.Local_scope { body; _ } -> walk_t ~on_set ~on_get body
   | LL.Ternop (_, (a, _), (b, _), (d, _)) ->
       walk_s ~on_set ~on_get a;
