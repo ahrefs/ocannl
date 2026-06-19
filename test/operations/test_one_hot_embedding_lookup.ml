@@ -127,14 +127,24 @@ let () =
   p "vocabulary reduction loop is eliminated" (loops <= 2);
   p "gather's dynamic index reads the token-id tensor" index_is_input;
   (* Proposal AC: the generated C for the optimized kernel contains a guarded dynamic table read and
-     no reduction loop over the vocabulary axis. The dynamic index renders as an [((int)(...))] cast
-     inside a ternary guard; a vocabulary loop would iterate up to [vocab - 1] ([<= 3] here), which
-     is distinct from the batch/output loop bounds ([<= 2]). *)
+     no reduction loop over the vocabulary axis. The dynamic index renders as a cast to
+     [Ops.index_prec ()] (uint32_t under default settings, uint64_t under large_models) inside a
+     ternary guard; a vocabulary loop would iterate up to [vocab - 1] ([<= 3] here), which is
+     distinct from the batch/output loop bounds ([<= 2]).
+     Note: [iprec] (the precision of the index value expression) comes from the IDs tensor's
+     precision verbatim (default: single/float32, exact for integers up to 2^24). For very large
+     vocabularies, callers should use double-precision IDs so the value survives to the widened
+     cast without prior float-rounding loss. *)
   (match read_generated_c "embedded_fwd" with
   | None -> p "generated C: guarded dynamic table read present (skipped: non-C backend)" true
   | Some c ->
+      (* The cast is to Ops.index_prec () = uint32_t (default) or uint64_t (large_models). *)
+      let has_index_prec_cast =
+        String.is_substring c ~substring:"((uint32_t)("
+        || String.is_substring c ~substring:"((uint64_t)("
+      in
       p "generated C contains a guarded dynamic table read"
-        (String.is_substring c ~substring:"((int)(" && String.is_substring c ~substring:"?");
+        (has_index_prec_cast && String.is_substring c ~substring:"?");
       p "generated C has no vocabulary reduction loop"
         (not (String.is_substring c ~substring:"<= 3")));
 
