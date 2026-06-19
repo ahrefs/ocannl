@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+scalar-local Where form rewrites to Get_dynamic: true
+scalar-local Where form removes the vocab loop: true
+scalar-local multiply form (reversed Cmpeq) rewrites to Get_dynamic: true
+double-use of loop var is not rewritten: true
+partial loop bounds are not rewritten: true
+affine table index is not rewritten: true

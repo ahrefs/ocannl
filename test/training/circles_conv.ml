@@ -67,7 +67,7 @@ let () =
 
   (* Convert to tensors *)
   let images_ndarray = Ir.Ndarray.as_array Ir.Ops.Single images_data in
-  let labels_one_hot = Nn_blocks.one_hot_of_int_list ~num_classes labels_list in
+  let labels_one_hot = Nn_blocks.dense_one_hot_of_int_list ~num_classes labels_list in
 
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let step_n, bindings = IDX.get_static_symbol bindings in

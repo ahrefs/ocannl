@@ -54,22 +54,53 @@ let xavier_at ?scale_sq init_f counter =
 
 open DSL_modules
 
-(** Convert a list of integers to a one-hot encoded tensor.
-    @param num_classes The number of classes (size of the one-hot dimension)
+(** Convert a list of integers to a compact tensor of class IDs (no [num_classes] allocation).
     @param lst List of integer class indices (0-based)
-    @return A tensor of shape [len; num_classes] with one-hot encoding *)
+    @return A tensor of shape [len] (a [len]-sized batch axis) holding the IDs as floats. *)
+let class_ids_of_int_list ?(label = "class_ids") lst =
+  let open Bigarray in
+  let arr = lst |> Array.of_list in
+  let len = Array.length arr in
+  let genarray = Genarray.create Float32 c_layout [| len |] in
+  for i = 0 to len - 1 do
+    Genarray.set genarray [| i |] (Float.of_int arr.(i))
+  done;
+  TDSL.rebatch ~l:label (Ir.Ndarray.as_array Ir.Ops.Single genarray) ()
+
+(** Build a logical one-hot tensor from a tensor of class IDs, using only existing operations
+    ([range] + equality) so the compiler keeps the proof that the result is one-hot (enabling the
+    gh-343 embedding gather optimization). No dense [len * num_classes] data is materialized on the
+    host. With [ids] shaped as a [len] batch (output rank 0), the result is [len; num_classes]:
+    [one_hot[i, k] = (k == ids[i])].
+    @param num_classes The number of classes (size of the one-hot dimension). *)
+let one_hot_of_ids ~num_classes ids =
+  let classes = TDSL.range num_classes in
+  let open TDSL.O in
+  classes = ids
+
+(** Convert a list of integers to a logical one-hot encoded tensor of shape [len; num_classes]. This
+    composes {!class_ids_of_int_list} and {!one_hot_of_ids}: it stores only [len] compact IDs on the
+    host and expresses the one-hot logically, rather than allocating a dense [len * num_classes]
+    Bigarray. See {!dense_one_hot_of_int_list} if a materialized host one-hot is genuinely required.
+    @param num_classes The number of classes (size of the one-hot dimension)
+    @param lst List of integer class indices (0-based) *)
 let one_hot_of_int_list ~num_classes lst =
+  one_hot_of_ids ~num_classes (class_ids_of_int_list lst)
+
+(** Convert a list of integers to a dense, host-materialized one-hot Bigarray-backed tensor of shape
+    [len; num_classes]. Prefer {!one_hot_of_int_list} (logical) unless a dense host fixture is needed;
+    a materialized Bigarray carries no proof that it is one-hot, so it cannot be optimized into an
+    embedding gather. *)
+let dense_one_hot_of_int_list ~num_classes lst =
   let open Bigarray in
   let len = List.length lst in
   let arr = lst |> Array.of_list in
   let genarray = Genarray.create Float32 c_layout [| len; num_classes |] in
-  (* Initialize to zero *)
   for i = 0 to len - 1 do
     for j = 0 to num_classes - 1 do
       Genarray.set genarray [| i; j |] 0.
     done
   done;
-  (* Set one-hot positions *)
   for i = 0 to len - 1 do
     Genarray.set genarray [| i; arr.(i) |] 1.
   done;

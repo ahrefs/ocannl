@@ -70,6 +70,9 @@ let setter_reads_self (llc : LL.t) tn =
   let rec scal (s : LL.scalar_t) =
     match s with
     | LL.Get (g, _) -> if g.Tn.id = tn.Tn.id then found := true
+    | LL.Get_dynamic { tn = g; dyn_value = v, _; _ } ->
+        if g.Tn.id = tn.Tn.id then found := true;
+        scal v
     | LL.Local_scope { body; _ } -> t body
     | LL.Ternop (_, (a, _), (b, _), (c, _)) -> scal a; scal b; scal c
     | LL.Binop (_, (a, _), (b, _)) -> scal a; scal b

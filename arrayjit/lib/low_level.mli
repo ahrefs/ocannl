@@ -48,6 +48,14 @@ and scalar_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Get of Tnode.t * Indexing.axis_index array
+  | Get_dynamic of {
+      tn : Tnode.t;  (** The gathered table; treated as a read of [tn], like [Get]. *)
+      idcs : Indexing.axis_index array;  (** Static everywhere except [dyn_axis]. *)
+      dyn_axis : int;  (** Which [idcs] slot is replaced by [dyn_value] at codegen time. *)
+      dyn_value : scalar_arg;
+          (** Integer-valued index spliced into the row-major offset at [dyn_axis]. gh-343: produced
+              only by {!rewrite_one_hot_reductions}; never escapes low-level / backend codegen. *)
+    }
   | Get_merge_buffer of Tnode.t * Indexing.axis_index array
   | Ternop of Ops.ternop * scalar_arg * scalar_arg * scalar_arg
   | Binop of Ops.binop * scalar_arg * scalar_arg
@@ -156,6 +164,14 @@ val reads_scope_before_set : scope_id -> t -> bool
 (** [reads_scope_before_set id body] returns [true] if [id] is read (via [Get_local]) before the
     first definitely-executed [Set_local id] in [body]. Use this at code-generation time to decide
     whether a [Local_scope] or [Declare_local] declaration needs a zero initializer. *)
+
+val rewrite_one_hot_reductions : t -> t
+(** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable
+    [k] whose body selects an embedding-table row via [k == index_expr] (a logical one-hot) -- into a
+    guarded dynamic gather ({!Get_dynamic}) that reads the table row at [index_expr] directly, with
+    an in-range guard returning 0 out of [\[0, vocab_size)] to preserve the one-hot semantics.
+    Unmatched or unsupported reductions are left unchanged. Called internally by [optimize] between
+    [simplify_llc] and [eliminate_common_subexpressions]; exposed for testing. *)
 
 val eliminate_common_subexpressions : t -> t
 (** Eliminates common subexpressions within each statement's scalar expression tree. Replaces

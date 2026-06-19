@@ -87,14 +87,13 @@ let names_to_examples names =
       targets.(i) <- tgt);
   (contexts, targets, n)
 
-(** Fill a per-batch flat one-hot buffer for contexts (shape
-    [batch_size * block_size * vocab_size]). *)
-let fill_ctx_one_hot buf contexts ~offset =
-  Array.fill buf ~pos:0 ~len:(Array.length buf) 0.;
+(** Fill a per-batch flat buffer of context token IDs (shape [batch_size * block_size]). gh-343: the
+    embedding is now a logical one-hot of these IDs, so the input is compact token IDs rather than a
+    dense [batch_size * block_size * vocab_size] one-hot. *)
+let fill_ctx_ids buf contexts ~offset =
   for i = 0 to batch_size - 1 do
     for t = 0 to block_size - 1 do
-      let base = ((i * block_size) + t) * vocab_size in
-      buf.(base + contexts.(((offset + i) * block_size) + t)) <- 1.
+      buf.((i * block_size) + t) <- Float.of_int contexts.(((offset + i) * block_size) + t)
     done
   done
 
@@ -125,11 +124,12 @@ let () =
   (* === Data tensors === *)
   let make_ctx_tensor label =
     let open Bigarray in
-    let ga = Genarray.create Float32 c_layout [| batch_size; block_size; vocab_size |] in
+    (* gh-343: token IDs, one per context position (no dense vocab_size axis). *)
+    let ga = Genarray.create Float32 c_layout [| batch_size; block_size |] in
     Bigarray.Genarray.fill ga 0.;
     let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
     Tensor.term ~init_data:(Reshape nd) ~grad_spec:If_needed ~label:[ label ]
-      ~batch_dims:[ batch_size; block_size ] ~input_dims:[] ~output_dims:[ vocab_size ] ()
+      ~batch_dims:[ batch_size; block_size ] ~input_dims:[] ~output_dims:[] ()
   in
   let make_tgt_tensor label =
     let open Bigarray in
@@ -148,7 +148,12 @@ let () =
      [hid_dim] via a block-weighted linear layer. This mirrors Bengio's "concatenate context
      embeddings and linear" — here expressed as an explicit einsum contraction with [w1] shaped
      [block_size, embed_dim -> hid_dim]. logits: final linear projection to [vocab_size]. *)
-  let%op embed input = { c; o = [ embed_dim ] } * input in
+  (* gh-343: [input] carries token IDs (one per context position); the logical one-hot
+     [range vocab_size == input] feeds the embedding-table contraction, which the low-level optimizer
+     collapses into a direct gather instead of materializing a dense [vocab_size] one-hot. *)
+  let%op embed input =
+    { c; o = [ embed_dim ] } * Nn_blocks.one_hot_of_ids ~num_classes:vocab_size input
+  in
   let%op hidden x =
     tanh (embed x +* { w1 } "bs|->e; |se->h => b|->h" [ "s"; "e" ] + { b1; o = [ hid_dim ] })
   in
@@ -189,7 +194,7 @@ let () =
   let step_ref = IDX.find_exn (Context.bindings sgd_step) step_n in
   Train.set_materialized batch_loss.value;
 
-  let ctx_buf = Array.create ~len:(batch_size * block_size * vocab_size) 0. in
+  let ctx_buf = Array.create ~len:(batch_size * block_size) 0. in
   let tgt_buf = Array.create ~len:(batch_size * vocab_size) 0. in
 
   (* === Training === *)
@@ -201,7 +206,7 @@ let () =
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       let offset = batch * batch_size in
-      fill_ctx_one_hot ctx_buf train_ctx ~offset;
+      fill_ctx_ids ctx_buf train_ctx ~offset;
       fill_tgt_one_hot tgt_buf train_tgt ~offset;
       ignore (Context.set_values ctx input_batch.value ctx_buf : Context.t);
       ignore (Context.set_values ctx target_batch.value tgt_buf : Context.t);
@@ -221,11 +226,12 @@ let () =
      %cd. *)
   let eval_input =
     let open Bigarray in
-    let ga = Genarray.create Float32 c_layout [| batch_size; block_size; vocab_size |] in
+    (* gh-343: context token IDs (see [make_ctx_tensor]). *)
+    let ga = Genarray.create Float32 c_layout [| batch_size; block_size |] in
     Bigarray.Genarray.fill ga 0.;
     let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
     Tensor.term ~init_data:(Reshape nd) ~grad_spec:Prohibit_grad ~label:[ "eval_input" ]
-      ~batch_dims:[ batch_size; block_size ] ~input_dims:[] ~output_dims:[ vocab_size ] ()
+      ~batch_dims:[ batch_size; block_size ] ~input_dims:[] ~output_dims:[] ()
   in
   let eval_target =
     let open Bigarray in
@@ -258,7 +264,7 @@ let () =
       let acc = ref 0. in
       for batch = 0 to nb - 1 do
         let offset = batch * batch_size in
-        fill_ctx_one_hot ctx_buf ctx_arr ~offset;
+        fill_ctx_ids ctx_buf ctx_arr ~offset;
         fill_tgt_one_hot tgt_buf tgt_arr ~offset;
         ignore (Context.set_values ctx eval_input.value ctx_buf : Context.t);
         ignore (Context.set_values ctx eval_target.value tgt_buf : Context.t);
@@ -283,11 +289,12 @@ let () =
   (* === Generation === Autoregressive sampling from a rolling [block_size] context. *)
   let infer_input =
     let open Bigarray in
-    let ga = Genarray.create Float32 c_layout [| 1; block_size; vocab_size |] in
+    (* gh-343: context token IDs (see [make_ctx_tensor]). *)
+    let ga = Genarray.create Float32 c_layout [| 1; block_size |] in
     Bigarray.Genarray.fill ga 0.;
     let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
     Tensor.term ~init_data:(Reshape nd) ~grad_spec:Prohibit_grad ~label:[ "infer_input" ]
-      ~batch_dims:[ 1; block_size ] ~input_dims:[] ~output_dims:[ vocab_size ] ()
+      ~batch_dims:[ 1; block_size ] ~input_dims:[] ~output_dims:[] ()
   in
   let counter_n, infer_bindings = IDX.get_static_symbol IDX.empty in
   let%cd infer_logits = logits infer_input in
@@ -303,10 +310,11 @@ let () =
   counter_ref := 0;
 
   let dot_idx = Dataprep.Names.char_index '.' in
-  let set_ctx_one_hot context =
-    let buf = Array.create ~len:(block_size * vocab_size) 0. in
+  let set_ctx_ids context =
+    (* gh-343: feed context token IDs, one per position. *)
+    let buf = Array.create ~len:block_size 0. in
     for t = 0 to block_size - 1 do
-      buf.((t * vocab_size) + context.(t)) <- 1.
+      buf.(t) <- Float.of_int context.(t)
     done;
     ignore (Context.set_values ctx infer_input.value buf : Context.t)
   in
@@ -318,7 +326,7 @@ let () =
     let rec aux steps =
       if steps >= max_len then Buffer.contents buf
       else begin
-        set_ctx_one_hot context;
+        set_ctx_ids context;
         Int.incr counter_ref;
         Train.run ctx infer_step;
         let dice_value = (ctx, dice).@[0] in

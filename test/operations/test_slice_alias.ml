@@ -60,6 +60,7 @@ let count_writes_to (llc : Ir.Low_level.t) (id : int) : int =
     | Set_local (_, s) -> go_scalar s
   and go_scalar : scalar_t -> unit = function
     | Local_scope { body; _ } -> go_t body
+    | Get_dynamic { dyn_value = v, _; _ } -> go_scalar v
     | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
     | Ternop (_, (a, _), (b, _), (c, _)) ->
         go_scalar a;

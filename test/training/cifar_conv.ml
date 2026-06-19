@@ -95,7 +95,7 @@ let () =
 
   (* Wrap training data as OCANNL tensors *)
   let images_ndarray = Ir.Ndarray.as_array Ir.Ops.Single train_images_f32 in
-  let labels_one_hot = Nn_blocks.one_hot_of_int_list ~num_classes train_labels_list in
+  let labels_one_hot = Nn_blocks.dense_one_hot_of_int_list ~num_classes train_labels_list in
 
   (* --- Training Model Setup --- *)
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
@@ -152,7 +152,7 @@ let () =
   printf "\nEvaluating on %d test samples...\n%!" num_test;
 
   let test_images_ndarray = Ir.Ndarray.as_array Ir.Ops.Single test_images_f32 in
-  let test_labels_one_hot = Nn_blocks.one_hot_of_int_list ~num_classes test_labels_list in
+  let test_labels_one_hot = Nn_blocks.dense_one_hot_of_int_list ~num_classes test_labels_list in
   let test_images_t = TDSL.rebatch ~l:"images" test_images_ndarray () in
 
   let eval_batch_n, eval_bindings = IDX.get_static_symbol ~static_range:n_test_batches IDX.empty in

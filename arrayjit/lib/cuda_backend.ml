@@ -779,6 +779,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       | Recip_sqrt, Single_prec _ -> f "(1.0f / sqrtf(" "))"
       | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
       | Neg, _ -> f "(-(" "))"
+      | Trunc, Double_prec _ -> func "trunc"
+      | Trunc, _ -> func "truncf"
       | Tanh_approx, Byte_prec _ ->
           invalid_arg
             "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"

@@ -633,6 +633,7 @@ module Fresh () = struct
           let s = metal_prec_suffix_float p in
           fun v -> infix_binop "/" (string @@ "1.0" ^ s) v
       | Recip_sqrt, _ -> func_doc "rsqrt"
+      | Trunc, _ -> func_doc "trunc"
       | Tanh_approx, _ -> func_doc "tanh"
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform1, _ ->

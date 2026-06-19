@@ -54,6 +54,15 @@ and scalar_t =
   | Local_scope of { id : scope_id; body : t; orig_indices : Indexing.axis_index array }
   | Get_local of scope_id
   | Get of Tn.t * Indexing.axis_index array
+  | Get_dynamic of {
+      tn : Tn.t;  (** The gathered table; treated as a read of [tn], like [Get]. *)
+      idcs : Indexing.axis_index array;  (** Static everywhere except [dyn_axis]. *)
+      dyn_axis : int;  (** Which [idcs] slot is replaced by [dyn_value] at codegen time. *)
+      dyn_value : scalar_arg;
+          (** Integer-valued index spliced into the row-major offset at [dyn_axis]. A nested scalar:
+              all recursive scalar traversals must descend into it. gh-343: produced only by
+              [rewrite_one_hot_reductions], never escapes [Low_level] / backend codegen. *)
+    }
   | Get_merge_buffer of Tn.t * Indexing.axis_index array
   | Ternop of Ops.ternop * scalar_arg * scalar_arg * scalar_arg
   | Binop of Ops.binop * scalar_arg * scalar_arg
@@ -68,6 +77,7 @@ and scalar_arg = scalar_t * Ops.prec [@@deriving sexp_of, equal, compare]
 (** Extract the precision from a scalar value by examining its origin tensor node *)
 let scalar_precision = function
   | Get (tn, _) -> Lazy.force tn.Tn.prec
+  | Get_dynamic { tn; _ } -> Lazy.force tn.Tn.prec
   | Get_merge_buffer (tn, _) -> Lazy.force tn.Tn.prec
   | Get_local { tn; _ } -> Lazy.force tn.Tn.prec
   | Local_scope { id; _ } -> Lazy.force id.tn.Tn.prec
@@ -206,6 +216,7 @@ let is_constexpr_comp traced_store llsc =
     | Get (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
+    | Get_dynamic _ -> false (* a runtime gather is never a scalar constexpr *)
     | Get_merge_buffer (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_scalar_constexpr
@@ -226,6 +237,7 @@ let is_accessing_comp traced_store llsc =
     | Get (tn, _) ->
         let traced = get_node traced_store tn in
         not traced.is_scalar_constexpr
+    | Get_dynamic _ -> true (* accesses the table at a runtime index *)
     | Get_merge_buffer (tn, _) ->
         let traced = get_node traced_store tn in
         traced.is_accessing <- true;
@@ -245,6 +257,7 @@ let is_complex_comp traced_store llsc =
       let traced = get_node traced_store tn in
       traced.is_complex
   | Get _ -> false
+  | Get_dynamic { dyn_value = v, _; _ } -> accessing v
   | Get_merge_buffer _ -> false
   | Ternop (_, (v1, _), (v2, _), (v3, _)) -> accessing v1 || accessing v2 || accessing v3
   | Binop (_, (v1, _), (v2, _)) -> accessing v1 || accessing v2
@@ -384,6 +397,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
         then
           Hashtbl.update traced.accesses at_pos
             ~f:(visit ~is_assigned:(traced.zeroed_out || Hash_set.mem traced.assignments at_pos))
+    | Get_dynamic { dyn_value = v, _; _ } ->
+        (* gh-343: [Get_dynamic] is produced after this tracing pass, so this arm is defensive; the
+           dynamic index sub-expression is still traversed for completeness. *)
+        loop v
     | Local_scope { body; _ } -> loop_proc ~first_visit:true env body
     | Get_local _ -> ()
     | Get_merge_buffer (source, _) ->
@@ -562,6 +579,9 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     | Get (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs loop_ranges idcs
         else check_sibling_escaping ~env_dom ~code:9 idcs
+    | Get_dynamic { dyn_value = v, _; _ } ->
+        (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
+        loop_scalar ~env_dom ~loop_ranges v
     | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
     | Get_local _ -> ()
     | Get_merge_buffer (tn, idcs) ->
@@ -933,6 +953,10 @@ let%track7_sexp inline_computation ~id
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
       | Get (tn, indices) -> Get (tn, Array.map ~f:(subst env) indices)
+      | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+          (* gh-343: defensive -- [Get_dynamic] is produced after virtualization. *)
+          Get_dynamic
+            { tn; idcs = Array.map ~f:(subst env) idcs; dyn_axis; dyn_value = (loop_scalar env v, prec) }
       | Local_scope { id; body; orig_indices } ->
           Local_scope
             {
@@ -1107,6 +1131,8 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
           Option.value ~default:llsc
           @@ Option.map (inline_computation ~id computations_table traced static_indices indices)
                ~f:(fun body -> Local_scope { id; body; orig_indices = indices })
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope opts ->
         Local_scope
           {
@@ -1196,6 +1222,10 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llsc
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+        (* gh-343: defensive -- the table is a materialized read; recurse into the dynamic index. *)
+        Tn.update_memory_mode tn Never_virtual 17;
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope { id; body; orig_indices } ->
         assert (
           Array.for_all orig_indices ~f:(function
@@ -1241,6 +1271,8 @@ let rec substitute_float ~var ~value llsc =
     | Constant _ -> llsc
     | Constant_bits _ -> llsc
     | Get (_ptr, _indices) -> llsc
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop_scalar v, prec) }
     | Local_scope opts -> Local_scope { opts with body = loop_proc opts.body }
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
@@ -1309,6 +1341,11 @@ let simplify_llc llc =
     | Constant _ -> (llsc, prec)
     | Constant_bits _ -> (llsc, prec)
     | Get (tn, _indices) -> (llsc, Lazy.force tn.Tn.prec)
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
+        (* gh-343: defensive -- simplify runs before the one-hot rewrite, so this is unreachable in
+           practice; still simplify the dynamic index sub-expression and never fold to a constant. *)
+        let v', vprec' = loop_scalar (v, vprec) in
+        (Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v', vprec') }, Lazy.force tn.Tn.prec)
     | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 ->
         ignore (Lazy.force id.tn.Tn.dims);
         loop_scalar (v, Lazy.force id.tn.Tn.prec)
@@ -1481,6 +1518,7 @@ let simplify_llc llc =
         loop v2
     | Unop (_, (v, _)) -> loop v
     | Embed_index (Indexing.Fixed_idx i) -> check_constant tn (Float.of_int i)
+    | Get_dynamic { dyn_value = v, _; _ } -> loop v
     | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> ()
   in
   let result = loop_proc llc in
@@ -1560,6 +1598,9 @@ let cse_equal_scalar s1 s2 =
         ids_equal id1 id2 && Array.equal idx_equal oi1 oi2 && equal_t b1 b2
     | Get_local id1, Get_local id2 -> ids_equal id1 id2
     | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
+    | ( Get_dynamic { tn = tn1; idcs = i1; dyn_axis = da1; dyn_value = v1 },
+        Get_dynamic { tn = tn2; idcs = i2; dyn_axis = da2; dyn_value = v2 } ) ->
+        Tn.equal tn1 tn2 && Int.equal da1 da2 && Array.equal idx_equal i1 i2 && equal_arg v1 v2
     | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
         Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
     | Ternop (op1, a1, a2, a3), Ternop (op2, b1, b2, b3) ->
@@ -1604,6 +1645,8 @@ let eliminate_common_subexpressions llc =
           | None ->
               seen := (result, id) :: !seen;
               result)
+      | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+          Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop_scalar v, prec) }
       | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
           llsc
       | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
@@ -1657,6 +1700,7 @@ let collect_local_scopes_in_scalar (llsc : scalar_t) : (scalar_t * scope_id) lis
   let rec loop (llsc : scalar_t) =
     match llsc with
     | Local_scope { id; _ } -> acc := (llsc, id) :: !acc
+    | Get_dynamic { dyn_value = v, _; _ } -> loop v
     | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
     | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
         loop s1;
@@ -1690,6 +1734,8 @@ let replace_local_scope_in_scalar ~target ~(replacement : scope_id) ~(stale_ids 
         if List.exists stale_ids ~f:(fun stale -> equal_scope_id id stale) then
           Get_local replacement
         else llsc
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> llsc
     | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
         Ternop (op, (loop s1, p1), (loop s2, p2), (loop s3, p3))
@@ -1725,6 +1771,11 @@ let reads_of_body (body : t) : Set.M(Tn).t =
   and loop_scalar (llsc : scalar_t) =
     match llsc with
     | Get (tn, _) -> acc := Set.add !acc tn
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        (* gh-343: the table is read at [tn]; the dynamic index reads its own tensor inside
+           [dyn_value], so recurse to count it too. *)
+        acc := Set.add !acc tn;
+        loop_scalar v
     | Get_merge_buffer (tn, _) -> acc := Set.add !acc tn
     | Local_scope { body; _ } -> loop_proc body
     | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
@@ -1779,6 +1830,7 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
         scalar_has_read s1 || scalar_has_read s2 || scalar_has_read s3
     | Binop (_, (s1, _), (s2, _)) -> scalar_has_read s1 || scalar_has_read s2
     | Unop (_, (s, _)) -> scalar_has_read s
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_has_read v
     | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
   and proc_has_read (llc : t) : bool =
     match llc with
@@ -1929,6 +1981,235 @@ let input_and_output_nodes optimized =
         (inputs, outputs)),
     optimized.merge_node )
 
+(* gh-343: helpers for the one-hot reduction rewrite. *)
+
+let axis_index_mentions_symbol (s : Indexing.symbol) (idx : Indexing.axis_index) : bool =
+  match idx with
+  | Indexing.Iterator s' -> Indexing.equal_symbol s s'
+  | Indexing.Affine { symbols; _ } ->
+      List.exists symbols ~f:(fun (_, s') -> Indexing.equal_symbol s s')
+  | Indexing.Concat syms -> List.exists syms ~f:(Indexing.equal_symbol s)
+  | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+
+let rec scalar_mentions_symbol (s : Indexing.symbol) (llsc : scalar_t) : bool =
+  match llsc with
+  | Embed_index idx -> axis_index_mentions_symbol s idx
+  | Get (_, idcs) | Get_merge_buffer (_, idcs) ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s)
+  | Get_dynamic { idcs; dyn_value = v, _; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
+  | Local_scope { orig_indices; body; _ } ->
+      Array.exists orig_indices ~f:(axis_index_mentions_symbol s) || proc_mentions_symbol s body
+  | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
+      scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2 || scalar_mentions_symbol s v3
+  | Binop (_, (v1, _), (v2, _)) -> scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2
+  | Unop (_, (v, _)) -> scalar_mentions_symbol s v
+  | Get_local _ | Constant _ | Constant_bits _ -> false
+
+and proc_mentions_symbol (s : Indexing.symbol) (llc : t) : bool =
+  match llc with
+  | Set { idcs; llsc; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s llsc
+  | Set_from_vec { idcs; arg = v, _; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
+  | Set_local (_, llsc) -> scalar_mentions_symbol s llsc
+  | Seq (a, b) -> proc_mentions_symbol s a || proc_mentions_symbol s b
+  | For_loop { body; _ } -> proc_mentions_symbol s body
+  | Zero_out _ | Declare_local _ | Noop | Comment _ | Staged_compilation _ -> false
+
+(* Count occurrences of [Iterator s] in [idcs], and report whether every occurrence is a plain
+   [Iterator s] (no [Affine]/[Concat] use). Returns [(count, axis_of_last_plain_occurrence)]. *)
+let count_plain_iterator (s : Indexing.symbol) (idcs : Indexing.axis_index array) :
+    int * int option * bool =
+  let count = ref 0 and axis = ref None and only_plain = ref true in
+  Array.iteri idcs ~f:(fun i idx ->
+      if axis_index_mentions_symbol s idx then (
+        Int.incr count;
+        match idx with
+        | Indexing.Iterator _ -> axis := Some i
+        | _ -> only_plain := false));
+  (!count, !axis, !only_plain)
+
+(* gh-343: recognize the in-range guard's reduction body. Matches the two semantically-equivalent
+   one-hot selectors over loop variable [k]:
+   - [Where (Cmpeq (Embed_index (Iterator k), index_expr), table_get, Constant 0.)] (either operand
+     order of [Cmpeq]);
+   - the multiply form [Binop (Mul, <cmpeq 0/1>, table_get)] (either factor order).
+   On success returns [Some (table, table_idcs, index_expr)] where [index_expr] is the scalar value
+   used as the dynamic index. *)
+let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
+    (Tn.t * Indexing.axis_index array * scalar_arg) option =
+  (* The range index appears either as a plain [Iterator k] or, after shape inference / reflection,
+     as the unit affine [1*k + 0]. Accept both. *)
+  let is_iter_k = function
+    | Embed_index (Indexing.Iterator k') -> Indexing.equal_symbol k k'
+    | Embed_index (Indexing.Affine { symbols = [ (1, k') ]; offset = 0 }) ->
+        Indexing.equal_symbol k k'
+    | _ -> false
+  in
+  (* Match a Cmpeq comparing [Embed_index (Iterator k)] against an index expression free of [k].
+     Returns the index expression (with its precision). *)
+  let match_cmpeq = function
+    | Binop (Ops.Cmpeq, (a, pa), (b, pb)) ->
+        if is_iter_k a && not (scalar_mentions_symbol k b) then Some (b, pb)
+        else if is_iter_k b && not (scalar_mentions_symbol k a) then Some (a, pa)
+        else None
+    | _ -> None
+  in
+  let as_table_get = function
+    | Get (table, table_idcs) -> Some (table, table_idcs)
+    | _ -> None
+  in
+  match contribution with
+  | Ternop (Ops.Where, cond, (then_, _), (Constant 0., _)) -> (
+      match (match_cmpeq (fst cond), as_table_get then_) with
+      | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+      | _ -> None)
+  | Binop (Ops.Mul, (a, _), (b, _)) -> (
+      (* one factor is the comparison, the other is the table read *)
+      match (match_cmpeq a, as_table_get b) with
+      | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+      | _ -> (
+          match (match_cmpeq b, as_table_get a) with
+          | Some index_expr, Some (table, table_idcs) -> Some (table, table_idcs, index_expr)
+          | _ -> None))
+  | _ -> None
+
+(* gh-343: build the guarded dynamic gather replacing a matched one-hot reduction. [class_count] is
+   the size of the table axis being gathered; [value_prec] is the table (result) precision. *)
+let build_guarded_gather ~table ~table_idcs ~dyn_axis ~(index_expr : scalar_arg) ~class_count
+    ~value_prec : scalar_t =
+  let iv, _iprec = index_expr in
+  (* The bounds comparison must NOT be evaluated in the unsigned index precision: [-1] would wrap to
+     UINT_MAX and the guard would always be false (gh: unsigned-index-precision). We do the whole
+     guard in a signed precision ([double], exact for the integer-valued indices in scope). [0 <= idx]
+     is encoded as [-1 < idx] (there is no [Cmple]); the upper bound is [idx < class_count]. *)
+  let guard_prec = Ops.double in
+  let lower = Binop (Ops.Cmplt, (Constant (-1.), guard_prec), (iv, guard_prec)) in
+  let upper = Binop (Ops.Cmplt, (iv, guard_prec), (Constant (Float.of_int class_count), guard_prec)) in
+  (* The backend casts [iv] to int when gathering. To preserve one-hot semantics for non-integer
+     indices (e.g. 1.5, where every [k == idx] is false so the reduction is 0), the gather must only
+     fire when [idx] is exactly integral: [idx == trunc(idx)]. Otherwise return 0. *)
+  let is_integral =
+    Binop (Ops.Cmpeq, (iv, guard_prec), (Unop (Ops.Trunc, (iv, guard_prec)), guard_prec))
+  in
+  let bounds = Binop (Ops.And, (lower, guard_prec), (upper, guard_prec)) in
+  let in_range = Binop (Ops.And, (bounds, guard_prec), (is_integral, guard_prec)) in
+  let index_prec = guard_prec in
+  let gather = Get_dynamic { tn = table; idcs = table_idcs; dyn_axis; dyn_value = index_expr } in
+  Ternop (Ops.Where, (in_range, index_prec), (gather, value_prec), (Constant 0., value_prec))
+
+(* gh-343: peel a possible zero-initializer off a reduction body, returning the inner [For_loop]. *)
+let strip_zero_init_for_local (id : scope_id) (body : t) : t option =
+  match body with
+  | Seq (Set_local (id', Constant 0.), (For_loop _ as fl)) when equal_scope_id id id' -> Some fl
+  | For_loop _ -> Some body
+  | _ -> None
+
+(* gh-343: extract the per-iteration one-hot contribution from an accumulation [acc] in which the
+   running total is recognized by [acc_is]. Handles the [Binop (Add, total, contribution)] form
+   (either operand order) and the fused [Ternop (FMA, a, b, total)] form, where FMA(a,b,total) =
+   a*b + total so the contribution is the product [a*b]. *)
+let accumulation_contribution ~(acc_is : scalar_t -> bool) (acc : scalar_t) : scalar_t option =
+  match acc with
+  | Binop (Ops.Add, (total, _), (contribution, _)) when acc_is total -> Some contribution
+  | Binop (Ops.Add, (contribution, _), (total, _)) when acc_is total -> Some contribution
+  | Ternop (Ops.FMA, (a, pa), (b, pb), (total, _)) when acc_is total ->
+      Some (Binop (Ops.Mul, (a, pa), (b, pb)))
+  | _ -> None
+
+(* gh-343: shared core -- given a reduction over [k] with bounds [\[from_, to_\]] and a per-iteration
+   [contribution], check the narrow one-hot side conditions and build the guarded gather. *)
+let gather_of_reduction ~(k : Indexing.symbol) ~from_ ~to_ (contribution : scalar_t) :
+    scalar_t option =
+  Option.bind (match_one_hot_contribution k contribution)
+    ~f:(fun (table, table_idcs, index_expr) ->
+      let count, axis, only_plain = count_plain_iterator k table_idcs in
+      match if count = 1 && only_plain then axis else None with
+      | None -> None
+      | Some dyn_axis ->
+          let class_count = from_ + (Lazy.force table.Tn.dims).(dyn_axis) in
+          (* the loop must span exactly [0, class_count) over the gathered axis, and the index
+             expression must be free of the reduction variable *)
+          if (not (from_ = 0)) || to_ <> class_count - 1 then None
+          else if scalar_mentions_symbol k (fst index_expr) then None
+          else
+            let value_prec = Lazy.force table.Tn.prec in
+            (* Neutralize the now-dead loop symbol at the dynamic axis. *)
+            let table_idcs = Array.copy table_idcs in
+            table_idcs.(dyn_axis) <- Indexing.Fixed_idx 0;
+            Some (build_guarded_gather ~table ~table_idcs ~dyn_axis ~index_expr ~class_count ~value_prec))
+
+(* gh-343: scalar-local form -- Local_scope { id; body = [init;] For k { Set_local (id, acc) } }. *)
+let try_rewrite_local_scope (id : scope_id) (body : t) : scalar_t option =
+  match strip_zero_init_for_local id body with
+  | Some (For_loop { index = k; from_; to_; body = Set_local (id', acc); _ })
+    when equal_scope_id id id' ->
+      let acc_is = function Get_local id' -> equal_scope_id id id' | _ -> false in
+      Option.bind (accumulation_contribution ~acc_is acc)
+        ~f:(fun contribution -> gather_of_reduction ~k ~from_ ~to_ contribution)
+  | _ -> None
+
+(* gh-343: materialized form -- a reduction loop [For k { Set lhs idcs acc }] at any nesting depth,
+   where [acc] accumulates the one-hot contribution into [lhs\[idcs\]] (and [k] does not index
+   [lhs]). The loop is replaced with a single read-accumulate of the guarded gather, dropping the
+   vocabulary loop. Reading-and-adding [lhs\[idcs\]] keeps the rewrite sound regardless of any
+   preceding zero-init: sum_k contribution == gather, so [lhs += gather] equals the original
+   [lhs + sum_k contribution]. *)
+let try_rewrite_materialized_loop (llc : t) : t option =
+  match llc with
+  | For_loop { index = k; from_; to_; body = Set { tn; idcs; llsc; _ }; _ }
+    when not (Array.exists idcs ~f:(axis_index_mentions_symbol k)) ->
+      let acc_is = function
+        | Get (g, gi) -> Tn.equal g tn && [%equal: Indexing.axis_index array] gi idcs
+        | _ -> false
+      in
+      Option.bind (accumulation_contribution ~acc_is llsc) ~f:(fun contribution ->
+          Option.map (gather_of_reduction ~k ~from_ ~to_ contribution) ~f:(fun gather ->
+              let value_prec = scalar_precision gather in
+              Set
+                {
+                  tn;
+                  idcs;
+                  llsc = Binop (Ops.Add, (Get (tn, idcs), value_prec), (gather, value_prec));
+                  debug = "";
+                }))
+  | _ -> None
+
+let rewrite_one_hot_reductions (llc : t) : t =
+  let rec loop_proc (llc : t) : t =
+    match try_rewrite_materialized_loop llc with
+    | Some replacement -> replacement
+    | None -> (
+        match llc with
+        | Seq (a, b) -> Seq (loop_proc a, loop_proc b)
+        | For_loop fc -> For_loop { fc with body = loop_proc fc.body }
+        | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_scalar llsc; debug }
+        | Set_from_vec { tn; idcs; length; vec_unop; arg = s, p; debug } ->
+            Set_from_vec { tn; idcs; length; vec_unop; arg = (loop_scalar s, p); debug }
+        | Set_local (id, llsc) -> Set_local (id, loop_scalar llsc)
+        | (Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _) as other -> other)
+  and loop_scalar (llsc : scalar_t) : scalar_t =
+    match llsc with
+    | Local_scope { id; body; orig_indices } -> (
+        (* Recurse into the body first so inner reductions are handled, then try to collapse this
+           scope itself. *)
+        let body = loop_proc body in
+        match try_rewrite_local_scope id body with
+        | Some gather -> gather
+        | None -> Local_scope { id; body; orig_indices })
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, p } ->
+        Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop_scalar v, p) }
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
+        Ternop (op, (loop_scalar a, pa), (loop_scalar b, pb), (loop_scalar c, pc))
+    | Binop (op, (a, pa), (b, pb)) -> Binop (op, (loop_scalar a, pa), (loop_scalar b, pb))
+    | Unop (op, (a, pa)) -> Unop (op, (loop_scalar a, pa))
+    | (Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _) as
+      other ->
+        other
+  in
+  loop_proc llc
+
 let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   let traced_store = Hashtbl.create (module Tnode) in
   (* Identifies the computations that the code block associated with the symbol belongs to. *)
@@ -1942,7 +2223,8 @@ let%diagn2_sexp optimize_proc (input_ctx : optimize_ctx) static_indices llc =
     virtual_llc input_ctx.computations traced_store reverse_node_map static_indices llc
   in
   let llc =
-    hoist_cross_statement_cse @@ eliminate_common_subexpressions @@ simplify_llc
+    hoist_cross_statement_cse @@ eliminate_common_subexpressions @@ rewrite_one_hot_reductions
+    @@ simplify_llc
     @@ cleanup_virtual_llc ~static_indices
     @@ virtual_llc_result
   in
@@ -2008,6 +2290,9 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
         loop body
     | Get_merge_buffer (la, _) -> visit la
     | Get (la, _) -> visit la
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        visit tn;
+        loop_scalar v
     | Ternop (_, (f1, _), (f2, _), (f3, _)) ->
         loop_scalar f1;
         loop_scalar f2;
@@ -2108,6 +2393,11 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Get_merge_buffer (source, idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
+        group
+          (doc_ident tn ^^ brackets (pp_indices idcs)
+          ^^ string (Printf.sprintf "@dyn[%d]=" dyn_axis)
+          ^^ parens (doc_of_float vprec v))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Constant_bits i -> string (Printf.sprintf "0x%LX" i)
     | Embed_index idx ->
@@ -2203,6 +2493,11 @@ let to_doc ?name ?static_indices () llc =
     | Get_merge_buffer (source, idcs) ->
         group (doc_ident source ^^ string ".merge" ^^ brackets (pp_indices idcs))
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, _ } ->
+        group
+          (doc_ident tn ^^ brackets (pp_indices idcs)
+          ^^ string (Printf.sprintf "@dyn[%d]=" dyn_axis)
+          ^^ parens (doc_of_float v))
     | Constant c -> string (Printf.sprintf "%.16g" c)
     | Constant_bits i -> string (Printf.sprintf "0x%LX" i)
     | Embed_index idx ->
