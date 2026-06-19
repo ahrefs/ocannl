@@ -1,117 +1,235 @@
-# Proposal: Restore `low_level.Fill` for dedicated backend fill operations
+# Proposal: Restore `Low_level.Fill`
 
-**Issue**: https://github.com/ahrefs/ocannl/issues/151
+GitHub issue: [ahrefs/ocannl#151](https://github.com/ahrefs/ocannl/issues/151)
 
-## Status update (2026-06-12)
+## Preamble: Discarded
 
-- Issue #151 is still OPEN, milestone v0.8 (ROADMAP now targets mid-June 2026 for v0.8; the GH milestone due date of Feb 2026 lags).
-- Not yet started: `Zero_out` is still the only bulk-init IR node (`low_level.ml:39`); no `Fill` variant exists; non-zero constants still lower to element loops.
-- gh-ocannl-420 has since landed and CLOSED (commits `5c075df7`, `c9e69816`): `c_syntax.ml` now elides the *first-touch* `Zero_out` at function scope when the array declaration's `= {0}` already covers it (see `zero_out_seen` / `zero_out_loop_redundant`, around `c_syntax.ml:306-370`). Re-zeros still expand to element-by-element loops, so #151's payoff (bulk memset/blit for re-zeros and non-zero fills) remains.
-- The `Zero_out` codegen handler moved from `c_syntax.ml:332-335` to ~line 358 and is now conditional; Step 4 must preserve the first-touch elision logic when generalizing to `Fill`.
-- Line numbers in "Key code paths" have drifted slightly (assignments.ml lowering is now at 719-724; tracing at low_level.ml:291; virtualization at ~799/889; backends.ml allocation check at ~505; metal alloc_zeros at ~126-136). Identifiers are unchanged.
-- gh-ocannl-350 (loop hoisting) was CLOSED NOT_PLANNED; cross-statement CSE with hoisting landed instead (`e48ec84f`). gh-ocannl-382 remains OPEN.
-- Correction to History: issue #341 ("Resolve non-determinism of multicore_cc") is closed; the multi-streaming *cleanup* removed cross-stream automatic coherence and the deprecated multi-stream backend infrastructure (commit `272c0880`), but multiple streams per device remain. The load-bearing claim stands: `Parallel`/`Task_id` no longer exist in the IR (verified by grep), so the original removal rationale for `Fill` is moot.
+This proposal should not be implemented as written. `Zero_out` already captures the only currently
+valuable special case: whole-buffer zeroing, which maps naturally to allocation zeroing,
+declaration `= {0}`, byte-wise memset, CUDA memset, and Metal blit fill. General `Fill { value }`
+would add a low-level IR case and more match arms without a measured non-zero bulk-fill use case.
+
+If arbitrary non-zero constant fills later show up as a real bottleneck, revisit the design with
+profiling and a concrete backend scheduling plan. Until then, keep `Zero_out` as the explicit
+zero-specialized IR node and do not pursue gh-ocannl-151.
+
+**Status, validated 2026-06-19**: Open. GitHub currently places the issue in milestone `v0.7`
+with due date 2026-06-24. The current code still has `Zero_out` as the only bulk-initialization
+IR node; there is no `Fill` variant, and non-zero constants still lower to explicit element loops.
+
+## Summary
+
+Restore a first-class low-level `Fill` instruction so constant tensor initialization remains a
+single semantic operation until backend lowering. Today the compiler loses that intent:
+
+- `Fetch { fetch_op = Constant 0.0 }` lowers to `Zero_out`.
+- `Fetch { fetch_op = Constant c }` for non-zero `c` lowers to `loop_over_dims` plus `Set`.
+- Reduction neutral initialization uses the same path, so common neutral values such as `1.0`,
+  `infinity`, and `neg_infinity` are also expanded before the backend can choose a bulk strategy.
+
+The first win is IR clarity: all constant fills become one operation. The second win is performance:
+backends can map fills to their native mechanisms where that is actually available, while keeping a
+correct loop fallback everywhere.
+
+This proposal deliberately separates those two steps. Replacing `Zero_out` with `Fill` is a
+compiler-IR change. Emitting `cuMemset*` or a Metal blit for runtime fills is a backend scheduling
+change, because CUDA and Metal fills happen outside device kernel source; they cannot be obtained by
+blindly printing `memset` inside `c_syntax.ml`.
+
+## Why This Is Safe To Revisit
+
+`Fill` was removed in commit `5e808c79` on 2023-05-09:
+
+> Remove `low_level.Fill`, it has tricky semantics
+> It was naively and wrongly ignoring `Parallel` / `Task_id`.
+
+That warning was valid for the old IR. A whole-buffer fill inside a per-task parallel region could
+clobber work owned by other tasks. The old low-level `Parallel`/`Task_id` execution model is no
+longer present in `arrayjit/lib/low_level.ml`, `assignments.ml`, or `indexing.ml`. The current
+high-level `Ocannl.Parallel` API is unrelated user-facing data-parallel orchestration; it is not the
+removed low-level indexing construct.
+
+The old removal rationale is therefore no longer load-bearing, but the replacement still needs a
+clear rule: `Fill` is a whole logical tensor-node write. It must only be emitted where the current
+code would already write the whole node by `Zero_out` or by a full `loop_over_dims` constant loop.
+
+## Current Ground Truth
+
+The following facts were checked against local HEAD on 2026-06-19:
+
+- `arrayjit/lib/low_level.ml` and `.mli` define `Zero_out of Tnode.t`; there is no `Fill`.
+- `assignments.ml` lowers `Fetch { Constant 0.0 }` to `Low_level.Zero_out array`.
+- `assignments.ml` lowers non-zero `Constant c` to `Low_level.loop_over_dims ... Set(Constant c)`.
+- `initialize_neutral` emits `Fetch { Constant neutral_value }` before accumulation when an init is
+  needed, so neutral values use the same lowering.
+- `c_syntax.ml` handles `Zero_out` by expanding it to a generated element loop.
+- gh-ocannl-420 has already landed: the first function-scope `Zero_out` can be elided when a local
+  declaration's `= {0}` already covers it. The relevant state is `zero_out_seen`,
+  `zero_out_loop_redundant`, and `zero_initialized_by_code`.
+- The shared slab API already exposes `memset_zero` in `backend_intf.ml`; `backends.ml` uses it for
+  allocation-time zeroing.
+- CUDA implements allocation-time zeroing with `Cu.Stream.memset_d8`.
+- Metal implements allocation-time zeroing with `Me.BlitCommandEncoder.fill_buffer`.
+- `backend_intf.buffer_loc = { pool_id; offset }` means backend bulk fill APIs should address a
+  byte range inside a pool, not assume one allocation per tensor node.
 
 ## Goal
 
-Restore a `Fill` instruction in the low-level IR so that filling an array with a constant value can be mapped to dedicated bulk operations on each backend (`memset` on CC, `cuMemsetD*` on CUDA, `MTLBlitCommandEncoder.fill` on Metal) instead of being expanded into element-by-element loops. This is a performance optimization for the v0.8 milestone.
-
-## Acceptance Criteria
-
-- A `Fill` variant exists in `Low_level.t` that takes a tensor node and a float value.
-- `Fetch { fetch_op = Constant c }` in `assignments.ml` lowers to `Fill` for all constant values (not just 0.0).
-- `Zero_out` becomes a special case of `Fill` (with value 0.0) or is replaced by it.
-- The CC backend (`c_syntax.ml`) emits `memset` for `Fill` with value 0.0, and a typed `memset`-style loop or bulk fill for non-zero values where byte-level memset is not applicable.
-- The CUDA backend emits `cuMemsetD8`/`cuMemsetD16`/`cuMemsetD32` for `Fill` where the value is representable at the appropriate granularity, falling back to a kernel loop otherwise.
-- The Metal backend emits `MTLBlitCommandEncoder.fill` for zero fills, and a compute-based fill for non-zero values.
-- The tracing/optimization pass (`low_level.ml`) handles `Fill` correctly: sets `zero_initialized_by_code` for `Fill 0.0`, tracks assignments, and virtualizes `Fill` nodes identically to `Zero_out`.
-- The `Fill` instruction interacts correctly with padding regions (padding fill happens before the bulk fill, as with `Zero_out` today).
-- All existing tests pass; `.expected` test files are updated to reflect the new IR node.
-- The interpreter (if any) handles `Fill` correctly.
-
-## Context
-
-### History
-
-`Fill` was removed in commit `5e808c79` (2023-05-09) with the message: "Remove `low_level.Fill`, it has tricky semantics -- It was naively and wrongly ignoring `Parallel` / `Task_id`." At that time, the IR had `Parallel` dimension markers and `Task_id` indices for multi-threaded execution. The old `Fill` simply called a whole-array fill, ignoring that in a parallel context each thread should only fill its portion.
-
-Since then, the `Parallel`/`Task_id` machinery has been removed from the codebase (parallelism is now expressed via streams; the deprecated multi-stream backend infrastructure was further cleaned up in commit `272c0880`, though multiple streams per device remain). The tricky semantics that motivated the removal are no longer relevant. *(Update 2026-06-12: an earlier draft attributed the removal to gh-ocannl-341, which actually tracks multicore_cc non-determinism; corrected.)*
-
-### Current state
-
-Today, constant filling takes two paths through the IR:
-
-1. **`Fetch { Constant 0.0 }`** lowers to `Zero_out tn` (`assignments.ml:719-720`). In the tracing pass, `Zero_out` sets `zero_initialized_by_code = true` and `zeroed_out = true`. At **code generation** time in `c_syntax.ml` (~line 358), `Zero_out` is expanded into an element-by-element zeroing loop via `loop_over_dims`. No `memset` is used in the generated C/CUDA code. *(Update 2026-06-12: since gh-ocannl-420 landed, the first-touch function-scope `Zero_out` is elided when the declaration's `= {0}` already covers it; re-zeros still emit the element loop.)*
-
-2. **`Fetch { Constant c }` (non-zero)** lowers directly to `loop_over_dims` + `Set` at the assignments level (`assignments.ml:721-724`), producing an explicit for-loop in the low-level IR. There is no opportunity for the backend to use bulk operations.
-
-3. **`Fetch { Constant neutral_value }`** is also emitted for `initialize_neutral` before accumulating assignments (`assignments.ml:447-450`). The neutral element can be 0.0 (Add/Sub), 1.0 (Mul/Div), infinity (Min), neg_infinity (Max), etc.
-
-Meanwhile, the backends already have bulk fill capabilities that are only used at **allocation** time:
-- CUDA: `Cu.Stream.memset_d8` in `alloc_zeros` (`cuda_backend.ml:84`)
-- Metal: `Me.BlitCommandEncoder.fill_buffer` in `alloc_zeros` (`metal_backend.ml:100`)
-- CC: relies on the OS for zero-initialized allocation
-
-### Key code paths
-
-*(Line numbers re-verified 2026-06-12 at HEAD `d9de22f0`.)*
-
-- **Low-level IR type**: `arrayjit/lib/low_level.ml:33-50` -- `t` variant type, `Zero_out` at line 39
-- **Assignments lowering**: `arrayjit/lib/assignments.ml:719-724` -- `Constant 0.0` to `Zero_out`, other constants to loops
-- **Neutral element init**: `arrayjit/lib/assignments.ml:447-450` -- `Fetch { Constant neutral_value }` before accumulation
-- **C syntax codegen**: `arrayjit/lib/c_syntax.ml:358-369` -- `Zero_out` expanded to loop (not memset), with first-touch elision (gh-ocannl-420) when the declaration already zeroes
-- **CUDA alloc_zeros**: `arrayjit/lib/cuda_backend.ml:78-85` -- uses `memset_d8` at allocation only
-- **Metal alloc_zeros**: `arrayjit/lib/metal_backend.ml:126-136` -- uses blit fill at allocation only
-- **Tracing**: `arrayjit/lib/low_level.ml:291-297` -- `Zero_out` tracing sets `zero_initialized_by_code`
-- **Virtualization**: `arrayjit/lib/low_level.ml:799`, `889` -- `Zero_out` virtualization
-- **CSE/optimization**: `low_level.ml:1005,1025,1199,1283,1351,1378` -- `Zero_out` cases in various passes
-- **Neutral elements**: `arrayjit/lib/ops.ml:447` -- `neutral_elem` function (Add->0, Mul->1, Max->neg_inf, etc.)
-
-### Related issues
-
-- **gh-ocannl-420**: Optimize away unnecessary zeroing-out (addresses the `is_surjective` bug causing spurious `Zero_out`). Complementary: #420 reduces the number of fills, #151 makes the remaining fills faster. *(Update 2026-06-12: CLOSED/completed — first-touch `Zero_out` elision now lives in `c_syntax.ml`.)*
-- **gh-ocannl-382**: Remove unnecessary zeroing-out (broader scope). *(Still OPEN as of 2026-06-12.)*
-- **gh-ocannl-350**: Loop hoisting + CSE (orthogonal optimization). *(Update 2026-06-12: CLOSED not-planned; cross-statement CSE with hoisting landed separately.)*
-
-## Approach
-
-### Step 1: Add `Fill` to the low-level IR
-
-In `low_level.ml` and `low_level.mli`, add a new variant:
+Represent every full-tensor constant initialization as:
 
 ```ocaml
 | Fill of { tn : Tnode.t; value : float }
 ```
 
-This replaces `Zero_out of Tnode.t`. Keep `Zero_out` as a deprecated alias or remove it outright (replacing all occurrences with `Fill { tn; value = 0.0 }`). Removing `Zero_out` is cleaner since the number of match cases is manageable (~15 locations in `low_level.ml` plus backends).
+Then lower that instruction as efficiently as each backend can support:
 
-### Step 2: Update tracing and optimization passes
+- zero fills may use byte-wise bulk zeroing,
+- non-zero fills may use typed loops or backend kernels,
+- unsupported cases must keep the existing element-loop semantics.
 
-In every match case that currently handles `Zero_out tn`, handle `Fill { tn; value }` instead:
-- Tracing (`low_level.ml:291`): set `zero_initialized_by_code` when `value = 0.0`, and add a new `fill_initialized` flag or generalize to track the fill value.
-- Virtualization: `Fill` of the virtual node inlines as `Set_local (id, Constant value)`.
-- CSE, structural equality, printing: straightforward replacements.
+`Constant_bits` is intentionally out of scope for the first pass. It can keep the current loop
+lowering until there is a bit-pattern fill design that is correct for packed and non-floating
+precisions.
 
-### Step 3: Update assignments lowering
+## Non-Goals
 
-In `assignments.ml`, change:
-- Lines 719-720: `Fetch { Constant 0.0 }` -> `Fill { tn = array; value = 0.0 }` (currently `Zero_out`)
-- Lines 721-724: `Fetch { Constant c }` -> `Fill { tn = array; value = c }` (currently `loop_over_dims`)
+- Do not redesign reduction initialization or projection inference.
+- Do not use `memset` for arbitrary floating-point values. Byte-wise `memset` is only correct when
+  the target byte pattern is intentionally repeated byte by byte, most importantly zero.
+- Do not assume every `Fill` can be a host-side API call. Local arrays and virtualized computations
+  still need generated code.
+- Do not rework pool allocation. This proposal consumes the existing `{ pool_id; offset }` contract.
 
-### Step 4: Backend code generation
+## Design
 
-**C syntax (`c_syntax.ml`)**: Replace the `Zero_out` handler (~line 358) with a `Fill` handler, preserving the gh-ocannl-420 first-touch elision (`zero_out_seen` / `zero_out_loop_redundant`) for `value = 0.0`:
-- For `value = 0.0`: emit `memset(tn, 0, size_in_bytes)` instead of an element-by-element loop.
-- For non-zero values: emit a typed fill loop. (A `memset` only works for byte-replicable values. For arbitrary float values, a simple loop is still needed, but the loop is generated at code-gen time rather than polluting the IR.)
+### 1. Replace `Zero_out` With `Fill`
 
-**CUDA backend (`cuda_backend.ml`)**: The C syntax module is shared. Additionally, for device-side code, `memset` cannot be called from a kernel. For the CUDA backend, `Fill` should be compiled to a host-side `cuMemsetD*` call injected via `Staged_compilation`, or the loop fallback for non-zero values.
+Add `Fill of { tn : Tnode.t; value : float }` to `Low_level.t` and remove `Zero_out` rather than
+keeping two spellings for the same write. The replacement is mechanical in most passes:
 
-**Metal backend (`metal_backend.ml`)**: Similarly, use `fill_buffer` for zero fills and a compute shader dispatch for non-zero fills.
+- read/write collection: `Fill` writes `tn` and reads nothing,
+- substitution and scalar simplification: unchanged payload,
+- structural equality: compare both `tn` and `value`,
+- pretty-printers: print `fill <tn> <value>;`,
+- constant validation: validate `value` against `tn.prec` exactly as `Constant value` is validated.
 
-### Step 5: Allocation optimization
+The one semantic caveat is tracing: keep the existing `zero_initialized_by_code` behavior only for
+`Fill { value = 0.0 }`. Non-zero fills initialize memory, but they do not justify C declarations
+with `= {0}` and do not let allocation skip zeroing for the same reason.
 
-In `backends.ml` (~line 505), the allocation path already distinguishes `zero_initialized_by_code` to skip `alloc_zeros`. With `Fill`, generalize: if the node's first operation is `Fill { value = 0.0 }` and we already used `alloc_zeros`, the `Fill` at code-gen time can be skipped (it's redundant). This avoids double-zeroing (the secondary issue from gh-ocannl-420).
+### 2. Lower Constants To `Fill`
 
-### Step 6: Update tests
+In `assignments.ml`, change constant fetch lowering to:
 
-Update all `.expected` test files to reflect `Fill` instead of `Zero_out` in IR dumps. The `%cd` pretty-printer should show `fill tn value;` instead of `zero_out tn;`.
+```ocaml
+| Fetch { array; fetch_op = Constant c; dims = _ } ->
+    default_padding_before array @@ Low_level.Fill { tn = array; value = c }
+```
+
+This preserves the current padding order: padding reset code still runs before the full logical
+fill, exactly as it does before `Zero_out` today. `Constant_bits` remains on the existing loop path.
+
+### 3. Preserve gh-ocannl-420 First-Touch Elision
+
+The `Zero_out` handler in `c_syntax.ml` currently has important first-touch logic:
+
+- `zero_out_seen` distinguishes the first zero from a later re-zero,
+- `zero_out_loop_redundant` checks whether a local declaration already emitted `= {0}`,
+- zeroing inside loops or `Local_scope` bodies is never treated as redundant.
+
+Generalize this logic only for `Fill { value = 0.0 }`. Later zero fills must still execute.
+Non-zero fills are never declaration-elidable by this mechanism.
+
+### 4. Backend Lowering Policy
+
+Stage 1 should make every backend correct by lowering `Fill` through existing generated loops:
+
+- zero `Fill` lowers to the same loop as `Zero_out` after first-touch elision,
+- non-zero `Fill` lowers to the same typed loop that `assignments.ml` emits today,
+- virtualized `Fill` becomes `Set_local (id, Constant value)`.
+
+Stage 2 adds actual bulk operations where the backend execution model supports them:
+
+- **CC / generated C**: zero fills for addressable buffers may use `memset(ptr, 0, bytes)`.
+  Non-zero floating fills should remain typed loops unless a precision-specific bulk fill helper is
+  added.
+- **CUDA**: device memory zero fills should use a scheduled host-side backend operation, likely by
+  extending the backend slab interface beyond allocation-time `memset_zero` or by introducing a
+  fill task in the routine schedule. Do not emit `memset` inside CUDA kernel source.
+- **Metal**: zero fills should use `Me.BlitCommandEncoder.fill_buffer` against the resolved
+  `{ pool_id; offset; size }` byte range. Non-zero fills need a compute fill kernel or a typed loop
+  fallback.
+
+The important invariant is that bulk fill operates on the tensor node's resolved buffer range. With
+pooled buffers, the target is not just `pool_id`; it is `pool_id + offset` for exactly
+`Tnode.size_in_bytes tn`.
+
+### 5. Allocation Interaction
+
+Keep `zero_initialized_by_code` narrowly defined: it records a first write by generated code that
+zeros the node. `backends.ml` currently uses it to skip allocation-time zeroing. That remains valid
+for `Fill 0.0`, but not for non-zero `Fill`.
+
+If a future backend schedules zero `Fill` as a separate `memset_zero` task, treat that task as the
+code initialization for the same purpose. The skip must be per tensor node and per byte range; it
+must not zero or skip neighboring tensors in the same pool.
+
+## Acceptance Criteria
+
+- `Low_level.t` has `Fill { tn; value }`; `Zero_out` is removed or reduced to a temporary migration
+  alias with no remaining steady-state uses.
+- `Fetch { fetch_op = Constant c }` lowers to `Fill` for all floating constants.
+- `Fetch { fetch_op = Constant_bits _ }` remains correct and is explicitly left out of this change.
+- Tracing, virtualization, CSE, equality, validation, read/write analysis, and pretty-printers all
+  handle `Fill`.
+- `Fill { value = 0.0 }` preserves gh-ocannl-420 first-touch elision.
+- Non-zero `Fill` does not set `zero_initialized_by_code` and does not trigger declaration `= {0}`.
+- Padding reset order is unchanged.
+- All generated C/CUDA/Metal remains correct with loop fallback before backend-specific bulk fill
+  optimizations are added.
+- `.expected` files that print low-level IR use `fill ... 0;` instead of `zero_out ...;`.
+- Existing tests pass with `OCANNL_BACKEND=sync_cc dune runtest`.
+
+## Test Plan
+
+Run targeted tests first:
+
+```sh
+OCANNL_BACKEND=sync_cc dune exec test/einsum/test_accumulation_semantics.exe
+OCANNL_BACKEND=sync_cc dune exec test/operations/zero_out_local_decl.exe
+OCANNL_BACKEND=sync_cc dune exec test/operations/test_slice_alias.exe
+```
+
+Then run the normal suite:
+
+```sh
+OCANNL_BACKEND=sync_cc dune runtest
+```
+
+Regenerate affected standalone `.expected` files from Dune output or `dune promote`, preserving the
+two-line config lookup banner required by this repository's test convention.
+
+## Implementation Checklist
+
+- Update `low_level.ml` / `.mli` with `Fill`.
+- Replace all `Zero_out` matches in `low_level.ml`.
+- Update `assignments.ml` constant lowering.
+- Generalize `c_syntax.ml` first-touch zero elision from `Zero_out` to zero-valued `Fill`.
+- Update tests and expected outputs.
+- Add or adjust focused tests for:
+  - zero fill,
+  - non-zero fill,
+  - neutral initialization with a non-zero neutral value,
+  - re-zero after a prior write,
+  - local declaration elision from gh-ocannl-420.
+- Only after the semantic migration is green, add backend bulk-fill tasks for CUDA and Metal.
+
+## Open Questions
+
+- Should `Fill` carry `float`, or should it eventually carry a richer constant type that can include
+  `Constant_bits`? Start with `float` to keep the migration small.
+- Where should backend runtime fills live: as an extension of `Backend_intf.Slab_alloc`, as a new
+  task kind in the schedule, or as a backend-private procedure wrapper around compiled kernels?
+  The answer determines how `cuMemset*` and Metal blits are sequenced with routine execution.
+- For non-zero fills, is a generated typed loop sufficient, or do CUDA and Metal need dedicated fill
+  kernels for common neutral values such as `1.0`?
