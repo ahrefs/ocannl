@@ -285,7 +285,6 @@ let track_symbol reverse_node_map tn idcs =
     | Indexing.Concat syms -> List.iter syms ~f:add)
 
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
-  (* FIXME(#351): avoid excessive inlining while CSE is not implemented *)
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   (* FIXME: migrate hashtable to use offsets instead of indices *)
   let lookup env indices =
