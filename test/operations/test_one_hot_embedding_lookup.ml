@@ -1,9 +1,9 @@
-(* gh-ocannl-343: end-to-end test for the one-hot embedding optimization.
+(* gh-ocannl-343 / task-73617488: end-to-end test for the one-hot embedding optimization.
 
    The embedding lookup [emb[b,o] = C[o, ids[b]]] is written logically as a one-hot reduction
-   [emb = C * (range vocab == ids)]. When the one-hot equality is inlined into the reduction (here we
-   raise [virtualize_max_visits] so it is), [rewrite_one_hot_reductions] collapses the vocabulary
-   loop into a guarded [Get_dynamic].
+   [emb = C * (range vocab == ids)]. [rewrite_one_hot_reductions] collapses the vocabulary loop into
+   a guarded [Get_dynamic]. task-73617488 makes this fire under the default [virtualize_max_visits =
+   1] via a narrow virtualizer exemption for one-hot selector producers.
 
    Pinned invariants:
    - Forward equivalence: the logical one-hot embedding equals a direct gather of table rows.
@@ -11,14 +11,16 @@
      loop over the vocabulary axis.
    - Out-of-bounds: an index outside [0, vocab) yields a zero embedding row (one-hot semantics).
    - Read tracking: the index tensor is a routine input of the optimized gather.
-   - Fallback: an ordinary (non one-hot) contraction is left unchanged (no [Get_dynamic]). *)
+   - Fallback: an ordinary (non one-hot) contraction is left unchanged (no [Get_dynamic]).
+   - Negative (task-73617488): non-one-hot complex pointwise tensors still respect [max_visits]. *)
 
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 
-let () = LL.virtualize_settings.max_visits <- 1000
+(* task-73617488: the gather rewrite now fires under the default max_visits = 1; no override. *)
+let () = assert (LL.virtualize_settings.max_visits = 1)
 
 (* Keep the generated C-family source in [build_files/<name>_fwd.c] so we can inspect it. *)
 let () = Utils.settings.output_debug_files_in_build_directory <- true
@@ -191,4 +193,26 @@ let () =
   let cid_vals = Context.get_values ctx5 cids.Tensor.value in
   p "class_ids_of_int_list stores compact ids"
     (Array.length cid_vals = List.length id_list
-    && Array.for_all2_exn cid_vals (Array.of_list id_list) ~f:(fun v i -> approx v (Float.of_int i)))
+    && Array.for_all2_exn cid_vals (Array.of_list id_list) ~f:(fun v i -> approx v (Float.of_int i)));
+
+  (* --- Negative (task-73617488): non-one-hot complex pointwise tensors still obey max_visits ---
+     [not_hot[b,k] = range[k] + ids_neg[b]] is complex (reads an accessing tensor) but NOT a
+     one-hot [Cmpeq], so the virtualizer exemption does NOT apply: the tensor stays materialized
+     ([Never_virtual]) and the vocabulary reduction loop survives in the consumer.  *)
+  let ids_neg =
+    TDSL.ndarray [| 1.; 0. |] ~label:[ "ids_neg" ] ~batch_dims:[ 2 ] ~output_dims:[] ()
+  in
+  let c_neg =
+    TDSL.ndarray cvals ~label:[ "C_neg" ] ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
+  in
+  let classes_neg = TDSL.range vocab in
+  let%op not_hot = classes_neg + ids_neg in
+  let%op emb_neg = c_neg * not_hot in
+  let ctx_neg = Context.cpu () in
+  let ctx_neg = Train.forward_once ctx_neg emb_neg in
+  ignore (Context.get_values ctx_neg emb_neg.Tensor.value : float array);
+  let dyn_neg, loops_neg, _ = inspect emb_neg ids_neg.Tensor.value in
+  p "non-one-hot complex tensor does not produce Get_dynamic" (dyn_neg = 0);
+  (* Without the one-hot exemption the vocab reduction loop is NOT collapsed: batch + output loops
+     are 2, so total > 2 means the vocabulary loop survived. *)
+  p "non-one-hot complex tensor keeps the vocab reduction loop" (loops_neg > 2)

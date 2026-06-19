@@ -166,6 +166,8 @@ type traced_array = {
   mutable is_scalar_constexpr : bool;
   mutable is_accessing : bool;
   mutable is_complex : bool;
+  mutable prefers_virtual_one_hot : bool;
+  mutable has_non_one_hot_setter : bool;
 }
 [@@deriving sexp_of]
 
@@ -197,6 +199,8 @@ let get_node store tn =
         is_scalar_constexpr = false;
         is_accessing = false;
         is_complex = false;
+        prefers_virtual_one_hot = false;
+        has_non_one_hot_setter = false;
       })
 
 let visit ~is_assigned old =
@@ -284,6 +288,95 @@ let track_symbol reverse_node_map tn idcs =
     | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> add s)
     | Indexing.Concat syms -> List.iter syms ~f:add)
 
+(* gh-343 / task-73617488: helpers for the one-hot reduction rewrite and the virtualizer exemption.
+   Placed before [visit_llc] so [is_one_hot_selector_assignment] is available during tracing. *)
+
+let axis_index_mentions_symbol (s : Indexing.symbol) (idx : Indexing.axis_index) : bool =
+  match idx with
+  | Indexing.Iterator s' -> Indexing.equal_symbol s s'
+  | Indexing.Affine { symbols; _ } ->
+      List.exists symbols ~f:(fun (_, s') -> Indexing.equal_symbol s s')
+  | Indexing.Concat syms -> List.exists syms ~f:(Indexing.equal_symbol s)
+  | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+
+let rec scalar_mentions_symbol (s : Indexing.symbol) (llsc : scalar_t) : bool =
+  match llsc with
+  | Embed_index idx -> axis_index_mentions_symbol s idx
+  | Get (_, idcs) | Get_merge_buffer (_, idcs) ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s)
+  | Get_dynamic { idcs; dyn_value = v, _; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
+  | Local_scope { orig_indices; body; _ } ->
+      Array.exists orig_indices ~f:(axis_index_mentions_symbol s) || proc_mentions_symbol s body
+  | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
+      scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2 || scalar_mentions_symbol s v3
+  | Binop (_, (v1, _), (v2, _)) -> scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2
+  | Unop (_, (v, _)) -> scalar_mentions_symbol s v
+  | Get_local _ | Constant _ | Constant_bits _ -> false
+
+and proc_mentions_symbol (s : Indexing.symbol) (llc : t) : bool =
+  match llc with
+  | Set { idcs; llsc; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s llsc
+  | Set_from_vec { idcs; arg = v, _; _ } ->
+      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
+  | Set_local (_, llsc) -> scalar_mentions_symbol s llsc
+  | Seq (a, b) -> proc_mentions_symbol s a || proc_mentions_symbol s b
+  | For_loop { body; _ } -> proc_mentions_symbol s body
+  | Zero_out _ | Declare_local _ | Noop | Comment _ | Staged_compilation _ -> false
+
+(* Count occurrences of [Iterator s] in [idcs], and report whether every occurrence is a plain
+   [Iterator s] (no [Affine]/[Concat] use). Returns [(count, axis_of_last_plain_occurrence)]. *)
+let count_plain_iterator (s : Indexing.symbol) (idcs : Indexing.axis_index array) :
+    int * int option * bool =
+  let count = ref 0 and axis = ref None and only_plain = ref true in
+  Array.iteri idcs ~f:(fun i idx ->
+      if axis_index_mentions_symbol s idx then (
+        Int.incr count;
+        match idx with
+        | Indexing.Iterator _ -> axis := Some i
+        | _ -> only_plain := false));
+  (!count, !axis, !only_plain)
+
+(* task-73617488: true when [expr] is an embedded loop iterator [k] in either plain or unit-affine
+   form. Shared by [match_one_hot_contribution] and [is_one_hot_selector_assignment]. *)
+let is_embedded_range_iterator (k : Indexing.symbol) (expr : scalar_t) : bool =
+  match expr with
+  | Embed_index (Indexing.Iterator k') -> Indexing.equal_symbol k k'
+  | Embed_index (Indexing.Affine { symbols = [ (1, k') ]; offset = 0 }) ->
+      Indexing.equal_symbol k k'
+  | _ -> false
+
+(* task-73617488: true when a [Set] assignment is a one-hot selector producer.
+   Recognises two forms:
+   - Direct: the [llsc] is [Cmpeq(Embed_index (Iterator k), expr_free_of_k)] (or unit-affine).
+   - Indirect: one side is [Get(range_tn, [|Iterator k|])] where [range_tn] is non-complex and
+     non-accessing, indicating a range tensor that [virtual_llc] will inline to [Embed_index k].
+   [traced_store] is consulted to classify the indirect case.  [Set_from_vec] is never a one-hot
+   selector (the caller sets [has_non_one_hot_setter] instead). *)
+let is_one_hot_selector_assignment traced_store ~(idcs : Indexing.axis_index array)
+    (llsc : scalar_t) : bool =
+  let is_range_side k expr =
+    is_embedded_range_iterator k expr
+    ||
+    match expr with
+    | Get (rtn, inner_idcs) when Array.length inner_idcs = 1 -> (
+        match inner_idcs.(0) with
+        | Indexing.Iterator k' when Indexing.equal_symbol k k' ->
+            let rt = get_node traced_store rtn in
+            not rt.is_complex && not rt.is_accessing
+        | _ -> false)
+    | _ -> false
+  in
+  Array.exists idcs ~f:(function
+    | Indexing.Iterator k -> (
+        match llsc with
+        | Binop (Ops.Cmpeq, (a, _), (b, _)) ->
+            (is_range_side k a && not (scalar_mentions_symbol k b))
+            || (is_range_side k b && not (scalar_mentions_symbol k a))
+        | _ -> false)
+    | _ -> false)
+
 let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
   let is_too_many = function Visits i -> i > max_visits | Recurrent -> true in
   (* FIXME: migrate hashtable to use offsets instead of indices *)
@@ -338,6 +431,11 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
+        (* task-73617488: track whether all setters are one-hot selector assignments so the
+           virtualizer can exempt this tensor from the visit-count Never_virtual rule. *)
+        if is_one_hot_selector_assignment traced_store ~idcs llsc
+        then traced.prefers_virtual_one_hot <- true
+        else traced.has_non_one_hot_setter <- true;
         (* Track which tensors use which loop symbol. Multiple tensors may legitimately share a
            symbol (e.g. Block/concat lowering); all of them are recorded as candidate owners in
            first-seen (trace) order. Sharing a symbol no longer marks tensors [is_complex] -- only
@@ -346,8 +444,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
     | Set_from_vec { tn; idcs; length; vec_unop = _; arg = arg, _; debug = _ } ->
         loop_scalar env (Some (lookup env idcs)) arg;
         let traced : traced_array = get_node traced_store tn in
-        (* Vector operations cannot be scalar constexpr *)
+        (* Vector operations cannot be scalar constexpr or one-hot selectors. *)
         traced.is_scalar_constexpr <- false;
+        traced.has_non_one_hot_setter <- true;
         if first_visit then (
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store arg;
           traced.is_complex <- traced.is_complex || not (is_constexpr_comp traced_store arg));
@@ -438,6 +537,10 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       if
         (not skip_simple) && Option.is_none tn.memory_mode
         && Hashtbl.exists traced.accesses ~f:is_too_many
+        (* task-73617488: one-hot selector producers are exempt from the visit-count cap.
+           The ordinary [virtual_llc]/[cleanup_virtual_llc] path will inline them so that
+           [rewrite_one_hot_reductions] can fire at default [max_visits = 1]. *)
+        && not (traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter)
       then Tn.update_memory_mode tn Never_virtual 1;
       if (not traced.zeroed_out) && Hash_set.is_empty traced.assignments then (
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
@@ -1998,55 +2101,6 @@ let input_and_output_nodes optimized =
         (inputs, outputs)),
     optimized.merge_node )
 
-(* gh-343: helpers for the one-hot reduction rewrite. *)
-
-let axis_index_mentions_symbol (s : Indexing.symbol) (idx : Indexing.axis_index) : bool =
-  match idx with
-  | Indexing.Iterator s' -> Indexing.equal_symbol s s'
-  | Indexing.Affine { symbols; _ } ->
-      List.exists symbols ~f:(fun (_, s') -> Indexing.equal_symbol s s')
-  | Indexing.Concat syms -> List.exists syms ~f:(Indexing.equal_symbol s)
-  | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
-
-let rec scalar_mentions_symbol (s : Indexing.symbol) (llsc : scalar_t) : bool =
-  match llsc with
-  | Embed_index idx -> axis_index_mentions_symbol s idx
-  | Get (_, idcs) | Get_merge_buffer (_, idcs) ->
-      Array.exists idcs ~f:(axis_index_mentions_symbol s)
-  | Get_dynamic { idcs; dyn_value = v, _; _ } ->
-      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
-  | Local_scope { orig_indices; body; _ } ->
-      Array.exists orig_indices ~f:(axis_index_mentions_symbol s) || proc_mentions_symbol s body
-  | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
-      scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2 || scalar_mentions_symbol s v3
-  | Binop (_, (v1, _), (v2, _)) -> scalar_mentions_symbol s v1 || scalar_mentions_symbol s v2
-  | Unop (_, (v, _)) -> scalar_mentions_symbol s v
-  | Get_local _ | Constant _ | Constant_bits _ -> false
-
-and proc_mentions_symbol (s : Indexing.symbol) (llc : t) : bool =
-  match llc with
-  | Set { idcs; llsc; _ } ->
-      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s llsc
-  | Set_from_vec { idcs; arg = v, _; _ } ->
-      Array.exists idcs ~f:(axis_index_mentions_symbol s) || scalar_mentions_symbol s v
-  | Set_local (_, llsc) -> scalar_mentions_symbol s llsc
-  | Seq (a, b) -> proc_mentions_symbol s a || proc_mentions_symbol s b
-  | For_loop { body; _ } -> proc_mentions_symbol s body
-  | Zero_out _ | Declare_local _ | Noop | Comment _ | Staged_compilation _ -> false
-
-(* Count occurrences of [Iterator s] in [idcs], and report whether every occurrence is a plain
-   [Iterator s] (no [Affine]/[Concat] use). Returns [(count, axis_of_last_plain_occurrence)]. *)
-let count_plain_iterator (s : Indexing.symbol) (idcs : Indexing.axis_index array) :
-    int * int option * bool =
-  let count = ref 0 and axis = ref None and only_plain = ref true in
-  Array.iteri idcs ~f:(fun i idx ->
-      if axis_index_mentions_symbol s idx then (
-        Int.incr count;
-        match idx with
-        | Indexing.Iterator _ -> axis := Some i
-        | _ -> only_plain := false));
-  (!count, !axis, !only_plain)
-
 (* gh-343: recognize the in-range guard's reduction body. Matches the two semantically-equivalent
    one-hot selectors over loop variable [k]:
    - [Where (Cmpeq (Embed_index (Iterator k), index_expr), table_get, Constant 0.)] (either operand
@@ -2056,20 +2110,13 @@ let count_plain_iterator (s : Indexing.symbol) (idcs : Indexing.axis_index array
    used as the dynamic index. *)
 let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
     (Tn.t * Indexing.axis_index array * scalar_arg) option =
-  (* The range index appears either as a plain [Iterator k] or, after shape inference / reflection,
-     as the unit affine [1*k + 0]. Accept both. *)
-  let is_iter_k = function
-    | Embed_index (Indexing.Iterator k') -> Indexing.equal_symbol k k'
-    | Embed_index (Indexing.Affine { symbols = [ (1, k') ]; offset = 0 }) ->
-        Indexing.equal_symbol k k'
-    | _ -> false
-  in
   (* Match a Cmpeq comparing [Embed_index (Iterator k)] against an index expression free of [k].
-     Returns the index expression (with its precision). *)
+     Returns the index expression (with its precision). Uses [is_embedded_range_iterator] defined
+     above, sharing the recognition logic with [is_one_hot_selector_assignment]. *)
   let match_cmpeq = function
     | Binop (Ops.Cmpeq, (a, pa), (b, pb)) ->
-        if is_iter_k a && not (scalar_mentions_symbol k b) then Some (b, pb)
-        else if is_iter_k b && not (scalar_mentions_symbol k a) then Some (a, pa)
+        if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then Some (b, pb)
+        else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then Some (a, pa)
         else None
     | _ -> None
   in
