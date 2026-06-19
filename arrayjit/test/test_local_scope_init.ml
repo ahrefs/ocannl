@@ -92,8 +92,14 @@ let () =
   in
   assert (LL.reads_scope_before_set id loop_with_read);
 
-  (* Empty loop (from_ > to_): write does NOT count as definite; neither read nor write for the
-     outer scope *)
+  (* Noop body: the local is never written -- needs initialization so the Local_scope
+     expression value is not an uninitialized C local. scan returns `Neither`, which
+     must map to true (needs init). *)
+  assert (LL.reads_scope_before_set id LL.Noop);
+
+  (* Empty loop (from_ > to_): write is NOT definite (loop never runs), so the local
+     may be uninitialized after the body -- needs initialization.  scan returns `Neither`
+     for the same reason as Noop, so this must also return true. *)
   let empty_loop_write =
     LL.For_loop
       {
@@ -104,12 +110,12 @@ let () =
         trace_it = false;
       }
   in
-  assert (not (LL.reads_scope_before_set id empty_loop_write));
+  assert (LL.reads_scope_before_set id empty_loop_write);
 
-  (* Empty loop followed by accumulator read: the empty-loop write is NOT definite, so the
-     subsequent accumulator read arrives before any definite write -- needs_init must be true.
-     A mutation that treats the empty-loop write as definite would make scan return `Written`
-     after the Seq's first component and suppress this `Read`, causing the assertion to fail. *)
+  (* Empty loop followed by accumulator read: scan returns `Read` (the accumulator step
+     reads the local after the non-definite empty-loop write), which also maps to true.
+     A mutation that treats the empty-loop write as definite would make scan return
+     `Written` after the Seq's first component and suppress this `Read`, failing here. *)
   let empty_loop_then_acc =
     LL.Seq
       ( empty_loop_write,
@@ -166,6 +172,22 @@ let () =
       { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "accumulator" }
   in
   Stdio.printf "=== Local_scope read-before-write (needs init): ===\n";
+  pp llc;
+  Stdio.printf "\n%!"
+
+(* ===== C codegen: Noop body (needs init -- Neither case) ===== *)
+(* A Local_scope whose body is Noop never writes the local, so the expression value
+   would be an uninitialized C local without the initializer. *)
+
+let () =
+  let tn_src = make_tn ~id:14 ~label:"src_noop" in
+  let tn_out = make_tn ~id:15 ~label:"out_noop" in
+  let id : LL.scope_id = { tn = tn_src; scope_id = 60 } in
+  let local_scope = LL.Local_scope { id; body = LL.Noop; orig_indices = [||] } in
+  let llc =
+    LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "noop-body" }
+  in
+  Stdio.printf "=== Local_scope Noop body (needs init, Neither case): ===\n";
   pp llc;
   Stdio.printf "\n%!"
 

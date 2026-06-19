@@ -1808,7 +1808,7 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
         | `Written -> if from_ <= to_ then `Written else `Neither
         | `Neither -> `Neither)
   in
-  match scan body with `Read -> true | `Written | `Neither -> false
+  match scan body with `Written -> false | `Read | `Neither -> true
 
 (** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
     Operates on a flat list of sibling statements. *)
