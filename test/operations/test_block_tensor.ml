@@ -197,4 +197,10 @@ let () =
   let ctx = Train.forward_once ctx tuple_elem_translated in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx tuple_elem_translated;
 
+  (* --- Test 17: Inline style on a beg_dims shape (regression for crash) --- *)
+  (* stacked has a non-empty beg_dims row (output-axis concat), which previously caused
+     Invalid_argument("index out of bounds") in to_doc_inline. *)
+  printf "\n--- Test 17: Inline style on beg_dims shape (was crash) ---\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Inline ctx stacked;
+
   printf "\n=== Block Tensor Literal Tests Complete ===\n%!"
