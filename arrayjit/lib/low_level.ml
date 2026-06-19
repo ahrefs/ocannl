@@ -168,6 +168,7 @@ type traced_array = {
   mutable is_complex : bool;
   mutable prefers_virtual_one_hot : bool;
   mutable has_non_one_hot_setter : bool;
+  mutable is_range_producer : bool;
 }
 [@@deriving sexp_of]
 
@@ -201,6 +202,7 @@ let get_node store tn =
         is_complex = false;
         prefers_virtual_one_hot = false;
         has_non_one_hot_setter = false;
+        is_range_producer = false;
       })
 
 let visit ~is_assigned old =
@@ -350,8 +352,9 @@ let is_embedded_range_iterator (k : Indexing.symbol) (expr : scalar_t) : bool =
 (* task-73617488: true when a [Set] assignment is a one-hot selector producer.
    Recognises two forms:
    - Direct: the [llsc] is [Cmpeq(Embed_index (Iterator k), expr_free_of_k)] (or unit-affine).
-   - Indirect: one side is [Get(range_tn, [|Iterator k|])] where [range_tn] is non-complex and
-     non-accessing, indicating a range tensor that [virtual_llc] will inline to [Embed_index k].
+   - Indirect: one side is [Get(range_tn, [|Iterator k|])] where [range_tn.is_range_producer] is
+     true, meaning it was set from a bare [Embed_index] (the [Range_over_offsets] lowering).
+     [virtual_llc] will inline such a tensor to [Embed_index k] so the gather rewrite fires.
    [traced_store] is consulted to classify the indirect case.  [Set_from_vec] is never a one-hot
    selector (the caller sets [has_non_one_hot_setter] instead). *)
 let is_one_hot_selector_assignment traced_store ~(idcs : Indexing.axis_index array)
@@ -363,8 +366,11 @@ let is_one_hot_selector_assignment traced_store ~(idcs : Indexing.axis_index arr
     | Get (rtn, inner_idcs) when Array.length inner_idcs = 1 -> (
         match inner_idcs.(0) with
         | Indexing.Iterator k' when Indexing.equal_symbol k k' ->
+            (* Only accept a tensor that was itself assigned from Embed_index (a real range
+               producer).  Read-only inputs and arbitrary computed tensors are NOT range producers
+               even if they happen to be non-complex and non-accessing. *)
             let rt = get_node traced_store rtn in
-            not rt.is_complex && not rt.is_accessing
+            rt.is_range_producer
         | _ -> false)
     | _ -> false
   in
@@ -431,6 +437,9 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
+        (* task-73617488: track range producers (assigned purely from Embed_index) so the
+           indirect arm of is_one_hot_selector_assignment can identify them precisely. *)
+        (match llsc with Embed_index _ -> traced.is_range_producer <- true | _ -> ());
         (* task-73617488: track whether all setters are one-hot selector assignments so the
            virtualizer can exempt this tensor from the visit-count Never_virtual rule. *)
         if is_one_hot_selector_assignment traced_store ~idcs llsc

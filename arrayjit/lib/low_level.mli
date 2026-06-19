@@ -133,6 +133,11 @@ type traced_array = {
       (** True when at least one setter is NOT a one-hot selector (including [Set_from_vec]). A
           tensor with [prefers_virtual_one_hot && not has_non_one_hot_setter] is the candidate for
           the one-hot virtualizer exemption. *)
+  mutable is_range_producer : bool;
+      (** True when at least one [Set] assigns this tensor from a bare [Embed_index] scalar, i.e.
+          the tensor is a [Range_over_offsets] producer. Used by the indirect arm of
+          [is_one_hot_selector_assignment] to prove that a [Get(rtn, [k])] will inline to
+          [Embed_index k] rather than arbitrary values (task-73617488). *)
 }
 [@@deriving sexp_of]
 

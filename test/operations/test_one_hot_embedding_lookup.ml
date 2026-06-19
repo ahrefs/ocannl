@@ -195,7 +195,7 @@ let () =
     (Array.length cid_vals = List.length id_list
     && Array.for_all2_exn cid_vals (Array.of_list id_list) ~f:(fun v i -> approx v (Float.of_int i)));
 
-  (* --- Negative (task-73617488): non-one-hot complex pointwise tensors still obey max_visits ---
+  (* --- Negative-1 (task-73617488): non-Cmpeq complex tensors still obey max_visits ---
      [not_hot[b,k] = range[k] + ids_neg[b]] is complex (reads an accessing tensor) but NOT a
      one-hot [Cmpeq], so the virtualizer exemption does NOT apply: the tensor stays materialized
      ([Never_virtual]) and the vocabulary reduction loop survives in the consumer.  *)
@@ -215,4 +215,29 @@ let () =
   p "non-one-hot complex tensor does not produce Get_dynamic" (dyn_neg = 0);
   (* Without the one-hot exemption the vocab reduction loop is NOT collapsed: batch + output loops
      are 2, so total > 2 means the vocabulary loop survived. *)
-  p "non-one-hot complex tensor keeps the vocab reduction loop" (loops_neg > 2)
+  p "non-one-hot complex tensor keeps the vocab reduction loop" (loops_neg > 2);
+
+  (* --- Negative-2 (task-73617488): Cmpeq against a non-range input tensor is NOT exempted ---
+     [not_hot2[b,k] = (arb_table[k] == ids_neg2[b])] is a Cmpeq, but [arb_table] is a plain
+     input (not a range producer), so [is_range_producer = false] and the indirect arm of
+     [is_one_hot_selector_assignment] correctly rejects it. [not_hot2] must stay [Never_virtual]
+     (forced by the visit-count cap) rather than being incorrectly inlined. *)
+  let arb_table =
+    TDSL.ndarray (Array.init vocab ~f:Float.of_int) ~label:[ "arb_table" ]
+      ~output_dims:[ vocab ] ()
+  in
+  let ids_neg2 =
+    TDSL.ndarray [| 1.; 0. |] ~label:[ "ids_neg2" ] ~batch_dims:[ 2 ] ~output_dims:[] ()
+  in
+  let c_neg2 =
+    TDSL.ndarray cvals ~label:[ "C_neg2" ] ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
+  in
+  let%op not_hot2 = arb_table = ids_neg2 in
+  let%op emb_neg2 = c_neg2 * not_hot2 in
+  let ctx_neg2 = Context.cpu () in
+  let _ctx_neg2 = Train.forward_once ctx_neg2 emb_neg2 in
+  (* The tensor [not_hot2] must be Never_virtual after compilation: the indirect arm uses
+     [is_range_producer] to reject non-range inputs. If this fails the indirect check was too
+     broad (allowed arbitrary inputs as a "range side"). *)
+  p "non-range Cmpeq equality tensor stays Never_virtual"
+    (Ir.Tnode.known_non_virtual not_hot2.Tensor.value)
