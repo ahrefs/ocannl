@@ -416,6 +416,7 @@ type unop =
   | Recip
   | Recip_sqrt
   | Neg
+  | Trunc  (** Truncate toward zero to an integer value (matches a C [(int)] cast). *)
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
   | Uint4x32_to_prec_uniform1
@@ -506,6 +507,7 @@ let interpret_unop op v =
   | Recip -> 1. / v
   | Recip_sqrt -> 1. / sqrt v
   | Neg -> ~-.v
+  | Trunc -> round_towards_zero v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
   | Uint4x32_to_prec_uniform1 ->
@@ -676,6 +678,7 @@ let unop_cd_syntax = function
   | Recip -> "recip"
   | Recip_sqrt -> "recip_sqrt"
   | Neg -> "neg"
+  | Trunc -> "trunc"
   | Tanh_approx -> "tanh"
   | Not -> "not"
   | Uint4x32_to_prec_uniform1 -> "uint4x32_to_prec_uniform1"
@@ -757,6 +760,8 @@ let unop_c_syntax prec op =
   | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
   | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
   | Neg, _ -> ("(-(", "))")
+  | Trunc, Double_prec _ -> ("trunc(", ")")
+  | Trunc, _ -> ("truncf(", ")")
   | ( Tanh_approx,
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->

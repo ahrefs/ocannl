@@ -148,6 +148,19 @@ let () =
   p "in-range row of OOB batch is correct" in_range_ok;
   p "out-of-range index gives a zero embedding row" oob_zero;
 
+  (* --- Fractional index yields a zero row (one-hot semantics: every [k == 1.5] is false). The
+     guard's integrality check ([idx == trunc(idx)]) must reject it rather than gather row 1. --- *)
+  let frac = [| 2.; 1.5 |] in
+  let _ids3, embedded3 = build_embedding frac in
+  let ctx_f = Context.cpu () in
+  let ctx_f = Train.forward_once ctx_f embedded3 in
+  let got3 = Context.get_values ctx_f embedded3.Tensor.value in
+  let row2 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 2)) in
+  let frac_in_range_ok = Array.for_alli got3 ~f:(fun i v -> i >= embed || approx v row2.(i)) in
+  let frac_zero = Array.for_alli got3 ~f:(fun i v -> i < embed || approx v 0.) in
+  p "integer row of fractional batch is correct" frac_in_range_ok;
+  p "fractional index gives a zero embedding row" frac_zero;
+
   (* --- Fallback: an ordinary matmul (not a one-hot reduction) is not rewritten --- *)
   let a = TDSL.ndarray (Array.create ~len:(2 * vocab) 1.) ~label:[ "A" ] ~input_dims:[ vocab ]
       ~output_dims:[ 2 ] () in

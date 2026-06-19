@@ -8,6 +8,8 @@ generated C contains a guarded dynamic table read: true
 generated C has no vocabulary reduction loop: true
 in-range row of OOB batch is correct: true
 out-of-range index gives a zero embedding row: true
+integer row of fractional batch is correct: true
+fractional index gives a zero embedding row: true
 ordinary matmul is not rewritten to Get_dynamic: true
 logical one_hot_of_int_list matches a dense one-hot: true
 class_ids_of_int_list stores compact ids: true

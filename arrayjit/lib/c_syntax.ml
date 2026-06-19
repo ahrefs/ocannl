@@ -860,20 +860,16 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ braces (string ("=" ^ B.float_log_style))
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
-    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = iv, iprec } ->
-        (* gh-343: mirror the [Get] debug rendering, splicing the dynamic index into the offset. *)
-        let ident_doc = string (get_ident tn) in
-        let dims = Lazy.force tn.dims in
-        let from_prec = Lazy.force tn.prec in
-        let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let _dyn_defs, dyn_expr = pp_scalar iprec iv in
-        let dyn_idx_doc = string "((int)(" ^^ dyn_expr ^^ string "))" in
-        let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
-        let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
-        let expr_doc =
-          access_doc ^^ braces (string ("=" ^ B.float_log_style))
-        in
-        (expr_doc, [ `Value access_doc ])
+    | Get_dynamic { tn; dyn_value = iv, iprec; _ } ->
+        (* gh-343: do NOT dereference the table in debug logs. A [Where]'s [debug_float] collects all
+           three branch values as printf arguments evaluated unconditionally, so returning the raw
+           [table[(int)idx]] access here would read out of bounds for ids the surrounding guard is
+           meant to exclude. Log the (always-safe) dynamic index value instead. *)
+        let prefix, postfix = B.convert_precision ~from:iprec ~to_:prec in
+        let _defs, idx_e = pp_scalar iprec iv in
+        let idx_doc = string prefix ^^ idx_e ^^ string postfix in
+        let label = string (get_ident tn ^ "@dyn_idx") in
+        (label ^^ braces (string ("=" ^ B.float_log_style)), [ `Value idx_doc ])
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in

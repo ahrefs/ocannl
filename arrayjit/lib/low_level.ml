@@ -2087,7 +2087,14 @@ let build_guarded_gather ~table ~table_idcs ~dyn_axis ~(index_expr : scalar_arg)
   let guard_prec = Ops.double in
   let lower = Binop (Ops.Cmplt, (Constant (-1.), guard_prec), (iv, guard_prec)) in
   let upper = Binop (Ops.Cmplt, (iv, guard_prec), (Constant (Float.of_int class_count), guard_prec)) in
-  let in_range = Binop (Ops.And, (lower, guard_prec), (upper, guard_prec)) in
+  (* The backend casts [iv] to int when gathering. To preserve one-hot semantics for non-integer
+     indices (e.g. 1.5, where every [k == idx] is false so the reduction is 0), the gather must only
+     fire when [idx] is exactly integral: [idx == trunc(idx)]. Otherwise return 0. *)
+  let is_integral =
+    Binop (Ops.Cmpeq, (iv, guard_prec), (Unop (Ops.Trunc, (iv, guard_prec)), guard_prec))
+  in
+  let bounds = Binop (Ops.And, (lower, guard_prec), (upper, guard_prec)) in
+  let in_range = Binop (Ops.And, (bounds, guard_prec), (is_integral, guard_prec)) in
   let index_prec = guard_prec in
   let gather = Get_dynamic { tn = table; idcs = table_idcs; dyn_axis; dyn_value = index_expr } in
   Ternop (Ops.Where, (in_range, index_prec), (gather, value_prec), (Constant 0., value_prec))
