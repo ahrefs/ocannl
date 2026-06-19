@@ -146,8 +146,7 @@ inline_simple_computations=true
 # If true, virtualize_max_visits only counts accesses that are not used for assignment of
 # the same cell (typically accumulation). Otherwise, all accesses are counted, so computations
 # that reduce an axis will rarely be inlined.
-# FIXME(#351): avoid excessive inlining while CSE is not implemented
-inline_complex_computations=false
+inline_complex_computations=true
 
 # Low-level-code identifier syntax. Options: heuristic, name_and_label, name_only.
 ll_ident_style=heuristic
