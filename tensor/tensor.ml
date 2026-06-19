@@ -990,9 +990,9 @@ let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = fals
   let axes_spec =
     if needs_spec then Some (Shape.to_string_hum ~style:Row.Only_bases sh) else None
   in
-  let num_batch_axes = List.length sh.batch.dims in
-  let num_input_axes = List.length sh.input.dims in
-  let num_output_axes = List.length sh.output.dims in
+  let num_batch_axes = List.length (sh.batch.beg_dims @ sh.batch.dims) in
+  let num_input_axes = List.length (sh.input.beg_dims @ sh.input.dims) in
+  let num_output_axes = List.length (sh.output.beg_dims @ sh.output.dims) in
 
   let open PPrint in
   (* Create document for tensor value *)
