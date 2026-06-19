@@ -50,6 +50,15 @@
  (libraries base stdio arrayjit.ir))
 
 (test
+ (name test_local_scope_init)
+ (package arrayjit)
+ (modules test_local_scope_init)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base stdio arrayjit.ir))
+
+(test
  (name test_slab_free_on_grow)
  (package arrayjit)
  (modules test_slab_free_on_grow)
