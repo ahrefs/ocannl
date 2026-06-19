@@ -15,6 +15,15 @@ reads_scope_before_set: all unit assertions passed
   }
   out2[0] = v20_src2;
 }
+=== Local_scope empty-loop-write then accumulator (needs init): ===
+{
+  float v50_src_el = (float)(0);
+  for (uint32_t i3 = 5; i3 <= 0; ++i3) {
+    v50_src_el = (float)(0);
+  }
+  v50_src_el = (v50_src_el + (float)(1));
+  out_el[0] = v50_src_el;
+}
 === Hoisted Declare_local write-before-read (no init): ===
 float v30_src3;
 v30_src3 = src3[0];
@@ -22,8 +31,8 @@ out3[0] = v30_src3;
 out4[0] = v30_src3;
 === Hoisted Declare_local read-before-write (needs init): ===
 float v40_src4 = (float)(0);
-for (uint32_t i3 = 0; i3 <= 3; ++i3) {
-  v40_src4 = (v40_src4 + src4[i3]);
+for (uint32_t i4 = 0; i4 <= 3; ++i4) {
+  v40_src4 = (v40_src4 + src4[i4]);
 }
 out5[0] = v40_src4;
 out6[0] = v40_src4;

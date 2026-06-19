@@ -106,6 +106,18 @@ let () =
   in
   assert (not (LL.reads_scope_before_set id empty_loop_write));
 
+  (* Empty loop followed by accumulator read: the empty-loop write is NOT definite, so the
+     subsequent accumulator read arrives before any definite write -- needs_init must be true.
+     A mutation that treats the empty-loop write as definite would make scan return `Written`
+     after the Seq's first component and suppress this `Read`, causing the assertion to fail. *)
+  let empty_loop_then_acc =
+    LL.Seq
+      ( empty_loop_write,
+        LL.Set_local
+          (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single))) )
+  in
+  assert (LL.reads_scope_before_set id empty_loop_then_acc);
+
   Stdio.printf "reads_scope_before_set: all unit assertions passed\n%!"
 
 (* ===== C codegen: inline Local_scope, write-before-read (no init) ===== *)
@@ -154,6 +166,39 @@ let () =
       { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "accumulator" }
   in
   Stdio.printf "=== Local_scope read-before-write (needs init): ===\n";
+  pp llc;
+  Stdio.printf "\n%!"
+
+(* ===== C codegen: empty-loop write then accumulator (needs init) ===== *)
+(* The empty loop body write is not definite, so the following accumulator read is
+   read-before-write -> declaration must keep the = 0 initializer. *)
+
+let () =
+  let tn_src = make_tn ~id:12 ~label:"src_el" in
+  let tn_out = make_tn ~id:13 ~label:"out_el" in
+  let id : LL.scope_id = { tn = tn_src; scope_id = 50 } in
+  let idx = Idx.get_symbol () in
+  let empty_loop =
+    LL.For_loop
+      {
+        index = idx;
+        from_ = 5;
+        to_ = 0;
+        body = LL.Set_local (id, LL.Constant 0.);
+        trace_it = false;
+      }
+  in
+  let acc_step =
+    LL.Set_local
+      (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)))
+  in
+  let body = LL.Seq (empty_loop, acc_step) in
+  let local_scope = LL.Local_scope { id; body; orig_indices = [||] } in
+  let llc =
+    LL.Set
+      { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "empty-loop-then-acc" }
+  in
+  Stdio.printf "=== Local_scope empty-loop-write then accumulator (needs init): ===\n";
   pp llc;
   Stdio.printf "\n%!"
 
