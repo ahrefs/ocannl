@@ -20,8 +20,16 @@ module LL = Ir.Low_level
 
 let () = LL.virtualize_settings.max_visits <- 1000
 
+(* Keep the generated C-family source in [build_files/<name>_fwd.c] so we can inspect it. *)
+let () = Utils.settings.output_debug_files_in_build_directory <- true
+
 let vocab = 4
 let embed = 3
+
+(* Read the generated C source for a forward kernel, if the C-family backend wrote one. *)
+let read_generated_c base_name =
+  let path = Stdlib.Filename.concat "build_files" (base_name ^ ".c") in
+  if Stdlib.Sys.file_exists path then Some (Stdio.In_channel.read_all path) else None
 
 (* Embedding table C with C[o,i] = o*vocab + i, so row i (over the input axis) is distinctive. *)
 let cvals = Array.init (embed * vocab) ~f:Float.of_int
@@ -116,6 +124,17 @@ let () =
      constant fills, contributing no loops). *)
   p "vocabulary reduction loop is eliminated" (loops <= 2);
   p "gather's dynamic index reads the token-id tensor" index_is_input;
+  (* Proposal AC: the generated C for the optimized kernel contains a guarded dynamic table read and
+     no reduction loop over the vocabulary axis. The dynamic index renders as an [((int)(...))] cast
+     inside a ternary guard; a vocabulary loop would iterate up to [vocab - 1] ([<= 3] here), which
+     is distinct from the batch/output loop bounds ([<= 2]). *)
+  (match read_generated_c "embedded_fwd" with
+  | None -> p "generated C: guarded dynamic table read present (skipped: non-C backend)" true
+  | Some c ->
+      p "generated C contains a guarded dynamic table read"
+        (String.is_substring c ~substring:"((int)(" && String.is_substring c ~substring:"?");
+      p "generated C has no vocabulary reduction loop"
+        (not (String.is_substring c ~substring:"<= 3")));
 
   (* --- Out-of-bounds index yields a zero embedding row --- *)
   let oob = [| 1.; Float.of_int vocab (* == vocab, out of [0,vocab) *) |] in
