@@ -13,3 +13,6 @@ fractional index gives a zero embedding row: true
 ordinary matmul is not rewritten to Get_dynamic: true
 logical one_hot_of_int_list matches a dense one-hot: true
 class_ids_of_int_list stores compact ids: true
+non-one-hot complex tensor does not produce Get_dynamic: true
+non-one-hot complex tensor keeps the vocab reduction loop: true
+non-range Cmpeq equality tensor stays Never_virtual: true

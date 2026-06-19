@@ -124,6 +124,20 @@ type traced_array = {
       (** True only if the tensor node is built from a genuinely complex scalar computation (one
           that accesses other non-constexpr computations). Sharing a loop symbol with another
           tensor does not, by itself, make a node complex (see #134). *)
+  mutable prefers_virtual_one_hot : bool;
+      (** True when at least one setter for this tensor is a one-hot selector assignment, i.e. a
+          [Cmpeq] between the embedded range iterator and a loop-variable-free expression.
+          When [has_non_one_hot_setter] is false this tensor is exempt from the visit-count
+          [Never_virtual] rule (task-73617488). *)
+  mutable has_non_one_hot_setter : bool;
+      (** True when at least one setter is NOT a one-hot selector (including [Set_from_vec]). A
+          tensor with [prefers_virtual_one_hot && not has_non_one_hot_setter] is the candidate for
+          the one-hot virtualizer exemption. *)
+  mutable is_range_producer : bool;
+      (** True when at least one [Set] assigns this tensor from a bare [Embed_index] scalar, i.e.
+          the tensor is a [Range_over_offsets] producer. Used by the indirect arm of
+          [is_one_hot_selector_assignment] to prove that a [Get(rtn, [k])] will inline to
+          [Embed_index k] rather than arbitrary values (task-73617488). *)
 }
 [@@deriving sexp_of]
 
