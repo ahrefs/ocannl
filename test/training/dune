@@ -32,6 +32,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ (name embedding_ids)
+ (package neural_nets_lib)
+ (modules embedding_ids)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries ocannl dataprep)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; mlp_names is a slow training run: gated behind the `slow` alias (see cifar_conv).
 (executable
  (name mlp_names)

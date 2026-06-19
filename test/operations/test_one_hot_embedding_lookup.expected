@@ -2,7 +2,10 @@ Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 forward equals direct gather of table rows: true
 optimized IR contains a Get_dynamic gather: true
+vocabulary reduction loop is eliminated: true
 gather's dynamic index reads the token-id tensor: true
 in-range row of OOB batch is correct: true
 out-of-range index gives a zero embedding row: true
 ordinary matmul is not rewritten to Get_dynamic: true
+logical one_hot_of_int_list matches a dense one-hot: true
+class_ids_of_int_list stores compact ids: true

@@ -33,8 +33,8 @@ let () =
   let input_size = List.length int_input in
   Stdio.printf "input_size: %d\n%!" input_size;
 
-  let inputs = Nn_blocks.one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_input in
-  let outputs = Nn_blocks.one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_output in
+  let inputs = Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_input in
+  let outputs = Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_output in
 
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in

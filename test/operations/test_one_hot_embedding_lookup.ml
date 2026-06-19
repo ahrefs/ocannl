@@ -103,7 +103,7 @@ let () =
   let ctx = Context.cpu () in
   let ctx = Train.forward_once ctx embedded in
   let got = Context.get_values ctx embedded.Tensor.value in
-  let dyn, _loops, index_is_input = inspect embedded ids.Tensor.value in
+  let dyn, loops, index_is_input = inspect embedded ids.Tensor.value in
   (* expected: emb[b,o] = C[o, ids[b]] = o*vocab + ids[b] *)
   let expected =
     Array.concat_map id_values ~f:(fun idf ->
@@ -111,8 +111,10 @@ let () =
   in
   p "forward equals direct gather of table rows" (Array.for_all2_exn got expected ~f:approx);
   p "optimized IR contains a Get_dynamic gather" (dyn >= 1);
-  (* The remaining loops are the batch/output loops; assert the vocabulary reduction is gone by
-     checking the kernel has fewer loops than the b/o/k nest (i.e. no third reduction loop). *)
+  (* The logical embedding nests batch x output x vocab loops; after the rewrite the vocabulary
+     reduction loop is gone, leaving only the 2 batch/output loops (the small literals are inlined as
+     constant fills, contributing no loops). *)
+  p "vocabulary reduction loop is eliminated" (loops <= 2);
   p "gather's dynamic index reads the token-id tensor" index_is_input;
 
   (* --- Out-of-bounds index yields a zero embedding row --- *)
