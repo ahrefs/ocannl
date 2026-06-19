@@ -47,7 +47,7 @@ type t =
       mutable debug : string;
     }
   | Set_local of scope_id * scalar_t
-  | Declare_local of scope_id
+  | Declare_local of { id : scope_id; needs_init : bool }
 [@@deriving sexp_of, equal]
 
 and scalar_t =
@@ -1549,7 +1549,7 @@ let cse_equal_scalar s1 s2 =
     | Set { tn = tn1; idcs = i1; llsc = s1; _ }, Set { tn = tn2; idcs = i2; llsc = s2; _ } ->
         Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2 && equal_scalar s1 s2
     | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
-    | Declare_local id1, Declare_local id2 -> ids_equal id1 id2
+    | Declare_local { id = id1; _ }, Declare_local { id = id2; _ } -> ids_equal id1 id2
     | _ -> false
   and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
     match (a, b) with
@@ -1764,6 +1764,52 @@ let writes_of_stmt (stmt : t) : Set.M(Tn).t =
   loop stmt;
   !acc
 
+(** Returns [true] if the given [scope_id] is read (via [Get_local]) before the first definitely
+    executed [Set_local] to that id in [body]. Used to decide whether a [Local_scope] or hoisted
+    [Declare_local] needs a zero initializer. A loop body write is only considered definite when the
+    loop bounds guarantee at least one iteration ([from_ <= to_]); reads inside loops always count
+    conservatively. Nested [Local_scope] binders introduce distinct [scope_id]s, so there is no
+    shadowing to handle. *)
+let reads_scope_before_set (target : scope_id) (body : t) : bool =
+  let rec scalar_has_read (llsc : scalar_t) : bool =
+    match llsc with
+    | Get_local id -> equal_scope_id id target
+    | Local_scope { body; _ } -> proc_has_read body
+    | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
+        scalar_has_read s1 || scalar_has_read s2 || scalar_has_read s3
+    | Binop (_, (s1, _), (s2, _)) -> scalar_has_read s1 || scalar_has_read s2
+    | Unop (_, (s, _)) -> scalar_has_read s
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+  and proc_has_read (llc : t) : bool =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> false
+    | Seq (a, b) -> proc_has_read a || proc_has_read b
+    | For_loop { body; _ } -> proc_has_read body
+    | Set { llsc; _ } -> scalar_has_read llsc
+    | Set_from_vec { arg = s, _; _ } -> scalar_has_read s
+    | Set_local (_, llsc) -> scalar_has_read llsc
+  in
+  (* Three-valued scan: Read (found a get before first definite set),
+     Written (found a definite set before any get), Neither. *)
+  let rec scan (llc : t) : [ `Read | `Written | `Neither ] =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> `Neither
+    | Set { llsc; _ } -> if scalar_has_read llsc then `Read else `Neither
+    | Set_from_vec { arg = s, _; _ } -> if scalar_has_read s then `Read else `Neither
+    | Set_local (id, llsc) ->
+        if scalar_has_read llsc then `Read
+        else if equal_scope_id id target then `Written
+        else `Neither
+    | Seq (a, b) -> (
+        match scan a with `Read -> `Read | `Written -> `Written | `Neither -> scan b)
+    | For_loop { body; from_; to_; _ } -> (
+        match scan body with
+        | `Read -> `Read
+        | `Written -> if from_ <= to_ then `Written else `Neither
+        | `Neither -> `Neither)
+  in
+  match scan body with `Read -> true | `Written | `Neither -> false
+
 (** Hoists shared [Local_scope] computations from sibling statements to the enclosing scope.
     Operates on a flat list of sibling statements. *)
 let hoist_shared_locals (stmts : t list) : t list =
@@ -1832,7 +1878,9 @@ let hoist_shared_locals (stmts : t list) : t list =
                 replace_local_scope_in_stmt ~target:target_scalar ~replacement:canonical_id
                   ~stale_ids:all_ids stmts.(idx));
           (* Record insertion: Declare_local + body before first user *)
-          insertions := (first_user, [ Declare_local canonical_id; body ]) :: !insertions));
+          let needs_init = reads_scope_before_set canonical_id body in
+          insertions :=
+            (first_user, [ Declare_local { id = canonical_id; needs_init }; body ]) :: !insertions));
     (* Apply insertions (sorted by position, last first to preserve indices) *)
     let insertions = List.sort !insertions ~compare:(fun (a, _) (b, _) -> Int.descending a b) in
     let result = Array.to_list stmts in
@@ -1952,7 +2000,7 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
     | Set_local ({ tn; _ }, llsc) ->
         visit tn;
         loop_scalar llsc
-    | Declare_local { tn; _ } -> visit tn
+    | Declare_local { id = { tn; _ }; _ } -> visit tn
   and loop_scalar fc =
     match fc with
     | Local_scope { id = { tn; _ }; body; orig_indices = _ } ->
@@ -2048,7 +2096,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Set_local (id, llsc) ->
         let prec = Lazy.force id.tn.prec in
         group (doc_local id ^^ string " := " ^^ doc_of_float prec llsc ^^ string ";")
-    | Declare_local id -> group (string "declare " ^^ doc_local id ^^ string ";")
+    | Declare_local { id; _ } -> group (string "declare " ^^ doc_local id ^^ string ";")
   and doc_of_float prec value =
     match value with
     | Local_scope { id; body; _ } ->
@@ -2143,7 +2191,7 @@ let to_doc ?name ?static_indices () llc =
     | Staged_compilation callback -> callback ()
     | Set_local (id, llsc) ->
         group (doc_local id ^^ string " := " ^^ doc_of_float llsc ^^ string ";")
-    | Declare_local id -> group (string "declare " ^^ doc_local id ^^ string ";")
+    | Declare_local { id; _ } -> group (string "declare " ^^ doc_local id ^^ string ";")
   and doc_of_float value =
     match value with
     | Local_scope { id; body; _ } ->

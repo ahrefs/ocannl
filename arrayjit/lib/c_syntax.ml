@@ -638,11 +638,15 @@ module C_syntax (B : C_syntax_config) = struct
         else
           let block_content = local_defs ^^ hardline ^^ assignment in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-    | Declare_local ({ tn = { prec; _ }; _ } as id) ->
+    | Declare_local { id = ({ tn = { prec; _ }; _ } as id); needs_init } ->
         let scope_prec = Lazy.force prec in
         let num_typ = string (B.typ_of_prec scope_prec) in
-        let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
-        let init_zero = string " = " ^^ string prefix ^^ string "0" ^^ string postfix in
+        let init_zero =
+          if needs_init then
+            let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+            string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+          else empty
+        in
         num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi
 
   and pp_scalar (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
@@ -655,9 +659,10 @@ module C_syntax (B : C_syntax_config) = struct
         let scope_prec = Lazy.force scope_prec in
         let num_typ = string (B.typ_of_prec scope_prec) in
         let init_zero =
-          (* TODO(#340): only do this in the rare cases where the computation is accumulating *)
-          let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
-          string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+          if Low_level.reads_scope_before_set id body then
+            let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
+            string " = " ^^ string prefix ^^ string "0" ^^ string postfix
+          else empty
         in
         let decl = num_typ ^^ space ^^ pp_scope_id id ^^ init_zero ^^ semi in
         (* A [Local_scope] body is a nested sub-computation; conservatively treat it like a loop

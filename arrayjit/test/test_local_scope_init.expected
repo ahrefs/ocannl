@@ -1,0 +1,29 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+reads_scope_before_set: all unit assertions passed
+=== Local_scope write-before-read (no init): ===
+{
+  float v10_src;
+  v10_src = src[0];
+  out[0] = v10_src;
+}
+=== Local_scope read-before-write (needs init): ===
+{
+  float v20_src2 = (float)(0);
+  for (uint32_t i2 = 0; i2 <= 3; ++i2) {
+    v20_src2 = (v20_src2 + src2[i2]);
+  }
+  out2[0] = v20_src2;
+}
+=== Hoisted Declare_local write-before-read (no init): ===
+float v30_src3;
+v30_src3 = src3[0];
+out3[0] = v30_src3;
+out4[0] = v30_src3;
+=== Hoisted Declare_local read-before-write (needs init): ===
+float v40_src4 = (float)(0);
+for (uint32_t i3 = 0; i3 <= 3; ++i3) {
+  v40_src4 = (v40_src4 + src4[i3]);
+}
+out5[0] = v40_src4;
+out6[0] = v40_src4;

@@ -41,7 +41,7 @@ type t =
       mutable debug : string;
     }
   | Set_local of scope_id * scalar_t
-  | Declare_local of scope_id
+  | Declare_local of { id : scope_id; needs_init : bool }
 [@@deriving sexp_of, equal]
 
 and scalar_t =
@@ -151,6 +151,11 @@ val optimize :
   Indexing.static_symbol list ->
   t ->
   optimized
+
+val reads_scope_before_set : scope_id -> t -> bool
+(** [reads_scope_before_set id body] returns [true] if [id] is read (via [Get_local]) before the
+    first definitely-executed [Set_local id] in [body]. Use this at code-generation time to decide
+    whether a [Local_scope] or [Declare_local] declaration needs a zero initializer. *)
 
 val eliminate_common_subexpressions : t -> t
 (** Eliminates common subexpressions within each statement's scalar expression tree. Replaces
