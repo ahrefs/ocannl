@@ -570,6 +570,11 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
         else check_sibling_escaping ~env_dom ~code:7 idcs;
         loop_scalar ~env_dom ~loop_ranges arg
     | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
+    (* #296: defensive/unreachable on the fresh-lowering path. [Declare_local] is produced only by
+       [hoist_cross_statement_cse], which runs last in [optimize_proc]; [check_and_store_virtual]
+       captures computations during [virtual_llc] (before hoisting), so a stored computation never
+       contains one. The arm guards the not-currently-exercised case of a hoisted program re-entering
+       virtualization. *)
     | Declare_local _ -> raise @@ Non_virtual 19
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual 8
@@ -1173,13 +1178,18 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
         @@ loop_proc ~balanced ~env_dom body
     | Zero_out tn ->
         if not @@ Tn.known_non_virtual tn then (
-          (* FIXME(#296): *)
+          (* #296: a tnode still not [known_non_virtual] by cleanup was never forced [Never_virtual]
+             during tracing/virtualization, so it has no materialized reader left -- its only uses
+             were inlined into [Local_scope] bodies. We therefore commit it to [Virtual] and drop
+             this now-dead initializer. Provenance 151 = dropped from the [Zero_out] cleanup arm. *)
           Tn.update_memory_mode tn Virtual 151;
           None)
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
         if not @@ Tn.known_non_virtual tn then (
-          (* FIXME(#296): *)
+          (* #296: same default-to-[Virtual] policy as the [Zero_out] arm above -- an undecided tnode
+             has no materialized reader left after inlining, so commit it [Virtual] and drop the
+             store. Provenance 152 = dropped from the [Set]/[Set_from_vec] cleanup arms. *)
           Tn.update_memory_mode tn Virtual 152;
           None)
         else (
@@ -1188,7 +1198,10 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
           Some (Set { tn; idcs; llsc = loop_scalar ~balanced ~env_dom llsc; debug }))
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         if not @@ Tn.known_non_virtual tn then (
-          (* FIXME(#296): *)
+          (* #296: same default-to-[Virtual] policy as [Set]. A vector op that genuinely cannot be
+             scalar-inlined was already forced [Never_virtual] (via [Non_virtual 140] in
+             [inline_computation]), so reaching here means the node stayed virtual-eligible and its
+             vector store is dead -- drop it. Provenance 152. *)
           Tn.update_memory_mode tn Virtual 152;
           None)
         else (
@@ -1217,7 +1230,12 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
     | Constant _ -> llsc
     | Constant_bits _ -> llsc
     | Get (a, indices) ->
-        (* TODO(#296): this should probably already be Never_virtual, we could assert it. *)
+        (* #296: keep [update_memory_mode] rather than [assert (Tn.known_non_virtual a)]. A [Get]
+           surviving into cleaned code reads a materialized array, but its target's mode is not
+           guaranteed finalized before this point: cleanup is itself the phase that commits surviving
+           reads to [Never_virtual] (a node read here but only written under a virtualized setter is
+           decided right now), so this update is the commitment point, not a redundant re-assertion.
+           Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
         Tn.update_memory_mode a Never_virtual 17;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));

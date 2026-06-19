@@ -19,7 +19,7 @@ Complete the documentation in `docs/lowering_and_inlining.md` to accurately refl
 
 ### Documentation (lowering_and_inlining.md)
 
-- [ ] **Accuracy pass**: Every code snippet, line-number reference, and behavioral claim in the doc matches the current source (2074 lines in `low_level.ml` as of 2026-06-12).
+- [ ] **Accuracy pass**: Every code snippet and behavioral claim in the doc matches the current source. **The doc must contain no source line numbers** (resolved 2026-06-19, Q2) — reference functions/phases/constructors by name, not line. Line-number drift is the exact failure this issue exists to fix, so the accuracy pass *removes* the existing `line 471`-style references rather than refreshing them.
 - [ ] **Missing sections added**:
   - `Set_from_vec` / vector operations: the doc currently omits `Set_from_vec` handling in tracing, virtualization, inlining, and cleanup.
   - `eliminate_common_subexpressions` (CSE pass): added in the pipeline after `simplify_llc`, not yet documented as a pipeline phase.
@@ -40,7 +40,7 @@ Complete the documentation in `docs/lowering_and_inlining.md` to accurately refl
 
 ### Audit (low_level.ml)
 
-- [ ] **Resolve FIXME(#296) markers**: For each of the 5 `FIXME(#296)` comments, determine whether the current behavior is correct or needs a code change. If correct, replace the FIXME with an explanatory comment. If incorrect, file a follow-up issue.
+- [ ] **Resolve FIXME(#296) markers**: The intended resolution is **explain and keep the behavior** (resolved 2026-06-19, Q4): the cleanup phase's policy of defaulting undecided tnodes to `Virtual` (provenance 15/151/152) is accepted as correct. For each of the 5 `FIXME(#296)` sites, replace the FIXME with an explanatory comment stating *why* cleanup defaults the undecided node to `Virtual` (and drops the loop where applicable). This is a document-and-retain pass, **not** an investigation into whether forcing `Virtual 15` on a not-yet-decided node could discard needed computation — that deeper question is explicitly out of scope. File a follow-up issue only if the audit incidentally surfaces a concrete bug.
 - [ ] **TODO(#296) at line 935** *(was 928)*: Evaluate whether the `Get` case in `cleanup_virtual_llc.loop_scalar` can indeed assert `Never_virtual` instead of calling `update_memory_mode`. If safe, convert to assert; otherwise document why not.
 - [ ] **Dead code check**: Identify any unreachable match arms or functions in `low_level.ml`.
 - [ ] **Edge cases**: Verify behavior when `dims` is empty (relevant to `Set_from_vec` tracing at line 331), when `computations` list is empty at inline time, and when `check_and_store_virtual` encounters `Concat` indices.
@@ -106,3 +106,12 @@ All 5 markers are in `cleanup_virtual_llc` (starts at line 866; line numbers as 
 - Accept the "no line numbers in the doc" rule (recommendation 1)?
 - Doc altitude (recommendation 4): should `loop_over_dims`/`unroll_dims`/`loop_over_padding_region` be documented in the doc or only in `low_level.mli`?
 - For the FIXME sites: is the intended resolution "explain and keep the behavior" (cleanup defaults undecided nodes to Virtual) or is there appetite to investigate whether forcing `Virtual 15` on a not-yet-decided node whose loop is then dropped can ever discard needed computation? The audit should state which question it is answering.
+
+## Decisions resolved (2026-06-19, Łukasz)
+
+All four decision points are now answered; `has_questions` cleared and the task moved to `ready`.
+
+1. **Scope / milestone — keep combined, do it now.** #296 is specifically a doc-and-audit update *at the current stage to prepare for work on v0.8*; treat the whole task (doc accuracy pass + audit) as current-cycle work, **not** split into a v1.0 doc-later half. The "later doc drift" staleness worry behind recommendation 5 is moot — that drift has not happened yet, so it is not a reason to defer the doc half. Milestone stays as-is (v0.7); no GitHub retarget, no issue split.
+2. **No line numbers in the doc — accepted.** The accuracy pass removes existing source line-number references in favor of function/phase/constructor names (recommendation 1; folded into the Accuracy-pass acceptance criterion above).
+3. **Doc altitude — medium.** Explain the pipeline and utilities *algorithmically but at a conceptual level*: describe what each phase/utility does and how it works in algorithmic terms, without mirroring the source line-by-line. This sits between "conceptual overview only" and "source mirror" — `loop_over_dims`/`unroll_dims`/`loop_over_padding_region` get a conceptual algorithmic description in the doc (not relegated solely to `.mli` comments, not reproduced verbatim).
+4. **FIXME sites — explain and keep the behavior.** Document *why* cleanup defaults undecided tnodes to `Virtual` (provenance 15/151/152) and retain that behavior; do not open the deeper "could this discard needed computation?" investigation (folded into the Resolve-FIXME acceptance criterion above).
