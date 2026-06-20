@@ -68,13 +68,14 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Headline target: **ICFP 
   - [x] RoPE and other non-learned position embeddings (#398); decoder-only autoregressive transformer toy (#57).
   - [x] Ternary einsum notation (#305); loop-invariant hoisting (#350) and common subexpression elimination (#351).
   - [ ] Universal Pool Allocator across backends (#344).
-  - [ ] Sharding and slicing with minimal copying (#293); MSVC on the native-Windows C backend (#313).
+  - [ ] Sharding and slicing with minimal copying (#293).
 * **0.8 (Summer 2026): GPU-style performance -- low hanging fruit; AMD HIP backend.**
   - [ ] First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   - [ ] Finally from [llm.c](https://github.com/karpathy/llm.c).
   - [ ] These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
   - [ ] HIP backend for AMD hardware (#411) — a major effort on par with the CUDA and Metal backends. The HIP bindings ship as an independent GitHub project and opam package (same as `cudajit` for CUDA and `metal` for Metal), usable by the community on their own; the `arrayjit` backend then depends on those bindings.
+  - [ ] MSVC on the native-Windows C backend (#313).
 * **0.9 (Aug 24, 2026 — ICFP week): Optimize performance: program search; real-world examples.**
   - [ ] Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   - [ ] We should also reproduce the search that tinygrad is doing. Inspiration: Halide.

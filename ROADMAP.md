@@ -47,7 +47,6 @@ This is the consolidated "paper-ready" release. It absorbs the frontend-finaliza
 **Still open in v0.7:**
 - **Universal Pool Allocator across backends** (#344) — in progress (buffer-addressing seam landed; full pooling scoped).
 - **`Local_scope` initialization tracking** (#340).
-- **MSVC support for the native-Windows C backend** (#313).
 - **Sharding and slicing with minimal copying** (#293) — the data-parallel driver with merge-buffer all-reduce has landed; remaining work continues here.
 - **Documentation:** flesh out `lowering_and_inlining.md` and audit `low_level.ml` (#296).
 - Inlining stretch goals: share one `for` loop across virtual tensors (#134); inline virtual nodes with non-linear index symbols (#133).
@@ -64,6 +63,7 @@ A substantial milestone (~2 months). GitHub milestone scope: *"GPU tiling and re
 - **Matmul tiling** (#412) — fast multidimensional matrix multiplication, first from Böhm's CPU article, then the CUDA worklog, then lessons from llm.c (#253).
 - **Megakernel exploration** (#318, done as a study) — may require splitting routines into multiple kernels.
 - **Metal private mode** (#320, done).
+- **MSVC on the native-Windows C backend** (#313) — grouped here with the other backend work (moved from v0.7's open list; the GitHub milestone is v0.8).
 - **AMD HIP backend** (#411) — a major effort, comparable to the CUDA and Metal backends (redistributed here from the dissolved v0.7.1). Standalone HIP bindings ship as an independent GitHub project and opam package, following the same pattern as the CUDA bindings (`cudajit`) and the Metal bindings (`metal`), so the OCaml community can use them without taking on the weight of OCANNL; the `arrayjit` backend then **depends on** those bindings, with the usual code-generation, memory-management, and synchronization plumbing.
 - Stretch / study: AVX/AVX2 intrinsics for the C backend (#164); `ggml` efficiency lessons (#163); restore CUDA `__constant__` arrays (#195); small-Transformer digit-addition reproduction (#427).
 
