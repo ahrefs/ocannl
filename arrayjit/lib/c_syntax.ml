@@ -937,8 +937,12 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 let then_guard = compose guard cond_c in
                 let else_guard = compose guard (parens (string "!" ^^ parens cond_c)) in
-                let v1_doc, idcs1 = debug_float v1_prec v1 in
-                (* condition: no conversion, unguarded (a comparison never dereferences an array) *)
+                let v1_doc, idcs1 = debug_float ?guard v1_prec v1 in
+                (* condition: no precision conversion. It is evaluated whenever the enclosing branch is
+                   reached, so its array reads (a nested [Where] condition may contain a [Get]) are
+                   gated by the incoming [guard] -- not by [cond_c], which the condition itself
+                   computes. At the top level [guard = None], so this is a no-op for the common
+                   pure-index-comparison case. *)
                 let v2_doc, idcs2 = debug_float ~guard:then_guard prec v2 in
                 (* then: result precision, gated by [cond] *)
                 let v3_doc, idcs3 = debug_float ~guard:else_guard prec v3 in

@@ -6,3 +6,6 @@ Retrieving commandline, environment, or config file variable ocannl_ll_ident_sty
 Not found, using default heuristic
 Stage B unit-solve producer read is gated by the range condition in debug log: true
 Stage B debug log preserves the annotated Where branch displays: true
+symmetric Where then-branch read is gated by the condition: true
+symmetric Where else-branch read is gated by the negated condition: true
+nested Where inner-condition array read is gated by the outer guard: true

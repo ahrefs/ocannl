@@ -838,14 +838,3 @@
  (libraries base ocannl stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
-
-(test
- (name debug_where_guard)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
- (modules debug_where_guard)
- (libraries base ocannl stdio unix)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
