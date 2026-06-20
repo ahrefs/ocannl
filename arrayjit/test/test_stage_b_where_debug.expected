@@ -1,0 +1,8 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Retrieving commandline, environment, or config file variable ocannl_debug_log_to_stream_files
+Not found, using default false
+Retrieving commandline, environment, or config file variable ocannl_ll_ident_style
+Not found, using default heuristic
+Stage B unit-solve producer read is gated by the range condition in debug log: true
+Stage B debug log preserves the annotated Where branch displays: true

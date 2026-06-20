@@ -232,8 +232,11 @@ let ac6 () =
    never passed to [debug_float] -- only the runtime [pp_scalar] ternary (which short-circuits)
    appears. We assert the kernel still virtualizes (Stage B path) and computes correct results with
    debug value-logging enabled (the config that would surface the OOB read), confirming no fault.
-   The non-vacuous coverage of the [debug_float] [Where] guard itself -- the actual fix site -- is in
-   [test/operations/debug_where_guard.ml], which exercises a directly-logged top-level [Where]. --- *)
+   This is a no-fault/parity sanity, NOT the branch-read invariant (that flow's [Where] is not
+   debug-logged). The non-vacuous coverage of the [debug_float] [Where] guard at the exact Stage B
+   shape is [arrayjit/test/test_stage_b_where_debug.ml] (the same
+   [Where (range_cond, Get producer, Get_local id)] in a logged position); the symmetric else-branch
+   is covered by [test/operations/debug_where_guard.ml]. --- *)
 (* Route stdout to /dev/null around [f] so the (backend-specific) config-retrieval noise that
    [log_level > 1] turns on stays out of the deterministic test output. *)
 let with_stdout_to_devnull f =
