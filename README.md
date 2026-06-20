@@ -59,7 +59,7 @@ NOTE: debug logging from CUDA in complex settings is a bit tricky, it involves a
 
 See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Headline target: **ICFP 2026 week (August 24, 2026)**.
 
-> Note (June 2026): the schedule drifted because of a slowdown from January to May; we are catching up. **v0.6.4 is skipped as a release** — its work (concatenation, RoPE, transformer toy) ships inside v0.7 — and **v0.7.2 is consolidated into v0.7**. The last tagged release is 0.6.3. The sequence is now `0.6.3 → 0.7 → 0.7.1 → 0.8 → 0.9 → 1.0`.
+> Note (June 2026): the schedule drifted because of a slowdown from January to May; we are catching up. **v0.6.4 is skipped as a release** — its work (concatenation, RoPE, transformer toy) ships inside v0.7 — and **v0.7.2 is consolidated into v0.7**. **v0.7.1 is dissolved**: its AMD HIP backend (#411) moves to v0.8, and its real-world examples and tokenizer bindings move to v0.9. The last tagged release is 0.6.3. The sequence is now `0.6.3 → 0.7 → 0.8 → 0.9 → 1.0`.
 
 * **0.7 (Late Jun 2026): Frontend finalization + compiler optimizations.** The consolidated paper-ready release for workshop submissions (OCaml Workshop, FProPer). Absorbs the former v0.6.4/v0.6.5/v0.7.0 frontend work and the former v0.7.2 optimization work.
   - [x] Migrate from the "hosted tensor" idea to always requiring a context when accessing tensors and dealing with devices directly; remove the `array` field of `Tnode.t` and the hosted memory mode (#333).
@@ -69,21 +69,20 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Headline target: **ICFP 
   - [x] Ternary einsum notation (#305); loop-invariant hoisting (#350) and common subexpression elimination (#351).
   - [ ] Universal Pool Allocator across backends (#344).
   - [ ] Sharding and slicing with minimal copying (#293); MSVC on the native-Windows C backend (#313).
-* **0.7.1 (Jul 2026): AMD HIP backend and real-world examples.**
-  - [ ] HIP backend for AMD hardware (#411) — a major effort on par with the CUDA and Metal backends. The HIP bindings ship as an independent GitHub project and opam package (same as `cudajit` for CUDA and `metal` for Metal), usable by the community on their own; the `arrayjit` backend then depends on those bindings.
-  - [x] makemore progression (bigram → MLP → BatchNorm → transformer), mirroring Karpathy's lectures (#59).
-  - [ ] Convnet examples: MNIST and CIFAR (#54); LSTM example (#60).
-  - [ ] Transformer inference for a small open-weights model (one of GPT-2, LLaMA, Gemma) (#377).
-  - [ ] Tokenizers are being developed in the spin-off project [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) (opam package `dataprep`, currently unreleased).
-* **0.8 (Summer 2026): GPU-style performance -- low hanging fruit.**
+* **0.8 (Summer 2026): GPU-style performance -- low hanging fruit; AMD HIP backend.**
   - [ ] First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
   - [ ] Finally from [llm.c](https://github.com/karpathy/llm.c).
   - [ ] These will either require splitting a routine into multiple kernels, or implementing the megakernel approach.
-* **0.9 (Aug 24, 2026 — ICFP week): Optimize performance: program search.**
+  - [ ] HIP backend for AMD hardware (#411) — a major effort on par with the CUDA and Metal backends. The HIP bindings ship as an independent GitHub project and opam package (same as `cudajit` for CUDA and `metal` for Metal), usable by the community on their own; the `arrayjit` backend then depends on those bindings.
+* **0.9 (Aug 24, 2026 — ICFP week): Optimize performance: program search; real-world examples.**
   - [ ] Instead of dynamic scheduling as in tinygrad, we can schedule statically by program search.
   - [ ] We should also reproduce the search that tinygrad is doing. Inspiration: Halide.
   - [ ] Check which optimizations are missing against the implementation of [llm.c](https://github.com/karpathy/llm.c).
+  - [x] makemore progression (bigram → MLP → BatchNorm → transformer), mirroring Karpathy's lectures (#59).
+  - [ ] Convnet examples: MNIST and CIFAR (#54); LSTM example (#60).
+  - [ ] Transformer inference for a small open-weights model (one of GPT-2, LLaMA, Gemma) (#377).
+  - [ ] Tokenizers are being developed in the spin-off project [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) (opam package `dataprep`, currently unreleased).
 * **1.0 (End Oct 2026): Few documentation gaps, some degree of feature completeness, ergonomics, safety.**
   - [ ] Feature completeness demonstrated by resolving / implementing a few of the $\color{green}{\text{explore}}$ issues.
   - [ ] Concise syntax for transfers into the merge buffer since we know which tensor node is transferred and where to.
