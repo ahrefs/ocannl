@@ -226,7 +226,41 @@ let ac6 () =
   p "AC6 triangular virtual matches expected" (Array.equal Float.equal tri_virtual tri_expected);
   p "AC6 triangular virtual matches materialized" (Array.equal Float.equal tri_virtual tri_mat)
 
+(* --- task-9658aac9: reuse the Stage B unit-solve scatter->copy under debug value-logging. The
+   unit-solve [Where (range_cond, Get (src, solved_idx), Get_local id)] is emitted inside the
+   virtualized producer's [Local_scope] body, which is rendered with [log_set_locals:false], so it is
+   never passed to [debug_float] -- only the runtime [pp_scalar] ternary (which short-circuits)
+   appears. We assert the kernel still virtualizes (Stage B path) and computes correct results with
+   debug value-logging enabled (the config that would surface the OOB read), confirming no fault.
+   The non-vacuous coverage of the [debug_float] [Where] guard itself -- the actual fix site -- is in
+   [test/operations/debug_where_guard.ml], which exercises a directly-logged top-level [Where]. --- *)
+(* Route stdout to /dev/null around [f] so the (backend-specific) config-retrieval noise that
+   [log_level > 1] turns on stays out of the deterministic test output. *)
+let with_stdout_to_devnull f =
+  Stdlib.flush Stdlib.stdout;
+  let saved = Unix.dup Unix.stdout in
+  let dn = Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o600 in
+  Unix.dup2 dn Unix.stdout;
+  Unix.close dn;
+  Exn.protect ~f ~finally:(fun () ->
+      Stdlib.flush Stdlib.stdout;
+      Unix.dup2 saved Unix.stdout;
+      Unix.close saved)
+
+let ac_debug_guard () =
+  Utils.set_log_level 2;
+  Utils.settings.debug_log_from_routines <- true;
+  Utils.settings.output_debug_files_in_build_directory <- true;
+  let out, dst_virtual =
+    with_stdout_to_devnull (fun () -> run_scatter_then_copy ~materialize_dst:false)
+  in
+  let expected = [| 10.; 11.; 12.; 13.; 14.; 15. |] in
+  p "AC4 debug-logging: Stage B unit-solve virtualized" dst_virtual;
+  p "AC4 debug-logging: parity holds under debug value-logging"
+    (Array.equal Float.equal out expected)
+
 let () =
   ac4 ();
   ac6 ();
+  ac_debug_guard ();
   Stdio.printf "%!"

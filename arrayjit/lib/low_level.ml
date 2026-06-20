@@ -1045,6 +1045,15 @@ let%track7_sexp inline_computation ~id
              the map is surjective, so every read cell IS written by exactly one iteration (injectivity)
              and the init value is always overwritten -- 0. is a safe neutral. *)
           if (not (List.is_empty conds)) && not has_zero_init then needs_init := true;
+          (* task-9658aac9: the then-arm [acc] structurally contains the producer read at the
+             unit-solved index, so for a non-matching kept-loop iteration that index (hence the flat
+             offset) can be out of range. This is sound today: every backend lowers [Where] to a C/
+             CUDA/Metal ternary that short-circuits, so arithmetic execution never dereferences the
+             discarded then-branch. The one path that would dereference it unconditionally is debug
+             value-logging, which is made safe by [C_syntax.debug_float]'s [Where] arm gating each
+             branch read on its (negated) condition. Full structural soundness -- index clamping or
+             an IR branch so the discarded read is never even constructed -- is deferred until an
+             eager/predicated backend that evaluates both [Where] arms actually lands. *)
           let guarded =
             List.fold conds ~init:inlined ~f:(fun acc cond ->
                 Ternop (Ops.Where, (cond, index_prec), (acc, value_prec), (Get_local id, value_prec)))
