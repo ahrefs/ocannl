@@ -12,3 +12,5 @@ AC6 triangular: virtual=[0. 1. 0. 0. 0. 2. 3. 0. 0. 0. 4. 5.] expected=[0. 1. 0.
 AC6 triangular dst virtualized (Stage B path exercised): true
 AC6 triangular virtual matches expected: true
 AC6 triangular virtual matches materialized: true
+AC4 debug-logging: Stage B unit-solve virtualized: true
+AC4 debug-logging: parity holds under debug value-logging: true

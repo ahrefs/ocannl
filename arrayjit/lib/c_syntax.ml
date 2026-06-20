@@ -818,11 +818,24 @@ module C_syntax (B : C_syntax_config) = struct
         let expr = group (B.unop_syntax prec op expr_v) in
         (defs, expr)
 
-  and debug_float (prec : Ops.prec) (value : Low_level.scalar_t) :
+  and debug_float ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document
       * [ `Accessor of Indexing.axis_index array * int array | `Value of PPrint.document ] list =
-    (* Returns (value expression doc, list of arguments for printf) *)
+    (* Returns (value expression doc, list of arguments for printf).
+
+       [guard] (task-9658aac9): when [Some cond_c] (a real C boolean expression), any array
+       dereference produced here is only safe when [cond_c] holds, so its printf [`Value] argument is
+       short-circuited as [(cond_c ? read : 0)]. This mirrors the runtime [Where] ternary's
+       short-circuiting and closes the only debug-logging path that would otherwise dereference a
+       conditionally-evaluated branch (e.g. the Stage B unit-solve then-branch producer read) out of
+       bounds -- the same hazard gh-343 fixed for the sibling [Get_dynamic] gather. Only the
+       dereferencing argument is gated; the displayed expression doc is unchanged. *)
     let open PPrint in
+    let guarded_value access_doc =
+      match guard with
+      | None -> access_doc
+      | Some g -> parens (g ^^ string " ? " ^^ access_doc ^^ string " : 0")
+    in
     match value with
     | Local_scope { id; _ } ->
         (* Not printing the inlined definition: (1) code complexity; (2) don't overload the debug
@@ -848,7 +861,7 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ string postfix
           ^^ braces (string ("=" ^ B.float_log_style))
         in
-        (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
+        (expr_doc, [ `Accessor (idcs, dims); `Value (guarded_value access_doc) ])
     | Get (tn, idcs) ->
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
@@ -862,7 +875,7 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ string postfix
           ^^ braces (string ("=" ^ B.float_log_style))
         in
-        (expr_doc, [ `Accessor (idcs, dims); `Value access_doc ])
+        (expr_doc, [ `Accessor (idcs, dims); `Value (guarded_value access_doc) ])
     | Get_dynamic { tn; dyn_value = iv, iprec; _ } ->
         (* gh-343: do NOT dereference the table in debug logs. A [Where]'s [debug_float] collects all
            three branch values as printf arguments evaluated unconditionally, so returning the raw
@@ -891,31 +904,54 @@ module C_syntax (B : C_syntax_config) = struct
     | Embed_index idx ->
         let idx_doc = pp_axis_index idx in
         ((if PPrint.is_empty idx_doc then string "0" else idx_doc), [])
-    | Binop (Arg1, (v1, _), _v2) -> debug_float prec v1
-    | Binop (Arg2, _v1, (v2, _)) -> debug_float prec v2
+    | Binop (Arg1, (v1, _), _v2) -> debug_float ?guard prec v1
+    | Binop (Arg2, _v1, (v2, _)) -> debug_float ?guard prec v2
     | Ternop (op, (v1, v1_prec), (v2, v2_prec), (v3, v3_prec)) ->
         let v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3 =
           if Ops.is_homogeneous_prec_ternop op then
             (* Homogeneous: all arguments use result precision *)
-            let v1_doc, idcs1 = debug_float prec v1 in
-            let v2_doc, idcs2 = debug_float prec v2 in
-            let v3_doc, idcs3 = debug_float prec v3 in
+            let v1_doc, idcs1 = debug_float ?guard prec v1 in
+            let v2_doc, idcs2 = debug_float ?guard prec v2 in
+            let v3_doc, idcs3 = debug_float ?guard prec v3 in
             (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
           else
             (* Heterogeneous: handle based on operation *)
             match op with
             | Ops.Where ->
-                let v1_doc, idcs1 = debug_float v1_prec v1 in
-                (* condition: no conversion *)
-                let v2_doc, idcs2 = debug_float prec v2 in
-                (* then: result precision *)
-                let v3_doc, idcs3 = debug_float prec v3 in
-                (* else: result precision *)
+                (* task-9658aac9: short-circuit array-read leaves on the live [Where] condition so
+                   debug value-logging never dereferences a conditionally-evaluated branch out of
+                   bounds (the Stage B unit-solve then-branch producer read; gh-343's hazard class
+                   for the sibling [Get_dynamic]). The displayed ternary is unchanged -- only the
+                   dereferencing printf arguments are gated: then-reads under [cond], else-reads
+                   under [!cond], each AND-composed with any enclosing [guard] so nested/triangular
+                   range guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real C
+                   guard expression here, and via [debug_float] for the annotated display below. *)
+                let _cond_defs, cond_c = pp_scalar v1_prec v1 in
+                (* Conditions reaching a Where here are pure index/value comparisons (range guards,
+                   in_range) with no Local_scope, so [_cond_defs] is empty. Even if a future
+                   condition inlined a Local_scope, dropping the redundant re-definition is safe: the
+                   local is already bound by the assignment computation that precedes the log
+                   statement (the same invariant debug_float's Local_scope arm relies on). *)
+                let compose outer c =
+                  match outer with None -> c | Some g -> parens (g ^^ string " && " ^^ c)
+                in
+                let then_guard = compose guard cond_c in
+                let else_guard = compose guard (parens (string "!" ^^ parens cond_c)) in
+                let v1_doc, idcs1 = debug_float ?guard v1_prec v1 in
+                (* condition: no precision conversion. It is evaluated whenever the enclosing branch is
+                   reached, so its array reads (a nested [Where] condition may contain a [Get]) are
+                   gated by the incoming [guard] -- not by [cond_c], which the condition itself
+                   computes. At the top level [guard = None], so this is a no-op for the common
+                   pure-index-comparison case. *)
+                let v2_doc, idcs2 = debug_float ~guard:then_guard prec v2 in
+                (* then: result precision, gated by [cond] *)
+                let v3_doc, idcs3 = debug_float ~guard:else_guard prec v3 in
+                (* else: result precision, gated by [!cond] *)
                 (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
             | _ ->
-                let v1_doc, idcs1 = debug_float v1_prec v1 in
-                let v2_doc, idcs2 = debug_float v2_prec v2 in
-                let v3_doc, idcs3 = debug_float v3_prec v3 in
+                let v1_doc, idcs1 = debug_float ?guard v1_prec v1 in
+                let v2_doc, idcs2 = debug_float ?guard v2_prec v2 in
+                let v3_doc, idcs3 = debug_float ?guard v3_prec v3 in
                 (v1_doc, idcs1, v2_doc, idcs2, v3_doc, idcs3)
         in
         (B.ternop_syntax prec op v1_doc v2_doc v3_doc, idcs1 @ idcs2 @ idcs3)
@@ -923,13 +959,13 @@ module C_syntax (B : C_syntax_config) = struct
         let v1_doc, idcs1, v2_doc, idcs2 =
           if Ops.is_homogeneous_prec_binop op then
             (* Homogeneous: both arguments use result precision *)
-            let v1_doc, idcs1 = debug_float prec v1 in
-            let v2_doc, idcs2 = debug_float prec v2 in
+            let v1_doc, idcs1 = debug_float ?guard prec v1 in
+            let v2_doc, idcs2 = debug_float ?guard prec v2 in
             (v1_doc, idcs1, v2_doc, idcs2)
           else
             (* Heterogeneous: arguments keep their natural precision *)
-            let v1_doc, idcs1 = debug_float v1_prec v1 in
-            let v2_doc, idcs2 = debug_float v2_prec v2 in
+            let v1_doc, idcs1 = debug_float ?guard v1_prec v1 in
+            let v2_doc, idcs2 = debug_float ?guard v2_prec v2 in
             (v1_doc, idcs1, v2_doc, idcs2)
         in
         (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2)
@@ -939,7 +975,7 @@ module C_syntax (B : C_syntax_config) = struct
             (* Homogeneous: argument uses result precision *)
           else v_prec
         in
-        let v_doc, idcs = debug_float arg_prec v in
+        let v_doc, idcs = debug_float ?guard arg_prec v in
         (B.unop_syntax prec op v_doc, idcs)
 
   let compile_main llc : PPrint.document = pp_ll llc
