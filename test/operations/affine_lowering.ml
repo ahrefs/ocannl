@@ -242,7 +242,7 @@ let ac6 () =
 let with_stdout_to_devnull f =
   Stdlib.flush Stdlib.stdout;
   let saved = Unix.dup Unix.stdout in
-  let dn = Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o600 in
+  let dn = Unix.openfile Stdlib.Filename.null [ Unix.O_WRONLY ] 0o600 in
   Unix.dup2 dn Unix.stdout;
   Unix.close dn;
   Exn.protect ~f ~finally:(fun () ->
