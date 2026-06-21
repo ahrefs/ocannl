@@ -2100,17 +2100,20 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         raise
         @@ Shape_error
              ("concat: components exceed the concatenated size", [ Dim_mismatch [ dim1; dim2 ] ]);
+      let residual_basis =
+        merge_derived_basis solved_basis n.basis ~on_conflict:(fun () ->
+            raise
+            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
+      in
       (match rest with
       | [] -> unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
-      | [ c ] ->
-          let basis =
-            merge_derived_basis solved_basis n.basis ~on_conflict:(fun () ->
-                raise
-                @@ Shape_error
-                     ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
-          in
-          unify_dim ~stage origin (c, get_dim ~d:residual ~basis ()) env
-      | _ -> ([ Dim_eq { d1 = Concat xs; d2 = d; origin } ], env))
+      | [ c ] -> unify_dim ~stage origin (c, get_dim ~d:residual ~basis:residual_basis ()) env
+      | _ ->
+          (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
+             subtracted), not the original equation, so the arithmetic progress is not lost and the
+             same unsolved form is not requeued. *)
+          ([ Dim_eq { d1 = Concat rest; d2 = get_dim ~d:residual ~basis:residual_basis (); origin } ],
+            env))
   | Concat _, _ | _, Concat _ ->
       (* Concat against a not-yet-reducible dimension (e.g. an unresolved affine): defer rather than
          reject, so a later substitution can make progress. *)

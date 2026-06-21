@@ -76,36 +76,35 @@ let () =
   let ctx = Train.forward_once ctx nested3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested3;
 
-  (* --- Test 5c: Cross-kind nest, batch over output [| [x1; x2]; [x1; x2] |] ---
-     Outer array introduces a new BATCH axis (size 2); inner list a new OUTPUT axis (size 2). The
-     two new axes land on different kinds — operand output 3, so the result has batch axis 2 and
-     output axes 2; 3 (memory order batch @ output @ input), reproducing the nested literal.
-     NB the canonical three-way order puts the input (tuple) axis innermost, but ppx_op only
-     recognizes a tuple as an input-axis stack at the top level (not nested), so the input axis is
-     exercised separately in Test 5c2 below rather than via a nested tuple. *)
-  printf "\n--- Test 5c: Cross-kind batch/output [| [x1; x2]; [x1; x2] |] ---\n%!";
-  let%op cross = [| [ x1; x2 ]; [ x1; x2 ] |] in
+  (* --- Test 5c: Cross-kind nest, output over input [ (x1, x2); (x1, x2) ] ---
+     The proposal's canonical cross-kind form with the tuple INNERMOST: inner tuple introduces a new
+     INPUT axis (size 2), outer list a new OUTPUT axis (size 2). Operand output 3, so the result has
+     output axes 2; 3 and input axis 2 (memory order batch @ output @ input), reproducing the nested
+     ndarray literal. Exercises a tuple nested inside a list (input-axis stacking below the top
+     level). *)
+  printf "\n--- Test 5c: Cross-kind output/input [ (x1, x2); (x1, x2) ] ---\n%!";
+  let%op cross = [ (x1, x2); (x1, x2) ] in
   Train.set_materialized cross.value;
   let ctx = Train.forward_once ctx cross in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross;
 
-  (* --- Test 5c2: Cross-kind nest, input over output ([x1; x2], [x1; x2]) ---
-     Top-level tuple introduces a new INPUT axis (size 2); inner lists a new OUTPUT axis (size 2),
-     so the result has output axes 2; 3 and input axis 2. Exercises concat arithmetic on the input
-     kind. *)
-  printf "\n--- Test 5c2: Cross-kind input/output ([x1; x2], [x1; x2]) ---\n%!";
-  let%op cross_in = ([ x1; x2 ], [ x1; x2 ]) in
-  Train.set_materialized cross_in.value;
-  let ctx = Train.forward_once ctx cross_in in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross_in;
+  (* --- Test 5c2: Cross-kind nest, batch over output [| [x1; x2]; [x1; x2] |] ---
+     Outer array introduces a new BATCH axis (size 2); inner list a new OUTPUT axis (size 2). Result:
+     batch 2, output axes 2; 3. *)
+  printf "\n--- Test 5c2: Cross-kind batch/output [| [x1; x2]; [x1; x2] |] ---\n%!";
+  let%op cross_b = [| [ x1; x2 ]; [ x1; x2 ] |] in
+  Train.set_materialized cross_b.value;
+  let ctx = Train.forward_once ctx cross_b in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross_b;
 
-  (* --- Test 5c3: Three-way cross-kind nest ( [| [x1; x2] |], [| [x1; x2] |] ) ---
-     All three kinds in one literal, canonical memory order batch @ output @ input: top-level tuple
-     introduces an INPUT axis (size 2, outermost delimiter), array a BATCH axis (size 1), inner list
-     an OUTPUT axis (size 2). Result: batch 1, output 2; 3, input 2 — the same shape the
-     corresponding three-way nested ndarray literal would produce. *)
-  printf "\n--- Test 5c3: Three-way ( [| [x1; x2] |], [| [x1; x2] |] ) ---\n%!";
-  let%op cross3 = ([| [ x1; x2 ] |], [| [ x1; x2 ] |]) in
+  (* --- Test 5c3: Three-way cross-kind nest [| [ (x1, x2); (x1, x2) ]; [ (x1, x2); (x1, x2) ] |] ---
+     All three kinds in one literal, in the canonical delimiter order array > list > tuple = batch >
+     output > input (memory order batch @ output @ input): array → BATCH axis (size 2, outermost),
+     list → OUTPUT axis (size 2, middle), tuple → INPUT axis (size 2, innermost). Operand output 3,
+     so the result is batch 2, output 2; 3, input 2 — the same shape the corresponding three-way
+     nested ndarray literal would produce. *)
+  printf "\n--- Test 5c3: Three-way [| [ (x1, x2); (x1, x2) ]; ... |] ---\n%!";
+  let%op cross3 = [| [ (x1, x2); (x1, x2) ]; [ (x1, x2); (x1, x2) ] |] in
   Train.set_materialized cross3.value;
   let ctx = Train.forward_once ctx cross3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross3;
@@ -122,6 +121,32 @@ let () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx mixed;
   printf "c (rank inferred up to output 2; 3):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx c;
+
+  (* --- Test 5e: Concat residual — subtract solved components from a 3-component concat (action
+     item 2) ---
+     A 3-component concatenated output axis ii^jj^kk: a_e is a SOLVED size 2 and b_e a SOLVED size 3,
+     while c_e (kk) is under-specified; the whole axis is forced to 7 by a broadcast add against a
+     fixed output[7]. The solver must subtract the solved components (2 + 3) from the size-7 concat
+     axis to infer kk = 2 (result output axis 2 + 3 + 2 = 7), exercising the [Concat = Dim] solved-
+     component subtraction in [unify_dim]. (The strictly >1-remaining-component `_` branch is only
+     reached transiently: once enough siblings are solved to make the axis determinate, re-
+     substitution routes it through this single-residual case — so this is the determinate guard for
+     the subtraction arithmetic.) *)
+  printf "\n--- Test 5e: Concat residual ii^jj^kk = 7 (a_e=2, b_e=3 => kk=2) ---\n%!";
+  let a_e = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let b_e =
+    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let fixed7 =
+    PDSL.ndarray
+      [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
+  in
+  let%op concat_resid = ((a_e, b_e, { c_e }) ++^ "ii; jj; kk => ii^jj^kk") + fixed7 in
+  Train.set_materialized concat_resid.value;
+  let ctx = Train.forward_once ctx concat_resid in
+  printf "concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_resid;
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";
