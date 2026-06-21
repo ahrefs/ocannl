@@ -1,20 +1,6 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
-Epoch=1, step=0, batch=0, lr=0.2, epoch loss=17.79
-Epoch=1, step=1, batch=1, lr=0.2, epoch loss=18.81
-Epoch=1, step=2, batch=2, lr=0.2, epoch loss=19.17
-Epoch=1, step=3, batch=3, lr=0.2, epoch loss=19.52
-Epoch=1, step=4, batch=4, lr=0.2, epoch loss=20.86
-Epoch=1, step=5, batch=5, lr=0.2, epoch loss=21.41
-Epoch=1, step=6, batch=6, lr=0.2, epoch loss=21.71
-Epoch=1, step=7, batch=7, lr=0.2, epoch loss=21.76
-Epoch=1, step=8, batch=8, lr=0.2, epoch loss=21.76
-Epoch=1, step=9, batch=9, lr=0.2, epoch loss=21.76
-...............................................................
-Epoch=80, step=6396, batch=76, lr=0.1, epoch loss=0.00
-Epoch=80, step=6397, batch=77, lr=0.1, epoch loss=0.00
-Epoch=80, step=6398, batch=78, lr=0.1, epoch loss=0.00
-Epoch=80, step=6399, batch=79, lr=0.1, epoch loss=0.00
+moons_demo: converged (final epoch loss < 0.1)
 
 Learning rate:
 ┌─────────┬─────────────────────────┐
