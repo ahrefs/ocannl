@@ -36,14 +36,20 @@ einsum-concat shape machinery (`gh-ocannl-49`).
 
 1. **Arbitrary-depth, three-way cross-kind nesting types correctly.** Nested
    stacking supports arbitrary nesting depth and the three axis kinds together,
-   with the delimiter→axis-kind mapping already fixed by the PPX:
-   - `( ... )` tuple → **input** axes (innermost / trailing, after `->`),
-   - `[ ... ]` list → **output** axes (middle),
-   - `[| ... |]` array → **batch** axes (outermost / leading, before `|`).
+   with the delimiter→axis-kind mapping already fixed by the PPX. The nesting
+   reproduces the **lowered (memory) axis order**, which is *input-last* —
+   `batch @ output @ input` (inputs are trailing because they are reduced over in
+   the inner loop) — so the **outermost** delimiter introduces the **leading**
+   axis and the **innermost** the **trailing** axis:
+   - `[| ... |]` array → **batch** axes — outermost / leading in memory (left of `|` in textual syntax),
+   - `[ ... ]` list → **output** axes — middle (right of `->` in textual syntax),
+   - `( ... )` tuple → **input** axes — innermost / trailing in memory (left of `->` in textual syntax).
 
-   The kinds nest in OCANNL's canonical `batch | output -> input` order. The
+   (Note the textual einsum/printing syntax `batch | input -> output` follows the
+   type-systems convention with inputs *left* of `->`; it differs from the memory
+   order, where inputs are last. The nesting follows the memory order.) The
    verifiable invariant: a nested stacking expression produces the **identical
-   shape** (batch/output/input dims, in order) that the corresponding nested
+   shape** (batch/output/input dims, in memory order) that the corresponding nested
    ndarray *literal* would produce. Concretely, a same-kind 2-level output nest
    `[[a; b]; [c; d]]` over `output_dims:[3]` operands yields output axes `2; 2; 3`
    (two new size-2 stack axes ahead of the operand's `3`); a cross-kind nest such
