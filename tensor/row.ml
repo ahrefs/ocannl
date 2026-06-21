@@ -1692,6 +1692,17 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
    (cancel common components, reduce solved [Dim]s, bind/defer the residual) rather than by
    equal-arity structural matching. --- *)
 
+(* Flatten nested [Concat] components: a concatenated axis is the SUM of its components, and
+   concatenation is associative, so [Concat [Concat [a; b]; c]] denotes the same axis as
+   [Concat [a; b; c]]. Flattening before cancellation / solved-partition / variable-pairing keeps
+   those steps operating on a flat component multiset, so a nested concat cannot mis-align the
+   oldest-variable pairing or hide a structurally-equal component from cancellation. (The proposal
+   only considered [Dim] and [Var] components; this normalizes the nested-[Concat] case the user
+   flagged. [Affine] components are left intact — they are opaque atoms here and are handled by the
+   solved-size arithmetic / single-component peeling below.) *)
+let rec flatten_concat (dims : dim list) : dim list =
+  List.concat_map dims ~f:(function Concat inner -> flatten_concat inner | d -> [ d ])
+
 (* Multiset cancellation of structurally-equal components from both sides. *)
 let cancel_common_dims (xs : dim list) (ys : dim list) : dim list * dim list =
   let kept_rev, ys =
@@ -2040,6 +2051,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          solved/unsolved subtracts the solved part; an all-unsolved equal-length residual (the pure
          nested-stacking case, where corresponding fresh stack axes match positionally) pairs
          element-wise; anything still ambiguous is deferred until substitution resolves more. *)
+      let xs = flatten_concat xs and ys = flatten_concat ys in
       let xs, ys = cancel_common_dims xs ys in
       let solved_x, rest_x = partition_solved_dims xs in
       let solved_y, rest_y = partition_solved_dims ys in
@@ -2136,6 +2148,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | Concat xs, (Dim n as d) | (Dim n as d), Concat xs ->
       (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the
          residual. *)
+      let xs = flatten_concat xs in
       let solved, rest = partition_solved_dims xs in
       let sum = List.sum (module Int) solved ~f:(fun s -> s.d) in
       let solved_basis =

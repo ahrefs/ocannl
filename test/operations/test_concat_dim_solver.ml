@@ -32,57 +32,99 @@ let no_from = Sexp.List []
 let ineq res v : Row.constraint_ =
   Row.Dim_ineq { res; opnd = Row.Var v; from_ = no_from; origin = dummy_origin }
 
-(* Run a solve, classifying the outcome so an [assert false] regression (any non-[Shape_error]
-   exception) is distinguished from a legitimate [Shape_error] and from success. *)
-let run_solve ~stage ineqs =
-  try `Ok (Row.solve_inequalities ~stage ineqs Row.empty_env) with
+let eq d1 d2 : Row.constraint_ = Row.Dim_eq { d1; d2; origin = dummy_origin }
+
+(* Run a solve over [env], classifying the outcome so an [assert false] regression (any
+   non-[Shape_error] exception) is distinguished from a legitimate [Shape_error] and from success. *)
+let run_solve_env ~stage cs env =
+  try `Ok (Row.solve_inequalities ~stage cs env) with
   | Row.Shape_error (m, _) -> `Shape m
   | e -> `Other (Exn.to_string e)
 
-(* AC1 — GLB merge of two COMPATIBLE Concat bounds (stage 4) commits without crashing.
-   First inequality banks [Concat 2^3] (size 5) as the glb of a fresh operand var; the second feeds
-   [Concat 1^4] (also size 5) into the merge. unify_dim of the two bounds succeeds, so at stage >= 4
-   the merge commits. Pre-task: this arm was [assert false]. *)
+let run_solve ~stage cs = run_solve_env ~stage cs Row.empty_env
+
+let has_dim_ineq cs = List.exists cs ~f:(function Row.Dim_ineq _ -> true | _ -> false)
+
+(* [v] forced through a size-[n] GLB iff equating it to [n] is consistent but to [n+1] conflicts. *)
+let forced_to_size ~env v n =
+  (match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim n) ] env with `Ok _ -> true | _ -> false)
+  && match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim (n + 1)) ] env with
+     | `Shape _ -> true
+     | _ -> false
+
+(* AC1 — GLB merge of two COMPATIBLE Concat bounds (stage 4) COMMITS: it forces the operand var
+   through the merged GLB (and does not merely avoid raising). First inequality banks [Concat 2^3]
+   (size 5) as the glb of a fresh operand var; the second feeds [Concat 1^4] (also size 5) into the
+   merge, which [unify_dim] reconciles, so at stage >= 4 the merge commits. Pre-task: [assert false].
+
+   The PASS condition pins the recipe, not just "Ok":
+   - no residual [Dim_ineq] survives — a Stage4 RE-DEFER mutation would leave one (this is exactly the
+     residual the postpone test below asserts IS present at Stage1);
+   - the operand is forced to size 5 — equating v = 5 is consistent, v = 6 conflicts. A mutation that
+     succeeds without forcing the operand through the GLB (drops the bound, or demotes to bcast-top)
+     fails [forced_to_size] (under bcast-top v = 5 itself would conflict). *)
 let test_ac1_glb_merge_compatible () =
-  Stdio.printf "AC1: GLB merge of two compatible Concat bounds (stage 4) commits, no crash\n";
+  Stdio.printf "AC1: GLB merge of two compatible Concat bounds (stage 4) commits (forces operand)\n";
   let v = Row.get_var () in
   match
     run_solve ~stage:Stage4
       [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 1; dim 4 ]) v ]
   with
-  | `Ok _ -> Stdio.printf "  PASS: merge completed without raising\n"
+  | `Ok (remaining, env) ->
+      let no_residual = (not (has_dim_ineq remaining)) && not (has_dim_ineq (Row.unsolved_constraints env)) in
+      let forced = forced_to_size ~env v 5 in
+      if no_residual && forced then
+        Stdio.printf "  PASS: operand committed to the merged size-5 GLB; no residual deferral\n"
+      else
+        Stdio.printf "  FAIL: expected commit (no_residual=%b forced_to_5=%b)\n" no_residual forced
   | `Shape m -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" m
   | `Other e -> Stdio.printf "  FAIL: regression (expected no assert false): %s\n" e
 
-(* AC1 — GLB merge of two INCOMPATIBLE Concat bounds (stage 4) demotes to broadcast-top, swallowing
-   the failed equality rather than propagating a Shape_error. [Concat 2^3] (size 5) vs [Concat 2^4]
-   (size 6): unify_dim fails, so the merge must demote (broadcast), not raise. Pre-task: [assert
-   false]. *)
+(* AC1 — GLB merge of two INCOMPATIBLE Concat bounds (stage 4) DEMOTES the operand to the broadcast-
+   top GLB (size 1), swallowing the failed equality rather than propagating a Shape_error or
+   committing to either bound. [Concat 2^3] (size 5) vs [Concat 2^4] (size 6): [unify_dim] fails.
+   Pre-task: [assert false].
+
+   The PASS condition pins demotion specifically: the operand is solved to size 1 — the broadcast-top
+   that is distinct from BOTH bounds (5 and 6). A mutation that commits to either bound (5 or 6), or
+   re-defers (operand unsolved), or drops the GLB yields [get_dim_val <> Some 1] and flips the
+   assertion; merely "not raising" is not enough. *)
 let test_ac1_glb_merge_incompatible_demotes () =
-  Stdio.printf "AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes, no raise\n";
+  Stdio.printf "AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top\n";
   let v = Row.get_var () in
   match
     run_solve ~stage:Stage4
       [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 2; dim 4 ]) v ]
   with
-  | `Ok _ -> Stdio.printf "  PASS: incompatible bounds demoted to broadcast-top (no raise)\n"
+  | `Ok (_remaining, env) -> (
+      match Row.get_dim_val env v with
+      | Some 1 ->
+          Stdio.printf "  PASS: operand demoted to broadcast-top (size 1), not committed to 5/6\n"
+      | other ->
+          Stdio.printf "  FAIL: expected demote to size 1, got %s\n"
+            (match other with Some n -> Int.to_string n | None -> "<unsolved>"))
   | `Shape m -> Stdio.printf "  FAIL: should demote, not raise Shape_error: %s\n" m
   | `Other e -> Stdio.printf "  FAIL: regression (expected no assert false): %s\n" e
 
-(* AC1 — below stage 4 the merge POSTPONES: it neither crashes nor demotes, re-deferring the
-   inequality so the two bounds can still resolve equal later. We check a [Dim_ineq] survives in the
-   returned residual at Stage1. Pre-task: [assert false]. *)
+(* AC1 — below stage 4 the merge POSTPONES: it neither crashes, commits, nor demotes — it re-defers
+   the inequality so the two bounds can still resolve equal later. PASS pins both halves: a [Dim_ineq]
+   survives in the residual AND the operand is left UNSOLVED (a Stage1 demote/commit mutation would
+   solve it — [get_dim_val] would be [Some _]). Pre-task: [assert false]. *)
 let test_ac1_glb_merge_postpone_below_stage4 () =
-  Stdio.printf "AC1: GLB merge below stage 4 postpones (defers, no demote/crash)\n";
+  Stdio.printf "AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)\n";
   let v = Row.get_var () in
   match
     run_solve ~stage:Stage1
       [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 1; dim 4 ]) v ]
   with
-  | `Ok (remaining, _) ->
-      if List.exists remaining ~f:(function Row.Dim_ineq _ -> true | _ -> false) then
-        Stdio.printf "  PASS: inequality deferred for a later stage\n"
-      else Stdio.printf "  FAIL: expected a deferred Dim_ineq, got none\n"
+  | `Ok (remaining, env) ->
+      let deferred = has_dim_ineq remaining in
+      let not_committed = Option.is_none (Row.get_dim_val env v) in
+      if deferred && not_committed then
+        Stdio.printf "  PASS: inequality deferred and operand left unsolved for a later stage\n"
+      else
+        Stdio.printf "  FAIL: expected postpone (deferred=%b operand_unsolved=%b)\n" deferred
+          not_committed
   | `Shape m -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" m
   | `Other e -> Stdio.printf "  FAIL: regression (expected no assert false): %s\n" e
 
@@ -146,6 +188,40 @@ let test_ac3_one_side_all_var_other_has_solved () =
   | `Shape m -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" m
   | `Other e -> Stdio.printf "  FAIL: regression (expected no assert false): %s\n" e
 
+(* Nested-[Concat] component (beyond the proposal, per user request): a component that is itself a
+   [Concat] must be flattened (concatenation is associative — sum semantics) so the oldest-variable
+   pairing aligns by flat position, not by nesting level. [Concat [Concat [a; b]; c]] =
+   [Concat [d; e; f]] (all distinct vars) must link a=d, b=e, c=f. Without flattening the residual
+   [Concat[a;b]; c] is not all-`Var` (its first component is a nested `Concat`), so the pairing would
+   mis-align — its only top-level var c would pair with the other side's oldest var d — giving wrong
+   linkage (or a deferral). We force a:=2, b:=3, c:=4 and require d, e, f to read back 2, 3, 4. *)
+let test_nested_concat_flattened () =
+  Stdio.printf "Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f\n";
+  let a = Row.get_var () and b = Row.get_var () and c = Row.get_var () in
+  let d = Row.get_var () and e = Row.get_var () and f = Row.get_var () in
+  let lhs = Row.Concat [ Row.Concat [ Row.Var a; Row.Var b ]; Row.Var c ] in
+  let rhs = Row.Concat [ Row.Var d; Row.Var e; Row.Var f ] in
+  match
+    try
+      let _rem, env = Row.solve_inequalities ~stage:Stage4 [ eq lhs rhs ] Row.empty_env in
+      let _rem, env =
+        Row.solve_inequalities ~stage:Stage4
+          [ eq (Row.Var a) (dim 2); eq (Row.Var b) (dim 3); eq (Row.Var c) (dim 4) ]
+          env
+      in
+      `Ok (Row.get_dim_val env d, Row.get_dim_val env e, Row.get_dim_val env f)
+    with
+    | Row.Shape_error (m, _) -> `Shape m
+    | ex -> `Other (Exn.to_string ex)
+  with
+  | `Ok (Some 2, Some 3, Some 4) ->
+      Stdio.printf "  PASS: nested concat flattened; d=2 e=3 f=4 (a=d, b=e, c=f)\n"
+  | `Ok (dv, ev, fv) ->
+      let show = function Some n -> Int.to_string n | None -> "?" in
+      Stdio.printf "  FAIL: expected d,e,f = 2,3,4; got %s,%s,%s\n" (show dv) (show ev) (show fv)
+  | `Shape m -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" m
+  | `Other e -> Stdio.printf "  FAIL: regression: %s\n" e
+
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
   Tensor.unsafe_reinitialize ();
@@ -154,4 +230,5 @@ let () =
   test_ac1_glb_merge_postpone_below_stage4 ();
   test_ac3_unequal_arity_all_var ();
   test_ac3_one_side_all_var_other_has_solved ();
+  test_nested_concat_flattened ();
   Stdio.printf "=== Done ===\n"
