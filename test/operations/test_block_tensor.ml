@@ -99,6 +99,17 @@ let () =
   let ctx = Train.forward_once ctx cross_in in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross_in;
 
+  (* --- Test 5c3: Three-way cross-kind nest ( [| [x1; x2] |], [| [x1; x2] |] ) ---
+     All three kinds in one literal, canonical memory order batch @ output @ input: top-level tuple
+     introduces an INPUT axis (size 2, outermost delimiter), array a BATCH axis (size 1), inner list
+     an OUTPUT axis (size 2). Result: batch 1, output 2; 3, input 2 — the same shape the
+     corresponding three-way nested ndarray literal would produce. *)
+  printf "\n--- Test 5c3: Three-way ( [| [x1; x2] |], [| [x1; x2] |] ) ---\n%!";
+  let%op cross3 = ([| [ x1; x2 ] |], [| [ x1; x2 ] |]) in
+  Train.set_materialized cross3.value;
+  let ctx = Train.forward_once ctx cross3 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross3;
+
   (* --- Test 5d: Mixed-rank row [[x1; x2]; {c}] (AC #2) ---
      The first row [x1; x2] has output axes 2; 3; the bare sibling [c] is under-specified, so shape
      inference forces it to the sibling's stacked rank — c is inferred with output axes 2; 3 (it
