@@ -4,12 +4,13 @@
 
 This roadmap outlines the development plan for OCANNL from the current state to version 1.0, incorporating academic paper milestones for workshops collocated with ICFP 2026 (OCaml Workshop, FProPer). Dates indicate **end of period** targets.
 
-> **Schedule note (June 2026):** the roadmap drifted from its original dating because of a slowdown between January and May 2026. We are now catching up. Two structural changes follow from that:
+> **Schedule note (June 2026):** the roadmap drifted from its original dating because of a slowdown between January and May 2026. We are now catching up. Three structural changes follow from that:
 >
 > - **v0.6.4 is skipped as a release.** Its scope — axis concatenation/block tensors (#49), RoPE and non-learned position embeddings (#398), the decoder-only transformer toy (#57) — is complete (the GitHub milestone is closed), but it ships inside **v0.7** rather than as a separate tagged release. The last tagged release is **0.6.3**.
-> - **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone. **v0.7.1** keeps a distinct, examples-oriented scope.
+> - **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone.
+> - **v0.7.1 is dissolved.** Its two tracks were redistributed: the **AMD HIP backend (#411)** moves to **v0.8**, and the **real-world examples** (makemore #59, CNN/CIFAR #54, LSTM #60, transformer inference #377) and **tokenizer bindings** move to **v0.9**. The GitHub milestone has been deleted.
 >
-> The version sequence is now: `0.6.3 → 0.7 → 0.7.1 → 0.8 → 0.9 → 1.0 → 1.1`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth.
+> The version sequence is now: `0.6.3 → 0.7 → 0.8 → 0.9 → 1.0 → 1.1`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth.
 
 ---
 
@@ -46,7 +47,6 @@ This is the consolidated "paper-ready" release. It absorbs the frontend-finaliza
 **Still open in v0.7:**
 - **Universal Pool Allocator across backends** (#344) — in progress (buffer-addressing seam landed; full pooling scoped).
 - **`Local_scope` initialization tracking** (#340).
-- **MSVC support for the native-Windows C backend** (#313).
 - **Sharding and slicing with minimal copying** (#293) — the data-parallel driver with merge-buffer all-reduce has landed; remaining work continues here.
 - **Documentation:** flesh out `lowering_and_inlining.md` and audit `low_level.ml` (#296).
 - Inlining stretch goals: share one `for` loop across virtual tensors (#134); inline virtual nodes with non-linear index symbols (#133).
@@ -55,35 +55,19 @@ This release is the basis for the workshop paper examples: a clean context-based
 
 ---
 
-## v0.7.1 — July 2026
-**Theme: AMD HIP backend and real-world examples**
-
-Two distinct, substantial tracks. GitHub milestone scope: *"Tokenization, transformer inference demo. HIP backend (AMD hardware)."*
-
-**AMD HIP backend** (#411) — a major effort, comparable to the CUDA and Metal backends:
-- **Standalone HIP bindings** — an independent GitHub project and opam package, following the same pattern as the CUDA bindings (`cudajit`) and the Metal bindings (`metal`). Kept separate so the OCaml community can use the HIP bindings on their own, without taking on the weight of OCANNL.
-- The HIP backend implementation in `arrayjit`, **depending on** those bindings, with the usual code-generation, memory-management, and synchronization plumbing.
-
-**Real-world examples:**
-- **makemore progression** (#59, done) — the character-level language-model series mirroring Karpathy's *Neural Networks: Zero to Hero* (see [docs/makemore_tutorial.md](docs/makemore_tutorial.md)); includes the Bengio-style MLP and BatchNorm variants.
-- **CNN classifiers** (#54) — MNIST and CIFAR-10 training examples.
-- **LSTM example** (#60).
-- **Transformer inference demo** (#377) — inference for a small open-weights model (GPT-2, LLaMA, or Gemma).
-- **Tokenizer bindings** — developed in the spin-off [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) project (opam package `dataprep`).
-
----
-
 ## v0.8 — Summer 2026
-**Theme: GPU-style performance — low-hanging fruit**
+**Theme: GPU-style performance — low-hanging fruit; AMD HIP backend**
 
 A substantial milestone (~2 months). GitHub milestone scope: *"GPU tiling and related optimizations in the polyhedral style, with heuristic syntactic metrics for now."*
 
 - **Matmul tiling** (#412) — fast multidimensional matrix multiplication, first from Böhm's CPU article, then the CUDA worklog, then lessons from llm.c (#253).
 - **Megakernel exploration** (#318, done as a study) — may require splitting routines into multiple kernels.
 - **Metal private mode** (#320, done).
+- **MSVC on the native-Windows C backend** (#313) — grouped here with the other backend work (moved from v0.7's open list; the GitHub milestone is v0.8).
+- **AMD HIP backend** (#411) — a major effort, comparable to the CUDA and Metal backends (redistributed here from the dissolved v0.7.1). Standalone HIP bindings ship as an independent GitHub project and opam package, following the same pattern as the CUDA bindings (`cudajit`) and the Metal bindings (`metal`), so the OCaml community can use them without taking on the weight of OCANNL; the `arrayjit` backend then **depends on** those bindings, with the usual code-generation, memory-management, and synchronization plumbing.
 - Stretch / study: AVX/AVX2 intrinsics for the C backend (#164); `ggml` efficiency lessons (#163); restore CUDA `__constant__` arrays (#195); small-Transformer digit-addition reproduction (#427).
 
-> **Date note:** the GitHub milestone still carries a stale 2026-02-28 due date from before the slip; treat the date above (post-v0.7.1) as authoritative.
+> **Date note:** the GitHub milestone still carries a stale 2026-02-28 due date from before the slip; treat the date above as authoritative.
 
 ---
 
@@ -96,6 +80,13 @@ A research-heavy milestone (~2.5 months). GitHub milestone scope: *"Program sear
 - **Cost functions** — per-backend execution-based metrics and aggregate cost functions across backends.
 - **Code-graph rewriting** — a broader range of rewriting rules, augmenting the v0.8 tiling/layout mechanisms.
 - Study tracks: Tiramisu (#267), Candle (#265), superoptimizers for tensor programs (#261).
+
+**Real-world examples and tokenization** (redistributed here from the dissolved v0.7.1):
+- **makemore progression** (#59, done) — the character-level language-model series mirroring Karpathy's *Neural Networks: Zero to Hero* (see [docs/makemore_tutorial.md](docs/makemore_tutorial.md)); includes the Bengio-style MLP and BatchNorm variants.
+- **CNN classifiers** (#54) — MNIST and CIFAR-10 training examples.
+- **LSTM example** (#60).
+- **Transformer inference demo** (#377) — inference for a small open-weights model (GPT-2, LLaMA, or Gemma).
+- **Tokenizer bindings** — developed in the spin-off [ocaml-dataprep](https://github.com/ahrefs/ocaml-dataprep) project (opam package `dataprep`).
 
 > **Date note:** the GitHub milestone carries a stale 2026-05-30 due date; the ICFP-week anchor above is authoritative.
 
@@ -133,9 +124,9 @@ GitHub milestone scope: *"Consider introducing axis labels. Consider introducing
 | 0.6.3  | Dec 2025 | released | Padding inference, toy CNN |
 | ~~0.6.4~~ | — | **skipped** (folds into 0.7) | Concatenation, RoPE, transformer toy |
 | **0.7** | Late Jun 2026 | **in progress** | **Frontend finalization + compiler optimizations** (consolidates 0.7.2) |
-| 0.7.1  | Jul 2026 | planned | AMD HIP backend (major); examples: makemore, MNIST/CIFAR, LSTM, transformer inference |
-| 0.8    | Summer 2026 | planned | GPU tiling, megakernels, matmul |
-| 0.9    | Aug 24, 2026 | planned | Program search **(ICFP week)** |
+| ~~0.7.1~~ | — | **dissolved** | AMD HIP backend → 0.8; examples + tokenizers → 0.9 |
+| 0.8    | Summer 2026 | planned | GPU tiling, megakernels, matmul; AMD HIP backend (major) |
+| 0.9    | Aug 24, 2026 | planned | Program search **(ICFP week)**; examples: makemore, MNIST/CIFAR, LSTM, transformer inference, tokenizers |
 | 1.0    | Q4 2026 | mostly de-risked | Docs, completeness, ergonomics, safety |
 | 1.1+   | post-1.0 | backlog | Shape schemes, axis labels, BERT, DisTrO |
 
