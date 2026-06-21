@@ -109,9 +109,16 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
       ( reduce_vbss vbss,
         [%expr stack ?label:[%e opt_expr ~loc label] [%e axis_expr] [%e rhses_array]] )
 
-let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label ?label expr =
+let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block = false) ~opt_label
+    ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label in
+  (* Block-element loop: like [loop] but flags that the immediate sub-expression sits in
+     block-tensor element position, so a bare tuple there denotes an input-axis stack (not OCaml
+     tuple grouping). Used only for the operands of a block-tensor stack. *)
+  let block_loop =
+    translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~in_block:true ~opt_label
+  in
   match expr with
   | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, payload); _ } -> (
       (* %oc anti-quotation: preserve the expression without transformation *)
@@ -403,13 +410,15 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
   | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } as list_expr ->
       if is_ndarray_constant_expr list_expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] list_expr)
-      else translate_block_tensor ~loc ~loop ~label ~opt_label `Output (collect_list [] list_expr)
+      else
+        translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Output
+          (collect_list [] list_expr)
   (* Array [|a; b|]: numeric first leaf -> ndarray constant; otherwise block tensor stacking along a
      new batch axis. *)
   | { pexp_desc = Pexp_array elems; _ } as arr_expr ->
       if is_ndarray_constant_expr arr_expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] arr_expr)
-      else translate_block_tensor ~loc ~loop ~label ~opt_label `Batch elems
+      else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Batch elems
   (* A tensor literal whose outermost axis container carries an axis-label annotation,
      e.g. [([ 1.; 2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
   | {
@@ -432,13 +441,15 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ~opt_label
   | [%expr [%e? expr1] **. [%e? expr2]] ->
       let vbs, e1 = loop expr1 in
       (vbs, [%expr TDSL.O.( **. ) ?label:[%e opt_expr ~loc label] [%e e1] [%e expr2]])
-  (* Top-level 2+ tuple (a, b): numeric first leaf -> ndarray constant; otherwise block tensor
-     stacking along a new input axis. Restricted to top level so that tuples used as operator
-     argument grouping or function arguments retain their existing meaning. *)
-  | { pexp_desc = Pexp_tuple elems; _ } when is_toplevel && List.length elems >= 2 ->
+  (* 2+ tuple (a, b): numeric first leaf -> ndarray constant; otherwise block tensor stacking along
+     a new input axis. Recognized at the top level, or in block-tensor element position (so that a
+     tuple nested inside a list/array/tuple introduces an input axis, e.g. [(a, b); (c, d)]). Tuples
+     used as operator argument grouping or function arguments are handled by the [Pexp_apply] arm
+     below (which keeps their OCaml-tuple meaning), so they are unaffected. *)
+  | { pexp_desc = Pexp_tuple elems; _ } when (is_toplevel || in_block) && List.length elems >= 2 ->
       if is_ndarray_constant_expr expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
-      else translate_block_tensor ~loc ~loop ~label ~opt_label `Input elems
+      else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Input elems
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
     when Hashtbl.mem binary_ops op_ident ->

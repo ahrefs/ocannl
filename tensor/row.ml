@@ -1687,6 +1687,37 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
       dim_var_occurs_in_dim v over || dim_var_occurs_in_dim v kernel
   | Concat dims -> List.exists dims ~f:(dim_var_occurs_in_dim v)
 
+(* --- Arithmetic normalization for [Concat] strict equality (consumed by [unify_dim] below). A
+   concatenated axis denotes the SUM of its components, so two concats are equated arithmetically
+   (cancel common components, reduce solved [Dim]s, bind/defer the residual) rather than by
+   equal-arity structural matching. --- *)
+
+(* Multiset cancellation of structurally-equal components from both sides. *)
+let cancel_common_dims (xs : dim list) (ys : dim list) : dim list * dim list =
+  let kept_rev, ys =
+    List.fold xs ~init:([], ys) ~f:(fun (kept, ys) x ->
+        match List.findi ys ~f:(fun _ y -> equal_dim x y) with
+        | Some (i, _) -> (kept, List.filteri ys ~f:(fun j _ -> j <> i))
+        | None -> (x :: kept, ys))
+  in
+  (List.rev kept_rev, ys)
+
+(* Split components into solved [Dim]s and the rest (vars / affine / nested concat). *)
+let partition_solved_dims (dims : dim list) : solved_dim list * dim list =
+  List.partition_map dims ~f:(function Dim s -> Either.First s | d -> Either.Second d)
+
+(* Reduce the basis tags of solved components: reserved (claim-free) tags ([default], [bcast_if_1])
+   drop out; all named tags must agree (and the residual takes that named tag), otherwise [default].
+   [None] flags a genuine named-tag conflict. *)
+let reduce_solved_basis (solved : solved_dim list) : string option =
+  match
+    List.filter_map solved ~f:(fun s -> if is_reserved_basis s.basis then None else Some s.basis)
+    |> List.dedup_and_sort ~compare:String.compare
+  with
+  | [] -> Some default_basis
+  | [ b ] -> Some b
+  | _ -> None
+
 let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   match (dim1, dim2) with
@@ -1997,6 +2028,122 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         (more_ineqs @ ineqs, env)
       in
       List.fold ~init:(ineqs, env) dim_eqs ~f
+  | Concat [], d | d, Concat [] ->
+      (* An empty concat is the size-0 axis. *)
+      unify_dim ~stage origin (get_default_dim ~d:0 (), d) env
+  | Concat [ x ], d | d, Concat [ x ] ->
+      (* Single-component concat erases to its component. *)
+      unify_dim ~stage origin (x, d) env
+  | Concat xs, Concat ys ->
+      (* Arithmetic equality of two concatenated axes. Cancel structurally-equal components, then
+         reconcile the residual sums: a fully-solved side reduces to a [Dim] comparison; mixed
+         solved/unsolved subtracts the solved part; an all-unsolved equal-length residual (the pure
+         nested-stacking case, where corresponding fresh stack axes match positionally) pairs
+         element-wise; anything still ambiguous is deferred until substitution resolves more. *)
+      let xs, ys = cancel_common_dims xs ys in
+      let solved_x, rest_x = partition_solved_dims xs in
+      let solved_y, rest_y = partition_solved_dims ys in
+      let sum_x = List.sum (module Int) solved_x ~f:(fun s -> s.d) in
+      let sum_y = List.sum (module Int) solved_y ~f:(fun s -> s.d) in
+      let basis_of solved =
+        match reduce_solved_basis solved with
+        | Some b -> b
+        | None ->
+            raise
+            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ])
+      in
+      let basis_x = basis_of solved_x and basis_y = basis_of solved_y in
+      let exceed () =
+        raise
+        @@ Shape_error
+             ("concat: components exceed the concatenated size", [ Dim_mismatch [ dim1; dim2 ] ])
+      in
+      (match (rest_x, rest_y) with
+      | [], [] ->
+          unify_dim ~stage origin
+            (get_dim ~d:sum_x ~basis:basis_x (), get_dim ~d:sum_y ~basis:basis_y ())
+            env
+      | [], _ ->
+          let residual = sum_x - sum_y in
+          if residual < 0 then exceed ();
+          unify_dim ~stage origin (Concat rest_y, get_dim ~d:residual ~basis:basis_x ()) env
+      | _, [] ->
+          let residual = sum_y - sum_x in
+          if residual < 0 then exceed ();
+          unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
+      | _, _
+        when List.is_empty solved_x && List.is_empty solved_y
+             && List.length rest_x = List.length rest_y
+             && List.for_all (rest_x @ rest_y) ~f:(function Var _ -> true | _ -> false) ->
+          (* All residual components are bare unsolved variables and the arities match: pair them
+             positionally. This is the nested-stacking shape — the two operands' concat axes have the
+             same structure and their corresponding fresh stack axes (each an independent size-1
+             unsqueeze axis) must align. We restrict this to the all-variable case so it cannot
+             over-constrain a genuine arithmetic equality between concats whose components carry
+             solved sizes (e.g. 2+3 vs 3+2): those go through the arithmetic normalization below,
+             where common solved sizes cancel instead of being matched pointwise. *)
+          List.fold (List.zip_exn rest_x rest_y) ~init:([], env) ~f:(fun (acc, env) (a, b) ->
+              let more, env = unify_dim ~stage origin (a, b) env in
+              (more @ acc, env))
+      | _, _ ->
+          (* Both sides still have unsolved residuals (and at least one side carries a solved size or
+             a non-variable residual). Normalize the solved [Dim] components by cancelling the common
+             solved size from both sides, so at most one side carries the remaining solved size
+             (proposal: "normalize solved Dim components so that only one side carries the remaining
+             solved size"). The surviving non-neutral basis carries onto the residual; distinct
+             non-neutral bases conflict. No negative size can arise here since the cancelled amount is
+             the smaller of the two sums. *)
+          let common = Int.min sum_x sum_y in
+          let residual_basis =
+            merge_derived_basis basis_x basis_y ~on_conflict:(fun () ->
+                raise
+                @@ Shape_error
+                     ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
+          in
+          let with_residual rest sum =
+            let r = sum - common in
+            if r = 0 then Concat rest else Concat (rest @ [ get_dim ~d:r ~basis:residual_basis () ])
+          in
+          ( [
+              Dim_eq
+                { d1 = with_residual rest_x sum_x; d2 = with_residual rest_y sum_y; origin };
+            ],
+            env ))
+  | Concat xs, (Dim n as d) | (Dim n as d), Concat xs ->
+      (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the
+         residual. *)
+      let solved, rest = partition_solved_dims xs in
+      let sum = List.sum (module Int) solved ~f:(fun s -> s.d) in
+      let solved_basis =
+        match reduce_solved_basis solved with
+        | Some b -> b
+        | None ->
+            raise
+            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ])
+      in
+      let residual = n.d - sum in
+      if residual < 0 then
+        raise
+        @@ Shape_error
+             ("concat: components exceed the concatenated size", [ Dim_mismatch [ dim1; dim2 ] ]);
+      let residual_basis =
+        merge_derived_basis solved_basis n.basis ~on_conflict:(fun () ->
+            raise
+            @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
+      in
+      (match rest with
+      | [] -> unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
+      | [ c ] -> unify_dim ~stage origin (c, get_dim ~d:residual ~basis:residual_basis ()) env
+      | _ ->
+          (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
+             subtracted), not the original equation, so the arithmetic progress is not lost and the
+             same unsolved form is not requeued. *)
+          ([ Dim_eq { d1 = Concat rest; d2 = get_dim ~d:residual ~basis:residual_basis (); origin } ],
+            env))
+  | Concat _, _ | _, Concat _ ->
+      (* Concat against a not-yet-reducible dimension (e.g. an unresolved affine): defer rather than
+         reject, so a later substitution can make progress. *)
+      ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
   | dim1, dim2 ->
       (* Note: at the unify_dim phase, it's strict equality (no broadcasting). *)
       raise @@ Shape_error ("solved dimensions for axis: mismatch", [ Dim_mismatch [ dim1; dim2 ] ])
