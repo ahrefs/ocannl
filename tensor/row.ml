@@ -2073,17 +2073,26 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
       | _, _
         when List.is_empty solved_x && List.is_empty solved_y
-             && List.length rest_x = List.length rest_y ->
+             && List.length rest_x = List.length rest_y
+             && List.for_all (rest_x @ rest_y) ~f:(function Var _ -> true | _ -> false) ->
+          (* All residual components are bare unsolved variables and the arities match: pair them
+             positionally. This is the nested-stacking shape — the two operands' concat axes have the
+             same structure and their corresponding fresh stack axes (each an independent size-1
+             unsqueeze axis) must align. We restrict this to the all-variable case so it cannot
+             over-constrain a genuine arithmetic equality between concats whose components carry
+             solved sizes (e.g. 2+3 vs 3+2): those go through the arithmetic normalization below,
+             where common solved sizes cancel instead of being matched pointwise. *)
           List.fold (List.zip_exn rest_x rest_y) ~init:([], env) ~f:(fun (acc, env) (a, b) ->
               let more, env = unify_dim ~stage origin (a, b) env in
               (more @ acc, env))
       | _, _ ->
-          (* Both sides still have unsolved residuals. Normalize the solved [Dim] components by
-             cancelling the common solved size from both sides, so at most one side carries the
-             remaining solved size (proposal: "normalize solved Dim components so that only one side
-             carries the remaining solved size"). The surviving non-neutral basis carries onto the
-             residual; distinct non-neutral bases conflict. No negative size can arise here since the
-             cancelled amount is the smaller of the two sums. *)
+          (* Both sides still have unsolved residuals (and at least one side carries a solved size or
+             a non-variable residual). Normalize the solved [Dim] components by cancelling the common
+             solved size from both sides, so at most one side carries the remaining solved size
+             (proposal: "normalize solved Dim components so that only one side carries the remaining
+             solved size"). The surviving non-neutral basis carries onto the residual; distinct
+             non-neutral bases conflict. No negative size can arise here since the cancelled amount is
+             the smaller of the two sums. *)
           let common = Int.min sum_x sum_y in
           let residual_basis =
             merge_derived_basis basis_x basis_y ~on_conflict:(fun () ->
