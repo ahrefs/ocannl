@@ -2078,10 +2078,27 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
               let more, env = unify_dim ~stage origin (a, b) env in
               (more @ acc, env))
       | _, _ ->
-          let canon rest sum basis =
-            if sum = 0 then Concat rest else Concat (rest @ [ get_dim ~d:sum ~basis () ])
+          (* Both sides still have unsolved residuals. Normalize the solved [Dim] components by
+             cancelling the common solved size from both sides, so at most one side carries the
+             remaining solved size (proposal: "normalize solved Dim components so that only one side
+             carries the remaining solved size"). The surviving non-neutral basis carries onto the
+             residual; distinct non-neutral bases conflict. No negative size can arise here since the
+             cancelled amount is the smaller of the two sums. *)
+          let common = Int.min sum_x sum_y in
+          let residual_basis =
+            merge_derived_basis basis_x basis_y ~on_conflict:(fun () ->
+                raise
+                @@ Shape_error
+                     ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
           in
-          ( [ Dim_eq { d1 = canon rest_x sum_x basis_x; d2 = canon rest_y sum_y basis_y; origin } ],
+          let with_residual rest sum =
+            let r = sum - common in
+            if r = 0 then Concat rest else Concat (rest @ [ get_dim ~d:r ~basis:residual_basis () ])
+          in
+          ( [
+              Dim_eq
+                { d1 = with_residual rest_x sum_x; d2 = with_residual rest_y sum_y; origin };
+            ],
             env ))
   | Concat xs, (Dim n as d) | (Dim n as d), Concat xs ->
       (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the

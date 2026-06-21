@@ -148,6 +148,17 @@ let () =
   printf "concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_resid;
 
+  (* NB: the [Concat = Concat] mixed-solved-residual normalization in unify_dim (round-3 fix) has no
+     determinate high-level fixture. A direct EQUALITY between two concat axes carrying differing
+     solved components arises only transiently — once enough sibling components are solved to make
+     the axes determinate, re-substitution routes the equation through the single-sided [],_ / _,[]
+     branches before the mixed _ branch can resolve, and while >=2 components stay unsolved the
+     equation is underdetermined. Forcing the equation via a pointwise add instead produces a
+     broadcast INEQUALITY between concat axes, which hits a pre-existing
+     [solve_dim_ineq] GLB [assert false] (concat broadcast bound, unrelated to this task). The
+     normalization is implemented to match the proposal's arithmetic-equality rule regardless; see
+     .peer-sync/workflow-feedback-coder.md. *)
+
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";
   let%op unsqueezed = [x1] in
