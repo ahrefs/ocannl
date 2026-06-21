@@ -66,5 +66,4 @@ x-maintenance-intent: ["(latest)"]
 pin-depends: [
   ["ppx_minidebug.dev" "git+https://github.com/lukstafi/ppx_minidebug.git#86a19de906add05caa0aa1626add1572da2f070d"]
   ["notty-community.dev" "git+https://github.com/lukstafi/notty-community.git#708e36ba78ecb4ec1bf12de2b087e549d6e42893"]
-  ["dataprep.dev" "git+https://github.com/lukstafi/ocaml-dataprep.git#bc710809163f08ee65ed714264511e7c331a4c63"]
 ]
