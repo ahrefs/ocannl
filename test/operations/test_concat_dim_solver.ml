@@ -222,6 +222,28 @@ let test_nested_concat_flattened () =
   | `Shape m -> Stdio.printf "  FAIL: unexpected Shape_error: %s\n" m
   | `Other e -> Stdio.printf "  FAIL: regression: %s\n" e
 
+(* Codex P2 regression: an all-`Var` residual on one side facing a residual that still holds a non-
+   variable, non-solved component (an unresolved `Affine` from a strided axis) must NOT enter the
+   pairing arm. [Concat [a; c]] = [Concat [Affine{2,w}; b]] is an underdetermined sum equality; the
+   buggy "one side all-Var" guard equated the oldest variables (a=b) and forced the leftover (c) to
+   the affine, over-constraining. The fix requires BOTH residuals to be variables-only, so this falls
+   through to arithmetic deferral and leaves a and b INDEPENDENT. We detect the spurious a=b link: if
+   it were present, forcing a:=5 then b:=7 would conflict; it must instead be consistent. *)
+let test_ac3_affine_residual_not_overconstrained () =
+  Stdio.printf "AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain\n";
+  let a = Row.get_var () and c = Row.get_var () and b = Row.get_var () and w = Row.get_var () in
+  let aff = Row.Affine { stride = 2; over = Row.Var w; conv = None; stride_offset = 0 } in
+  let lhs = Row.Concat [ Row.Var a; Row.Var c ] in
+  let rhs = Row.Concat [ aff; Row.Var b ] in
+  match run_solve ~stage:Stage4 [ eq lhs rhs ] with
+  | `Ok (_remaining, env) -> (
+      match run_solve_env ~stage:Stage4 [ eq (Row.Var a) (dim 5); eq (Row.Var b) (dim 7) ] env with
+      | `Ok _ -> Stdio.printf "  PASS: a and b left independent (a:=5, b:=7 both consistent)\n"
+      | `Shape m -> Stdio.printf "  FAIL: over-constrained (spurious a=b link): %s\n" m
+      | `Other e -> Stdio.printf "  FAIL: unexpected exception: %s\n" e)
+  | `Shape m -> Stdio.printf "  FAIL: first solve raised Shape_error: %s\n" m
+  | `Other e -> Stdio.printf "  FAIL: regression: %s\n" e
+
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
   Tensor.unsafe_reinitialize ();
@@ -231,4 +253,5 @@ let () =
   test_ac3_unequal_arity_all_var ();
   test_ac3_one_side_all_var_other_has_solved ();
   test_nested_concat_flattened ();
+  test_ac3_affine_residual_not_overconstrained ();
   Stdio.printf "=== Done ===\n"

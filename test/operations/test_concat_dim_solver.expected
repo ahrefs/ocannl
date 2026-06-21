@@ -13,4 +13,6 @@ AC3: one side all-Var, other carries a solved Dim — pairing arm still fires
   PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)
 Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f
   PASS: nested concat flattened; d=2 e=3 f=4 (a=d, b=e, c=f)
+AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain
+  PASS: a and b left independent (a:=5, b:=7 both consistent)
 === Done ===

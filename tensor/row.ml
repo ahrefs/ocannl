@@ -2085,33 +2085,36 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
       | _, _
         when (let is_var = function Var _ -> true | _ -> false in
-              (* Original pure-nested-stacking case (PR #64): both residuals are bare unsolved
-                 variables of equal arity. This must fire at ANY stage — the nested stacking concat
-                 components are linked ONLY through this equation, and the incremental Stage1 solver
-                 (propagate_shapes / derive_projections) relies on it resolving early; gating it to
-                 stage 4 makes the inference loop (Test 5 [[x1;x2];[x1;x2]]). *)
-              (List.is_empty solved_x && List.is_empty solved_y
-               && List.length rest_x = List.length rest_y
-               && List.for_all (rest_x @ rest_y) ~f:is_var)
-              (* AC3 generalization: at stage >= 4 extend to UNEQUAL arity / a solved [Dim] on the
-                 other side, requiring only that ONE side's residual is variables-only (and the other
-                 has at least one variable to pair with). The same-arity and [solved_*]-empty
-                 restrictions are dropped; concats where NEITHER side is all-[Var] still fall through
-                 to the arithmetic-cancellation arm. Gated to stage 4 so earlier, more-specific arms
-                 get their chance first. *)
-              || (is_stage4_up stage
-                  && (List.for_all rest_x ~f:is_var || List.for_all rest_y ~f:is_var)
-                  && List.exists rest_x ~f:is_var
-                  && List.exists rest_y ~f:is_var)) ->
+              (* The pairing arm requires BOTH residuals to be variables-only. Solved [Dim]s are
+                 already partitioned into [solved_x]/[solved_y] (handled by the arithmetic-cancellation
+                 arm below), so "the other side carries a solved [Dim]" still reaches here with an
+                 all-[Var] residual. But a residual that still holds a NON-variable, NON-solved
+                 component (e.g. an unresolved [Affine] from a strided/conv axis) must NOT be paired:
+                 equating oldest variables and forcing the leftover to the affine over-constrains a sum
+                 equality that is genuinely underdetermined (Codex P2). Such cases fall through to the
+                 arithmetic-cancellation arm, which cancels the common solved size and defers. *)
+              List.for_all rest_x ~f:is_var
+              && List.for_all rest_y ~f:is_var
+              && (* Original pure-nested-stacking case (PR #64): equal arity, no solved component on
+                    either side. Fires at ANY stage — the nested-stacking concat components are linked
+                    ONLY through this equation, and the incremental Stage1 solver (propagate_shapes /
+                    derive_projections) relies on it resolving early; gating it to stage 4 makes
+                    inference loop (Test 5 [[x1;x2];[x1;x2]]). *)
+                 ((List.is_empty solved_x && List.is_empty solved_y
+                  && List.length rest_x = List.length rest_y)
+                 (* AC3 generalization: at stage >= 4 extend to UNEQUAL arity and to a solved [Dim] on
+                    either side (still variables-only residuals). The same-arity and [solved_*]-empty
+                    restrictions are dropped. *)
+                 || is_stage4_up stage)) ->
           (* Link the two concat axes by equating their oldest (lowest-id) residual variables and
              re-running the unification on the two original concats under the resulting env.
              [cancel_common_dims] then sees the freshly-equated components as common, so unequal arity
              and any further progress fall out of the re-run — no leftover-variable bookkeeping or
              reduced-sides construction is needed. This takes precedence over the arithmetic-
-             cancellation arm below and must not fall through to it (that arm cannot make progress when
-             a side is variables-only). Termination: post-cancellation no variable appears on both
-             sides, so the two oldest variables are distinct, and each re-entry equates one more pair —
-             strictly shrinking the free-variable count. *)
+             cancellation arm below. Both residuals are non-empty here (the empty cases are handled by
+             the earlier arms), so each side has an oldest variable. Termination: post-cancellation no
+             variable appears on both sides, so the two oldest variables are distinct, and each
+             re-entry equates one more pair — strictly shrinking the free-variable count. *)
           let oldest rest =
             List.filter_map rest ~f:(function Var v -> Some v | _ -> None)
             |> List.min_elt ~compare:compare_dim_var
