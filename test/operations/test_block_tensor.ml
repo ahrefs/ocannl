@@ -154,10 +154,20 @@ let () =
      the axes determinate, re-substitution routes the equation through the single-sided [],_ / _,[]
      branches before the mixed _ branch can resolve, and while >=2 components stay unsolved the
      equation is underdetermined. Forcing the equation via a pointwise add instead produces a
-     broadcast INEQUALITY between concat axes, which hits a pre-existing
-     [solve_dim_ineq] GLB [assert false] (concat broadcast bound, unrelated to this task). The
-     normalization is implemented to match the proposal's arithmetic-equality rule regardless; see
-     .peer-sync/workflow-feedback-coder.md. *)
+     broadcast INEQUALITY between concat axes that routes through [solve_dim_ineq]'s GLB merge between
+     two [Concat] bounds. That merge used to be [assert false]; task-887c4062 hardened it (AC1,
+     equality-attempt-first) so it no longer crashes — the broadcast GLB and the generalized
+     [Concat = Concat] pairing now have direct solver-level coverage in
+     [test_concat_dim_solver.{ml,expected}]. *)
+
+  (* AC1's GLB merge between two [Concat] bounds (pointwise-add-of-two-stacked-tensors) has no clean
+     determinate high-level fixture: forcing it from the DSL routes through [solve_dim_ineq]'s GLB
+     merge and no longer crashes (the shape resolves), but the printed result values are not a
+     reliable witness — a free-parameter trailing component prints uninitialized memory, and even a
+     concrete trailing component does not propagate its data into [forward_once]'s result here (an
+     unrelated concat-forward concern). The hardened GLB merge therefore has rigorous, deterministic
+     per-arm coverage (commit / demote / postpone) at the solver level instead, in
+     [test_concat_dim_solver.{ml,expected}]; see .peer-sync/workflow-feedback-coder.md. *)
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";

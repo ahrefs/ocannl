@@ -109,6 +109,14 @@
   (pps ppx_here)))
 
 (test
+ (name test_concat_dim_solver)
+ (package neural_nets_lib)
+ (modules test_concat_dim_solver)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here)))
+
+(test
  (name top_down_prec)
  (package neural_nets_lib)
  (deps

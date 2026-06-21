@@ -1,0 +1,18 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+=== Concat dim-solver hardening (solver-level) ===
+AC1: GLB merge of two compatible Concat bounds (stage 4) commits (forces operand)
+  PASS: operand committed to the merged size-5 GLB; no residual deferral
+AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top
+  PASS: operand demoted to broadcast-top (size 1), not committed to 5/6
+AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)
+  PASS: inequality deferred and operand left unsolved for a later stage
+AC3: variables-only Concat=Concat at unequal arity (3 vs 2) links oldest vars
+  PASS: c=0, a=d (d read 7 after a:=7), b=e (e read 9 after b:=9)
+AC3: one side all-Var, other carries a solved Dim — pairing arm still fires
+  PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)
+Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f
+  PASS: nested concat flattened; d=2 e=3 f=4 (a=d, b=e, c=f)
+AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain
+  PASS: a and b left independent (a:=5, b:=7 both consistent)
+=== Done ===

@@ -1692,6 +1692,17 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
    (cancel common components, reduce solved [Dim]s, bind/defer the residual) rather than by
    equal-arity structural matching. --- *)
 
+(* Flatten nested [Concat] components: a concatenated axis is the SUM of its components, and
+   concatenation is associative, so [Concat [Concat [a; b]; c]] denotes the same axis as
+   [Concat [a; b; c]]. Flattening before cancellation / solved-partition / variable-pairing keeps
+   those steps operating on a flat component multiset, so a nested concat cannot mis-align the
+   oldest-variable pairing or hide a structurally-equal component from cancellation. (The proposal
+   only considered [Dim] and [Var] components; this normalizes the nested-[Concat] case the user
+   flagged. [Affine] components are left intact — they are opaque atoms here and are handled by the
+   solved-size arithmetic / single-component peeling below.) *)
+let rec flatten_concat (dims : dim list) : dim list =
+  List.concat_map dims ~f:(function Concat inner -> flatten_concat inner | d -> [ d ])
+
 (* Multiset cancellation of structurally-equal components from both sides. *)
 let cancel_common_dims (xs : dim list) (ys : dim list) : dim list * dim list =
   let kept_rev, ys =
@@ -2040,6 +2051,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          solved/unsolved subtracts the solved part; an all-unsolved equal-length residual (the pure
          nested-stacking case, where corresponding fresh stack axes match positionally) pairs
          element-wise; anything still ambiguous is deferred until substitution resolves more. *)
+      let xs = flatten_concat xs and ys = flatten_concat ys in
       let xs, ys = cancel_common_dims xs ys in
       let solved_x, rest_x = partition_solved_dims xs in
       let solved_y, rest_y = partition_solved_dims ys in
@@ -2072,19 +2084,46 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           if residual < 0 then exceed ();
           unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
       | _, _
-        when List.is_empty solved_x && List.is_empty solved_y
-             && List.length rest_x = List.length rest_y
-             && List.for_all (rest_x @ rest_y) ~f:(function Var _ -> true | _ -> false) ->
-          (* All residual components are bare unsolved variables and the arities match: pair them
-             positionally. This is the nested-stacking shape — the two operands' concat axes have the
-             same structure and their corresponding fresh stack axes (each an independent size-1
-             unsqueeze axis) must align. We restrict this to the all-variable case so it cannot
-             over-constrain a genuine arithmetic equality between concats whose components carry
-             solved sizes (e.g. 2+3 vs 3+2): those go through the arithmetic normalization below,
-             where common solved sizes cancel instead of being matched pointwise. *)
-          List.fold (List.zip_exn rest_x rest_y) ~init:([], env) ~f:(fun (acc, env) (a, b) ->
-              let more, env = unify_dim ~stage origin (a, b) env in
-              (more @ acc, env))
+        when (let is_var = function Var _ -> true | _ -> false in
+              (* The pairing arm requires BOTH residuals to be variables-only. Solved [Dim]s are
+                 already partitioned into [solved_x]/[solved_y] (handled by the arithmetic-cancellation
+                 arm below), so "the other side carries a solved [Dim]" still reaches here with an
+                 all-[Var] residual. But a residual that still holds a NON-variable, NON-solved
+                 component (e.g. an unresolved [Affine] from a strided/conv axis) must NOT be paired:
+                 equating oldest variables and forcing the leftover to the affine over-constrains a sum
+                 equality that is genuinely underdetermined (Codex P2). Such cases fall through to the
+                 arithmetic-cancellation arm, which cancels the common solved size and defers. *)
+              List.for_all rest_x ~f:is_var
+              && List.for_all rest_y ~f:is_var
+              && (* Original pure-nested-stacking case (PR #64): equal arity, no solved component on
+                    either side. Fires at ANY stage — the nested-stacking concat components are linked
+                    ONLY through this equation, and the incremental Stage1 solver (propagate_shapes /
+                    derive_projections) relies on it resolving early; gating it to stage 4 makes
+                    inference loop (Test 5 [[x1;x2];[x1;x2]]). *)
+                 ((List.is_empty solved_x && List.is_empty solved_y
+                  && List.length rest_x = List.length rest_y)
+                 (* AC3 generalization: at stage >= 4 extend to UNEQUAL arity and to a solved [Dim] on
+                    either side (still variables-only residuals). The same-arity and [solved_*]-empty
+                    restrictions are dropped. *)
+                 || is_stage4_up stage)) ->
+          (* Link the two concat axes by equating their oldest (lowest-id) residual variables and
+             re-running the unification on the two original concats under the resulting env.
+             [cancel_common_dims] then sees the freshly-equated components as common, so unequal arity
+             and any further progress fall out of the re-run — no leftover-variable bookkeeping or
+             reduced-sides construction is needed. This takes precedence over the arithmetic-
+             cancellation arm below. Both residuals are non-empty here (the empty cases are handled by
+             the earlier arms), so each side has an oldest variable. Termination: post-cancellation no
+             variable appears on both sides, so the two oldest variables are distinct, and each
+             re-entry equates one more pair — strictly shrinking the free-variable count. *)
+          let oldest rest =
+            List.filter_map rest ~f:(function Var v -> Some v | _ -> None)
+            |> List.min_elt ~compare:compare_dim_var
+          in
+          let vx = Option.value_exn ~here:[%here] (oldest rest_x) in
+          let vy = Option.value_exn ~here:[%here] (oldest rest_y) in
+          let eq_constr, env = unify_dim ~stage origin (Var vx, Var vy) env in
+          let more, env = unify_dim ~stage origin (dim1, dim2) env in
+          (eq_constr @ more, env)
       | _, _ ->
           (* Both sides still have unsolved residuals (and at least one side carries a solved size or
              a non-variable residual). Normalize the solved [Dim] components by cancelling the common
@@ -2112,6 +2151,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | Concat xs, (Dim n as d) | (Dim n as d), Concat xs ->
       (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the
          residual. *)
+      let xs = flatten_concat xs in
       let solved, rest = partition_solved_dims xs in
       let sum = List.sum (module Int) solved ~f:(fun s -> s.d) in
       let solved_basis =
@@ -2738,40 +2778,62 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                _;
              }) ->
           let origin = merge_origins origin origin2 in
-          let glb, glb_forcing =
-            match (res, glb2) with
-            | Dim _, Dim _ when equal_dim res glb2 ->
-                (* Same size and same tag: keep the existing bound. (Basis is total now, so there
-                   is no wildcard "one side unspecified, prefer the other" case to handle here.) *)
-                (res, [])
-            | Dim _, Dim _ (* different size or different basis *) ->
-                (* Intentional broadcast semantics: conflicting bases (or different sizes) demote
-                   to the broadcast top 1_(bcast_if_1), meaning these axes are incompatible and
-                   should be broadcast. This is NOT a bug — do not tighten to raise Shape_error. *)
-                let glb = get_bcast_dim ~d:1 ~proj_id:47 () in
-                (glb, [ Dim_eq { d1 = opnd; d2 = glb; origin } ])
-            | Var _, _ | _, Var _ -> assert false
-            | Affine _, _ | _, Affine _ -> assert false
-            | Concat _, _ | _, Concat _ -> assert false
+          (* Commit the merged GLB [glb] for [opnd_v], threading [extra] constraints (the GLB-forcing
+             equation plus any constraints produced by an equality attempt). [env] is the environment
+             to extend, so a successful [unify_dim] attempt can thread its updated env through here. *)
+          let commit ~glb ~extra env =
+            let from_constr, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
+            ( from_constr @ extra,
+              {
+                env with
+                dim_env =
+                  add_dim env.dim_env ~key:opnd_v
+                    ~data:
+                      (Bounds_dim
+                         {
+                           is_in_param;
+                           has_uniq_constr_unless = None;
+                           glb = Some glb;
+                           res = res2;
+                           opnd = opnd2;
+                           constr = constr2;
+                           origin;
+                         });
+              } )
           in
-          let from_constr, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
-          ( from_constr @ glb_forcing,
-            {
-              env with
-              dim_env =
-                add_dim env.dim_env ~key:opnd_v
-                  ~data:
-                    (Bounds_dim
-                       {
-                         is_in_param;
-                         has_uniq_constr_unless = None;
-                         glb = Some glb;
-                         res = res2;
-                         opnd = opnd2;
-                         constr = constr2;
-                         origin;
-                       });
-            } )
+          (* Demote the bound to the broadcast top 1_(bcast_if_1): the two bounds are incompatible, so
+             these axes broadcast. *)
+          let demote () =
+            let glb = get_bcast_dim ~d:1 ~proj_id:47 () in
+            commit ~glb ~extra:[ Dim_eq { d1 = opnd; d2 = glb; origin } ] env
+          in
+          (* Equality-attempt-first GLB merge for non-[Dim] bounds (AC1): try to unify the incoming
+             bound [res] with the existing GLB [glb2]. On failure the two are irreconcilable -> demote
+             to broadcast-top (mirroring the differing-[Dim] arm). On success keep the possibility that
+             they resolve equal-as-sizes: below stage 4 postpone (re-defer the inequality, leaving the
+             bound un-demoted, using the same idiom as the [discardable_vars] concat case); at stage 4+
+             commit the unification (the GLB stays [glb2], i.e. [res = glb2]) and force [res = opnd],
+             threading the unification's own constraints through alongside. *)
+          let merge_by_equality () =
+            match try `Ok (unify_dim ~stage origin (res, glb2) env) with Shape_error _ -> `Failed with
+            | `Failed -> demote ()
+            | `Ok (more, env') ->
+                if is_stage4_up stage then
+                  commit ~glb:glb2 ~extra:(Dim_eq { d1 = opnd; d2 = glb2; origin } :: more) env'
+                else ([ Dim_ineq { res; opnd; from_ = Sexp.List []; origin } ], env)
+          in
+          (match (res, glb2) with
+          | Dim _, Dim _ when equal_dim res glb2 ->
+              (* Same size and same tag: keep the existing bound. (Basis is total now, so there is no
+                 wildcard "one side unspecified, prefer the other" case to handle here.) *)
+              commit ~glb:res ~extra:[] env
+          | Dim _, Dim _ (* different size or different basis *) ->
+              (* Intentional broadcast semantics: conflicting bases (or different sizes) demote to the
+                 broadcast top 1_(bcast_if_1), meaning these axes are incompatible and should be
+                 broadcast. This is NOT a bug — do not tighten to raise Shape_error. *)
+              demote ()
+          | Var _, _ | _, Var _ -> assert false
+          | Affine _, _ | _, Affine _ | Concat _, _ | _, Concat _ -> merge_by_equality ())
       | Some
           (Bounds_dim
              {
@@ -2806,9 +2868,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
             } ))
   | Var _, Dim _ (* when d2 > 1 or based *) -> ([ Dim_eq { d1 = res; d2 = opnd; origin } ], env)
   | Concat dims1, Concat dims2 when List.length dims1 = List.length dims2 ->
-      (* Element-wise unification of concatenated dimensions *)
-      let eqs = List.map2_exn dims1 dims2 ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin }) in
-      (eqs, env)
+      (* AC2: do not force pointwise element equalities (which over-constrains positionally). Emit a
+         single [Concat = Concat] equation so [unify_dim]'s [Concat = Concat] branch handles it via
+         structural cancellation and the generalized variable pairing (AC3). *)
+      ([ Dim_eq { d1 = Concat dims1; d2 = Concat dims2; origin } ], env)
   | _, Concat dims
     when List.count dims ~f:(function Var v -> Set.mem env.discardable_vars v | _ -> false)
          >= List.length dims - 1 ->
