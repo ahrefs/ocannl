@@ -58,11 +58,59 @@ let () =
   let ctx = Train.forward_once ctx triple in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx triple;
 
-  (* --- Test 5: (removed) Nested block matrix [[a; b]; [c; d]] ---
-     Nested stacking (rank+2 via two concat levels) is a known limitation of the current shape
-     solver: the outer unsqueeze's fresh leading axis fails to unify against the inner stacked
-     tensor's leading Concat axis. Single-level stacking — this task's scope — is unaffected.
-     Nested block matrices are deferred (see the task Notes / follow-up). *)
+  (* --- Test 5: Nested block matrix [[x1; x2]; [x1; x2]] (same-kind 2-level output nest) ---
+     Two output-axis concat levels: the result reproduces the nested ndarray literal's shape,
+     output axes 2; 2; 3 (two fresh size-2 stack axes ahead of the operand's 3). *)
+  printf "\n--- Test 5: Nested [[x1; x2]; [x1; x2]] ---\n%!";
+  let%op nested = [ [ x1; x2 ]; [ x1; x2 ] ] in
+  Train.set_materialized nested.value;
+  let ctx = Train.forward_once ctx nested in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested;
+
+  (* --- Test 5b: Deeper same-kind nest (3 output-axis levels) ---
+     [[[x1; x2]; [x1; x2]]; [[x1; x2]; [x1; x2]]] reproduces the nested literal at depth 3:
+     output axes 2; 2; 2; 3. *)
+  printf "\n--- Test 5b: Deeper nest [[[..]]] (3 levels) ---\n%!";
+  let%op nested3 = [ [ [ x1; x2 ]; [ x1; x2 ] ]; [ [ x1; x2 ]; [ x1; x2 ] ] ] in
+  Train.set_materialized nested3.value;
+  let ctx = Train.forward_once ctx nested3 in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested3;
+
+  (* --- Test 5c: Cross-kind nest, batch over output [| [x1; x2]; [x1; x2] |] ---
+     Outer array introduces a new BATCH axis (size 2); inner list a new OUTPUT axis (size 2). The
+     two new axes land on different kinds — operand output 3, so the result has batch axis 2 and
+     output axes 2; 3 (memory order batch @ output @ input), reproducing the nested literal.
+     NB the canonical three-way order puts the input (tuple) axis innermost, but ppx_op only
+     recognizes a tuple as an input-axis stack at the top level (not nested), so the input axis is
+     exercised separately in Test 5c2 below rather than via a nested tuple. *)
+  printf "\n--- Test 5c: Cross-kind batch/output [| [x1; x2]; [x1; x2] |] ---\n%!";
+  let%op cross = [| [ x1; x2 ]; [ x1; x2 ] |] in
+  Train.set_materialized cross.value;
+  let ctx = Train.forward_once ctx cross in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross;
+
+  (* --- Test 5c2: Cross-kind nest, input over output ([x1; x2], [x1; x2]) ---
+     Top-level tuple introduces a new INPUT axis (size 2); inner lists a new OUTPUT axis (size 2),
+     so the result has output axes 2; 3 and input axis 2. Exercises concat arithmetic on the input
+     kind. *)
+  printf "\n--- Test 5c2: Cross-kind input/output ([x1; x2], [x1; x2]) ---\n%!";
+  let%op cross_in = ([ x1; x2 ], [ x1; x2 ]) in
+  Train.set_materialized cross_in.value;
+  let ctx = Train.forward_once ctx cross_in in
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross_in;
+
+  (* --- Test 5d: Mixed-rank row [[x1; x2]; {c}] (AC #2) ---
+     The first row [x1; x2] has output axes 2; 3; the bare sibling [c] is under-specified, so shape
+     inference forces it to the sibling's stacked rank — c is inferred with output axes 2; 3 (it
+     acquires the leading stack axis), rather than erroring or auto-unsqueezing. *)
+  printf "\n--- Test 5d: Mixed-rank [[x1; x2]; {c}] ---\n%!";
+  let%op mixed = [ [ x1; x2 ]; { c } ] in
+  Train.set_materialized mixed.value;
+  let ctx = Train.forward_once ctx mixed in
+  printf "mixed (shape 2; 2; 3):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx mixed;
+  printf "c (rank inferred up to output 2; 3):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx c;
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";
@@ -122,6 +170,30 @@ let () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx h2;
   printf "\nGradient of h3:\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx h3;
+
+  (* --- Test 8b: Nested gradient flow ([[n1; n2]; [n3; n4]]) ---
+     Backward through a 2-level nested stack must reach every leaf operand. Extends the Test 8
+     precedent to the nested case: grad of each leaf is cos of its original (sum-of-sin loss). *)
+  printf "\n--- Test 8b: Nested gradient flow [[n1; n2]; [n3; n4]] ---\n%!";
+  let n1 = PDSL.ndarray [| 0.2; 0.4 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let n2 = PDSL.ndarray [| 0.6; 0.8 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let n3 = PDSL.ndarray [| 1.0; 1.2 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let n4 = PDSL.ndarray [| 1.4; 1.6 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let%op grad_nested = sin [ [ n1; n2 ]; [ n3; n4 ] ] in
+  let%op loss_nested = grad_nested ++ "...|... => 0" in
+  Train.set_materialized loss_nested.value;
+  Train.set_materialized grad_nested.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] n1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] n2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] n3.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] n4.diff).grad;
+  let ctx = Train.update_once ~output_cd_file:false ctx loss_nested in
+  printf "grad_nested (sin of nested stacked):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx grad_nested;
+  printf "\nGradient of n1 (should be cos of [0.2; 0.4] = [0.980; 0.921]):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx n1;
+  printf "\nGradient of n4 (should be cos of [1.4; 1.6] = [0.170; -0.029]):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx n4;
 
   (* --- Test 9: ndarray constant tuple (1.0, 2.0) — must NOT become block tensor --- *)
   printf "\n--- Test 9: ndarray constant tuple (1.0, 2.0) ---\n%!";

@@ -587,9 +587,9 @@ For example, `[ta; tb]` desugars to ``stack `Output [| ta; tb |]``, which genera
 
 - All components must have the same trailing shape (stacking requires shape compatibility).
 - Single-element block tensors like `[ta]` act as unsqueeze (add a size-1 leading axis).
-- Tuple syntax `(ta, tb)` only works at the top level of a `%op` expression. Tuples inside function arguments (e.g., `f (ta, tb)`) are preserved as regular OCaml tuples.
+- Tuple syntax `(ta, tb)` only works at the top level of a `%op` expression. Tuples inside function arguments (e.g., `f (ta, tb)`) are preserved as regular OCaml tuples. (Because of this top-level restriction, a tuple cannot introduce an input axis *inside* a nested literal; an input-axis stack must be the outermost delimiter, e.g. `([ta; tb], [tc; td])`.)
 - The named operation is also callable directly: ``TDSL.O.stack `Output [| ta; tb |]`` (and the `NTDSL` / `PDSL` variants).
-- **Known limitation:** nested block matrices `[[ta; tb]; [tc; td]]` (rank+2 via two concat levels) are not yet supported by the shape solver; only single-level stacking works currently.
+- Nested block tensors are supported at arbitrary depth, including across different axis kinds: a nested literal reproduces the shape the corresponding nested ndarray literal would have. For example `[[ta; tb]; [tc; td]]` stacks two output-axis levels (rank+2), and `[| [ta; tb]; [tc; td] |]` introduces a batch axis over an output axis. Mixed-rank rows like `[[ta; tb]; tc]` are well-formed: shape inference forces the under-specified sibling (`tc`) to acquire the matching stacked rank rather than erroring.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
 
