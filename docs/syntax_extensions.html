@@ -1419,16 +1419,29 @@ To include scalar constants alongside tensors, wrap them with
 shape compatibility).</li>
 <li>Single-element block tensors like <code>[ta]</code> act as unsqueeze
 (add a size-1 leading axis).</li>
-<li>Tuple syntax <code>(ta, tb)</code> only works at the top level of a
-<code>%op</code> expression. Tuples inside function arguments (e.g.,
-<code>f (ta, tb)</code>) are preserved as regular OCaml tuples.</li>
+<li>A tuple introduces an input axis at the top level of a
+<code>%op</code> expression <em>and</em> in block-tensor element
+position (nested inside a list, array, or another tuple),
+e.g. <code>(ta, tb)</code> or the inner tuples of
+<code>[ (ta, tb); (tc, td) ]</code>. Tuples used as function arguments
+(e.g., <code>f (ta, tb)</code>) are still preserved as regular OCaml
+tuples, since those are applications rather than bare tuples.</li>
 <li>The named operation is also callable directly:
 <code>TDSL.O.stack `Output [| ta; tb |]</code> (and the
 <code>NTDSL</code> / <code>PDSL</code> variants).</li>
-<li><strong>Known limitation:</strong> nested block matrices
-<code>[[ta; tb]; [tc; td]]</code> (rank+2 via two concat levels) are not
-yet supported by the shape solver; only single-level stacking works
-currently.</li>
+<li>Nested block tensors are supported at arbitrary depth, including
+three-way across all axis kinds: a nested literal reproduces the shape
+the corresponding nested ndarray literal would have. The delimiters nest
+in the canonical memory order <code>batch @ output @ input</code> —
+array (batch) outermost, list (output) middle, tuple (input) innermost.
+For example <code>[[ta; tb]; [tc; td]]</code> stacks two output-axis
+levels (rank+2); <code>[ (ta, tb); (tc, td) ]</code> introduces an
+output axis over an input axis; and
+<code>[| [ (ta, tb); (tc, td) ]; [ (te, tf); (tg, th) ] |]</code>
+introduces all three (batch over output over input). Mixed-rank rows
+like <code>[[ta; tb]; tc]</code> are well-formed: shape inference forces
+the under-specified sibling (<code>tc</code>) to acquire the matching
+stacked rank rather than erroring.</li>
 </ul>
 <h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
