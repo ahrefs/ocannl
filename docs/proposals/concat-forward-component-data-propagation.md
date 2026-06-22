@@ -26,24 +26,24 @@ A concrete 3-component concat `(a, b, c) ++^ "ii;jj;kk => ii^jj^kk"` with
 (component `c` lands where `b` should, `b`'s data dropped, tail left at the neutral
 element).
 
-- [ ] **Forward correctness restored.** The forward path correctly propagates all
+- [x] **Forward correctness restored.** The forward path correctly propagates all
   component data of a multi-component concat when the concat axis is constrained
   against a plain `Dim` axis by a broadcast binary op. The three reference cases
   that already work — a standalone concat, a unary consumer (`sin(...)`), and a
   scalar-broadcast add (`... + 0.0`) — continue to work.
 
-- [ ] **Middle components restored, not just the tail.** A free or concrete
+- [x] **Middle components restored, not just the tail.** A free or concrete
   *middle* component (`(a, {m}, c) + fixed7`) produces correct output. (Pre-fix
   repro Case F produced `10 20 0 0 0 0 0`.) The fix must restore every misplaced
   component, regardless of position.
 
-- [ ] **Coverage across shapes.** Fixtures exercise: 2-component and 3+-component
+- [x] **Coverage across shapes.** Fixtures exercise: 2-component and 3+-component
   concats added against a `Dim` axis; the `Dim` operand on the **LHS** of the add
   (operand order); and nested concat (`flatten_concat`, from #66) added against a
   `Dim` axis. These need not all live in distinct tests, but the regression suite
   must witness more than the single 3-component-tail case.
 
-- [ ] **Hard-fail on a *missing* component size in `concat_offset_for`.** The
+- [x] **Hard-fail on a *missing* component size in `concat_offset_for`.** The
   current `Map.find iter_sizes s |> Option.value ~default:0` silently drops data
   when a component's iterator symbol is **absent** from `iter_sizes` (projection
   derivation dropped the component). Replace this silent default with an
@@ -55,7 +55,7 @@ element).
   **both** `loop_accum` (Block) and `loop_accum_rev` (Rev_sides) copies of
   `concat_offset_for`.
 
-- [ ] **Gradient direction audited and fixed.** Audit the `Rev_sides` /
+- [x] **Gradient direction audited and fixed.** Audit the `Rev_sides` /
   `loop_accum_rev` gradient path for the same offset corruption (it shares the
   `concat_offset_for` + projection-derivation machinery). If incoming gradient is
   misrouted to the wrong component under a `concat + Dim` shape, fix it. Add a
@@ -64,8 +64,12 @@ element).
   gradient path turns out genuinely unaffected, the fixture still ships as a
   regression guard and the audit finding is recorded in the test comments — this
   case is **not** split to a follow-up.
+  **Audit finding**: The gradient path was NOT affected by the same bug. The root cause was
+  in `low_level.ml`'s virtualizer (not in `concat_offset_for`), and the gradient path's
+  `Rev_sides` For_loops write to component gradients directly (not Block-virtualized). Test
+  5h ships as the regression guard (grad_q1=[1,1], grad_q2=[1,1,1], grad_q3=[1,1] ✓).
 
-- [ ] **High-level AC1 GLB-merge reachability fixture added.** With the forward
+- [x] **High-level AC1 GLB-merge reachability fixture added.** With the forward
   bug fixed, add a high-level `%op` add-of-concat-vs-`Dim` (or
   pointwise-add-of-two-stacked-tensors) test to `test_block_tensor` that witnesses
   the #66 AC1 GLB merge between two `Concat` bounds with **real, asserted values**
@@ -73,13 +77,15 @@ element).
   `test_block_tensor.ml` (the block currently noting "an unrelated concat-forward
   concern" / "the printed result values are not a reliable witness") at the new
   fixture, since the witness is now reliable.
+  **Done**: Test 5i (`glb_result = (r1,r2,r3 concat) + (s1,s2,s3 concat)`) produces
+  [11, 22, 33, 44, 55, 66, 77] ✓. The stale deferring comments were replaced.
 
-- [ ] **Test 5e expectation corrected.** `test_block_tensor`'s Test 5e
+- [x] **Test 5e expectation corrected.** `test_block_tensor`'s Test 5e
   (`((a_e, b_e, {c_e}) ++^ …) + fixed7`) currently ships a `.expected` that
   encodes the bug (its trailing `1.00 2.00` is `a_e`'s data leaking, not `c_e`).
   Once the fix lands, this expectation reflects correct data propagation.
 
-- [ ] **Existing tests stay green.** `dune test` (or the project's test entry
+- [x] **Existing tests stay green.** `dune test` (or the project's test entry
   point) passes; no regression in the standalone-concat, unary-consumer, or
   gradient fixtures.
 

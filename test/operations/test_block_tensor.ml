@@ -148,26 +148,120 @@ let () =
   printf "concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_resid;
 
-  (* NB: the [Concat = Concat] mixed-solved-residual normalization in unify_dim (round-3 fix) has no
-     determinate high-level fixture. A direct EQUALITY between two concat axes carrying differing
-     solved components arises only transiently — once enough sibling components are solved to make
-     the axes determinate, re-substitution routes the equation through the single-sided [],_ / _,[]
-     branches before the mixed _ branch can resolve, and while >=2 components stay unsolved the
-     equation is underdetermined. Forcing the equation via a pointwise add instead produces a
-     broadcast INEQUALITY between concat axes that routes through [solve_dim_ineq]'s GLB merge between
-     two [Concat] bounds. That merge used to be [assert false]; task-887c4062 hardened it (AC1,
-     equality-attempt-first) so it no longer crashes — the broadcast GLB and the generalized
-     [Concat = Concat] pairing now have direct solver-level coverage in
-     [test_concat_dim_solver.{ml,expected}]. *)
+  (* --- Test 5f: 2-component Concat + Dim; operand order: Dim on LHS --- *)
+  (* Exercises the 2-component case and the Dim-on-LHS operand order for concat+Dim coverage. *)
+  printf "\n--- Test 5f: 2-component Concat + Dim (Dim on LHS) ---\n%!";
+  let pf1 =
+    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let pf2 =
+    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let fixed5 =
+    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0 |]
+      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 5 ] ()
+  in
+  let%op concat_2c = fixed5 + ((pf1, pf2) ++^ "ii; jj => ii^jj") in
+  Train.set_materialized concat_2c.value;
+  let ctx = Train.forward_once ctx concat_2c in
+  printf "concat_2c (Dim on LHS; expected 1.0 2.0 3.0 4.0 5.0):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_2c;
 
-  (* AC1's GLB merge between two [Concat] bounds (pointwise-add-of-two-stacked-tensors) has no clean
-     determinate high-level fixture: forcing it from the DSL routes through [solve_dim_ineq]'s GLB
-     merge and no longer crashes (the shape resolves), but the printed result values are not a
-     reliable witness — a free-parameter trailing component prints uninitialized memory, and even a
-     concrete trailing component does not propagate its data into [forward_once]'s result here (an
-     unrelated concat-forward concern). The hardened GLB merge therefore has rigorous, deterministic
-     per-arm coverage (commit / demote / postpone) at the solver level instead, in
-     [test_concat_dim_solver.{ml,expected}]; see .peer-sync/workflow-feedback-coder.md. *)
+  (* --- Test 5g: Nested concat (flatten-concat from #66) + Dim --- *)
+  (* Exercises [Concat[Concat[a;b];c]] flattening against a Dim axis. The inner [++^] produces
+     [bc_g.output = Concat[jj^kk]] (size 5); the outer [++^] wraps it as one component to give
+     [nested_concat.output = Concat[ii^jjkk]] where [jjkk = Concat[jj^kk]] (nested). Adding
+     against [fixed7g] (Dim 7) forces the solver to flatten and solve 2+3+2=7. *)
+  printf "\n--- Test 5g: Nested concat (flatten-concat) + Dim ---\n%!";
+  let ng1 =
+    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let ng2 =
+    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let ng3 =
+    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let fixed7g =
+    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
+  in
+  let%op bc_g = (ng2, ng3) ++^ "jj; kk => jj^kk" in
+  let%op nested_concat = (ng1, bc_g) ++^ "ii; jjkk => ii^jjkk" in
+  let%op nested_dim = nested_concat + fixed7g in
+  Train.set_materialized nested_dim.value;
+  let ctx = Train.forward_once ctx nested_dim in
+  printf "nested_dim (nested (2+(3+2)) + Dim; expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested_dim;
+
+  (* --- Test 5h: Gradient through Concat + Dim --- *)
+  (* Audits the [Rev_sides] / [loop_accum_rev] gradient path: grad of each component is all 1.0
+     (from a sum-to-scalar loss), showing that the backward concat-offset routing is correct. *)
+  printf "\n--- Test 5h: Gradient through Concat + Dim ---\n%!";
+  let q1 =
+    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let q2 =
+    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let q3 =
+    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let fixed7h =
+    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
+  in
+  let%op concat_g = ((q1, q2, q3) ++^ "ii; jj; kk => ii^jj^kk") + fixed7h in
+  let%op loss_g = concat_g ++ "...|... => 0" in
+  Train.set_materialized loss_g.value;
+  Train.set_materialized concat_g.value;
+  Train.set_materialized (Option.value_exn ~here:[%here] q1.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] q2.diff).grad;
+  Train.set_materialized (Option.value_exn ~here:[%here] q3.diff).grad;
+  let ctx = Train.update_once ~output_cd_file:false ctx loss_g in
+  printf "concat_g forward (expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_g;
+  printf "\nGradient of q1 (expected [1.0 1.0]):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx q1;
+  printf "\nGradient of q2 (expected [1.0 1.0 1.0]):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx q2;
+  printf "\nGradient of q3 (expected [1.0 1.0]):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx q3;
+
+  (* --- Test 5i: AC1 GLB-merge — two same-shape concats added (pointwise-add-of-two-stacked-tensors) ---
+     Two 3-component [++^] results with matching component sizes are pointwise-added, forcing the
+     shape solver through [solve_dim_ineq]'s GLB merge between two [Concat] bounds (AC1 from
+     task-887c4062 / PR #66). Previously had no reliable high-level fixture because the forward
+     propagation was broken (see task-e5df793f); now that the virtualizer correctly propagates all
+     concat components, the values are a reliable witness. Different spec names ([ii;jj;kk] vs
+     [pp;qq;rr]) ensure two independent Concat bounds, triggering the GLB merge path. *)
+  printf "\n--- Test 5i: AC1 GLB-merge (two same-shape 3-component concats added) ---\n%!";
+  let r1 =
+    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let r2 =
+    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let r3 =
+    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let s1 =
+    PDSL.ndarray [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let s2 =
+    PDSL.ndarray [| 30.0; 40.0; 50.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let s3 =
+    PDSL.ndarray [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let%op glb_result =
+    ((r1, r2, r3) ++^ "ii; jj; kk => ii^jj^kk")
+    + ((s1, s2, s3) ++^ "pp; qq; rr => pp^qq^rr")
+  in
+  Train.set_materialized glb_result.value;
+  let ctx = Train.forward_once ctx glb_result in
+  printf "glb_result (AC1 GLB-merge; expected 11.0 22.0 33.0 44.0 55.0 66.0 77.0):\n%!";
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx glb_result;
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";

@@ -326,7 +326,16 @@ let%track4_sexp to_low_level code =
     let concat_offset_for syms active =
       let _, offset =
         List.fold syms ~init:(0, None) ~f:(fun (cumul, found) s ->
-            let size = Map.find iter_sizes s |> Option.value ~default:0 in
+            let size =
+              match Map.find iter_sizes s with
+              | Some v -> v
+              | None ->
+                  raise
+                  @@ Utils.User_error
+                       ("concat_offset_for: iterator symbol "
+                       ^ Indexing.symbol_ident s
+                       ^ " absent from projection iter_sizes; a projection component was dropped")
+            in
             if Indexing.equal_symbol s active then (cumul + size, Some cumul)
             else (cumul + size, found))
       in
@@ -507,7 +516,16 @@ let%track4_sexp to_low_level code =
     let concat_offset_for syms active =
       let _, offset =
         List.fold syms ~init:(0, None) ~f:(fun (cumul, found) s ->
-            let size = Map.find iter_sizes s |> Option.value ~default:0 in
+            let size =
+              match Map.find iter_sizes s with
+              | Some v -> v
+              | None ->
+                  raise
+                  @@ Utils.User_error
+                       ("concat_offset_for: iterator symbol "
+                       ^ Indexing.symbol_ident s
+                       ^ " absent from projection iter_sizes; a projection component was dropped")
+            in
             if Indexing.equal_symbol s active then (cumul + size, Some cumul)
             else (cumul + size, found))
       in
