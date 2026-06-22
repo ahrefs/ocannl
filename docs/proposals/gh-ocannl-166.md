@@ -23,16 +23,32 @@ filed there.
 
 ## Acceptance Criteria
 
-- [ ] The cause is identified as either (A) system configuration, (B) an
-  ocaml-cudajit binding/printing issue, or (C) a CUDA driver oddity / legacy value.
-- [ ] If (A) — system config: `nvidia-smi -q | grep -A1 "Compute Mode"` is recorded
-  in the issue, the appropriate `nvidia-smi --compute-mode=DEFAULT` (or equivalent)
-  step is documented, and the issue is closed with the resolution.
-- [ ] If (B) — binding/printing issue: a fix PR is opened against
-  `lukstafi/ocaml-cudajit` adjusting the affected enum mapping, sexp printer, or
-  raw-int printing path; the fix is verified on the RTX 3050.
-- [ ] If (C) — driver oddity (no fix possible from our side): the finding is
-  documented on the issue and the issue is closed.
+*Relaxed 2026-06-22 (user decision: solve as a code question on the always-on host;
+device-state confirmation is delegated to the user out-of-band). In-session
+verification on the RTX 3050 is **NOT** required to satisfy this task — the host
+running this session has no nvidia GPU and cannot build the CUDA bindings.*
+
+- [ ] **Cause documented.** Value `1` is the legacy `CU_COMPUTEMODE_EXCLUSIVE`
+  (per-device single-context), removed from the public `CUcomputemode` enum in
+  CUDA 8.0 (`DEFAULT=0`, `PROHIBITED=2`, `EXCLUSIVE_PROCESS=3` remain). Modern
+  ocaml-cudajit's `cu_computemode_of_int` therefore falls through to
+  `UNCATEGORIZED` for `1`, and `computemode_of_cu` raises `invalid_arg` on it —
+  which is why `properties.exe` reports "uncategorized" / crashes rather than
+  printing a mode (branch B, a binding robustness gap; possibly compounded by
+  branch A if the device was actually placed in a legacy exclusive mode).
+- [ ] **Binding robustness fix (branch B)** opened against `lukstafi/ocaml-cudajit`
+  (PR #8): `computemode_of_cu` surfaces a non-fatal `UNCATEGORIZED of int64`
+  variant + sexp printer instead of `invalid_arg`, so legacy/unknown driver values
+  print instead of crashing the diagnostic. **Code review by inspection is
+  sufficient to close out this task**; build/runtime verification needs CUDA and is
+  explicitly deferred to minipc-wsl or the user (the always-on host cannot compile
+  the CUDA bindings). The reviewer must NOT block merge on an in-session build.
+- [ ] **Device-state action documented for the user** (out-of-band, not a session
+  blocker): `nvidia-smi -q | grep -A1 "Compute Mode"` to read the human-readable
+  mode, and `sudo nvidia-smi --compute-mode=DEFAULT` if a non-default mode is
+  unwanted. Issue ahrefs/ocannl#166 is updated with the diagnosis + this user-action
+  note; final closure waits on the user's device readout but the code deliverable
+  is complete without it.
 
 ## Context
 
@@ -144,7 +160,8 @@ binary — but that is a follow-up, not the focus of this task.
 
 **Out of scope**:
 - Broader cleanup of other CUDA attribute enums (separate task if desired).
-- Any work that does not require the RTX 3050 hardware.
+- In-session RTX 3050 build/runtime verification — delegated to the user / a
+  later minipc-wsl run (see relaxed Acceptance Criteria, 2026-06-22).
 
 **Dependencies**: requires physical access to the RTX 3050 desktop with a
 working CUDA driver and the ocaml-cudajit checkout buildable there.
