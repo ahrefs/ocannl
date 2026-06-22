@@ -147,6 +147,37 @@ let () =
   let ctx = Train.forward_once ctx concat_resid in
   printf "concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_resid;
+  (let vals = Context.get_values ctx concat_resid.value in
+   printf "concat_resid exact:";
+   Array.iter vals ~f:(fun v -> printf " %.2f" v);
+   printf "\n%!");
+
+  (* --- Test 5e2: Concrete middle component restored ---
+     Mirrors the proposal's Case D/F: a=[10,20], b=[30,40,50] (middle), c=[60,70], Dim zeros.
+     Pre-fix, the middle component b was silently dropped, producing 10 20 0 0 0 60 70 (or
+     c values leaking into b's position). The exact flat-value print enforces all seven positions,
+     including positions 2-4 which are the middle component. *)
+  printf "\n--- Test 5e2: Concrete middle component (positions 2-4 must equal [30,40,50]) ---\n%!";
+  let a_mc =
+    PDSL.ndarray [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let b_mc =
+    PDSL.ndarray [| 30.0; 40.0; 50.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+  in
+  let c_mc =
+    PDSL.ndarray [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+  in
+  let fixed7_mc =
+    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
+  in
+  let%op concat_mc = ((a_mc, b_mc, c_mc) ++^ "ii; mm; kk => ii^mm^kk") + fixed7_mc in
+  Train.set_materialized concat_mc.value;
+  let ctx = Train.forward_once ctx concat_mc in
+  (let vals = Context.get_values ctx concat_mc.value in
+   printf "concat_mc exact (expected 10 20 30 40 50 60 70):";
+   Array.iter vals ~f:(fun v -> printf " %.2f" v);
+   printf "\n%!");
 
   (* --- Test 5f: 2-component Concat + Dim; operand order: Dim on LHS --- *)
   (* Exercises the 2-component case and the Dim-on-LHS operand order for concat+Dim coverage. *)
@@ -193,6 +224,10 @@ let () =
   let ctx = Train.forward_once ctx nested_dim in
   printf "nested_dim (nested (2+(3+2)) + Dim; expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested_dim;
+  (let vals = Context.get_values ctx nested_dim.value in
+   printf "nested_dim exact:";
+   Array.iter vals ~f:(fun v -> printf " %.2f" v);
+   printf "\n%!");
 
   (* --- Test 5h: Gradient through Concat + Dim --- *)
   (* Audits the [Rev_sides] / [loop_accum_rev] gradient path: grad of each component is all 1.0
@@ -221,6 +256,10 @@ let () =
   let ctx = Train.update_once ~output_cd_file:false ctx loss_g in
   printf "concat_g forward (expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx concat_g;
+  (let vals = Context.get_values ctx concat_g.value in
+   printf "concat_g exact:";
+   Array.iter vals ~f:(fun v -> printf " %.2f" v);
+   printf "\n%!");
   printf "\nGradient of q1 (expected [1.0 1.0]):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx q1;
   printf "\nGradient of q2 (expected [1.0 1.0 1.0]):\n%!";
@@ -262,6 +301,10 @@ let () =
   let ctx = Train.forward_once ctx glb_result in
   printf "glb_result (AC1 GLB-merge; expected 11.0 22.0 33.0 44.0 55.0 66.0 77.0):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx glb_result;
+  (let vals = Context.get_values ctx glb_result.value in
+   printf "glb_result exact:";
+   Array.iter vals ~f:(fun v -> printf " %.2f" v);
+   printf "\n%!");
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";

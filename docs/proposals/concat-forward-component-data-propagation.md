@@ -36,6 +36,10 @@ element).
   *middle* component (`(a, {m}, c) + fixed7`) produces correct output. (Pre-fix
   repro Case F produced `10 20 0 0 0 0 0`.) The fix must restore every misplaced
   component, regardless of position.
+  **Done**: Test 5e2 (`concat_mc = (a_mc, b_mc, c_mc) ++^ "ii;mm;kk => ii^mm^kk") + fixed7_mc`)
+  with `a_mc=[10,20]`, `b_mc=[30,40,50]` (middle), `c_mc=[60,70]` produces
+  `concat_mc exact: 10.00 20.00 30.00 40.00 50.00 60.00 70.00`. The `Context.get_values`
+  flat print enforces all 7 positions including positions 2-4 (the middle component).
 
 - [x] **Coverage across shapes.** Fixtures exercise: 2-component and 3+-component
   concats added against a `Dim` axis; the `Dim` operand on the **LHS** of the add
