@@ -1949,6 +1949,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     List.iter rhs ~f:set_padding;
     (* Update padding_elem for RHS shapes based on the operation's neutral element *)
     List.iter rhs ~f:update_padding_elem;
+    let project_lhs = indices_of_sh lhs in
+    let project_rhs = Array.of_list_map ~f:indices_of_sh rhs in
     let projections =
       try
         Idx.
@@ -1957,8 +1959,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
             lhs_dims;
             rhs_dims;
             product_iterators;
-            project_lhs = indices_of_sh lhs;
-            project_rhs = Array.of_list_map ~f:indices_of_sh rhs;
+            project_lhs;
+            project_rhs;
             debug_info =
               {
                 spec = logic_to_spec update_step.logic;

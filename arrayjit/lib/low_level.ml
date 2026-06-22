@@ -778,6 +778,14 @@ let%track7_sexp inline_computation ~id
     in
     List.exists computations ~f:(fun (_, def) -> contains def)
   in
+  (* For Block/Concat virtual nodes with multiple Set computations (each writing a distinct slice),
+     a single init local is shared across all component computations so that each guarded update
+     sees the preceding component's value via [Get_local id] rather than a per-component reset to
+     0. [None] entries are [Zero_out] computations and are excluded from the count. *)
+  let set_computation_count =
+    List.count computations ~f:(fun (def_args, _) -> Option.is_some def_args)
+  in
+  let global_needs_init = ref false in
   (* In the order of computation. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
     (* One substitution step: replace env-bound symbols, folding nested affine/fixed contributions. *)
@@ -856,12 +864,18 @@ let%track7_sexp inline_computation ~id
     let bound_pos = Array.create ~len:n false in
     let env = ref (Map.empty (module Indexing.Symbol)) in
     let range_guards = ref [] in
-    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. *)
+    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For
+       Block/Concat virtual nodes with multiple Set computations, also emit a range guard: the
+       producer's loop covers [0, range) while the consumer iterates a wider range, so
+       out-of-range consumer iterations must fall back to [Get_local id]. *)
     Array.iteri def_args_arr ~f:(fun i lhs_ind ->
         match lhs_ind with
         | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem !env s) ->
             bound_pos.(i) <- true;
-            env := Map.add_exn !env ~key:s ~data:call_args.(i)
+            env := Map.add_exn !env ~key:s ~data:call_args.(i);
+            if set_computation_count > 1 then
+              range_guards :=
+                (1, Indexing.Fixed_idx 0, call_args.(i), symbol_range s) :: !range_guards
         | _ -> ());
     (* gh-133 Stage B: structural affine match -- producer [Σ cₖ·sₖ + off] read at a call-site affine
        with the same canonical (distinct) coefficient list and equal offset binds producer symbols
@@ -1103,14 +1117,25 @@ let%track7_sexp inline_computation ~id
       | Unop (op, (llsc, prec)) -> Unop (op, (loop_scalar env llsc, prec))
     in
     match loop env def with
-    | Some body when !needs_init ->
-        (* Prepend the init local before any (possibly loop-nested) guarded updates. *)
-        Some (Seq (Set_local (id, Constant 0.0), body))
-    | other -> other
+    | Some body ->
+        if !needs_init then global_needs_init := true;
+        Some body
+    | None -> None
   in
   try
     let body = List.rev_filter_map ~f:loop_proc computations in
-    if List.is_empty body then raise @@ Non_virtual 14 else Some (unflat_lines body)
+    if List.is_empty body then raise @@ Non_virtual 14
+    else
+      (* Prepend a single init local when any component computation has guards but the producer
+         has no [Zero_out] to supply the initial value. For multi-computation nodes (Block/Concat)
+         this emits exactly one reset rather than one per component, so each component's guarded
+         update sees the preceding component's value via [Get_local id] rather than 0. *)
+      let body =
+        if !global_needs_init && not has_zero_init then
+          Set_local (id, Constant 0.0) :: body
+        else body
+      in
+      Some (unflat_lines body)
   with Non_virtual i ->
     Tn.update_memory_mode traced.tn Never_virtual i;
     None
