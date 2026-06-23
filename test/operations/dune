@@ -837,6 +837,23 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_cuda_pool_offset)
+ (package neural_nets_lib)
+ (modules test_cuda_pool_offset)
+ (deps ocannl_config test_cuda_pool_offset.expected)
+ (libraries
+  base
+  stdio
+  ocannl
+  (select
+   test_cuda_pool_offset.ml
+   from
+   (cudajit.cuda -> test_cuda_pool_offset.real.ml)
+   (-> test_cuda_pool_offset.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_one_hot_embedding_lookup)
  (package neural_nets_lib)
  (deps

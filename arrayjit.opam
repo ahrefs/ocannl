@@ -37,7 +37,6 @@ depends: [
   "ppx_minidebug" {>= "3.0.0"}
   "metal" {os = "macos"}
   "odoc" {with-doc}
-  "menhir" {>= "20180523"}
 ]
 depopts: [
   "cudajit" {>= "0.7.0"}
@@ -66,4 +65,5 @@ x-maintenance-intent: ["(latest)"]
 pin-depends: [
   ["ppx_minidebug.dev" "git+https://github.com/lukstafi/ppx_minidebug.git#86a19de906add05caa0aa1626add1572da2f070d"]
   ["notty-community.dev" "git+https://github.com/lukstafi/notty-community.git#708e36ba78ecb4ec1bf12de2b087e549d6e42893"]
+  ["cudajit.dev" "git+https://github.com/lukstafi/ocaml-cudajit.git#fb2b55284d90c682d771bd0fdd578ef77f229541"]
 ]
