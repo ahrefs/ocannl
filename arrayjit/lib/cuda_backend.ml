@@ -260,12 +260,18 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let is_idle device = Cu.Stream.is_ready device.runner
 
   (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
-     against the device's private pool table. *)
+     against the device's private pool table.
+     We pass [~length] explicitly to [memcpy_H_to_D] / [memcpy_D_to_H]: without it the cudajit
+     impl computes [size_in_bytes = full_size - offset], which would reduce the copy to 0 bytes
+     when the tensor is placed at an offset equal to its own size (the common bump-packed case). *)
   let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
     let base = Slab.resolve_pool dst.device dst_loc in
     let f src =
-      Cu.Stream.memcpy_H_to_D ~dst_offset:dst_loc.offset ~dst:base ~src dst.device.runner
+      let full_bytes = Bigarray.Genarray.size_in_bytes src in
+      let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind src) in
+      Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset
+        ~dst:base ~src dst.device.runner
     in
     Ndarray.apply { f } hosted
 
@@ -273,7 +279,10 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     set_ctx @@ ctx_of src;
     let base = Slab.resolve_pool src.device src_loc in
     let f dst =
-      Cu.Stream.memcpy_D_to_H ~src_offset:src_loc.offset ~dst ~src:base src.device.runner
+      let full_bytes = Bigarray.Genarray.size_in_bytes dst in
+      let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind dst) in
+      Cu.Stream.memcpy_D_to_H ~length:(full_bytes / elem_bytes) ~src_offset:src_loc.offset
+        ~dst ~src:base src.device.runner
     in
     Ndarray.apply { f } hosted
 
