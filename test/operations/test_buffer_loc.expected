@@ -12,4 +12,7 @@ offsets are 8-byte aligned (2x float32) = true
 two constants share a pool = true
 two constants have distinct offsets = true
 constant pool is separate from working pool = true
+pooled p.offset=0 q.offset=8 share_pool=true
+pooled p (a+b expect [4.0;6.0]) correct = true
+pooled q (a*b expect [3.0;8.0]) correct = true
 done

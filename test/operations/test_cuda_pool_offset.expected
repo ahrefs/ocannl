@@ -1,0 +1,4 @@
+p and q share pool = true
+p.offset=0 q.offset=8 distinct = true
+CUDA pooled p (a+b expect [4.0;6.0]) correct = true
+CUDA pooled q (a*b expect [3.0;8.0]) correct = true
