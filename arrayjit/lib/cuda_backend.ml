@@ -239,7 +239,7 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
 
   let new_stream (device : device) : device = device
 
-  let cuda_properties =
+  let _cuda_properties =
     let cache =
       let%debug2_sexp f (ordinal : int) =
         let dev = get_device ~ordinal in
@@ -253,11 +253,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     in
     get_props
 
-  let await device : unit =
+  let await (device : device) : unit =
     set_ctx device.dev.primary_context;
     Cu.Stream.synchronize device.runner
 
-  let is_idle device = Cu.Stream.is_ready device.runner
+  let is_idle (device : device) = Cu.Stream.is_ready device.runner
 
   (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
      against the device's private pool table.

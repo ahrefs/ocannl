@@ -174,3 +174,19 @@ back as 0.0. ✅
 Round 2 additionally fixed a bug in `from_host` / `to_host` (the `~length` omission that caused
 `memcpy_H_to_D` to copy 0 bytes for tensors at non-zero pool offsets). This bug would have caused
 AC 9 to fail even with the correct kernel-arg path.
+
+---
+
+## Round 3 reviewer outcome: APPROVE
+
+Reviewer confirmed all 9 ACs satisfied. Key notes from round-3-reviewer.md:
+
+- `ptr_at` / `Deviceptr.Deviceptr` are gone; `resolve_pool` returns the owning slab base;
+  memset/transfers apply offsets at operation sites; kernel params stay CUDA `Per_param` via
+  `S.Tensor_at (Cu.Deviceptr.offset ...)`. All verified against the final diff.
+- AC 8/9 evidence (minipc-wsl `dune build @check` and `dune runtest`) accepted as authoritative;
+  reviewer noted the review host also has cudajit 0.7.2 (old) and could not reproduce locally.
+- Adjacent `from_host`/`to_host` `~length` fix (found by the CUDA runtest) accepted in scope.
+- Unrelated shape-solver/block-tensor work from round 1 confirmed absent from the final diff.
+
+PR: https://github.com/lukstafi/ocannl-staging/pull/68 — APPROVED and ready to merge.
