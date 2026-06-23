@@ -82,22 +82,15 @@ module Slab = struct
         Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
         Hashtbl.remove pools key)
 
-  (* Advance a [CUdeviceptr] by [offset] bytes. cudajit (>= 0.7.0) represents a device pointer as
-     [Deviceptr of Unsigned.uint64], so pooled sub-region addressing is base-address arithmetic.
-     NOTE: CUDA is not buildable in this dev environment; this mirrors the CPU/Metal offset contract
-     and must be confirmed against the installed cudajit at CUDA build time. *)
-  let ptr_at (Cu.Deviceptr.Deviceptr base) ~offset : buffer_ptr =
-    if offset = 0 then Cu.Deviceptr.Deviceptr base
-    else Cu.Deviceptr.Deviceptr Unsigned.UInt64.(add base (of_int offset))
-
-  let resolve_pool (device : device) { pool_id; offset } : buffer_ptr =
-    (* Pooled policy: many tnodes share a pool slab at distinct byte offsets. *)
-    ptr_at (Hashtbl.find_exn pools (device.device_id, pool_id)) ~offset
+  let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
+    (* Return the slab base. The byte offset is NOT folded into the handle here; callers apply it
+       via the cudajit ?offset / ?dst_offset / ?src_offset params or via Cu.Deviceptr.offset. *)
+    Hashtbl.find_exn pools (device.device_id, pool_id)
 
   let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
-    let ptr = resolve_pool device { pool_id; offset } in
+    let base = resolve_pool device { pool_id; offset } in
     if size_in_bytes > 0 then
-      Cu.Stream.memset_d8 ptr Unsigned.UChar.zero ~length:size_in_bytes device.runner
+      Cu.Stream.memset_d8 ~offset base Unsigned.UChar.zero ~length:size_in_bytes device.runner
 end
 
 (* [initialized_devices] never forgets its entries. *)
@@ -270,40 +263,46 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
      against the device's private pool table. *)
   let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
-    let dst_ptr = Slab.resolve_pool dst.device dst_loc in
-    let f src = Cu.Stream.memcpy_H_to_D ~dst:dst_ptr ~src dst.device.runner in
+    let base = Slab.resolve_pool dst.device dst_loc in
+    let f src =
+      Cu.Stream.memcpy_H_to_D ~dst_offset:dst_loc.offset ~dst:base ~src dst.device.runner
+    in
     Ndarray.apply { f } hosted
 
   let to_host ~src ~src_loc hosted =
     set_ctx @@ ctx_of src;
-    let src_ptr = Slab.resolve_pool src.device src_loc in
-    let f dst = Cu.Stream.memcpy_D_to_H ~dst ~src:src_ptr src.device.runner in
+    let base = Slab.resolve_pool src.device src_loc in
+    let f dst =
+      Cu.Stream.memcpy_D_to_H ~src_offset:src_loc.offset ~dst ~src:base src.device.runner
+    in
     Ndarray.apply { f } hosted
 
   let device_to_device tn ~into_merge_buffer ~dst_loc ~dst ~src_loc ~src =
     let dev = dst.device in
     let same_device = dev.ordinal = src.device.ordinal in
     let size_in_bytes = Lazy.force tn.Tn.size_in_bytes in
-    let src_ptr = Slab.resolve_pool src.device src_loc in
-    let memcpy ~dst_ptr =
-      (* FIXME: coming in cudajit.0.6.2. *)
-      (* if same_device && Cu.Deviceptr.equal dst_ptr src_ptr then () else *)
+    let src_base = Slab.resolve_pool src.device src_loc in
+    let src_offset = src_loc.offset in
+    let memcpy ~dst_base ~dst_offset =
       if same_device then
-        Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst:dst_ptr ~src:src_ptr dst.device.runner
+        Cu.Stream.memcpy_D_to_D ~size_in_bytes ~dst_offset ~src_offset ~dst:dst_base ~src:src_base
+          dst.device.runner
       else
-        Cu.Stream.memcpy_peer ~size_in_bytes ~dst:dst_ptr ~dst_ctx:(ctx_of dst) ~src:src_ptr
-          ~src_ctx:(ctx_of src) dst.device.runner
+        Cu.Stream.memcpy_peer ~size_in_bytes ~dst_offset ~src_offset ~dst:dst_base
+          ~dst_ctx:(ctx_of dst) ~src:src_base ~src_ctx:(ctx_of src) dst.device.runner
     in
     match (into_merge_buffer, dst_loc) with
     | No, None -> invalid_arg "Cuda_backend.device_to_device: missing dst_loc"
     | No, Some dst_loc ->
         set_ctx @@ ctx_of dst;
-        memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc)
+        let dst_base = Slab.resolve_pool dst.device dst_loc in
+        memcpy ~dst_base ~dst_offset:dst_loc.offset
     | Copy, _ ->
         set_ctx @@ ctx_of dst;
         opt_alloc_merge_buffer ~size_in_bytes dst.device;
         let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
-        memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc)
+        let dst_base = Slab.resolve_pool dst.device loc in
+        memcpy ~dst_base ~dst_offset:loc.offset
 
   type code = {
     traced_store : Low_level.traced_store;
@@ -950,11 +949,14 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       if !next_id < 0 then next_id := 0;
       !next_id
 
-  let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list) ~ctx_arrays
+  let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list) ~ctx_buffers
       lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name in
     let device = prior_context.device in
     let stream_name = get_name device in
+    (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the
+       task closure; region views ([Tensor_at]) are non-owning and must not outlive the slab base. *)
+    let ctx_bases = Map.map ctx_buffers ~f:(Slab.resolve_pool device) in
     let%diagn3_sexp work () : unit =
       let log_id = get_global_run_id () in
       let log_id_prefix = Int.to_string log_id ^ ": " in
@@ -968,15 +970,17 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       let module S = Cu.Stream in
       let args : S.kernel_param list =
         (* TODO: should we prohibit or warn about local-only tensors that are in
-           prior_context.ctx_arrays? *)
+           prior_context.ctx_buffers? *)
         List.map kparams ~f:(function
           | _name, Kparam_ptr tn ->
-              let arr = Option.value_exn ~here:[%here] @@ Map.find ctx_arrays tn in
-              S.Tensor arr
+              let loc = Option.value_exn ~here:[%here] @@ Map.find ctx_buffers tn in
+              let base = Map.find_exn ctx_bases tn in
+              S.Tensor_at (Cu.Deviceptr.offset base ~bytes:loc.offset)
           | _name, Log_file_name -> S.Int log_id
           | _name, Merge_buffer ->
               let loc = Option.value_exn ~here:[%here] !(device.merge_buffer) in
-              S.Tensor (Slab.resolve_pool device loc)
+              let base = Slab.resolve_pool device loc in
+              S.Tensor_at (Cu.Deviceptr.offset base ~bytes:loc.offset)
           | _name, Static_idx s ->
               let i = Indexing.find_exn lowered_bindings s in
               if !i < 0 then
@@ -1009,7 +1013,7 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     in
     Task.Task
       {
-        context_lifetime = (run_module, ctx_arrays);
+        context_lifetime = (run_module, ctx_bases);
         description = "launches " ^ name ^ " on " ^ stream_name;
         work;
       }
@@ -1023,9 +1027,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
     in
-    let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
     let task =
-      link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~ctx_arrays lowered_bindings
+      link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~ctx_buffers lowered_bindings
         run_module
     in
     (lowered_bindings, task)
@@ -1043,9 +1046,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       Array.mapi code_batch.kparams_and_names ~f:(fun i pns ->
           Option.value ~default:None
           @@ Option.map2 pns ctx_buffers.(i) ~f:(fun (kparams, name) ctx_buffers ->
-              let ctx_arrays = Map.map ctx_buffers ~f:(Slab.resolve_pool prior_context.device) in
               let task =
-                link_proc ~prior_context ~name ~kparams ~ctx_arrays lowered_bindings run_module
+                link_proc ~prior_context ~name ~kparams ~ctx_buffers lowered_bindings run_module
               in
               Some task))
     in
