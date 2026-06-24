@@ -1,5 +1,28 @@
 # Add centered param init support and return updated context from Train.to_routine
 
+> **Superseded in part by PR #70 (2026-06-24).** The root fix —
+> [lukstafi/ocannl-staging#70](https://github.com/lukstafi/ocannl-staging/pull/70),
+> "Refactor inline parameter initialization semantics" — makes inline `%op` parameter
+> initialization **forward-only** (init-expression heads qualify with `NTDSL`/`Prohibit_grad`),
+> **retires PDSL** (no more hidden "Require_grad everywhere" path for param init), and makes
+> `Tensor.param ~require_grad` the **sole gradient path** (it strips any inherited
+> `diff`/`zero_grads` from the init subgraph and mints a single fresh gradient for the final
+> parameter value only). Consequently:
+>
+> - **The gradient-node-leak fix (this proposal's part 1, "grad-free intermediates") is RESOLVED
+>   by PR #70.** The proposal's approach of *carefully using grad-free intermediates* is
+>   superseded by the root fix — composite init expressions can no longer leak
+>   `zero_grads`/backprop into training.
+> - **The `Train.to_routine` API-return concern (part 2) is RESOLVED by investigation — no API
+>   break.** The updated context is already recoverable via `Context.context : routine -> t`
+>   (PR #70's new `test/operations/test_composite_param_init.ml` uses exactly this idiom).
+>
+> **What remains live of this proposal is the ergonomic centered/scaled init API only** —
+> a convenience `centered_uniform1` / range-parameterized `uniform1 ~low ~high` / `xavier`
+> defaults, plus adopting it in the transformer/FSM examples and optionally documenting a
+> default init policy. This lands **after PR #70 merges**. The superseded sections below are
+> retained struck-through for the historical record. Tracked by task-9b0559f5.
+
 ## Status update (2026-06-12)
 
 - gh-ocannl-116 (the Karpathy FSM transformer tutorial, source of discovery) is CLOSED/COMPLETED (milestone v0.6.4); the tutorial landed as `test/training/fsm_transformer.ml`.
@@ -12,6 +35,10 @@
 
 ## Goal
 
+> **(2026-06-24) The "no grad-carrying intermediates" half of item 1 and all of item 2 below are
+> RESOLVED by PR #70 / investigation — see the superseded header. The live goal is now only the
+> *convenience centered/scaled init API* (the first sentence of item 1).**
+
 Two improvements discovered during the Karpathy FSM transformer tutorial (gh-ocannl-116):
 
 1. Neural networks need centered parameter initialization (values in [-0.5, 0.5) or [-1, 1) rather than [0, 1)). Users who try to build centered init from existing primitives (e.g., `2 * uniform1 - 1`) inadvertently create gradient-carrying intermediate nodes that cause NaN during SGD updates, because `sgd_update` iterates over all `loss.Tensor.params` including those stale intermediates. *(Update 2026-06-12: mechanism corrected — the intermediates do not enter `loss.Tensor.params`; instead, their `zero_grads` get baked into the param's `diff.zero_grads` at construction, so the training step references grad tnodes the init context never created, and `Train.to_routine` fails with `User_error "The linked context lacks node _N.grad"` (verified by repro). The fix direction — grad-free init subgraphs — is unchanged.)*
@@ -22,11 +49,17 @@ Related: gh-ocannl-116, task-28c898b7.
 
 ## Acceptance Criteria
 
-1. A convenience function (e.g., `centered_uniform1`) is available in the DSL that produces uniform random values centered around zero, suitable as a drop-in `default_param_init` replacement.
-2. The centered init function does not create gradient-carrying intermediate nodes -- only the final param tensor itself should have `Require_grad`. This prevents the NaN issue when used with `sgd_update`.
-3. `Train.to_routine` returns `Context.t * Context.routine` (the updated context alongside the routine).
-4. All in-tree callers of `Train.to_routine` are updated to destructure the new return type.
-5. Existing tests pass after the changes.
+**Live (post-PR #70):**
+
+1. A convenience function (e.g., `centered_uniform1`) and/or a range-parameterized `uniform1 ~low ~high` (and optionally `xavier` defaults) is available in the DSL, producing centered/scaled uniform random values suitable as a drop-in `default_param_init` replacement.
+2. The transformer/FSM examples (`test/training/fsm_transformer.ml`, `test/training/transformer_names.ml`) adopt the new initializer, removing their host-side recentering loops.
+3. (Optional) A preferred default init policy for neural-net examples is documented.
+4. Existing tests pass after the changes.
+
+**~~Superseded / resolved by PR #70 (kept for record):~~**
+
+- ~~The centered init function does not create gradient-carrying intermediate nodes -- only the final param tensor itself should have `Require_grad`.~~ **RESOLVED at the root by PR #70** (`Tensor.param ~require_grad` is the sole grad path; init expressions are forward-only `NTDSL`/`Prohibit_grad`; PDSL retired). Any composite init is now grad-safe regardless.
+- ~~`Train.to_routine` returns `Context.t * Context.routine`; all in-tree callers updated.~~ **DROPPED — no API break.** The updated context is recoverable via `Context.context : routine -> t`.
 
 ## Context
 
@@ -38,7 +71,11 @@ Related: gh-ocannl-116, task-28c898b7.
 - `lib/train.ml` lines 110-113: `sgd_update` iterates `loss.Tensor.params` and calls `sgd_one` on every param with a `diff` field, including init-time intermediates if they carry `Require_grad`. *(Update 2026-06-12: incorrect — `params` is populated only by `Tensor.param` (`tensor/tensor.ml:678` sets `params = Set.singleton t`); op nodes merely union subtensor `params` (`tensor.ml:372`), so init intermediates never appear there. The real leak is via `zero_grads`: `Tensor.op` folds subtensor `zero_grads` into the new node's `diff.zero_grads` (`tensor.ml:438-446`), so a composite param's training-step zeroing references the intermediates' grad tnodes, which fail `verify_prior_context` at link (`arrayjit/lib/backends.ml:301-306`).)*
 - The key insight: init-time arithmetic intermediates should use `Prohibit_grad`; only the outermost param tensor needs `Require_grad`.
 
-### to_routine context threading
+### ~~to_routine context threading~~ (SUPERSEDED — no API change, use `Context.context`)
+
+> **(2026-06-24) RESOLVED by investigation, confirmed by PR #70.** No `to_routine` API break:
+> the updated context is already stored in the routine and recoverable via
+> `Context.context : routine -> t`. The section below is retained for the historical record.
 
 - `lib/train.ml` lines 139-155 *(Update 2026-06-12: was 186-203)*: `to_routine` calls `Context.compile ctx comp bindings` which returns `(Context.t * Context.routine)`, but discards the context with `let _ctx, routine = ...`.
 - `lib/train.ml` line 161 *(Update 2026-06-12: was 208)*: `init_params` already returns `Context.t` after compile+run, showing the pattern.
@@ -53,9 +90,16 @@ Related: gh-ocannl-116, task-28c898b7.
 
 *Suggested approach -- agents may deviate if they find a better path.*
 
-**Centered init**: Add `centered_uniform1` (and optionally `centered_uniform`) functions in `operation.ml` that build the same threefry PRNG chain as `uniform1` but with `Prohibit_grad` on all intermediate nodes, then apply `2 * result - 1` arithmetic also with `Prohibit_grad`, wrapping only the final output with the caller's `grad_spec`. Expose through `Make_DSL` alongside existing `uniform1`.
+> **(2026-06-24) Post-PR #70:** the grad-safety concern is gone (the root fix handles it), so the
+> centered-init functions no longer *need* to be hand-built grad-free — they can simply compose
+> `NTDSL`/`Prohibit_grad` primitives (or any init expression) and let `TDSL.param ~require_grad`
+> mint the single final gradient. `test/operations/test_composite_param_init.ml` in PR #70 already
+> shows a working `centered_uniform1` built this way; the live work is to promote it to a real
+> DSL-exposed initializer (ideally range-parameterized) and adopt it in the examples.
 
-**to_routine**: Change return type from `Context.routine` to `Context.t * Context.routine`. Callers that don't need the context can destructure as `let _ctx, routine = ...`.
+**Centered init**: Add `centered_uniform1` (and optionally a range-parameterized `uniform1 ~low ~high`) in `operation.ml`, building on `uniform1` plus the affine recentering, exposed through `Make_DSL` so the `%op` record syntax picks it up. Then replace the host-side recentering loops in `test/training/fsm_transformer.ml` and `test/training/transformer_names.ml`.
+
+**~~to_routine~~**: ~~Change return type from `Context.routine` to `Context.t * Context.routine`.~~ **DROPPED — no API change** (use `Context.context : routine -> t`).
 
 ## Scope
 
