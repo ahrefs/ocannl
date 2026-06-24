@@ -299,6 +299,15 @@
  (libraries base ocannl stdio))
 
 (test
+ (name test_concat_dim_solver)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_concat_dim_solver)
+ (libraries base ocannl stdio))
+
+(test
  (name tensor_puzzles)
  (package neural_nets_lib)
  (deps

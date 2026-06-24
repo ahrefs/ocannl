@@ -1,0 +1,13 @@
+Retrieving commandline, environment, or config file variable ocannl_log_level
+Found 0, in the config file
+Concat dim-solver hardening regressions:
+
+AC1: broadcast-GLB merge of two Concat bounds resolves (was assert false)
+  PASS: two Concat GLB bounds merge at stage 4 [solved]
+AC3: unequal-arity variables-only Concat = Concat is SOLVED at stage 4
+  PASS: 3-var = 2-var (disjoint) [solved]
+  PASS: 2-var = 3-var (disjoint) [solved]
+  PASS: shared [s;a;b] = [s;c] [solved]
+  PASS: shared [s;p] = [s;q;r] [solved]
+AC3: below stage 4 the equation is DEFERRED (gate holds), not solved
+  PASS: 3-var = 2-var deferred at stage 1 [deferred(1)]
